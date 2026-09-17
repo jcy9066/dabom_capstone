@@ -172,6 +172,7 @@ required_env=(
     ROS_LOCALHOST_ONLY
     MOTOR_SERIAL_PORT
     MOTOR_SERIAL_BAUDRATE
+    WHEEL_TICKS_TOPIC
     LIDAR_ENABLE
     LIDAR_SCAN_TOPIC
     LIDAR_WS_RECONNECT_SEC
@@ -209,6 +210,9 @@ case "${STREAM_INFER,,}" in
     true|false|1|0|yes|no|on|off) ;;
     *) fail "STREAM_INFER must be a boolean value" ;;
 esac
+
+[[ "${ROS_LOCALHOST_ONLY}" == "1" ]] \
+    || fail "ROS_LOCALHOST_ONLY must be 1; Pi/GPU sensor transport uses WebSocket, not cross-host DDS"
 
 [[ "${MOTOR_SERIAL_PORT}" != "${LIDAR_SERIAL_PORT}" ]] \
     || fail "Pico and LiDAR cannot share the same serial port: ${MOTOR_SERIAL_PORT}"
@@ -472,11 +476,13 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
     robot_connected=0
     camera_connected=0
     lidar_connected=0
+    encoder_connected=0
 
     for _ in {1..20}; do
         robot_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/get_status" 2>/dev/null || true)"
         camera_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/stream_status" 2>/dev/null || true)"
         lidar_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/lidar/bridge" 2>/dev/null || true)"
+        encoder_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/encoder/bridge" 2>/dev/null || true)"
 
         if [[ -n "${robot_json}" ]] && python3 -c \
             'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if d.get("updated_at") is not None else 1)' \
@@ -496,18 +502,25 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
             lidar_connected=1
         fi
 
-        if (( robot_connected && camera_connected && lidar_connected )); then
+        if [[ -n "${encoder_json}" ]] && python3 -c \
+            'import json,sys,time; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; last=st.get("last_received_at"); fresh=last is not None and time.time()-float(last) <= 3.0; raise SystemExit(0 if d.get("enabled") is True and int(st.get("published") or 0) > 0 and fresh else 1)' \
+            "${encoder_json}" >/dev/null 2>&1; then
+            encoder_connected=1
+        fi
+
+        if (( robot_connected && camera_connected && lidar_connected && encoder_connected )); then
             break
         fi
         sleep 0.5
     done
 
-    if (( robot_connected && camera_connected && lidar_connected )); then
-        log "CONNECTED: GPU receives robot status, camera, and LiDAR"
+    if (( robot_connected && camera_connected && lidar_connected && encoder_connected )); then
+        log "CONNECTED: GPU receives robot status, camera, LiDAR, and encoder telemetry"
     else
         (( robot_connected )) || warn "GPU is reachable but robot status is not arriving"
         (( camera_connected )) || warn "GPU is reachable but camera stream is not confirmed"
         (( lidar_connected )) || warn "GPU is reachable but LiDAR stream is not confirmed"
+        (( encoder_connected )) || warn "GPU is reachable but fresh encoder telemetry is not confirmed"
         log "READY: local stack remains active and will keep reconnecting"
     fi
 else
