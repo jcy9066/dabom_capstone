@@ -2,6 +2,10 @@
     'use strict';
 
     const SYSTEM_CONTROL_POLL_INTERVAL_MS = 5000;
+    const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 500;
+    const DASHBOARD_CLIENT_STORAGE_KEY = 'dabom.dashboardClientId';
+    const AUTOMATIC_ESTOP_REASONS = new Set(['window_blur', 'page_hidden']);
+
     const state = {
         status: null,
         pending: new Set(),
@@ -10,6 +14,10 @@
         statusRefreshPending: false,
         statusForceRefreshPending: false,
         csrfPromise: null,
+        dashboardClientId: null,
+        dashboardControl: null,
+        dashboardControlTimer: null,
+        dashboardControlRequest: null,
     };
     const guideViewName = 'dashboard-usage-guide';
 
@@ -19,7 +27,7 @@
         checking: '\ud655\uc778 \uc911',
         unavailable: '\ud655\uc778 \ubd88\uac00',
         processing: '\ucc98\ub9ac \uc911',
-        instances: '\uc2e4\ud589 \uc778\uc2a4\ud134\uc2a4',
+        instances: '\uc2e4\ud589 \uc778스\ud134\uc2a4',
         normalize: '\uc911\ubcf5 \uc815\ub9ac',
         guide: '\ub300\uc2dc\ubcf4\ub4dc \uc0ac\uc6a9 \uc548\ub0b4',
         noStatus: '\uc0c1\ud0dc \uc815\ubcf4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.',
@@ -29,7 +37,7 @@
         duplicate: '\uc911\ubcf5',
         error: '\uc624\ub958',
         guideTitle: '\ub300\uc2dc\ubcf4\ub4dc \uc0ac\uc6a9 \uc548\ub0b4',
-        processUnavailable: '\uc0c1\ud0dc \uc870\ud68c \ud6c4 \ud504\ub85c\uc138\uc2a4 \uc21c\uc11c\ub97c \ud655\uc778\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.'
+        processUnavailable: '\uc0c1\ud0dc \uc870\ud68c \ud6c4 \ud504\ub85c\uc138\uc2a4 \uc21c\uc11c\ub97c \ud655\uc778\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.',
     };
 
     const make = (tag, className, value) => {
@@ -53,7 +61,7 @@
         const slot = document.getElementById('systemControlPanelSlot');
         if (!body || document.getElementById('systemControlPanel')) return;
 
-        const wrapper = make('div', '', undefined);
+        const wrapper = make('div');
         wrapper.id = 'systemControlPanel';
         const gpu = make('section', 'system-control-panel');
         const gpuHeading = make('div', 'system-control-heading');
@@ -65,19 +73,14 @@
 
         const divider = make('div', 'sidebar-divider system-control-divider');
         const pi = make('section', 'system-control-panel');
-        const piHeading = make('div', 'system-control-heading', text.pi);
-        pi.append(piHeading, make('div', 'system-control-list'));
+        pi.append(make('div', 'system-control-heading', text.pi), make('div', 'system-control-list'));
         pi.lastChild.id = 'piSystemControls';
 
         const guide = make('button', 'system-control-manual', text.guide);
         guide.type = 'button';
         guide.addEventListener('click', openGuide);
         wrapper.append(gpu, divider, pi, guide);
-        if (slot) {
-            slot.append(wrapper);
-        } else {
-            body.append(wrapper);
-        }
+        (slot || body).append(wrapper);
     }
 
     function renderGroup(targetId, components, group) {
@@ -99,15 +102,23 @@
             details.append(make('div', 'system-control-description', component.description || ''));
             const action = component.state === 'on' || component.state === 'duplicate' ? 'stop' : 'start';
             const availabilityClass = pending ? ' is-pending' : unreachable ? ' is-unavailable' : '';
-            const button = make('button', `system-control-switch state-${component.state || 'error'}${availabilityClass}`, pending ? text.processing : stateLabel(component));
+            const button = make(
+                'button',
+                `system-control-switch state-${component.state || 'error'}${availabilityClass}`,
+                pending ? text.processing : stateLabel(component),
+            );
             button.type = 'button';
             button.disabled = pending || unreachable;
             button.addEventListener('click', () => control(group, component.id, action));
             row.append(details, button);
             card.append(row);
 
-            const count = Number.isInteger(component.instance_count) ? `${text.instances}: ${component.instance_count}` : `${text.instances}: ${text.unavailable}`;
-            const pids = Array.isArray(component.pids) && component.pids.length ? ` | PID: ${component.pids.join(', ')}` : '';
+            const count = Number.isInteger(component.instance_count)
+                ? `${text.instances}: ${component.instance_count}`
+                : `${text.instances}: ${text.unavailable}`;
+            const pids = Array.isArray(component.pids) && component.pids.length
+                ? ` | PID: ${component.pids.join(', ')}`
+                : '';
             card.append(make('div', 'system-control-meta', `${count}${pids}`));
             if (component.message) card.append(make('div', 'system-control-message', component.message));
             if (component.duplicate) {
@@ -127,7 +138,11 @@
         renderGroup('gpuSystemControls', status.gpu, 'gpu');
         renderGroup('piSystemControls', status.pi, 'pi');
         const updated = document.getElementById('systemControlUpdated');
-        if (updated) updated.textContent = status.updated_at ? `\ucd5c\uc885 \ud655\uc778 ${new Date(status.updated_at).toLocaleTimeString('ko-KR')}` : text.unavailable;
+        if (updated) {
+            updated.textContent = status.updated_at
+                ? `\ucd5c\uc885 \ud655\uc778 ${new Date(status.updated_at).toLocaleTimeString('ko-KR')}`
+                : text.unavailable;
+        }
     }
 
     function isDocumentVisible() {
@@ -164,11 +179,8 @@
             return Promise.resolve();
         }
         if (state.statusRequest) {
-            if (force) {
-                state.statusForceRefreshPending = true;
-            } else {
-                state.statusRefreshPending = true;
-            }
+            if (force) state.statusForceRefreshPending = true;
+            else state.statusRefreshPending = true;
             return state.statusRequest;
         }
 
@@ -180,15 +192,15 @@
                 if (!response.ok || !payload.ok) throw new Error(payload.detail || text.unavailable);
                 render(payload);
                 document.dispatchEvent(new CustomEvent('dabom:system-control-status', {
-                    detail: { available: true, payload }
+                    detail: { available: true, payload },
                 }));
             } catch (error) {
                 render({ updated_at: null, gpu: [], pi: [{
                     id: 'lidar_ros', label: 'LiDAR ROS Service', description: '', state: 'unreachable',
-                    instance_count: null, control_available: false, message: error.message
+                    instance_count: null, control_available: false, message: error.message,
                 }] }, false);
                 document.dispatchEvent(new CustomEvent('dabom:system-control-status', {
-                    detail: { available: false, error: error.message }
+                    detail: { available: false, error: error.message },
                 }));
             }
         })();
@@ -247,7 +259,9 @@
         try {
             const token = await csrfToken();
             const response = await fetch(`/api/system-control/${group}/${encodeURIComponent(componentId)}/${action}`, {
-                method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': token }
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'X-CSRF-Token': token },
             });
             if (response.status === 403) state.csrfPromise = null;
             const payload = await response.json();
@@ -263,7 +277,10 @@
     function appendGuideSection(container, titleValue, items, ordered = true) {
         const section = make('section', 'system-control-guide-section');
         section.append(make('h3', 'system-control-guide-heading', titleValue));
-        const list = make(ordered ? 'ol' : 'ul', `system-control-guide-list${ordered ? '' : ' is-source-list'}`);
+        const list = make(
+            ordered ? 'ol' : 'ul',
+            `system-control-guide-list${ordered ? '' : ' is-source-list'}`,
+        );
         for (const item of items) list.append(make('li', '', item));
         section.append(list);
         container.append(section);
@@ -306,7 +323,7 @@
             '[\uae30\uc874 \uc9c0\ub3c4 \uc120\ud0dd]',
             'Initial Pose \uc9c0\uc815',
             'Goal \uc9c0\uc815',
-            '\uacbd\ub85c \ud655\uc778',
+            '\uacbd\ub85c \ud655인',
             '[\uc8fc\ud589 \uc2dc\uc791]',
         ]);
         appendGuideSection(guide, '\uc704\ud5d8 \ub300\uc751', [
@@ -318,7 +335,9 @@
             '[\ud604\uc7ac \uc0c1\ud669 \uc791\uc131]',
             '[\uad00\ub9ac\uc790 \uc870\uce58 \uc870\ud68c]',
         ]);
-        appendGuideSection(guide, '\uae30\uae30 \uc0c1\ud0dc', ['\uc2dc\uc2a4\ud15c \uc9c4\ub2e8: [\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]']);
+        appendGuideSection(guide, '\uae30\uae30 \uc0c1\ud0dc', [
+            '\uc2dc\uc2a4\ud15c \uc9c4\ub2e8: [\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]',
+        ]);
         appendGuideSection(guide, '\ud504\ub85c\uc138\uc2a4 \uc2e4\ud589 \uc21c\uc11c', processGuideItems());
         return guide;
     }
@@ -340,8 +359,157 @@
         modal.style.display = 'flex';
     }
 
+    function dashboardClientId() {
+        if (state.dashboardClientId) return state.dashboardClientId;
+        let clientId = window.sessionStorage.getItem(DASHBOARD_CLIENT_STORAGE_KEY);
+        if (!clientId) {
+            if (window.crypto?.randomUUID) {
+                clientId = window.crypto.randomUUID();
+            } else {
+                clientId = `dashboard-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            }
+            window.sessionStorage.setItem(DASHBOARD_CLIENT_STORAGE_KEY, clientId);
+        }
+        state.dashboardClientId = clientId;
+        return clientId;
+    }
+
+    function ownsRobotControl() {
+        return Boolean(
+            state.dashboardControl?.owner_client_id
+            && state.dashboardControl.owner_client_id === dashboardClientId(),
+        );
+    }
+
+    function setControlFeedback(message, isError = false) {
+        const feedback = document.getElementById('navigation-control-feedback');
+        if (!feedback) return;
+        feedback.textContent = message || '';
+        feedback.classList.toggle('error', Boolean(isError));
+    }
+
+    function applyDashboardControl(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        state.dashboardControl = payload.control || payload;
+        if (typeof payload.robot_connected === 'boolean') {
+            window.setDashboardRobotConnection?.(payload.robot_connected);
+        }
+        const mode = String(state.dashboardControl?.mode || '').toLowerCase();
+        if (mode === 'manual' || mode === 'auto') {
+            window.applyServerPatrolMode?.(mode);
+        }
+        document.dispatchEvent(new CustomEvent('dabom:dashboard-control-state', {
+            detail: {
+                clientId: dashboardClientId(),
+                isOwner: ownsRobotControl(),
+                control: state.dashboardControl,
+            },
+        }));
+    }
+
+    function clearDashboardControlTimer() {
+        if (state.dashboardControlTimer !== null) {
+            window.clearTimeout(state.dashboardControlTimer);
+            state.dashboardControlTimer = null;
+        }
+    }
+
+    function scheduleDashboardControlPoll(delay = DASHBOARD_CONTROL_POLL_INTERVAL_MS) {
+        clearDashboardControlTimer();
+        if (!isDocumentVisible()) return;
+        state.dashboardControlTimer = window.setTimeout(() => {
+            state.dashboardControlTimer = null;
+            fetchDashboardControlState();
+        }, delay);
+    }
+
+    async function fetchDashboardControlState() {
+        if (!isDocumentVisible()) {
+            clearDashboardControlTimer();
+            return;
+        }
+        if (state.dashboardControlRequest) return state.dashboardControlRequest;
+
+        state.dashboardControlRequest = (async () => {
+            try {
+                const response = await fetch('/api/dashboard-control/state', {
+                    credentials: 'same-origin',
+                    headers: { 'X-Dashboard-Client-Id': dashboardClientId() },
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || !payload.ok) throw new Error(payload.detail || 'control state unavailable');
+                applyDashboardControl(payload);
+            } catch (error) {
+                console.warn('dashboard control state sync failed:', error);
+            }
+        })().finally(() => {
+            state.dashboardControlRequest = null;
+            scheduleDashboardControlPoll();
+        });
+        return state.dashboardControlRequest;
+    }
+
+    async function sendDashboardRobotCommand(payload, keepalive = false) {
+        try {
+            const token = await csrfToken();
+            const response = await fetch('/api/dashboard-control/command', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': token,
+                    'X-Dashboard-Client-Id': dashboardClientId(),
+                },
+                body: JSON.stringify(payload),
+                keepalive,
+            });
+            if (response.status === 403) state.csrfPromise = null;
+            const data = await response.json().catch(() => ({}));
+            if (data.control) applyDashboardControl({ control: data.control });
+
+            if (!response.ok || !data.ok) {
+                if (data.error_code === 'CONTROL_BUSY') {
+                    setControlFeedback('다른 대시보드가 현재 로봇을 조종 중입니다.', true);
+                } else {
+                    setControlFeedback(data.detail || data.error || '로봇 명령 전송에 실패했습니다.', true);
+                }
+                return false;
+            }
+            setControlFeedback('', false);
+            scheduleDashboardControlPoll(0);
+            return true;
+        } catch (error) {
+            console.error('dashboard robot command failed:', error);
+            return false;
+        }
+    }
+
+    function installDashboardControlProxy() {
+        if (typeof window.sendRobotCommand === 'function') {
+            window.sendRobotCommand = sendDashboardRobotCommand;
+        }
+
+        if (typeof window.emergencyStopRobot === 'function') {
+            window.emergencyStopRobot = function syncedEmergencyStopRobot(
+                reason = 'dashboard_emergency_stop',
+                keepalive = false,
+            ) {
+                if (AUTOMATIC_ESTOP_REASONS.has(reason) && !ownsRobotControl()) {
+                    return Promise.resolve(true);
+                }
+                window.stopAllLocalInputs?.(false);
+                return sendDashboardRobotCommand({
+                    type: 'emergency_stop',
+                    reason,
+                }, keepalive);
+            };
+        }
+    }
+
     function initialize() {
         createPanel();
+        installDashboardControlProxy();
+
         document.addEventListener('dabom:sidebar-visibility', event => {
             if (event.detail?.open === false) {
                 pauseStatusPolling();
@@ -352,11 +520,14 @@
         document.addEventListener('visibilitychange', () => {
             if (!isDocumentVisible()) {
                 pauseStatusPolling();
+                clearDashboardControlTimer();
                 return;
             }
             refreshStatusPolling();
+            scheduleDashboardControlPoll(0);
         });
         refreshStatusPolling();
+        scheduleDashboardControlPoll(0);
     }
 
     if (document.readyState === 'loading') {

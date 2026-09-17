@@ -19,6 +19,12 @@ from fastapi.responses import JSONResponse
 from server.env_config import env_bool, env_float, env_int, env_text
 
 
+DASHBOARD_CONTROL_LEASE_SEC = 1.0
+DASHBOARD_CLIENT_HEADER = "X-Dashboard-Client-Id"
+CONTROLLED_COMMAND_TYPES = frozenset({"move", "auto_drive"})
+CONTROL_RELEASE_COMMAND_TYPES = frozenset({"stop", "emergency_stop", "mode"})
+
+
 def attach_system_control_routes(app, navigation_process_control=None) -> None:
     root_dir = Path(__file__).resolve().parents[1]
     log_dir = root_dir / "logs" / "system_control"
@@ -27,19 +33,164 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
     component_ids = ("lidar_ros_bridge", "encoder_ros_bridge", "wheel_odometry", "slam_mapping", "map_bridge")
     locks = {component_id: threading.Lock() for component_id in component_ids}
 
+    dashboard_control_lock = threading.Lock()
+    dashboard_control_state = {
+        "owner_client_id": None,
+        "owner_user_id": None,
+        "lease_deadline": 0.0,
+        "mode": "manual",
+        "emergency_stop": False,
+        "motion": "stop",
+        "updated_at": time.time(),
+    }
+
     def server_module():
         module = sys.modules.get("server.app") or sys.modules.get("__main__")
         if module is None:
             raise RuntimeError("Integrated server module is unavailable.")
         return module
 
-    def error(message: str, status_code: int = 400):
-        return JSONResponse({"ok": False, "detail": message}, status_code=status_code)
+    def error(message: str, status_code: int = 400, **extra):
+        return JSONResponse(
+            {"ok": False, "detail": message, **extra},
+            status_code=status_code,
+        )
 
     def access(request, csrf: bool = False):
         if not request.session.get("user"):
             return error("Login required.", 401)
         return server_module().csrf_failure(request) if csrf else None
+
+    def dashboard_client_id(request: Request) -> str:
+        value = str(request.headers.get(DASHBOARD_CLIENT_HEADER, "")).strip()
+        if not value or len(value) > 128:
+            return ""
+        return value
+
+    def dashboard_user_id(request: Request) -> str:
+        user = request.session.get("user") or {}
+        return str(user.get("user_id") or "")
+
+    def expire_dashboard_control(now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        if (
+            dashboard_control_state["owner_client_id"]
+            and dashboard_control_state["lease_deadline"] <= now
+        ):
+            dashboard_control_state["owner_client_id"] = None
+            dashboard_control_state["owner_user_id"] = None
+            dashboard_control_state["lease_deadline"] = 0.0
+            dashboard_control_state["motion"] = "stop"
+            dashboard_control_state["updated_at"] = time.time()
+
+    def dashboard_control_snapshot(client_id: str = "") -> dict:
+        module = server_module()
+        with dashboard_control_lock:
+            expire_dashboard_control()
+            snapshot = dict(dashboard_control_state)
+
+        robot = module.robot_status_snapshot()
+        robot_mode = str(robot.get("mode") or "").strip().lower()
+        if robot_mode in {"manual", "auto"}:
+            snapshot["mode"] = robot_mode
+        if robot.get("emergency_stop") is not None:
+            snapshot["emergency_stop"] = bool(robot.get("emergency_stop"))
+        robot_motion = robot.get("motor_motion")
+        if robot_motion:
+            snapshot["motion"] = str(robot_motion)
+
+        lease_remaining = 0.0
+        if snapshot["owner_client_id"]:
+            lease_remaining = max(
+                0.0,
+                float(snapshot["lease_deadline"]) - time.monotonic(),
+            )
+
+        snapshot.pop("lease_deadline", None)
+        snapshot["lease_remaining_sec"] = round(lease_remaining, 3)
+        snapshot["is_owner"] = bool(
+            client_id
+            and snapshot["owner_client_id"] == client_id
+        )
+        snapshot["robot_id"] = module.SERVER_ROBOT_ID
+        return snapshot
+
+    def authorize_dashboard_command(
+        command_type: str,
+        client_id: str,
+        user_id: str,
+    ) -> tuple[bool, str | None]:
+        now = time.monotonic()
+        with dashboard_control_lock:
+            expire_dashboard_control(now)
+            owner = dashboard_control_state["owner_client_id"]
+
+            if command_type in CONTROLLED_COMMAND_TYPES:
+                if owner and owner != client_id:
+                    return False, owner
+                dashboard_control_state["owner_client_id"] = client_id
+                dashboard_control_state["owner_user_id"] = user_id or None
+                dashboard_control_state["lease_deadline"] = (
+                    now + DASHBOARD_CONTROL_LEASE_SEC
+                )
+                dashboard_control_state["updated_at"] = time.time()
+                return True, None
+
+            if command_type == "stop" and owner and owner != client_id:
+                return False, owner
+
+        return True, None
+
+    def apply_dashboard_command(
+        command: dict,
+        client_id: str,
+        user_id: str,
+    ) -> None:
+        command_type = str(command.get("type") or "").strip().lower()
+        now = time.monotonic()
+        with dashboard_control_lock:
+            expire_dashboard_control(now)
+
+            if command_type in CONTROLLED_COMMAND_TYPES:
+                dashboard_control_state["owner_client_id"] = client_id
+                dashboard_control_state["owner_user_id"] = user_id or None
+                dashboard_control_state["lease_deadline"] = (
+                    now + DASHBOARD_CONTROL_LEASE_SEC
+                )
+                dashboard_control_state["motion"] = (
+                    str(command.get("direction") or "drive")
+                    if command_type == "move"
+                    else "auto_drive"
+                )
+                dashboard_control_state["emergency_stop"] = False
+
+            elif command_type == "stop":
+                dashboard_control_state["motion"] = "stop"
+                dashboard_control_state["owner_client_id"] = None
+                dashboard_control_state["owner_user_id"] = None
+                dashboard_control_state["lease_deadline"] = 0.0
+
+            elif command_type == "emergency_stop":
+                dashboard_control_state["motion"] = "stop"
+                dashboard_control_state["emergency_stop"] = True
+                dashboard_control_state["owner_client_id"] = None
+                dashboard_control_state["owner_user_id"] = None
+                dashboard_control_state["lease_deadline"] = 0.0
+
+            elif command_type == "resume_navigation":
+                dashboard_control_state["motion"] = "stop"
+                dashboard_control_state["emergency_stop"] = False
+
+            elif command_type == "mode":
+                target_mode = str(command.get("mode") or "").strip().lower()
+                if target_mode in {"manual", "auto"}:
+                    dashboard_control_state["mode"] = target_mode
+                dashboard_control_state["motion"] = "stop"
+                dashboard_control_state["owner_client_id"] = None
+                dashboard_control_state["owner_user_id"] = None
+                dashboard_control_state["lease_deadline"] = 0.0
+
+            dashboard_control_state["updated_at"] = time.time()
 
     def cmdline(pid: int) -> list[str]:
         try:
@@ -266,3 +417,84 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
         if denied:
             return denied
         return error("Pi system service control is unavailable until its control agent supports it.", 409)
+
+    @app.get("/api/dashboard-control/state")
+    async def get_dashboard_control_state(request: Request):
+        denied = access(request)
+        if denied:
+            return denied
+        client_id = dashboard_client_id(request)
+        module = server_module()
+        connected = await module.connections.is_connected(module.SERVER_ROBOT_ID)
+        return {
+            "ok": True,
+            "robot_connected": connected,
+            "control": dashboard_control_snapshot(client_id),
+        }
+
+    @app.post("/api/dashboard-control/command")
+    async def send_dashboard_control_command(request: Request):
+        denied = access(request, csrf=True)
+        if denied:
+            return denied
+
+        client_id = dashboard_client_id(request)
+        if not client_id:
+            return error("Dashboard client id is required.", 400)
+        user_id = dashboard_user_id(request)
+
+        try:
+            command = await request.json()
+        except Exception:
+            return error("JSON command body is required.", 400)
+        if not isinstance(command, dict):
+            return error("JSON command object is required.", 400)
+
+        command_type = str(command.get("type") or "").strip().lower()
+        if not command_type:
+            return error("Command type is required.", 400)
+
+        allowed, owner = authorize_dashboard_command(
+            command_type,
+            client_id,
+            user_id,
+        )
+        if not allowed:
+            return error(
+                "Another dashboard is currently controlling the robot.",
+                409,
+                error_code="CONTROL_BUSY",
+                owner_client_id=owner,
+                control=dashboard_control_snapshot(client_id),
+            )
+
+        module = server_module()
+        delivered = await module.connections.send_command_wait_ack(
+            module.SERVER_ROBOT_ID,
+            command,
+        )
+        if not delivered:
+            if command_type in CONTROLLED_COMMAND_TYPES:
+                with dashboard_control_lock:
+                    if dashboard_control_state["owner_client_id"] == client_id:
+                        dashboard_control_state["owner_client_id"] = None
+                        dashboard_control_state["owner_user_id"] = None
+                        dashboard_control_state["lease_deadline"] = 0.0
+                        dashboard_control_state["motion"] = "stop"
+                        dashboard_control_state["updated_at"] = time.time()
+            return error(
+                "Robot command failed or was not acknowledged.",
+                409,
+                error_code="COMMAND_DELIVERY_FAILED",
+                delivered=False,
+                control=dashboard_control_snapshot(client_id),
+            )
+
+        apply_dashboard_command(command, client_id, user_id)
+        return {
+            "ok": True,
+            "delivered": True,
+            "robot_id": module.SERVER_ROBOT_ID,
+            "command": command,
+            "control": dashboard_control_snapshot(client_id),
+        }
