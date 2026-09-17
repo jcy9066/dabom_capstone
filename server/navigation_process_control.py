@@ -63,6 +63,11 @@ class NavigationProcessControl:
             raise NavigationProcessError("Driving mode requires a saved map YAML path.")
 
         with self._lock:
+            # Older dashboard builds could start `ros2 run ... map_bridge`
+            # independently. It must not coexist with the map_bridge owned by
+            # mapping/localization launch files.
+            self._stop_legacy_map_bridges()
+
             other = "DRIVING" if normalized == "MAPPING" else "MAPPING"
             self._stop_locked(other)
             matches = self._matching(normalized)
@@ -82,7 +87,19 @@ class NavigationProcessControl:
             for target in targets:
                 if target in self.MODES:
                     self._stop_locked(target)
+            if mode is None:
+                self._stop_legacy_map_bridges()
             return self.status()
+
+    def _proc_args(self, entry: Path) -> list[str]:
+        try:
+            return [
+                part.decode("utf-8", errors="replace")
+                for part in (entry / "cmdline").read_bytes().split(b"\0")
+                if part
+            ]
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return []
 
     def _matching(self, mode: str) -> list[dict[str, Any]]:
         proc = Path("/proc")
@@ -93,14 +110,7 @@ class NavigationProcessControl:
         for entry in proc.iterdir():
             if not entry.name.isdigit():
                 continue
-            try:
-                args = [
-                    part.decode("utf-8", errors="replace")
-                    for part in (entry / "cmdline").read_bytes().split(b"\0")
-                    if part
-                ]
-            except (FileNotFoundError, PermissionError, ProcessLookupError):
-                continue
+            args = self._proc_args(entry)
             if any(
                 Path(args[index]).name == "ros2"
                 and args[index + 1:index + 4] == ["launch", "patrol_navigation", launch_name]
@@ -108,6 +118,48 @@ class NavigationProcessControl:
             ):
                 found.append({"pid": int(entry.name), "args": args})
         return found
+
+    def _matching_legacy_map_bridges(self) -> list[dict[str, Any]]:
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return []
+        found: list[dict[str, Any]] = []
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            args = self._proc_args(entry)
+            if any(
+                Path(args[index]).name == "ros2"
+                and args[index + 1:index + 4] == ["run", "patrol_navigation", "map_bridge"]
+                for index in range(len(args))
+            ):
+                found.append({"pid": int(entry.name), "args": args})
+        return found
+
+    def _stop_legacy_map_bridges(self) -> None:
+        targets = self._matching_legacy_map_bridges()
+        for item in targets:
+            try:
+                if os.getpgid(item["pid"]) == item["pid"]:
+                    os.killpg(item["pid"], signal.SIGTERM)
+                else:
+                    os.kill(item["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+
+        deadline = time.monotonic() + self.stop_timeout_sec
+        while targets and time.monotonic() < deadline:
+            time.sleep(0.1)
+            targets = self._matching_legacy_map_bridges()
+
+        for item in targets:
+            try:
+                if os.getpgid(item["pid"]) == item["pid"]:
+                    os.killpg(item["pid"], signal.SIGKILL)
+                else:
+                    os.kill(item["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                continue
 
     def _ros_command(self, command: list[str]) -> list[str]:
         source_parts = ["source /opt/ros/humble/setup.bash"]
