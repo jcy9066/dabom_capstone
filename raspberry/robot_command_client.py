@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 from controllers.motor_controller import MotorController
 from controllers.speaker_controller import SpeakerController
+
+try:
+    from raspberry.encoder_ros_publisher import EncoderRosPublisher
+except ModuleNotFoundError:
+    from encoder_ros_publisher import EncoderRosPublisher
 try:
     from raspberry.env_config import env_float, env_int, env_text
 except ModuleNotFoundError:  # Direct script execution from raspberry/.
@@ -71,8 +76,13 @@ class RobotCommandClient:
         )
 
         self.speaker = SpeakerController()
+        self.encoder_ros = EncoderRosPublisher(
+            topic=env_text("WHEEL_TICKS_TOPIC")
+        )
 
     def start(self) -> None:
+        self.encoder_ros.start()
+
         threads = [
             threading.Thread(
                 target=self.status_loop,
@@ -95,6 +105,7 @@ class RobotCommandClient:
 
         finally:
             self.running = False
+            self.encoder_ros.close()
             self.motor.close()
 
     def status_payload(self) -> dict:
@@ -235,6 +246,8 @@ class RobotCommandClient:
                 != previous_sequence
             ):
                 previous_sequence = snapshot["sequence"]
+
+                self.encoder_ros.publish(snapshot)
 
                 message = {
                     "type": "encoder",
