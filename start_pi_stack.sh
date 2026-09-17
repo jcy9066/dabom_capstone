@@ -295,7 +295,7 @@ stop_matching "ros2 launch patrol_navigation lidar.launch.py" TERM
 stop_matching "rpicam-vid" TERM
 stop_matching "/stream/h264?robot_id=${ROBOT_ID}" TERM
 
-# Verify that the Pico responds before handing UART ownership to the robot client.
+# Verify that the Pico responds and is stopped before handing UART ownership to the robot client.
 if ! python3 - "${MOTOR_SERIAL_PORT}" "${MOTOR_SERIAL_BAUDRATE}" <<'PY'
 import serial
 import sys
@@ -303,7 +303,6 @@ import time
 
 port = sys.argv[1]
 baudrate = int(sys.argv[2])
-deadline = time.monotonic() + 2.0
 
 with serial.Serial(
     port=port,
@@ -314,25 +313,28 @@ with serial.Serial(
     device.write(b"ENC_STREAM,0\n")
     device.flush()
     time.sleep(0.1)
-    device.reset_input_buffer()
 
-    device.write(b"PING\n")
-    device.flush()
+    def exchange(command: bytes, expected_prefix: str) -> None:
+        device.reset_input_buffer()
+        device.write(command + b"\n")
+        device.flush()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            line = device.readline().decode("ascii", errors="replace").strip()
+            if line.startswith(expected_prefix):
+                return
+            if line.startswith("ERR"):
+                print(line, file=sys.stderr)
+                raise SystemExit(2)
+        raise SystemExit(1)
 
-    while time.monotonic() < deadline:
-        line = device.readline().decode("ascii", errors="replace").strip()
-        if line == "OK,PONG":
-            raise SystemExit(0)
-        if line.startswith("ERR"):
-            print(line, file=sys.stderr)
-            raise SystemExit(2)
-
-raise SystemExit(1)
+    exchange(b"PING", "OK,PONG")
+    exchange(b"STOP,startup_preflight", "OK")
 PY
 then
-    fail "Pico UART PING failed on ${MOTOR_SERIAL_PORT}"
+    fail "Pico UART PING/STOP preflight failed on ${MOTOR_SERIAL_PORT}"
 fi
-log "Pico UART READY"
+log "Pico UART READY and motor STOP confirmed"
 
 camera_list="$(timeout 8 rpicam-vid --list-cameras 2>&1 || true)"
 if ! grep -Eq '^[[:space:]]*[0-9]+[[:space:]]*:' <<< "${camera_list}"; then
@@ -467,7 +469,47 @@ log "LiDAR sender PID=${LIDAR_SENDER_PID}"
 log "Camera PID=${CAMERA_PID}"
 
 if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/null 2>&1; then
-    log "CONNECTED: GPU server is reachable"
+    robot_connected=0
+    camera_connected=0
+    lidar_connected=0
+
+    for _ in {1..20}; do
+        robot_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/get_status" 2>/dev/null || true)"
+        camera_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/stream_status" 2>/dev/null || true)"
+        lidar_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/lidar/bridge" 2>/dev/null || true)"
+
+        if [[ -n "${robot_json}" ]] && python3 -c \
+            'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if d.get("updated_at") is not None else 1)' \
+            "${robot_json}" >/dev/null 2>&1; then
+            robot_connected=1
+        fi
+
+        if [[ -n "${camera_json}" ]] && python3 -c \
+            'import json,sys; d=json.loads(sys.argv[1]); raise SystemExit(0 if d.get("camera_connected") is True else 1)' \
+            "${camera_json}" >/dev/null 2>&1; then
+            camera_connected=1
+        fi
+
+        if [[ -n "${lidar_json}" ]] && python3 -c \
+            'import json,sys; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; raise SystemExit(0 if st.get("connected") is True and int(st.get("received") or 0) > 0 else 1)' \
+            "${lidar_json}" >/dev/null 2>&1; then
+            lidar_connected=1
+        fi
+
+        if (( robot_connected && camera_connected && lidar_connected )); then
+            break
+        fi
+        sleep 0.5
+    done
+
+    if (( robot_connected && camera_connected && lidar_connected )); then
+        log "CONNECTED: GPU receives robot status, camera, and LiDAR"
+    else
+        (( robot_connected )) || warn "GPU is reachable but robot status is not arriving"
+        (( camera_connected )) || warn "GPU is reachable but camera stream is not confirmed"
+        (( lidar_connected )) || warn "GPU is reachable but LiDAR stream is not confirmed"
+        log "READY: local stack remains active and will keep reconnecting"
+    fi
 else
     log "WAITING: GPU server may be started before or after this script"
 fi
