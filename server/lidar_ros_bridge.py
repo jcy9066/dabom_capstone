@@ -164,7 +164,6 @@ class LidarRosBridge:
         self.node = None
         self.executor = None
         self.thread = None
-        self.owns_rclpy = False
         self.started = False
 
         self.stats_lock = threading.Lock()
@@ -188,7 +187,6 @@ class LidarRosBridge:
 
         if not rclpy.ok():
             rclpy.init(args=None)
-            self.owns_rclpy = True
 
         self.node = LidarPublisherNode(self)
         self.executor = SingleThreadedExecutor()
@@ -229,12 +227,11 @@ class LidarRosBridge:
             except Exception:
                 pass
 
-        if self.owns_rclpy and rclpy.ok():
-            try:
-                rclpy.shutdown()
-            except Exception:
-                pass
-
+        # Do not call rclpy.shutdown() here. The FastAPI process can share
+        # this global context with encoder and navigation ROS nodes.
+        self.node = None
+        self.executor = None
+        self.thread = None
         self.started = False
 
     def mark_connected(self, robot_id: str) -> None:
