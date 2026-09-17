@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -8,12 +9,25 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def rclpy_shutdown_calls(path: str) -> list[ast.Call]:
+    tree = ast.parse(read(path))
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "shutdown" or not isinstance(node.func.value, ast.Name):
+            continue
+        if node.func.value.id == "rclpy":
+            calls.append(node)
+    return calls
+
+
 def test_ros_bridges_do_not_shutdown_shared_rclpy_context():
     encoder = read("server/encoder_ros_bridge.py")
     lidar = read("server/lidar_ros_bridge.py")
 
-    assert "rclpy.shutdown()" not in encoder
-    assert "rclpy.shutdown()" not in lidar
+    assert rclpy_shutdown_calls("server/encoder_ros_bridge.py") == []
+    assert rclpy_shutdown_calls("server/lidar_ros_bridge.py") == []
     assert "executor.shutdown" in encoder
     assert "executor.shutdown" in lidar
 
