@@ -32,6 +32,7 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
     ros_install_setup = root_dir / "navigation" / "ros" / "install" / "setup.bash"
     component_ids = ("lidar_ros_bridge", "encoder_ros_bridge", "wheel_odometry", "slam_mapping", "map_bridge")
     locks = {component_id: threading.Lock() for component_id in component_ids}
+    supervisor_managed_components = frozenset({"wheel_odometry", "map_bridge"})
 
     dashboard_control_lock = threading.Lock()
     dashboard_control_state = {
@@ -233,9 +234,9 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
         labels = {
             "lidar_ros_bridge": ("LiDAR ROS Bridge", "Pi의 LiDAR 데이터를 ROS 2 /scan으로 전달"),
             "encoder_ros_bridge": ("Encoder ROS Bridge", "Pi의 엔코더 데이터를 ROS 2 /wheel_ticks로 전달"),
-            "wheel_odometry": ("Wheel Odometry", "엔코더 기반 로봇 위치 변화와 odom TF 계산"),
+            "wheel_odometry": ("Wheel Odometry", "root GPU supervisor가 관리하는 엔코더 기반 odometry"),
             "slam_mapping": ("SLAM Mapping", "LiDAR 기반 지도 작성과 Map Bridge 함께 실행"),
-            "map_bridge": ("Map Bridge", "단독 실행 시 지도·위치·LiDAR 데이터를 대시보드로 전달"),
+            "map_bridge": ("Map Bridge", "Mapping/Driving launch가 소유하는 지도·위치 전송 노드"),
         }
         module = server_module()
         label, description = labels[component_id]
@@ -250,11 +251,25 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
         else:
             matches = matching_processes(component_id)
             count, pids = len(matches), [item["pid"] for item in matches]
+
+        duplicate = count > 1
+        control_available = component_id not in supervisor_managed_components
+        message = "중복 실행 감지" if duplicate else None
+        if component_id == "wheel_odometry":
+            message = "start_gpu_server.sh가 소유하므로 대시보드에서 개별 시작/중지하지 않습니다."
+        elif component_id == "map_bridge":
+            message = "Mapping/Driving launch가 소유하므로 단독 실행하지 않습니다."
+
         return {
-            "id": component_id, "label": label, "description": description,
-            "state": "off" if count == 0 else "duplicate" if count > 1 else "on",
-            "instance_count": count, "duplicate": count > 1, "pids": pids,
-            "message": "중복 실행 감지" if count > 1 else None,
+            "id": component_id,
+            "label": label,
+            "description": description,
+            "state": "off" if count == 0 else "duplicate" if duplicate else "on",
+            "instance_count": count,
+            "duplicate": duplicate,
+            "pids": pids,
+            "control_available": control_available,
+            "message": message,
         }
 
     def ros_command(command: list[str]) -> list[str]:
@@ -280,6 +295,8 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
                 lidar_x=env_float("LIDAR_X"),
                 lidar_y=env_float("LIDAR_Y"),
                 lidar_z=env_float("LIDAR_Z"),
+                lidar_roll=env_float("LIDAR_ROLL"),
+                lidar_pitch=env_float("LIDAR_PITCH"),
                 lidar_yaw=env_float("LIDAR_YAW"),
                 dashboard_max_points=env_int(
                     "LIDAR_DASHBOARD_MAX_POINTS", minimum=1
@@ -305,9 +322,7 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
             module.encoder_ros_bridge = None
 
     def start_process(component_id: str) -> None:
-        if component_id == "wheel_odometry":
-            command = [sys.executable, str(wheel_script)]
-        elif component_id == "slam_mapping":
+        if component_id == "slam_mapping":
             if navigation_process_control is not None:
                 navigation_process_control.transition("MAPPING")
                 return
@@ -316,18 +331,8 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
                 "server_base_url:=http://127.0.0.1:21063", "robot_id:=pi-01",
                 "start_lidar:=false", "start_fake_odom:=false", "start_rviz:=false",
             ]
-        elif component_id == "map_bridge":
-            command = [
-                "ros2", "run", "patrol_navigation", "map_bridge", "--ros-args",
-                "-p", "robot_id:=pi-01",
-                "-p", "server_base_url:=http://127.0.0.1:21063",
-                "-p", "map_topic:=/map",
-                "-p", "scan_topic:=/scan",
-                "-p", "pose_parent_frame:=map",
-                "-p", "pose_child_frame:=base_link",
-            ]
         else:
-            raise KeyError(component_id)
+            raise RuntimeError(f"{component_id} is owned by the root runtime supervisor or navigation launch")
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / f"{component_id}.log").open("ab") as log_file:
             subprocess.Popen(
@@ -345,6 +350,9 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
             else:
                 navigation_process_control.stop("MAPPING")
             return
+        if component_id in supervisor_managed_components:
+            raise RuntimeError(f"{component_id} is supervisor-managed and cannot be stopped independently")
+
         matches = matching_processes(component_id)
         targets = matches[1:] if keep_one else matches
         for item in targets:
@@ -371,6 +379,8 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
     def control_gpu(component_id: str, action: str) -> dict:
         with locks[component_id]:
             status = gpu_status(component_id)
+            if not status.get("control_available", True):
+                raise RuntimeError(status.get("message") or f"{component_id} is read-only")
             if action == "start" and status["instance_count"] == 0:
                 start_bridge(component_id) if component_id.endswith("bridge") else start_process(component_id)
             elif action == "stop":
@@ -405,6 +415,9 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
             return denied
         if component_id not in component_ids or action not in {"start", "stop", "normalize"}:
             return error("Invalid system control request.", 404)
+        status = gpu_status(component_id)
+        if not status.get("control_available", True):
+            return error(status.get("message") or "Component is read-only.", 409)
         try:
             component = await asyncio.to_thread(control_gpu, component_id, action)
             return {"ok": True, "component": component, "updated_at": datetime.now(timezone.utc).isoformat()}
