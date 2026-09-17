@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+import os
 import queue
 import threading
 import time
@@ -164,8 +165,8 @@ class LidarRosBridge:
         lidar_x: float = 0.0,
         lidar_y: float = 0.0,
         lidar_z: float = 0.12,
-        lidar_roll: float = 0.0,
-        lidar_pitch: float = 0.0,
+        lidar_roll: float | None = None,
+        lidar_pitch: float | None = None,
         lidar_yaw: float = 0.0,
         dashboard_max_points: int = 360,
         use_source_timestamp: bool = True,
@@ -177,8 +178,12 @@ class LidarRosBridge:
         self.lidar_x = float(lidar_x)
         self.lidar_y = float(lidar_y)
         self.lidar_z = float(lidar_z)
-        self.lidar_roll = float(lidar_roll)
-        self.lidar_pitch = float(lidar_pitch)
+        self.lidar_roll = float(
+            os.getenv("LIDAR_ROLL", "0") if lidar_roll is None else lidar_roll
+        )
+        self.lidar_pitch = float(
+            os.getenv("LIDAR_PITCH", "0") if lidar_pitch is None else lidar_pitch
+        )
         self.lidar_yaw = float(lidar_yaw)
 
         self.dashboard_max_points = max(0, int(dashboard_max_points))
