@@ -168,7 +168,9 @@ required_env=(
     SERVER_HOST
     SERVER_PORT
     ROS_DOMAIN_ID
+    ROS_LOCALHOST_ONLY
     ENCODER_ROS_ENABLE
+    ENCODER_ROS_TOPIC
     WHEEL_DIAMETER_M
     WHEEL_TRACK_M
     ENCODER_TICKS_PER_REV
@@ -187,11 +189,18 @@ case "${ENCODER_ROS_ENABLE,,}" in
     *) fail "ENCODER_ROS_ENABLE must be enabled for the final runtime" ;;
 esac
 
+[[ "${ROS_LOCALHOST_ONLY}" == "1" ]] \
+    || fail "ROS_LOCALHOST_ONLY must be 1; Pi/GPU sensor transport uses WebSocket, not cross-host DDS"
+
+[[ "${ENCODER_ROS_TOPIC}" == "${WHEEL_TICKS_TOPIC}" ]] \
+    || fail "ENCODER_ROS_TOPIC and WHEEL_TICKS_TOPIC must match"
+
 require_cmd python3
 require_cmd curl
 require_cmd flock
 require_cmd setsid
 require_cmd ps
+require_cmd timeout
 
 [[ -f /opt/ros/humble/setup.bash ]] || fail "ROS 2 Humble setup not found"
 [[ -f "${ROOT_DIR}/navigation/ros/install/setup.bash" ]] \
@@ -208,7 +217,7 @@ source /opt/ros/humble/setup.bash
 source "${ROOT_DIR}/navigation/ros/install/setup.bash"
 set -u
 
-export ROS_DOMAIN_ID ENCODER_ROS_ENABLE
+export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV
 export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME
 
@@ -235,7 +244,7 @@ if [[ -f "${PID_FILE}" ]]; then
     fi
 fi
 
-# Compatibility cleanup for the removed legacy launcher and any stale workers.
+# Compatibility cleanup for removed launchers and stale workers.
 stop_matching "server/scripts/start_gpu_server.sh" TERM || true
 stop_matching "python3 -m uvicorn server.app:app" TERM || true
 stop_matching "uvicorn server.app:app" TERM || true
@@ -243,6 +252,9 @@ stop_matching "server/wheel_odometry.py" TERM || true
 stop_matching "ros2 launch patrol_navigation mapping.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation navigation.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation localization.launch.py" TERM || true
+# Old dashboard builds could create a standalone map_bridge. The current
+# navigation launch owns map_bridge, so no standalone copy may survive restart.
+stop_matching "ros2 run patrol_navigation map_bridge" TERM || true
 
 printf '%s\n' "$$" > "${PID_FILE}"
 
@@ -277,26 +289,43 @@ if (( server_ready == 0 )); then
     fail "FastAPI did not become ready at ${health_url}"
 fi
 
-log "Starting wheel odometry"
-setsid python3 server/wheel_odometry.py &
-ODOM_PID=$!
+start_odometry() {
+    log "Starting wheel odometry"
+    setsid python3 server/wheel_odometry.py &
+    ODOM_PID=$!
 
-odom_ready=0
-for _ in {1..20}; do
-    if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
-        break
+    local publisher_ready=0
+    local topic_info
+    for _ in {1..20}; do
+        if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
+            break
+        fi
+        topic_info="$(ros2 topic info "${ODOM_TOPIC}" 2>/dev/null || true)"
+        if grep -Eq 'Publisher count:[[:space:]]*[1-9][0-9]*' <<< "${topic_info}"; then
+            publisher_ready=1
+            break
+        fi
+        sleep 0.5
+    done
+
+    if (( publisher_ready == 0 )); then
+        fail "wheel odometry publisher did not appear on ${ODOM_TOPIC}"
     fi
+}
 
-    topic_info="$(ros2 topic info "${ODOM_TOPIC}" 2>/dev/null || true)"
-    if grep -Eq 'Publisher count:[[:space:]]*[1-9][0-9]*' <<< "${topic_info}"; then
-        odom_ready=1
-        break
+start_odometry
+
+# A publisher object alone is not evidence of live odometry. If encoder data is
+# already available, require a real /odom sample. If Pi is not connected yet,
+# keep the local runtime READY and explicitly report WAITING.
+if timeout 3 ros2 topic echo "${WHEEL_TICKS_TOPIC}" --once >/dev/null 2>&1; then
+    if timeout 3 ros2 topic echo "${ODOM_TOPIC}" --once >/dev/null 2>&1; then
+        log "Odometry data READY: live ${WHEEL_TICKS_TOPIC} -> ${ODOM_TOPIC} confirmed"
+    else
+        fail "live encoder ticks exist but no odometry message was received on ${ODOM_TOPIC}"
     fi
-    sleep 0.5
-done
-
-if (( odom_ready == 0 )); then
-    fail "wheel odometry is not publishing ${ODOM_TOPIC}"
+else
+    log "WAITING: no live encoder sample yet; ${ODOM_TOPIC} will start when Pi encoder telemetry arrives"
 fi
 
 flock -u 9
@@ -314,16 +343,20 @@ else
     log "WAITING: Raspberry Pi stack may be started before or after this script"
 fi
 
-set +e
-wait -n "${SERVER_PID}" "${ODOM_PID}"
-status=$?
-set -e
+# FastAPI is the primary GPU service. wheel_odometry is owned by this
+# supervisor and is automatically restarted if an external dashboard action or
+# transient error terminates it. This prevents a child stop from collapsing the
+# entire GPU stack.
+while true; do
+    if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+        warn "FastAPI exited unexpectedly"
+        exit 1
+    fi
 
-if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
-    warn "FastAPI exited unexpectedly"
-fi
-if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
-    warn "wheel odometry exited unexpectedly"
-fi
+    if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
+        warn "wheel odometry exited unexpectedly; restarting supervisor-owned worker"
+        start_odometry
+    fi
 
-exit "${status}"
+    sleep 1
+done
