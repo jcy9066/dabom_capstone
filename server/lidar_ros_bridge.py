@@ -71,6 +71,23 @@ def dashboard_range(value: Any):
     return result
 
 
+def quaternion_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    half_roll = roll / 2.0
+    half_pitch = pitch / 2.0
+    half_yaw = yaw / 2.0
+
+    cr, sr = math.cos(half_roll), math.sin(half_roll)
+    cp, sp = math.cos(half_pitch), math.sin(half_pitch)
+    cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+
+    return (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+
+
 class LidarPublisherNode(Node):
     def __init__(self, bridge: "LidarRosBridge"):
         super().__init__("lidar_websocket_bridge")
@@ -99,12 +116,15 @@ class LidarPublisherNode(Node):
         transform.transform.translation.y = self.bridge.lidar_y
         transform.transform.translation.z = self.bridge.lidar_z
 
-        half_yaw = self.bridge.lidar_yaw / 2.0
-
-        transform.transform.rotation.x = 0.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = math.sin(half_yaw)
-        transform.transform.rotation.w = math.cos(half_yaw)
+        qx, qy, qz, qw = quaternion_from_rpy(
+            self.bridge.lidar_roll,
+            self.bridge.lidar_pitch,
+            self.bridge.lidar_yaw,
+        )
+        transform.transform.rotation.x = qx
+        transform.transform.rotation.y = qy
+        transform.transform.rotation.z = qz
+        transform.transform.rotation.w = qw
 
         self.static_tf_broadcaster.sendTransform(transform)
 
@@ -114,6 +134,8 @@ class LidarPublisherNode(Node):
             f"x={self.bridge.lidar_x} "
             f"y={self.bridge.lidar_y} "
             f"z={self.bridge.lidar_z} "
+            f"roll={self.bridge.lidar_roll} "
+            f"pitch={self.bridge.lidar_pitch} "
             f"yaw={self.bridge.lidar_yaw}"
         )
 
@@ -142,6 +164,8 @@ class LidarRosBridge:
         lidar_x: float = 0.0,
         lidar_y: float = 0.0,
         lidar_z: float = 0.12,
+        lidar_roll: float = 0.0,
+        lidar_pitch: float = 0.0,
         lidar_yaw: float = 0.0,
         dashboard_max_points: int = 360,
         use_source_timestamp: bool = True,
@@ -153,6 +177,8 @@ class LidarRosBridge:
         self.lidar_x = float(lidar_x)
         self.lidar_y = float(lidar_y)
         self.lidar_z = float(lidar_z)
+        self.lidar_roll = float(lidar_roll)
+        self.lidar_pitch = float(lidar_pitch)
         self.lidar_yaw = float(lidar_yaw)
 
         self.dashboard_max_points = max(0, int(dashboard_max_points))
