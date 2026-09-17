@@ -8,9 +8,9 @@
 - Frontend: `frontend/templates/`, `frontend/services/static/`
 - ROS 2: `navigation/ros/patrol_navigation/`
 - Raspberry Pi target: **Raspberry Pi 3 Model B (1GB), Ubuntu Server 22.04 arm64**
+- GPU runtime launcher: `start_gpu_server.sh`
+- Raspberry Pi runtime launcher: `start_pi_stack.sh`
 - Raspberry Pi client: `raspberry/robot_command_client.py`
-- Pi 3B setup: `raspberry/scripts/setup_pi3b.sh`
-- Pi 3B environment validation: `raspberry/scripts/validate_pi3b.sh`
 - Motor control: `raspberry/controllers/motor_controller.py`
 - Pico W: `raspberry/pico_w_sdk/main.c`
 - Tests: `tests/`
@@ -31,7 +31,7 @@ GPU Server
 ```
 
 Pi 3B UART 기준은 `/dev/serial0`, 115200 8N1, GPIO14/15이며,
-`setup_pi3b.sh` 적용 후 PL011(`ttyAMA0`)을 primary UART로 사용한다.
+PL011(`ttyAMA0`)을 primary UART로 사용하는 현재 하드웨어 구성을 기준으로 한다.
 Pi 3B 내장 Wi-Fi는 2.4GHz를 사용한다.
 
 문서와 코드가 충돌하면 현재 실행 경로와 실제 참조 관계를 우선한다.
@@ -61,19 +61,19 @@ Validation routing:
 - `frontend/` → `validate-dashboard`
 - `server/app.py` → `validate-server` + `validate-dashboard`
 - `navigation/` → `validate-navigation`
-- `raspberry/` → `validate-raspberry`
+- `raspberry/` 또는 `start_pi_stack.sh` → `validate-raspberry`
+- `start_gpu_server.sh` → `validate-server` + `validate-navigation`
 - source/config 변경 → `review-change`
 
-Pi 3B 관련 파일이 변경되면 `validate-raspberry`는 최소한 다음을 확인한다.
+Runtime launcher 관련 변경은 최소한 다음을 확인한다.
 
 ```text
-bash -n raspberry/scripts/setup_pi3b.sh
-bash -n raspberry/scripts/validate_pi3b.sh
+bash -n start_gpu_server.sh start_pi_stack.sh
 python .agents/skills/validate-raspberry/scripts/validate_uart_protocol.py
 ```
 
-실제 Pi 3B가 없는 개발 환경에서는 위 정적 검증까지만 수행한다.
-`validate_pi3b.sh`의 실기기 실행 결과와 정적 검증 결과를 혼합해서 보고하지 않는다.
+실제 Pi 3B가 없는 개발 환경에서는 정적 검증과 mock/test 결과까지만 인정한다.
+실제 UART, Camera, LiDAR, Pico 응답은 Pi 3B 실기기에서 실행한 결과와 구분해서 보고한다.
 
 ## 3. Orchestration / Worktree 규칙
 
@@ -113,10 +113,10 @@ T5 REVIEW      BLOCKED
 - 실제 하드웨어가 없으면 static/mock/build 결과와 실환경 결과를 구분한다.
 - 사용자의 명시적 요청 없이 실제 motor, GPIO, serial movement, firmware flash,
   `/cmd_vel`, Telegram 전송, 경고 방송, 지도/사용자/운영 DB 삭제를 실행하지 않는다.
-- `raspberry/scripts/setup_pi3b.sh`는 boot/UART/Bluetooth/Wi-Fi system 설정을 변경하므로
-  Agent가 개발 PC나 임의 환경에서 자동 실행하지 않는다. 기본 검증은 `bash -n`과 정적 검토만 수행한다.
-- `raspberry/scripts/validate_pi3b.sh`는 read-only 검증이지만 실제 Pi 3B 결과로 간주하려면
-  사용자가 해당 Pi에서 실행한 결과이거나 현재 세션이 명시적으로 Pi 3B 실기기 환경이어야 한다.
+- `start_pi_stack.sh`는 실제 UART, Camera, LiDAR, Pico W와 상호작용하고 기존 동일 역할 프로세스를 종료하므로
+  사용자의 명시적 요청 없이 개발 PC나 임의 환경에서 자동 실행하지 않는다.
+- `start_gpu_server.sh`는 기존 FastAPI/odometry/navigation runtime 프로세스를 종료할 수 있으므로
+  현재 GPU runtime을 재시작해도 되는 상황에서만 실행한다.
 - 운영 DB DDL/DML은 사용자가 현재 작업에서 명시적으로 승인한 범위만 수행한다.
 - 승인된 migration을 적용하기 전 현재 schema를 확인하고, 적용 후 다시 schema를 검증한다.
 - `DROP DATABASE`, `DROP TABLE`, `TRUNCATE`, 대량 `DELETE`는 명시적 별도 승인 없이는 금지한다.
