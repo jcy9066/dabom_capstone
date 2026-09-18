@@ -20,6 +20,11 @@
 # navigation_mode:
 #   localization_nav2
 #
+# odometry 설정:
+#   최종 runtime에서는 server/wheel_odometry.py의 /odom 및 dynamic
+#   odom->base_link TF를 사용한다. fake odometry는 기본 비활성화이며
+#   독립 테스트가 필요할 때만 start_fake_odom:=true로 활성화한다.
+#
 # 안전 설정:
 #   Nav2 최종 속도 명령은 실제 /cmd_vel이 아니라
 #   /cmd_vel_nav_dry_run으로 출력한다.
@@ -443,7 +448,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "start_fake_odom",
-                default_value="true",
+                default_value="false",
             ),
             DeclareLaunchArgument(
                 "start_nav2_command_bridge",
