@@ -8,9 +8,10 @@
 #       -> map_bridge
 #       -> FastAPI server
 #
-# 현재 엔코더 odometry가 연결되지 않았으므로 임시 static
-# odom->base_link TF를 사용할 수 있다.
-# 실제 odometry 연결 후 start_fake_odom:=false로 실행한다.
+# 최종 runtime에서는 root start_gpu_server.sh가 server/wheel_odometry.py를 실행하고
+# /wheel_ticks를 입력으로 /odom과 dynamic odom->base_link TF를 생성한다.
+# fake odometry는 launch 단독 테스트용으로만 유지하며 기본값은 비활성화한다.
+# 필요한 경우에만 start_fake_odom:=true를 명시적으로 전달한다.
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -143,7 +144,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "start_fake_odom",
-            default_value="true",
+            default_value="false",
         ),
         DeclareLaunchArgument(
             "start_rviz",
@@ -213,9 +214,9 @@ def generate_launch_description():
         # 임시 odom -> base_link TF
         # -----------------------------------------------------
         #
-        # 엔코더 odometry 연결 전 테스트용이다.
-        # 실제 /odom과 odom->base_link TF가 생성되면 반드시
-        # start_fake_odom:=false로 실행해야 한다.
+        # encoder/wheel odometry 없이 launch만 독립 테스트할 때 사용하는
+        # opt-in fallback이다. 최종 runtime에서는 비활성화되며
+        # server/wheel_odometry.py의 dynamic odom->base_link TF만 사용한다.
         Node(
             package="tf2_ros",
             executable="static_transform_publisher",
