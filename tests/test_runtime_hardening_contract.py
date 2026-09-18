@@ -77,3 +77,28 @@ def test_gpu_lidar_bridge_supports_full_mounting_orientation():
     assert "quaternion_from_rpy" in bridge
     assert 'os.getenv("LIDAR_ROLL", "0")' in bridge
     assert 'os.getenv("LIDAR_PITCH", "0")' in bridge
+
+
+def test_navigation_launches_default_fake_odom_off_but_keep_opt_in_fallback():
+    launch_paths = (
+        "navigation/ros/patrol_navigation/launch/mapping.launch.py",
+        "navigation/ros/patrol_navigation/launch/localization.launch.py",
+        "navigation/ros/patrol_navigation/launch/navigation.launch.py",
+    )
+
+    for path in launch_paths:
+        content = read(path)
+        marker = '"start_fake_odom",'
+        index = content.index(marker)
+        declaration = content[index:index + 160]
+        assert 'default_value="false"' in declaration
+
+    mapping = read(launch_paths[0])
+    localization = read(launch_paths[1])
+    navigation = read(launch_paths[2])
+
+    assert "static_transform_publisher" in mapping
+    assert "static_transform_publisher" in localization
+    assert "condition=IfCondition(start_fake_odom)" in mapping
+    assert "start_fake_odom" in localization
+    assert '"start_fake_odom": (' in navigation
