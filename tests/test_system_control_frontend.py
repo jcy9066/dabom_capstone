@@ -38,9 +38,9 @@ def test_backend_component_descriptions_match_frontend_contract():
     for description in (
         "Pi\uc758 LiDAR \ub370\uc774\ud130\ub97c ROS 2 /scan\uc73c\ub85c \uc804\ub2ec",
         "Pi\uc758 \uc5d4\ucf54\ub354 \ub370\uc774\ud130\ub97c ROS 2 /wheel_ticks\ub85c \uc804\ub2ec",
-        "\uc5d4\ucf54\ub354 \uae30\ubc18 \ub85c\ubd07 \uc704\uce58 \ubcc0\ud654\uc640 odom TF \uacc4\uc0b0",
+        "root GPU supervisor\uac00 \uad00\ub9ac\ud558\ub294 \uc5d4\ucf54\ub354 \uae30\ubc18 odometry",
         "LiDAR \uae30\ubc18 \uc9c0\ub3c4 \uc791\uc131\uacfc Map Bridge \ud568\uaed8 \uc2e4\ud589",
-        "\ub2e8\ub3c5 \uc2e4\ud589 \uc2dc \uc9c0\ub3c4\u00b7\uc704\uce58\u00b7LiDAR \ub370\uc774\ud130\ub97c \ub300\uc2dc\ubcf4\ub4dc\ub85c \uc804\ub2ec",
+        "Mapping/Driving launch\uac00 \uc18c\uc720\ud558\ub294 \uc9c0\ub3c4\u00b7\uc704\uce58 \uc804\uc1a1 \ub178\ub4dc",
         "Pi\uc5d0\uc11c LiDAR \uc2a4\uce94 \ub370\uc774\ud130\ub97c \uc218\uc9d1",
     ):
         assert description in BACKEND
