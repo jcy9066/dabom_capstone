@@ -36,8 +36,24 @@ def runtime_env_keys() -> set[str]:
                     keys.add(node.args[0].value)
 
     required_shell_env = re.compile(r"\$\{([A-Z][A-Z0-9_]*):\?")
+    required_env_array = re.compile(
+        r"required_env\s*=\s*\((.*?)\)",
+        re.DOTALL,
+    )
+    shell_env_name = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
     for path in ROOT_DIR.glob("**/*.sh"):
-        keys.update(required_shell_env.findall(path.read_text(encoding="utf-8-sig")))
+        source = path.read_text(encoding="utf-8-sig")
+        keys.update(required_shell_env.findall(source))
+
+        # Root runtime launchers keep required .env keys in a shell array and
+        # validate them indirectly via ${!key:-}. Include those keys in the
+        # same exact-key contract as Python env_* readers.
+        for block in required_env_array.findall(source):
+            for token in block.split():
+                name = token.strip("'\"")
+                if shell_env_name.fullmatch(name):
+                    keys.add(name)
     return keys
 
 
