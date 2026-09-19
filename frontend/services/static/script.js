@@ -265,6 +265,7 @@ const lidarState = {
     map: null,
     pose: null,
     scan: null,
+    trajectory: { mode: null, point_count: 0, segments: [] },
     mapImage: null,
     mapImageKey: null,
     renderPending: false,
@@ -467,6 +468,39 @@ function canvasToWorld(x, y, layout) {
     };
 }
 
+function drawTrajectory(ctx, trajectory, layout) {
+    const segments = Array.isArray(trajectory?.segments) ? trajectory.segments : [];
+    if (!segments.length) return;
+
+    ctx.save();
+    ctx.strokeStyle = '#166534';
+    ctx.lineWidth = minimapExpanded ? 4 : 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = 'rgba(22, 101, 52, 0.45)';
+    ctx.shadowBlur = minimapExpanded ? 5 : 2;
+
+    for (const segment of segments) {
+        if (!Array.isArray(segment) || segment.length < 2) continue;
+        ctx.beginPath();
+        let started = false;
+        for (const item of segment) {
+            const x = Number(item?.x);
+            const y = Number(item?.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            const point = worldToCanvas(x, y, layout);
+            if (!started) {
+                ctx.moveTo(point.x, point.y);
+                started = true;
+            } else {
+                ctx.lineTo(point.x, point.y);
+            }
+        }
+        if (started) ctx.stroke();
+    }
+    ctx.restore();
+}
+
 function drawRobot(ctx, pose, layout) {
     if (!pose) return;
     const point = worldToCanvas(Number(pose.x || 0), Number(pose.y || 0), layout);
@@ -635,6 +669,7 @@ function renderLidarMap() {
     const map = lidarState.map;
     const pose = lidarState.pose;
     const scan = lidarState.scan;
+    const trajectory = lidarState.trajectory;
     const layout = getCanvasLayout(canvas, map);
 
     drawEmptyLidar(ctx, canvas);
@@ -648,6 +683,7 @@ function renderLidarMap() {
         ctx.lineWidth = Math.max(1, dpr);
         ctx.strokeRect(layout.x, layout.y, layout.width, layout.height);
     }
+    drawTrajectory(ctx, trajectory, layout);
     drawScan(ctx, scan, pose, layout);
     const pulseActive = drawScanPulse(ctx, pose, layout);
     drawRobot(ctx, pose, layout);
@@ -666,6 +702,19 @@ function requestLidarRender() {
         renderLidarMap();
     });
 }
+
+document.addEventListener('dabom:navigation-control-state', event => {
+    const mode = String(event?.detail?.navigation_mode || '').toUpperCase();
+    const trajectoryMode = String(lidarState.trajectory?.mode || '').toUpperCase();
+    if (
+        (mode === 'MAPPING' || mode === 'DRIVING')
+        && trajectoryMode
+        && trajectoryMode !== mode
+    ) {
+        lidarState.trajectory = { mode, point_count: 0, segments: [] };
+        requestLidarRender();
+    }
+});
 
 function defaultNavigationMapName() {
     const now = new Date();
@@ -757,6 +806,12 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
+    lidarState.trajectory = (
+        data.trajectory
+        && Array.isArray(data.trajectory.segments)
+    )
+        ? data.trajectory
+        : { mode: null, point_count: 0, segments: [] };
     if (data.scan_available && data.scan) {
         lidarState.scan = data.scan;
         noteScanUpdate(data.scan);

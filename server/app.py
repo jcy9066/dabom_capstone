@@ -67,6 +67,7 @@ from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
+from server.navigation_trajectory import NavigationTrajectoryTracker
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -453,6 +454,7 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+navigation_trajectory = NavigationTrajectoryTracker()
 frame_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 decode_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 publish_stats = {"last_time": time.time(), "count": 0, "fps": 0, "last_publish_at": None}
@@ -750,6 +752,7 @@ navigation_control_api = NavigationControlApi(
     get_live_map=current_navigation_map_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(payload, name),
     send_robot_command=connections.send_command_wait_ack,
+    on_mode_changed=navigation_trajectory.reset,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
 
@@ -2811,6 +2814,7 @@ async def update_navigation_map(request: Request):
         navigation_state["map"] = received_payload(data, received_at)
         navigation_state["map_updated_at"] = received_at
         navigation_state["map_revision"] = map_revision
+    navigation_trajectory.note_map(navigation_mode, map_revision)
     return {"ok": True}
 
 
@@ -2842,6 +2846,7 @@ async def update_navigation_pose(request: Request):
         store_navigation_mode(navigation_mode, received_at)
         navigation_state["pose"] = received_payload(data, received_at)
         navigation_state["pose_updated_at"] = received_at
+    navigation_trajectory.note_pose(navigation_mode, data)
     navigation_control_api.note_navigation_sample("pose", received_at, data)
     return {"ok": True}
 
@@ -2912,6 +2917,7 @@ async def get_navigation_snapshot(map_revision: str | None = None):
             "pose": pose,
             "scan_available": scan is not None,
             "scan": scan,
+            "trajectory": navigation_trajectory.snapshot(),
         }
         if map_changed:
             snapshot["map"] = current_map

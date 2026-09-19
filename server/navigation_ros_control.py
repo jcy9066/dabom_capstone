@@ -17,7 +17,7 @@ try:
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import ComputePathToPose, NavigateToPose
     from nav2_msgs.srv import LoadMap
-    from nav_msgs.msg import OccupancyGrid, Odometry
+    from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
     from sensor_msgs.msg import LaserScan
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
@@ -44,6 +44,7 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     LoadMap = None
     OccupancyGrid = None
     Odometry = None
+    NavPath = None
     LaserScan = None
     ActionClient = None
     Duration = None
@@ -115,6 +116,8 @@ class NavigationRosControl:
         self._last_scan_at = None
         self._last_odom_at = None
         self._last_tf_at = None
+        self._latest_plan: list[dict[str, float]] = []
+        self._last_plan_at: float | None = None
         self._tf_buffer = None
         self._tf_listener = None
         self._map = _MapObservation()
@@ -156,6 +159,7 @@ class NavigationRosControl:
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(Odometry, "/odom", self._on_odom, 10)
+            self._node.create_subscription(NavPath, "/plan", self._on_plan, 10)
             self._compute_path_client = ActionClient(
                 self._node,
                 ComputePathToPose,
@@ -354,6 +358,9 @@ class NavigationRosControl:
             raise NavigationRosError("NAVIGATOR_UNAVAILABLE", "NavigateToPose action is unavailable.", 503)
         request = NavigateToPose.Goal()
         request.pose = self._pose_stamped(goal)
+        with self._lock:
+            self._latest_plan = []
+            self._last_plan_at = None
         goal_handle = self._wait_future(
             self._navigate_client.send_goal_async(request),
             timeout_sec=3.0,
@@ -378,6 +385,9 @@ class NavigationRosControl:
             goal_handle = self._navigate_goal_handle
             result_future = self._navigate_result_future
         if goal_handle is None:
+            with self._lock:
+                self._latest_plan = []
+                self._last_plan_at = None
             return {"requested": False, "confirmed": True}
         response = self._wait_future(
             goal_handle.cancel_goal_async(),
@@ -408,11 +418,18 @@ class NavigationRosControl:
                 f"Nav2 completed cancel with status={result.status}.",
                 502,
             )
+        with self._lock:
+            self._latest_plan = []
+            self._last_plan_at = None
         return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:
             return {"state": self._navigation_state, "error": self._navigation_error}
+
+    def latest_planned_path(self) -> list[dict[str, float]]:
+        with self._lock:
+            return [dict(point) for point in self._latest_plan]
 
     def navigation_ready(self) -> bool:
         if ROS_IMPORT_ERROR is not None or not self._started:
@@ -609,6 +626,18 @@ class NavigationRosControl:
     def _on_odom(self, _message: Any) -> None:
         with self._lock:
             self._last_odom_at = time.monotonic()
+
+    def _on_plan(self, message: Any) -> None:
+        path = [
+            {
+                "x": float(item.pose.position.x),
+                "y": float(item.pose.position.y),
+            }
+            for item in message.poses
+        ]
+        with self._lock:
+            self._latest_plan = path
+            self._last_plan_at = time.monotonic()
 
     def _on_map(self, message: Any) -> None:
         with self._condition:

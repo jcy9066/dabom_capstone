@@ -36,6 +36,7 @@ class FakeRos:
         self.navigate_calls = 0
         self.cancel_calls = 0
         self.state = "IDLE"
+        self.live_path = []
         self.health = {
             "available": True,
             "odometry_age_sec": 0.01,
@@ -61,6 +62,9 @@ class FakeRos:
 
     def navigation_status(self):
         return {"state": self.state, "error": None}
+
+    def latest_planned_path(self):
+        return [dict(point) for point in self.live_path]
 
     def watchdog_status(self, now=None):
         return dict(self.health)
@@ -109,6 +113,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.map_api = FakeMapApi()
         self.process = FakeProcess()
         self.commands = []
+        self.mode_changes = []
 
         async def sender(robot_id, command):
             self.commands.append((robot_id, dict(command)))
@@ -135,6 +140,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             get_live_map=lambda: {"width": 1, "height": 1, "data": [[0, 1]]},
             save_map=lambda payload, name: {"map_name": "test_map"},
             send_robot_command=sender,
+            on_mode_changed=self.mode_changes.append,
             watchdog=NavigationWatchdogConfig(
                 interval_sec=10,
                 lidar_timeout_sec=5,
@@ -178,6 +184,30 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
         self.assertFalse(started["motor_output_enabled"])
         self.assertTrue(started["dry_run"])
+
+
+    async def test_live_nav2_replan_replaces_displayed_planned_path(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"goal": {"x": 1.0, "y": 1.0, "yaw": 0.0}})
+        await self.api.start_navigation()
+
+        self.map_api.ros_control.live_path = [
+            {"x": 0.0, "y": 0.0},
+            {"x": 0.4, "y": 0.2},
+            {"x": 1.0, "y": 1.0},
+        ]
+
+        state = self.api.state_response()
+
+        self.assertEqual(self.map_api.ros_control.live_path, state["planned_path"])
+
+    async def test_successful_navigation_mode_switch_notifies_visualization_reset(self):
+        await self.driving_ready()
+        self.assertEqual(["DRIVING"], self.mode_changes)
+
+        await self.api.switch_mode({"mode": "MAPPING"})
+
+        self.assertEqual(["DRIVING", "MAPPING"], self.mode_changes)
 
     async def test_goal_terminal_and_manual_tolerance_rules(self):
         await self.driving_ready()
