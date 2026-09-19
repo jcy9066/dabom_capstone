@@ -703,6 +703,19 @@ function requestLidarRender() {
     });
 }
 
+document.addEventListener('dabom:navigation-control-state', event => {
+    const mode = String(event?.detail?.navigation_mode || '').toUpperCase();
+    const trajectoryMode = String(lidarState.trajectory?.mode || '').toUpperCase();
+    if (
+        (mode === 'MAPPING' || mode === 'DRIVING')
+        && trajectoryMode
+        && trajectoryMode !== mode
+    ) {
+        lidarState.trajectory = { mode, point_count: 0, segments: [] };
+        requestLidarRender();
+    }
+});
+
 function defaultNavigationMapName() {
     const now = new Date();
     const yyyy = now.getFullYear();
