@@ -14,6 +14,8 @@ def test_dashboard_renders_actual_trajectory_before_scan_in_dark_green():
     assert "data.trajectory" in script
     assert "ctx.strokeStyle = '#166534'" in script
     assert "drawTrajectory(ctx, trajectory, layout);" in script
+    assert "dabom:navigation-control-state" in script
+    assert "trajectoryMode !== mode" in script
     assert script.index("drawTrajectory(ctx, trajectory, layout);") < script.index(
         "drawScan(ctx, scan, pose, layout);"
     )
