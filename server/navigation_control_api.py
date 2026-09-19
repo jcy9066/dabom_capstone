@@ -64,6 +64,7 @@ class NavigationControlApi:
         get_live_map: Callable[[], dict[str, Any] | None],
         save_map: Callable[[dict[str, Any], str | None], dict[str, Any]],
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool]],
+        on_mode_changed: Callable[[str], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
         motor_output_enabled: bool = False,
         estop_cooldown_sec: float | None = None,
@@ -78,6 +79,7 @@ class NavigationControlApi:
         self._get_live_map = get_live_map
         self._save_map = save_map
         self._send_robot_command = send_robot_command
+        self._on_mode_changed = on_mode_changed
         self._watchdog = watchdog or NavigationWatchdogConfig.from_env()
         self._motor_output_enabled = bool(motor_output_enabled)
         self._driving_ready_timeout_sec = env_float(
@@ -223,7 +225,21 @@ class NavigationControlApi:
             ros_nav = self._ros.navigation_status()
         except Exception:
             ros_nav = {"state": "UNAVAILABLE"}
+        try:
+            live_path = (
+                self._normalized_path(self._ros.latest_planned_path())
+                if hasattr(self._ros, "latest_planned_path")
+                else []
+            )
+        except Exception:
+            live_path = []
         with self._lock:
+            if (
+                self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+                and self._state["active_goal"] is not None
+                and len(live_path) >= 2
+            ):
+                self._state["planned_path"] = live_path
             if self._state["navigation_state"] == "NAVIGATING":
                 terminal = str(ros_nav.get("state", "")).upper()
                 if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
@@ -301,6 +317,7 @@ class NavigationControlApi:
                 if self._connected and not delivered:
                     self._state["last_error"] = "PI_MODE_SYNC_FAILED"
                 self._touch_locked()
+            self._notify_mode_changed("MAPPING")
             return self.state_response()
 
         source = str(payload.get("source", "existing")).strip().lower()
@@ -356,6 +373,7 @@ class NavigationControlApi:
             if self._connected and not delivered:
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
             self._touch_locked()
+        self._notify_mode_changed("DRIVING")
         return self.state_response()
 
     async def load_existing_map(
@@ -656,6 +674,16 @@ class NavigationControlApi:
             except Exception:
                 # State reads remain available even if a health adapter temporarily fails.
                 continue
+
+    def _notify_mode_changed(self, mode: str) -> None:
+        callback = self._on_mode_changed
+        if callback is None:
+            return
+        try:
+            callback(mode)
+        except Exception:
+            # Visualization state must never make a navigation transition fail.
+            return
 
     def _assert_resume_safety_locked(self, require_estop: bool) -> None:
         if self._state["navigation_mode"] != "DRIVING":
