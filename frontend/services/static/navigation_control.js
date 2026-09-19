@@ -477,9 +477,9 @@
             const path = state.control?.planned_path || [];
             if (path.length > 1) {
                 ctx.save();
-                ctx.strokeStyle = '#a855f7';
+                ctx.strokeStyle = '#991b1b';
                 ctx.lineWidth = 3;
-                ctx.shadowColor = 'rgba(168, 85, 247, 0.55)';
+                ctx.shadowColor = 'rgba(153, 27, 27, 0.55)';
                 ctx.shadowBlur = 5;
                 ctx.beginPath();
                 path.forEach((item, index) => {
