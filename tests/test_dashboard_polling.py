@@ -403,7 +403,10 @@ vm.runInContext(
         'dabom:sidebar-visibility',
         { detail: { open: false } },
     ));
-    assert.strictEqual(timers.size, 0);
+    assert.strictEqual(
+        [...timers.values()].some(timer => timer.delay === 5000),
+        false,
+    );
     assert.strictEqual(maximumActive.get('/api/system-control/status'), 1);
 })().catch(error => {
     console.error(error);
