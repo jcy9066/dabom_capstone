@@ -385,6 +385,9 @@ class NavigationRosControl:
             goal_handle = self._navigate_goal_handle
             result_future = self._navigate_result_future
         if goal_handle is None:
+            with self._lock:
+                self._latest_plan = []
+                self._last_plan_at = None
             return {"requested": False, "confirmed": True}
         response = self._wait_future(
             goal_handle.cancel_goal_async(),
@@ -415,6 +418,9 @@ class NavigationRosControl:
                 f"Nav2 completed cancel with status={result.status}.",
                 502,
             )
+        with self._lock:
+            self._latest_plan = []
+            self._last_plan_at = None
         return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self) -> dict[str, Any]:
