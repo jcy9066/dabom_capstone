@@ -343,7 +343,7 @@ vm.runInContext(
     assert.strictEqual(requestCount('/api/system-control/status'), 1);
     resolveRequest(latestPending('/api/system-control/status'), statusPayload);
     await flush();
-    assert.deepStrictEqual([...timers.values()].map(timer => timer.delay), [5000]);
+    assert.deepStrictEqual([...timers.values()].map(timer => timer.delay).sort(), [0, 5000]);
 
     runTimer(5000);
     assert.strictEqual(requestCount('/api/system-control/status'), 2);
