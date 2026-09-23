@@ -1,4 +1,37 @@
 {
-  "last_selected_map": "slam_test_01",
-  "updated_at": "2026-08-14T09:50:58.051373Z"
+  "version": 1,
+  "last_selected_map": "dabom_test_map",
+  "active_map": {
+    "map_name": "dabom_test_map",
+    "saved_at": "2026-09-23T14:04:21Z",
+    "width": 72,
+    "height": 87,
+    "resolution": 0.05000000074505806,
+    "origin": {
+      "x": -2.114304574166341,
+      "y": -2.4726702792299258,
+      "yaw": 0.0
+    },
+    "yaml": "navigation/maps/dabom_test_map.yaml",
+    "loaded_at": "2026-09-23T18:51:08.588809Z",
+    "initial_pose": {
+      "x": 0.094,
+      "y": -0.401,
+      "yaw_degrees": 170.25,
+      "yaw": 2.971423051520346
+    },
+    "verification": {
+      "map": {
+        "width": 72,
+        "height": 87,
+        "resolution": 0.05000000074505806
+      },
+      "amcl_pose": {
+        "x": 0.11317763636068238,
+        "y": -0.36312414186580183,
+        "yaw": 2.977324866151778
+      }
+    }
+  },
+  "updated_at": "2026-09-23T18:51:08.588819Z"
 }

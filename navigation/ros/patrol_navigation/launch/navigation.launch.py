@@ -309,7 +309,7 @@ def generate_launch_description():
                 "cmd_vel_topic": (
                     "/cmd_vel_nav_dry_run"
                 ),
-                "wheel_track_m": 0.201,
+                "wheel_track_m": 0.4023,
                 "max_wheel_mps": 0.50,
                 "twist_timeout_sec": nav2_twist_timeout_sec,
                 "server_base_url": (

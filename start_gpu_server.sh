@@ -316,10 +316,11 @@ start_odometry() {
 start_odometry
 
 # A publisher object alone is not evidence of live odometry. If encoder data is
-# already available, require a real /odom sample. If Pi is not connected yet,
-# keep the local runtime READY and explicitly report WAITING.
+# already available, wait briefly for a real /odom sample because ROS discovery
+# and the first encoder callback may take a few seconds. If Pi is not connected
+# yet, keep the local runtime READY and explicitly report WAITING.
 if timeout 3 ros2 topic echo "${WHEEL_TICKS_TOPIC}" --once >/dev/null 2>&1; then
-    if timeout 3 ros2 topic echo "${ODOM_TOPIC}" --once >/dev/null 2>&1; then
+    if timeout 10 ros2 topic echo "${ODOM_TOPIC}" --once >/dev/null 2>&1; then
         log "Odometry data READY: live ${WHEEL_TICKS_TOPIC} -> ${ODOM_TOPIC} confirmed"
     else
         fail "live encoder ticks exist but no odometry message was received on ${ODOM_TOPIC}"
@@ -327,6 +328,8 @@ if timeout 3 ros2 topic echo "${WHEEL_TICKS_TOPIC}" --once >/dev/null 2>&1; then
 else
     log "WAITING: no live encoder sample yet; ${ODOM_TOPIC} will start when Pi encoder telemetry arrives"
 fi
+
+
 
 flock -u 9
 RESTART_LOCKED=0
