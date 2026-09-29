@@ -592,6 +592,7 @@ function toggleMinimapExpand() {
         btn.title = '미니맵 축소';
         minimap.classList.add('expanded');
         minimapExpanded = true;
+        window.dabomLidar3D?.setExpandedState?.(true);
         requestLidarRender();
     } else {
         minimap.style.width = '';
@@ -603,7 +604,7 @@ function toggleMinimapExpand() {
         btn.title = '미니맵 확대';
         minimap.classList.remove('expanded');
         minimapExpanded = false;
-        window.dabomLidar3D?.setInteractionMode?.('view');
+        window.dabomLidar3D?.setExpandedState?.(false);
         requestLidarRender();
     }
 }
@@ -628,7 +629,6 @@ window.navigationMapView = {
     },
     requestRender() {
         requestLidarRender();
-        window.dabomLidar3D?.requestRender?.();
     },
 };
 
