@@ -22,6 +22,10 @@ if (root && canvas) {
         trajectory: 0xf59e0b,
         goal: 0xfb7185,
         draftGoal: 0xfbbf24,
+        cameraBody: 0x303941,
+        cameraLens: 0x111827,
+        cameraFrustum: 0xf59aa8,
+        cameraViewBorder: 0xe2e8f0,
     };
 
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
@@ -31,6 +35,13 @@ if (root && canvas) {
     const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
     const TRAJECTORY_FALLBACK_MS = 500;
     const MAX_TRAJECTORY_POINTS = 4000;
+    // Visualization-only camera geometry. The stream aspect ratio stays native.
+    const CAMERA_VIEW_DISTANCE_M = 0.75;
+    const CAMERA_VIEW_HEIGHT_M = 0.34;
+    const CAMERA_TEXTURE_MAX_WIDTH = 512;
+    const CAMERA_TEXTURE_FPS = 12;
+    const CAMERA_MOUNT_FORWARD_RATIO = 0.44;
+    const CAMERA_MOUNT_Z_OFFSET_M = 0.03;
 
     const renderer = new THREE.WebGLRenderer({
         canvas,
@@ -134,6 +145,16 @@ if (root && canvas) {
     goalRoot.name = 'navigation-goals';
     layerGroups.goal.add(goalRoot);
 
+    const cameraFrustumPoseGroup = new THREE.Group();
+    cameraFrustumPoseGroup.name = 'camera-frustum-pose';
+    cameraFrustumPoseGroup.visible = false;
+    layerGroups['camera-frustum'].add(cameraFrustumPoseGroup);
+
+    const cameraViewPoseGroup = new THREE.Group();
+    cameraViewPoseGroup.name = 'camera-view-pose';
+    cameraViewPoseGroup.visible = false;
+    layerGroups['camera-view'].add(cameraViewPoseGroup);
+
     let currentMapKey = null;
     let currentMap = null;
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
@@ -151,7 +172,18 @@ if (root && canvas) {
     let trajectorySessionActive = false;
     let trajectorySamples = [];
     let lastTrajectorySampleAt = 0;
+    let cameraVisualReady = false;
+    let cameraMountLocal = new THREE.Vector3(0.12, 0, 0.16);
+    let cameraAspect = 4 / 3;
+    let cameraViewPlane = null;
+    let cameraViewBorder = null;
+    let cameraFrustumLines = null;
+    let cameraTexture = null;
+    let cameraTextureCanvas = null;
+    let cameraTextureContext = null;
+    let lastCameraTextureAt = 0;
 
+    const cameraImage = document.getElementById('camera-stream');
     const raycaster = new THREE.Raycaster();
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
@@ -400,6 +432,227 @@ if (root && canvas) {
         return wheel;
     }
 
+    function createCameraPlaneGeometry(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+        const x = cameraMountLocal.x + CAMERA_VIEW_DISTANCE_M;
+        const z = cameraMountLocal.z;
+        const vertices = new Float32Array([
+            x, -halfWidth, z - halfHeight,
+            x, halfWidth, z - halfHeight,
+            x, halfWidth, z + halfHeight,
+            x, -halfWidth, z + halfHeight,
+        ]);
+        const uvs = new Float32Array([
+            0, 0,
+            1, 0,
+            1, 1,
+            0, 1,
+        ]);
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geometry.setIndex([0, 1, 2, 0, 2, 3]);
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
+    function createCameraOutlineGeometry(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+        const x = cameraMountLocal.x + CAMERA_VIEW_DISTANCE_M + 0.001;
+        const z = cameraMountLocal.z;
+        return new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(x, -halfWidth, z - halfHeight),
+            new THREE.Vector3(x, halfWidth, z - halfHeight),
+            new THREE.Vector3(x, halfWidth, z + halfHeight),
+            new THREE.Vector3(x, -halfWidth, z + halfHeight),
+        ]);
+    }
+
+    function createFrustumGeometry(width, height) {
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+        const origin = cameraMountLocal;
+        const x = cameraMountLocal.x + CAMERA_VIEW_DISTANCE_M;
+        const z = cameraMountLocal.z;
+        const corners = [
+            new THREE.Vector3(x, -halfWidth, z - halfHeight),
+            new THREE.Vector3(x, halfWidth, z - halfHeight),
+            new THREE.Vector3(x, halfWidth, z + halfHeight),
+            new THREE.Vector3(x, -halfWidth, z + halfHeight),
+        ];
+        const vertices = [];
+        for (const corner of corners) {
+            vertices.push(origin.x, origin.y, origin.z, corner.x, corner.y, corner.z);
+        }
+        for (let index = 0; index < corners.length; index += 1) {
+            const a = corners[index];
+            const b = corners[(index + 1) % corners.length];
+            vertices.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+            'position',
+            new THREE.Float32BufferAttribute(vertices, 3),
+        );
+        return geometry;
+    }
+
+    function ensureCameraTexture() {
+        if (cameraTexture) return cameraTexture;
+        cameraTextureCanvas = document.createElement('canvas');
+        cameraTextureCanvas.width = 512;
+        cameraTextureCanvas.height = 384;
+        cameraTextureContext = cameraTextureCanvas.getContext('2d', {
+            alpha: false,
+            desynchronized: true,
+        });
+        cameraTexture = new THREE.CanvasTexture(cameraTextureCanvas);
+        cameraTexture.colorSpace = THREE.SRGBColorSpace;
+        cameraTexture.minFilter = THREE.LinearFilter;
+        cameraTexture.magFilter = THREE.LinearFilter;
+        cameraTexture.generateMipmaps = false;
+        return cameraTexture;
+    }
+
+    function rebuildCameraGeometry(nextAspect = cameraAspect) {
+        const aspect = Number.isFinite(Number(nextAspect)) && Number(nextAspect) > 0
+            ? Number(nextAspect)
+            : 4 / 3;
+        cameraAspect = aspect;
+        const viewHeight = CAMERA_VIEW_HEIGHT_M;
+        const viewWidth = viewHeight * cameraAspect;
+
+        clearGroup(cameraFrustumPoseGroup);
+        cameraFrustumLines = new THREE.LineSegments(
+            createFrustumGeometry(viewWidth, viewHeight),
+            new THREE.LineBasicMaterial({
+                color: COLORS.cameraFrustum,
+                transparent: true,
+                opacity: 0.68,
+                depthWrite: false,
+            }),
+        );
+        cameraFrustumPoseGroup.add(cameraFrustumLines);
+
+        clearGroup(cameraViewPoseGroup);
+        const texture = ensureCameraTexture();
+        cameraViewPlane = new THREE.Mesh(
+            createCameraPlaneGeometry(viewWidth, viewHeight),
+            new THREE.MeshBasicMaterial({
+                map: texture,
+                side: THREE.DoubleSide,
+                toneMapped: false,
+            }),
+        );
+        cameraViewPoseGroup.add(cameraViewPlane);
+
+        cameraViewBorder = new THREE.LineLoop(
+            createCameraOutlineGeometry(viewWidth, viewHeight),
+            new THREE.LineBasicMaterial({
+                color: COLORS.cameraViewBorder,
+                transparent: true,
+                opacity: 0.78,
+                depthWrite: false,
+            }),
+        );
+        cameraViewPoseGroup.add(cameraViewBorder);
+        cameraVisualReady = true;
+    }
+
+    function updateCameraTexture(now) {
+        if (
+            !cameraVisualReady
+            || !cameraImage
+            || !cameraTexture
+            || !cameraTextureContext
+            || !layerGroups['camera-view'].visible
+            || !cameraViewPoseGroup.visible
+        ) return;
+
+        if (now - lastCameraTextureAt < 1000 / CAMERA_TEXTURE_FPS) return;
+        if (!cameraImage.complete || !cameraImage.naturalWidth || !cameraImage.naturalHeight) return;
+
+        const nextAspect = cameraImage.naturalWidth / cameraImage.naturalHeight;
+        if (Math.abs(nextAspect - cameraAspect) > 0.002) {
+            rebuildCameraGeometry(nextAspect);
+        }
+
+        const targetWidth = Math.max(
+            1,
+            Math.min(CAMERA_TEXTURE_MAX_WIDTH, cameraImage.naturalWidth),
+        );
+        const targetHeight = Math.max(1, Math.round(targetWidth / nextAspect));
+        if (
+            cameraTextureCanvas.width !== targetWidth
+            || cameraTextureCanvas.height !== targetHeight
+        ) {
+            cameraTextureCanvas.width = targetWidth;
+            cameraTextureCanvas.height = targetHeight;
+        }
+
+        try {
+            cameraTextureContext.drawImage(
+                cameraImage,
+                0,
+                0,
+                cameraTextureCanvas.width,
+                cameraTextureCanvas.height,
+            );
+            cameraTexture.needsUpdate = true;
+            lastCameraTextureAt = now;
+        } catch (error) {
+            // The existing dashboard stream remains authoritative if a frame
+            // is temporarily unavailable to the WebGL texture.
+        }
+    }
+
+    function addCameraBody(model, chassisLength, chassisWidth, topZ) {
+        cameraMountLocal.set(
+            chassisLength * CAMERA_MOUNT_FORWARD_RATIO,
+            0,
+            topZ + CAMERA_MOUNT_Z_OFFSET_M,
+        );
+
+        const bodyLength = clamp(chassisLength * 0.08, 0.032, 0.055);
+        const bodyWidth = clamp(chassisWidth * 0.24, 0.04, 0.075);
+        const bodyHeight = clamp(bodyWidth * 0.68, 0.028, 0.052);
+        const body = new THREE.Mesh(
+            new THREE.BoxGeometry(bodyLength, bodyWidth, bodyHeight),
+            new THREE.MeshStandardMaterial({
+                color: COLORS.cameraBody,
+                roughness: 0.82,
+                metalness: 0.02,
+            }),
+        );
+        body.position.copy(cameraMountLocal);
+        model.add(body);
+
+        const lens = new THREE.Mesh(
+            new THREE.CylinderGeometry(
+                Math.min(bodyWidth, bodyHeight) * 0.22,
+                Math.min(bodyWidth, bodyHeight) * 0.22,
+                bodyLength * 0.3,
+                18,
+            ),
+            new THREE.MeshStandardMaterial({
+                color: COLORS.cameraLens,
+                roughness: 0.55,
+                metalness: 0.08,
+            }),
+        );
+        lens.rotation.z = Math.PI / 2;
+        lens.position.set(
+            cameraMountLocal.x + bodyLength * 0.56,
+            cameraMountLocal.y,
+            cameraMountLocal.z,
+        );
+        model.add(lens);
+
+        rebuildCameraGeometry(cameraAspect);
+    }
+
     async function buildRobotModel() {
         try {
             const [upper, lower] = await Promise.all([
@@ -461,6 +714,13 @@ if (root && canvas) {
             );
             model.add(frontMarker);
 
+            addCameraBody(
+                model,
+                chassisLength,
+                chassisWidth,
+                Math.max(upperBox.max.z, wheelRadius * 2),
+            );
+
             obstacleHeightM = clamp(wheelRadius * 2.25, 0.07, 0.12);
 
             clearGroup(robotPoseGroup);
@@ -490,6 +750,8 @@ if (root && canvas) {
         robotPoseGroup.visible = Boolean(available && robotModelReady);
         tfPoseGroup.visible = Boolean(available);
         if (!available) {
+            cameraFrustumPoseGroup.visible = false;
+            cameraViewPoseGroup.visible = false;
             followTarget = null;
             return;
         }
@@ -502,6 +764,12 @@ if (root && canvas) {
         robotPoseGroup.rotation.z = yaw;
         tfPoseGroup.position.set(x, y, z);
         tfPoseGroup.rotation.z = yaw;
+        cameraFrustumPoseGroup.visible = cameraVisualReady;
+        cameraFrustumPoseGroup.position.set(x, y, z);
+        cameraFrustumPoseGroup.rotation.z = yaw;
+        cameraViewPoseGroup.visible = cameraVisualReady;
+        cameraViewPoseGroup.position.set(x, y, z);
+        cameraViewPoseGroup.rotation.z = yaw;
 
         followTarget = new THREE.Vector3(x, y, z);
         if (viewMode === 'follow') {
@@ -929,6 +1197,7 @@ if (root && canvas) {
             }
         }
 
+        updateCameraTexture(performance.now());
         controls.update();
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
@@ -962,6 +1231,9 @@ if (root && canvas) {
         clearGroup(pathRoot);
         clearGroup(trajectoryRoot);
         clearGroup(goalRoot);
+        clearGroup(cameraFrustumPoseGroup);
+        clearGroup(cameraViewPoseGroup);
+        cameraTexture?.dispose?.();
         renderer.dispose();
     }, { once: true });
 
