@@ -394,7 +394,6 @@ function updateLidarLabels() {
 
 function requestLidarRender() {
     updateLidarLabels();
-    window.dabomLidar3D?.requestRender?.();
 }
 
 function defaultNavigationMapName() {
@@ -555,7 +554,6 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 fetchNavigationSnapshot();
-window.addEventListener('resize', requestLidarRender);
 requestLidarRender();
 
 // ===================================================
