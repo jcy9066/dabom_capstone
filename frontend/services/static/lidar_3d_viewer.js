@@ -16,10 +16,21 @@ if (root && canvas) {
         upperChassis: 0x98a6b1,
         wheel: 0x222a31,
         robotFront: 0x5b9bd5,
+        scanRay: 0x7dd3fc,
+        scanPoint: 0x2dd4bf,
+        globalPath: 0x8b5cf6,
+        trajectory: 0xf59e0b,
+        goal: 0xfb7185,
+        draftGoal: 0xfbbf24,
     };
 
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
     const MAP_OCCUPIED_THRESHOLD = 50;
+    const LIDAR_HEIGHT_M = 0.12;
+    const TRAJECTORY_DISTANCE_M = 0.08;
+    const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
+    const TRAJECTORY_FALLBACK_MS = 500;
+    const MAX_TRAJECTORY_POINTS = 4000;
 
     const renderer = new THREE.WebGLRenderer({
         canvas,
@@ -102,6 +113,27 @@ if (root && canvas) {
     tfPoseGroup.visible = false;
     layerGroups.tf.add(tfPoseGroup);
 
+    const scanRoot = new THREE.Group();
+    scanRoot.name = 'laser-scan-rays';
+    layerGroups.scan.add(scanRoot);
+
+    const pointsRoot = new THREE.Group();
+    pointsRoot.name = 'lidar-points';
+    layerGroups.points.add(pointsRoot);
+
+    const pathRoot = new THREE.Group();
+    pathRoot.name = 'global-path';
+    layerGroups.path.add(pathRoot);
+
+    const trajectoryRoot = new THREE.Group();
+    trajectoryRoot.name = 'driving-trajectory';
+    trajectoryRoot.visible = false;
+    layerGroups.trajectory.add(trajectoryRoot);
+
+    const goalRoot = new THREE.Group();
+    goalRoot.name = 'navigation-goals';
+    layerGroups.goal.add(goalRoot);
+
     let currentMapKey = null;
     let currentMap = null;
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
@@ -109,7 +141,19 @@ if (root && canvas) {
     let robotVisual = null;
     let baseAxes = null;
     let viewMode = 'free';
+    let interactionMode = 'view';
     let followTarget = null;
+    let currentVisualizationState = null;
+    let currentControlState = null;
+    let currentDraftGoal = null;
+    let previousNavigationMode = null;
+    let previousNavigationState = null;
+    let trajectorySessionActive = false;
+    let trajectorySamples = [];
+    let lastTrajectorySampleAt = 0;
+
+    const raycaster = new THREE.Raycaster();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
     function disposeMaterial(material) {
         if (!material) return;
@@ -465,10 +509,345 @@ if (root && canvas) {
         }
     }
 
+    function validPose(pose) {
+        return Boolean(
+            pose
+            && Number.isFinite(Number(pose.x))
+            && Number.isFinite(Number(pose.y))
+        );
+    }
+
+    function rebuildScan(scan, pose) {
+        clearGroup(scanRoot);
+        clearGroup(pointsRoot);
+        if (!scan || !Array.isArray(scan.ranges) || !validPose(pose)) return;
+
+        const robotX = Number(pose.x);
+        const robotY = Number(pose.y);
+        const robotYaw = Number(pose.yaw) || 0;
+        const angleMin = Number(scan.angle_min) || 0;
+        const angleIncrement = Number(scan.angle_increment) || 0;
+        const rangeMin = Math.max(0, Number(scan.range_min) || 0);
+        const rangeMax = Number.isFinite(Number(scan.range_max))
+            ? Number(scan.range_max)
+            : 12;
+
+        const rayPositions = [];
+        const pointPositions = [];
+        for (let index = 0; index < scan.ranges.length; index += 1) {
+            const distance = Number(scan.ranges[index]);
+            if (!Number.isFinite(distance) || distance < rangeMin || distance > rangeMax) continue;
+
+            const angle = robotYaw + angleMin + angleIncrement * index;
+            const x = robotX + Math.cos(angle) * distance;
+            const y = robotY + Math.sin(angle) * distance;
+            rayPositions.push(
+                robotX, robotY, LIDAR_HEIGHT_M,
+                x, y, LIDAR_HEIGHT_M,
+            );
+            pointPositions.push(x, y, LIDAR_HEIGHT_M);
+        }
+
+        if (rayPositions.length) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute(rayPositions, 3),
+            );
+            const material = new THREE.LineBasicMaterial({
+                color: COLORS.scanRay,
+                transparent: true,
+                opacity: 0.34,
+                depthWrite: false,
+            });
+            scanRoot.add(new THREE.LineSegments(geometry, material));
+        }
+
+        if (pointPositions.length) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute(pointPositions, 3),
+            );
+            const material = new THREE.PointsMaterial({
+                color: COLORS.scanPoint,
+                size: 0.035,
+                sizeAttenuation: true,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+            });
+            pointsRoot.add(new THREE.Points(geometry, material));
+        }
+    }
+
+    function rebuildPath(path) {
+        clearGroup(pathRoot);
+        if (!Array.isArray(path) || path.length < 2) return;
+
+        const positions = [];
+        for (const point of path) {
+            const x = Number(point?.x);
+            const y = Number(point?.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            positions.push(x, y, 0.035);
+        }
+        if (positions.length < 6) return;
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+            'position',
+            new THREE.Float32BufferAttribute(positions, 3),
+        );
+        const material = new THREE.LineBasicMaterial({
+            color: COLORS.globalPath,
+            transparent: true,
+            opacity: 0.92,
+        });
+        pathRoot.add(new THREE.Line(geometry, material));
+    }
+
+    function createGoalMarker(goal, color) {
+        const x = Number(goal?.x);
+        const y = Number(goal?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+        const yaw = Number(goal?.yaw) || 0;
+        const marker = new THREE.Group();
+        marker.position.set(x, y, 0.045);
+        marker.rotation.z = yaw;
+
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.07, 0.105, 32),
+            new THREE.MeshBasicMaterial({
+                color,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+            }),
+        );
+        marker.add(ring);
+
+        const direction = new THREE.ArrowHelper(
+            new THREE.Vector3(1, 0, 0),
+            new THREE.Vector3(0, 0, 0.012),
+            0.30,
+            color,
+            0.085,
+            0.05,
+        );
+        marker.add(direction);
+        return marker;
+    }
+
+    function rebuildGoals() {
+        clearGroup(goalRoot);
+        const active = createGoalMarker(currentControlState?.active_goal, COLORS.goal);
+        if (active) goalRoot.add(active);
+        const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal);
+        if (draft) goalRoot.add(draft);
+    }
+
+    function renderTrajectory() {
+        clearGroup(trajectoryRoot);
+        if (!trajectorySamples.length) return;
+
+        const positions = [];
+        for (const point of trajectorySamples) {
+            positions.push(point.x, point.y, 0.045);
+        }
+
+        if (positions.length >= 6) {
+            const lineGeometry = new THREE.BufferGeometry();
+            lineGeometry.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute(positions, 3),
+            );
+            trajectoryRoot.add(new THREE.Line(
+                lineGeometry,
+                new THREE.LineBasicMaterial({
+                    color: COLORS.trajectory,
+                    transparent: true,
+                    opacity: 0.9,
+                }),
+            ));
+        }
+
+        const pointGeometry = new THREE.BufferGeometry();
+        pointGeometry.setAttribute(
+            'position',
+            new THREE.Float32BufferAttribute(positions, 3),
+        );
+        trajectoryRoot.add(new THREE.Points(
+            pointGeometry,
+            new THREE.PointsMaterial({
+                color: COLORS.trajectory,
+                size: 0.045,
+                sizeAttenuation: true,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+            }),
+        ));
+    }
+
+    function resetTrajectory(seedPose = null, active = false) {
+        trajectorySamples = [];
+        lastTrajectorySampleAt = 0;
+        trajectorySessionActive = active;
+        if (active && validPose(seedPose)) {
+            trajectorySamples.push({
+                x: Number(seedPose.x),
+                y: Number(seedPose.y),
+            });
+            lastTrajectorySampleAt = performance.now();
+        }
+        renderTrajectory();
+    }
+
+    function sampleTrajectory(pose) {
+        if (!trajectorySessionActive || !validPose(pose)) return;
+        const next = { x: Number(pose.x), y: Number(pose.y) };
+        const last = trajectorySamples[trajectorySamples.length - 1];
+        if (!last) {
+            trajectorySamples.push(next);
+            lastTrajectorySampleAt = performance.now();
+            renderTrajectory();
+            return;
+        }
+
+        const distance = Math.hypot(next.x - last.x, next.y - last.y);
+        const now = performance.now();
+        const fallbackReached = (
+            now - lastTrajectorySampleAt >= TRAJECTORY_FALLBACK_MS
+            && distance >= TRAJECTORY_FALLBACK_DISTANCE_M
+        );
+        if (distance < TRAJECTORY_DISTANCE_M && !fallbackReached) return;
+
+        trajectorySamples.push(next);
+        if (trajectorySamples.length > MAX_TRAJECTORY_POINTS) {
+            trajectorySamples.splice(
+                0,
+                trajectorySamples.length - MAX_TRAJECTORY_POINTS,
+            );
+        }
+        lastTrajectorySampleAt = now;
+        renderTrajectory();
+    }
+
+    function applyControlState(control) {
+        if (!control) return;
+        const mode = String(control.navigation_mode || '').toUpperCase();
+        const navState = String(control.navigation_state || '').toUpperCase();
+        const previousWasMoving = ['NAVIGATING', 'RESUMING'].includes(previousNavigationState);
+        const movingNow = ['NAVIGATING', 'RESUMING'].includes(navState);
+        const modeRestarted = (
+            mode !== previousNavigationMode
+            && (mode === 'DRIVING' || mode === 'MAPPING')
+        );
+        const newDrivingRun = (
+            mode === 'DRIVING'
+            && navState === 'NAVIGATING'
+            && !previousWasMoving
+        );
+
+        currentControlState = control;
+        rebuildPath(control.planned_path || []);
+        rebuildGoals();
+
+        if (mode === 'MAPPING') {
+            if (modeRestarted || trajectorySamples.length) {
+                resetTrajectory(null, false);
+            }
+            trajectoryRoot.visible = false;
+        } else if (mode === 'DRIVING') {
+            trajectoryRoot.visible = true;
+            if (modeRestarted) {
+                resetTrajectory(null, false);
+            }
+            if (newDrivingRun || (movingNow && !trajectorySessionActive)) {
+                resetTrajectory(currentVisualizationState?.pose, true);
+            }
+        } else {
+            trajectoryRoot.visible = false;
+        }
+
+        previousNavigationMode = mode;
+        previousNavigationState = navState;
+    }
+
+    function pointInsideCurrentMap(x, y) {
+        if (!currentMap) return false;
+        const width = Number(currentMap.width) || 0;
+        const height = Number(currentMap.height) || 0;
+        const resolution = Number(currentMap.resolution) || 0;
+        if (width <= 0 || height <= 0 || resolution <= 0) return false;
+
+        const transform = mapTransform(currentMap);
+        const dx = x - transform.x;
+        const dy = y - transform.y;
+        const cosYaw = Math.cos(transform.yaw);
+        const sinYaw = Math.sin(transform.yaw);
+        const localX = cosYaw * dx + sinYaw * dy;
+        const localY = -sinYaw * dx + cosYaw * dy;
+        return (
+            localX >= 0
+            && localY >= 0
+            && localX < width * resolution
+            && localY < height * resolution
+        );
+    }
+
+    function screenToGround(event) {
+        if (!currentMap) return null;
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+
+        const pointer = new THREE.Vector2(
+            ((event.clientX - rect.left) / rect.width) * 2 - 1,
+            -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        );
+        raycaster.setFromCamera(pointer, camera);
+
+        const z = mapTransform(currentMap).z;
+        groundPlane.set(new THREE.Vector3(0, 0, 1), -z);
+        const hit = new THREE.Vector3();
+        if (!raycaster.ray.intersectPlane(groundPlane, hit)) return null;
+        if (!pointInsideCurrentMap(hit.x, hit.y)) return null;
+        return { x: hit.x, y: hit.y };
+    }
+
+    function setInteractionMode(mode) {
+        interactionMode = mode === 'set-goal' ? 'set-goal' : 'view';
+        controls.enableRotate = interactionMode === 'view';
+        controls.enablePan = interactionMode === 'view';
+        controls.enableZoom = true;
+        root.closest('.lidar-viewer-overlay')?.classList.toggle(
+            'goal-input-active',
+            interactionMode === 'set-goal',
+        );
+        root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
+            button.classList.toggle(
+                'active',
+                button.dataset.lidarInteraction === interactionMode,
+            );
+        });
+        if (interactionMode === 'set-goal') canvas.focus({ preventScroll: true });
+    }
+
     function applyVisualizationState(state) {
         if (!state) return;
+        currentVisualizationState = state;
         rebuildMap(state.map || null, state.mapRevision);
         updateRobotPose(state.pose || null);
+        rebuildScan(state.scan || null, state.pose || null);
+        if (
+            trajectorySessionActive
+            && String(currentControlState?.navigation_mode || '').toUpperCase() === 'DRIVING'
+        ) {
+            sampleTrajectory(state.pose || null);
+        }
     }
 
     const setActiveViewButton = mode => {
@@ -501,6 +880,12 @@ if (root && canvas) {
 
     root.querySelectorAll('[data-lidar-view]').forEach(button => {
         button.addEventListener('click', () => setViewMode(button.dataset.lidarView));
+    });
+
+    root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
+        button.addEventListener('click', () => {
+            setInteractionMode(button.dataset.lidarInteraction);
+        });
     });
 
     root.querySelectorAll('[data-lidar-display]').forEach(input => {
@@ -556,6 +941,15 @@ if (root && canvas) {
         applyVisualizationState(event.detail);
     });
 
+    document.addEventListener('dabom:navigation-control-state', event => {
+        applyControlState(event.detail);
+    });
+
+    document.addEventListener('dabom:navigation-goal-draft', event => {
+        currentDraftGoal = event.detail || null;
+        rebuildGoals();
+    });
+
     window.addEventListener('beforeunload', () => {
         observer.disconnect();
         controls.dispose();
@@ -563,6 +957,11 @@ if (root && canvas) {
         clearGroup(gridRoot);
         clearGroup(robotPoseGroup);
         clearGroup(tfPoseGroup);
+        clearGroup(scanRoot);
+        clearGroup(pointsRoot);
+        clearGroup(pathRoot);
+        clearGroup(trajectoryRoot);
+        clearGroup(goalRoot);
         renderer.dispose();
     }, { once: true });
 
@@ -575,6 +974,11 @@ if (root && canvas) {
         world,
         layers: layerGroups,
         setViewMode,
+        setInteractionMode,
+        interactionMode() {
+            return interactionMode;
+        },
+        screenToGround,
         setFollowTarget(target) {
             followTarget = target ? new THREE.Vector3(target.x, target.y, target.z || 0) : null;
             if (viewMode === 'follow' && followTarget) controls.target.copy(followTarget);
@@ -587,6 +991,8 @@ if (root && canvas) {
 
     buildRobotModel();
     applyVisualizationState(window.dabomNavigationVisualizationState);
+    applyControlState(window.dabomNavigationControlState);
+    setInteractionMode('view');
     resize();
     animate();
 }
