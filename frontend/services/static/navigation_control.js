@@ -462,66 +462,6 @@
         window.navigationMapView?.requestRender();
     }
 
-    function drawArrow(ctx, goal, worldToCanvas, layout, color) {
-        if (!goal) return;
-        const point = worldToCanvas(goal.x, goal.y, layout);
-        const length = Math.max(20, 0.45 * layout.scale);
-        const endX = point.x + Math.cos(goal.yaw) * length;
-        const endY = point.y - Math.sin(goal.yaw) * length;
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(point.x, point.y);
-        ctx.lineTo(endX, endY);
-        ctx.stroke();
-        ctx.translate(endX, endY);
-        ctx.rotate(-goal.yaw);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-11, -6);
-        ctx.lineTo(-11, 6);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-    }
-
-    function drawGoalFlag(ctx, goal, worldToCanvas, layout) {
-        if (!goal) return;
-        const point = worldToCanvas(goal.x, goal.y, layout);
-        const size = Math.max(24, Math.min(40, 0.62 * layout.scale));
-        ctx.save();
-        ctx.font = `${size}px 'Noto Sans KR', 'Noto Sans', sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText('🚩', point.x, point.y + 5);
-        ctx.restore();
-    }
-
-    window.navigationControlOverlay = {
-        draw(ctx, layout, worldToCanvas) {
-            const path = state.control?.planned_path || [];
-            if (path.length > 1) {
-                ctx.save();
-                ctx.strokeStyle = '#a855f7';
-                ctx.lineWidth = 3;
-                ctx.shadowColor = 'rgba(168, 85, 247, 0.55)';
-                ctx.shadowBlur = 5;
-                ctx.beginPath();
-                path.forEach((item, index) => {
-                    const point = worldToCanvas(item.x, item.y, layout);
-                    if (index === 0) ctx.moveTo(point.x, point.y);
-                    else ctx.lineTo(point.x, point.y);
-                });
-                ctx.stroke();
-                ctx.restore();
-            }
-            if (state.control?.active_goal) drawGoalFlag(ctx, state.control.active_goal, worldToCanvas, layout);
-            if (state.draftGoal) drawArrow(ctx, state.draftGoal, worldToCanvas, layout, '#f59e0b');
-        },
-    };
-
     async function requestDriveMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
         if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending) return false;
@@ -633,6 +573,7 @@
         const target = String(mode || '').toUpperCase();
         if (target === 'MAPPING') return setMappingMode();
         if (target !== 'DRIVING' || state.drivePending || state.navigationPending || state.control?.navigation_mode === 'DRIVING') return;
+        if (!window.navigationMapView?.snapshot()?.expanded) window.toggleMinimapExpand?.();
         setFeedback('Driving 준비를 위해 저장 지도와 Initial Pose를 지정해주세요.');
         return window.openSavedMapModal?.();
     }
