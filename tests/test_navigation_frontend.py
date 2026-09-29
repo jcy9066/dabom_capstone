@@ -37,7 +37,14 @@ class NavigationFrontendContractTests(unittest.TestCase):
         goal_request = self.control.index("mutate('/api/navigation/control/goal', { goal })")
         self.assertLess(auto_request, goal_request)
         self.assertIn("state.draftGoal = null", self.control)
-        self.assertIn("drawGoalFlag", self.control)
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("drawGoalFlag", self.control)
+        self.assertIn("createGoalMarker", viewer)
+        self.assertIn("screenToGround", viewer)
+        self.assertIn("GLTFLoader", viewer)
+        self.assertIn("robot_upper_chassis.glb", viewer)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)
