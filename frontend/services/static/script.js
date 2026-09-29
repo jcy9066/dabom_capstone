@@ -254,7 +254,6 @@ if (cameraStream) {
 // ===================================================
 const LIDAR_STALE_SECONDS = 3;
 const LIDAR_OFFLINE_SECONDS = 8;
-const SCAN_PULSE_DURATION_MS = 850;
 const NAVIGATION_SNAPSHOT_VISIBLE_MS = 500;
 const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000;
 const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000;
@@ -265,12 +264,8 @@ const lidarState = {
     map: null,
     pose: null,
     scan: null,
-    mapImage: null,
-    mapImageKey: null,
-    renderPending: false,
     lastScanKey: null,
     lastScanSeenAtMs: 0,
-    lastScanPulseAtMs: 0,
     scanIntervalsMs: [],
 };
 
@@ -309,7 +304,6 @@ function noteScanUpdate(scan) {
 
     lidarState.lastScanKey = key;
     lidarState.lastScanSeenAtMs = now;
-    lidarState.lastScanPulseAtMs = now;
 }
 
 function getScanReceiveHz() {
@@ -350,225 +344,6 @@ function getLidarLiveState() {
         return { level: 'stale', label: 'STALE', title: 'LiDAR STALE', detail: `LAST ${formatAgeSeconds(age)} AGO`, age };
     }
     return { level: 'live', label: 'LIVE', title: 'LiDAR LIVE', detail: `AGE ${formatAgeSeconds(age)}`, age };
-}
-
-function decodeRleMap(runs, expectedLength) {
-    const output = new Int16Array(expectedLength);
-    let index = 0;
-    if (!Array.isArray(runs)) return output;
-    for (const run of runs) {
-        if (!Array.isArray(run) || run.length < 2) continue;
-        const value = Number(run[0]);
-        const count = Number(run[1]);
-        for (let i = 0; i < count && index < expectedLength; i += 1) {
-            output[index] = value;
-            index += 1;
-        }
-        if (index >= expectedLength) break;
-    }
-    return output;
-}
-
-function buildMapImage(map) {
-    const width = Number(map?.width || 0);
-    const height = Number(map?.height || 0);
-    if (!width || !height || !map?.data) return null;
-
-    const key = `${map.timestamp || ''}:${map.received_at || ''}:${width}x${height}`;
-    if (lidarState.mapImage && lidarState.mapImageKey === key) return lidarState.mapImage;
-
-    const cells = decodeRleMap(map.data, width * height);
-    const offscreen = document.createElement('canvas');
-    offscreen.width = width;
-    offscreen.height = height;
-    const ctx = offscreen.getContext('2d');
-    const image = ctx.createImageData(width, height);
-
-    for (let row = 0; row < height; row += 1) {
-        for (let col = 0; col < width; col += 1) {
-            const src = row * width + col;
-            const dstRow = height - 1 - row;
-            const dst = (dstRow * width + col) * 4;
-            const value = cells[src];
-            let r = 54, g = 65, b = 84;
-            if (value === 0) {
-                r = 230; g = 238; b = 246;
-            } else if (value > 0) {
-                const shade = Math.max(26, 92 - Math.round(value * 0.58));
-                r = shade; g = shade + 6; b = shade + 16;
-            }
-            image.data[dst] = r;
-            image.data[dst + 1] = g;
-            image.data[dst + 2] = b;
-            image.data[dst + 3] = 255;
-        }
-    }
-
-    ctx.putImageData(image, 0, 0);
-    lidarState.mapImage = offscreen;
-    lidarState.mapImageKey = key;
-    return offscreen;
-}
-
-function getCanvasLayout(canvas, map) {
-    const padding = minimapExpanded ? 24 : 8;
-    const width = canvas.width;
-    const height = canvas.height;
-    const mapWidth = Number(map?.width || 0);
-    const mapHeight = Number(map?.height || 0);
-    const resolution = Number(map?.resolution || 0.05);
-    const worldWidth = mapWidth > 0 ? mapWidth * resolution : 8;
-    const worldHeight = mapHeight > 0 ? mapHeight * resolution : 8;
-    const scale = Math.min(
-        (width - padding * 2) / Math.max(worldWidth, 0.1),
-        (height - padding * 2) / Math.max(worldHeight, 0.1)
-    );
-    const drawWidth = worldWidth * scale;
-    const drawHeight = worldHeight * scale;
-    return {
-        padding,
-        scale,
-        x: (width - drawWidth) / 2,
-        y: (height - drawHeight) / 2,
-        width: drawWidth,
-        height: drawHeight,
-        worldWidth,
-        worldHeight,
-        originX: Number(map?.origin?.x || 0),
-        originY: Number(map?.origin?.y || 0),
-        originYaw: Number(map?.origin?.yaw || 0),
-    };
-}
-
-function worldToCanvas(x, y, layout) {
-    const dx = x - layout.originX;
-    const dy = y - layout.originY;
-    const cosYaw = Math.cos(layout.originYaw);
-    const sinYaw = Math.sin(layout.originYaw);
-    const localX = cosYaw * dx + sinYaw * dy;
-    const localY = -sinYaw * dx + cosYaw * dy;
-    return {
-        x: layout.x + localX * layout.scale,
-        y: layout.y + layout.height - localY * layout.scale,
-    };
-}
-
-function canvasToWorld(x, y, layout) {
-    const localX = (x - layout.x) / layout.scale;
-    const localY = (layout.y + layout.height - y) / layout.scale;
-    if (localX < 0 || localY < 0 || localX >= layout.worldWidth || localY >= layout.worldHeight) {
-        return null;
-    }
-    const cosYaw = Math.cos(layout.originYaw);
-    const sinYaw = Math.sin(layout.originYaw);
-    return {
-        x: layout.originX + cosYaw * localX - sinYaw * localY,
-        y: layout.originY + sinYaw * localX + cosYaw * localY,
-    };
-}
-
-function drawRobot(ctx, pose, layout) {
-    if (!pose) return;
-    const point = worldToCanvas(Number(pose.x || 0), Number(pose.y || 0), layout);
-    const yaw = Number(pose.yaw || 0);
-    const size = minimapExpanded ? 13 : 8;
-
-    ctx.save();
-    ctx.translate(point.x, point.y);
-    ctx.rotate(-yaw);
-    ctx.beginPath();
-    ctx.moveTo(size, 0);
-    ctx.lineTo(-size * 0.65, -size * 0.55);
-    ctx.lineTo(-size * 0.35, 0);
-    ctx.lineTo(-size * 0.65, size * 0.55);
-    ctx.closePath();
-    ctx.fillStyle = '#e11d48';
-    ctx.strokeStyle = 'rgba(255,255,255,0.86)';
-    ctx.lineWidth = minimapExpanded ? 2 : 1.2;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-}
-
-function drawScan(ctx, scan, pose, layout) {
-    if (!scan || !Array.isArray(scan.ranges) || scan.ranges.length === 0) return;
-    const hasPose = Boolean(pose);
-    const robotX = hasPose ? Number(pose.x || 0) : layout.originX + layout.worldWidth / 2;
-    const robotY = hasPose ? Number(pose.y || 0) : layout.originY + layout.worldHeight / 2;
-    const robotYaw = hasPose ? Number(pose.yaw || 0) : 0;
-    const angleMin = Number(scan.angle_min || 0);
-    const angleIncrement = Number(scan.angle_increment || 0);
-    const rangeMin = Number(scan.range_min || 0);
-    const rangeMax = Number(scan.range_max || 12);
-
-    ctx.save();
-    ctx.fillStyle = '#22d3ee';
-    ctx.shadowColor = 'rgba(34, 211, 238, 0.5)';
-    ctx.shadowBlur = minimapExpanded ? 5 : 2;
-    const radius = minimapExpanded ? 2.2 : 1.4;
-    for (let i = 0; i < scan.ranges.length; i += 1) {
-        const range = scan.ranges[i];
-        if (range === null || range === undefined) continue;
-        const distance = Number(range);
-        if (!Number.isFinite(distance) || distance < rangeMin || distance > rangeMax) continue;
-        const angle = robotYaw + angleMin + angleIncrement * i;
-        const x = robotX + Math.cos(angle) * distance;
-        const y = robotY + Math.sin(angle) * distance;
-        const point = worldToCanvas(x, y, layout);
-        if (point.x < layout.x - 2 || point.x > layout.x + layout.width + 2) continue;
-        if (point.y < layout.y - 2 || point.y > layout.y + layout.height + 2) continue;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-    }
-    ctx.restore();
-}
-
-function drawScanPulse(ctx, pose, layout) {
-    if (!lidarState.lastScanPulseAtMs) return false;
-
-    const elapsed = performance.now() - lidarState.lastScanPulseAtMs;
-    if (elapsed < 0 || elapsed > SCAN_PULSE_DURATION_MS) return false;
-
-    const progress = elapsed / SCAN_PULSE_DURATION_MS;
-    const robotX = pose ? Number(pose.x || 0) : layout.originX + layout.worldWidth / 2;
-    const robotY = pose ? Number(pose.y || 0) : layout.originY + layout.worldHeight / 2;
-    const center = worldToCanvas(robotX, robotY, layout);
-    const baseRadius = minimapExpanded ? 12 : 6;
-    const spread = minimapExpanded ? 80 : 28;
-    const radius = baseRadius + spread * progress;
-    const alpha = Math.max(0, 0.78 * (1 - progress));
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(34, 211, 238, ${alpha})`;
-    ctx.lineWidth = minimapExpanded ? 3 : 1.8;
-    ctx.shadowColor = `rgba(34, 211, 238, ${alpha})`;
-    ctx.shadowBlur = minimapExpanded ? 16 : 8;
-    ctx.stroke();
-    ctx.restore();
-    return true;
-}
-
-function drawEmptyLidar(ctx, canvas) {
-    ctx.fillStyle = '#101827';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.14)';
-    ctx.lineWidth = 1;
-    const step = minimapExpanded ? 32 : 16;
-    for (let x = 0; x < canvas.width; x += step) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-    }
-    for (let y = 0; y < canvas.height; y += step) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-    }
 }
 
 function updateLidarLabels() {
@@ -617,57 +392,9 @@ function updateLidarLabels() {
     }
 }
 
-function renderLidarMap() {
-    const canvas = document.getElementById('lidar-map-canvas');
-    if (!canvas) {
-        updateLidarLabels();
-        return;
-    }
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const nextWidth = Math.max(1, Math.floor(rect.width * dpr));
-    const nextHeight = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
-        canvas.width = nextWidth;
-        canvas.height = nextHeight;
-    }
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const map = lidarState.map;
-    const pose = lidarState.pose;
-    const scan = lidarState.scan;
-    const layout = getCanvasLayout(canvas, map);
-
-    drawEmptyLidar(ctx, canvas);
-    if (map) {
-        const image = buildMapImage(map);
-        if (image) {
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(image, layout.x, layout.y, layout.width, layout.height);
-        }
-        ctx.strokeStyle = 'rgba(34, 211, 238, 0.32)';
-        ctx.lineWidth = Math.max(1, dpr);
-        ctx.strokeRect(layout.x, layout.y, layout.width, layout.height);
-    }
-    drawScan(ctx, scan, pose, layout);
-    const pulseActive = drawScanPulse(ctx, pose, layout);
-    drawRobot(ctx, pose, layout);
-    if (window.navigationControlOverlay?.draw) {
-        window.navigationControlOverlay.draw(ctx, layout, worldToCanvas);
-    }
-    updateLidarLabels();
-    if (pulseActive) requestLidarRender();
-}
-
 function requestLidarRender() {
-    if (lidarState.renderPending) return;
-    lidarState.renderPending = true;
-    requestAnimationFrame(() => {
-        lidarState.renderPending = false;
-        renderLidarMap();
-    });
+    updateLidarLabels();
+    window.dabomLidar3D?.requestRender?.();
 }
 
 function defaultNavigationMapName() {
@@ -748,7 +475,6 @@ function clearNavigationScan() {
     lidarState.scan = null;
     lidarState.lastScanKey = null;
     lidarState.lastScanSeenAtMs = 0;
-    lidarState.lastScanPulseAtMs = 0;
     lidarState.scanIntervalsMs = [];
 }
 
@@ -770,8 +496,6 @@ function applyNavigationSnapshot(data) {
     navigationMapRevision = data.map_revision ?? null;
     if (!data.map_available) {
         lidarState.map = null;
-        lidarState.mapImage = null;
-        lidarState.mapImageKey = null;
     } else if (data.map_changed && data.map) {
         lidarState.map = data.map;
     }
@@ -881,6 +605,7 @@ function toggleMinimapExpand() {
         btn.title = '미니맵 확대';
         minimap.classList.remove('expanded');
         minimapExpanded = false;
+        window.dabomLidar3D?.setInteractionMode?.('view');
         requestLidarRender();
     }
 }
@@ -893,7 +618,7 @@ window.navigationMapView = {
         return {
             map: lidarState.map,
             pose: lidarState.pose,
-            expanded: true,
+            expanded: minimapExpanded,
             interactionMode: window.dabomLidar3D?.interactionMode?.() || 'view',
         };
     },
