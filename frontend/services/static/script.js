@@ -619,7 +619,10 @@ function updateLidarLabels() {
 
 function renderLidarMap() {
     const canvas = document.getElementById('lidar-map-canvas');
-    if (!canvas) return;
+    if (!canvas) {
+        updateLidarLabels();
+        return;
+    }
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const nextWidth = Math.max(1, Math.floor(rect.width * dpr));
@@ -772,6 +775,20 @@ function applyNavigationSnapshot(data) {
     } else if (data.map_changed && data.map) {
         lidarState.map = data.map;
     }
+
+    const visualizationState = {
+        status: lidarState.status,
+        map: lidarState.map,
+        pose: lidarState.pose,
+        scan: lidarState.scan,
+        mapRevision: navigationMapRevision,
+        mapChanged: Boolean(data.map_changed),
+    };
+    window.dabomNavigationVisualizationState = visualizationState;
+    document.dispatchEvent(new CustomEvent(
+        'dabom:navigation-visualization-state',
+        { detail: visualizationState },
+    ));
 }
 
 function scheduleNavigationSnapshot(delayMs = navigationSnapshotDelayMs()) {
