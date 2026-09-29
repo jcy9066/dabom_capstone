@@ -1,17 +1,4 @@
-
-/* 3D LiDAR viewer: replaces only the former LiDAR minimap visualization area. */
-.minimap-overlay.lidar-viewer-overlay {
-    inset: 0;
-    width: auto;
-    height: auto;
-    border: 0;
-    border-radius: 0;
-    background: #0f1720;
-    box-shadow: none;
-    backdrop-filter: none;
-    transition: none;
-}
-
+/* 3D renderer inside the existing LiDAR minimap shell. */
 .lidar-viewer-overlay .lidar-3d-viewer,
 .lidar-viewer-overlay .lidar-3d-canvas {
     position: absolute;
@@ -37,14 +24,28 @@
     cursor: grabbing;
 }
 
+.lidar-view-controls,
+.lidar-display-panel {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s;
+}
+
+.minimap-overlay.expanded .lidar-view-controls,
+.minimap-overlay.expanded .lidar-display-panel {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 .lidar-view-controls {
     position: absolute;
-    top: 8px;
+    top: 108px;
     left: 8px;
     z-index: 31;
     display: flex;
+    flex-wrap: wrap;
     gap: 5px;
-    pointer-events: auto;
+    max-width: calc(100% - 175px);
 }
 
 .lidar-view-controls button,
@@ -88,13 +89,12 @@
 
 .lidar-display-panel {
     position: absolute;
-    top: 8px;
+    top: 108px;
     right: 8px;
     z-index: 31;
     width: 146px;
     color: #dbeafe;
     font: 700 9px var(--mono);
-    pointer-events: auto;
 }
 
 .lidar-display-panel summary {
@@ -131,46 +131,11 @@
     accent-color: #38bdf8;
 }
 
-.lidar-viewer-overlay .lidar-live-badge {
-    top: 42px;
-    left: 8px;
-}
-
-.lidar-viewer-overlay .lidar-map-meta {
-    top: 66px;
-    left: 8px;
-    right: auto;
-    max-width: 230px;
-}
-
-.lidar-viewer-overlay .lidar-map-status.has-data {
-    bottom: 8px;
-    left: 8px;
-    max-width: 55%;
-}
-
-.lidar-viewer-overlay .lidar-map-save-btn {
-    top: auto;
-    right: 58px;
-    bottom: 8px;
-    opacity: 1;
-}
-
-.lidar-viewer-overlay .lidar-map-select-btn {
-    top: auto;
-    right: 8px;
-    bottom: 8px;
-    opacity: 1;
-}
-
-.lidar-viewer-overlay .navigation-control-panel {
-    top: auto;
-    left: 8px;
-    right: 8px;
-    bottom: 42px;
-}
-
 @media (max-width: 760px) {
+    .lidar-view-controls {
+        max-width: calc(100% - 150px);
+    }
+
     .lidar-display-panel {
         width: 132px;
     }
