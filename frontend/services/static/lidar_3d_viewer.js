@@ -430,6 +430,7 @@ if (root && canvas) {
         mapRoot.position.set(transform.x, transform.y, transform.z);
         mapRoot.rotation.z = transform.yaw;
         rebuildGrid(map);
+        if (!viewerExpanded) applyCollapsedTopView();
     }
 
     function clamp(value, min, max) {
@@ -1465,7 +1466,7 @@ if (root && canvas) {
     function animate(now = performance.now()) {
         interpolateRobotPose(now);
 
-        if (viewMode === 'follow' && followTarget) {
+        if (viewerExpanded && viewMode === 'follow' && followTarget) {
             const delta = followTarget.clone().sub(controls.target);
             if (delta.lengthSq() > 1e-10) {
                 camera.position.add(delta);
