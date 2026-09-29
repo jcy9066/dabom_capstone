@@ -161,7 +161,9 @@ if (root && canvas) {
     let robotModelReady = false;
     let robotVisual = null;
     let baseAxes = null;
-    let viewMode = 'free';
+    let viewMode = 'top';
+    let expandedViewMode = 'free';
+    let viewerExpanded = root.closest('.minimap-overlay')?.classList.contains('expanded') === true;
     let interactionMode = 'view';
     let followTarget = null;
     let currentVisualizationState = null;
@@ -260,6 +262,50 @@ if (root && canvas) {
             z: Number(origin.z) || 0,
             yaw: Number(origin.yaw) || 0,
         };
+    }
+
+    function mapWorldCenter(map) {
+        if (!map) return null;
+        const widthM = (Number(map.width) || 0) * (Number(map.resolution) || 0);
+        const heightM = (Number(map.height) || 0) * (Number(map.resolution) || 0);
+        if (widthM <= 0 || heightM <= 0) return null;
+
+        const transform = mapTransform(map);
+        const localX = widthM / 2;
+        const localY = heightM / 2;
+        const cosYaw = Math.cos(transform.yaw);
+        const sinYaw = Math.sin(transform.yaw);
+        return {
+            x: transform.x + cosYaw * localX - sinYaw * localY,
+            y: transform.y + sinYaw * localX + cosYaw * localY,
+            z: transform.z,
+            widthM,
+            heightM,
+        };
+    }
+
+    function applyCollapsedTopView() {
+        const mapCenter = mapWorldCenter(currentMap);
+        const target = mapCenter
+            ? new THREE.Vector3(mapCenter.x, mapCenter.y, mapCenter.z)
+            : (followTarget?.clone() || controls.target.clone());
+
+        let distance = 4;
+        if (mapCenter) {
+            const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+            const horizontalFov = 2 * Math.atan(
+                Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.1),
+            );
+            const verticalDistance = mapCenter.heightM / (2 * Math.tan(verticalFov / 2));
+            const horizontalDistance = mapCenter.widthM / (2 * Math.tan(horizontalFov / 2));
+            distance = Math.max(1.5, verticalDistance, horizontalDistance) * 1.12;
+        }
+
+        controls.target.copy(target);
+        camera.up.set(0, 1, 0);
+        camera.position.set(target.x, target.y, target.z + distance);
+        camera.lookAt(target);
+        controls.update();
     }
 
     function rebuildGrid(map) {
@@ -1278,13 +1324,18 @@ if (root && canvas) {
     }
 
     function setInteractionMode(mode) {
-        interactionMode = mode === 'set-goal' ? 'set-goal' : 'view';
-        controls.enableRotate = interactionMode === 'view';
-        controls.enablePan = interactionMode === 'view';
-        controls.enableZoom = true;
+        interactionMode = (
+            viewerExpanded && mode === 'set-goal'
+                ? 'set-goal'
+                : 'view'
+        );
+        controls.enabled = viewerExpanded;
+        controls.enableRotate = viewerExpanded && interactionMode === 'view';
+        controls.enablePan = viewerExpanded && interactionMode === 'view';
+        controls.enableZoom = viewerExpanded;
         root.closest('.lidar-viewer-overlay')?.classList.toggle(
             'goal-input-active',
-            interactionMode === 'set-goal',
+            viewerExpanded && interactionMode === 'set-goal',
         );
         root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
             button.classList.toggle(
@@ -1315,11 +1366,15 @@ if (root && canvas) {
         });
     };
 
-    function setViewMode(mode) {
-        viewMode = mode;
-        setActiveViewButton(mode);
+    function applyViewMode(mode) {
+        viewMode = ['free', 'top', 'follow'].includes(mode) ? mode : 'free';
+        setActiveViewButton(viewMode);
 
-        if (mode === 'top') {
+        if (viewMode === 'top') {
+            if (!viewerExpanded) {
+                applyCollapsedTopView();
+                return;
+            }
             const target = followTarget || controls.target;
             const distance = Math.max(4, camera.position.distanceTo(controls.target));
             controls.target.copy(target);
@@ -1331,10 +1386,37 @@ if (root && canvas) {
         }
 
         camera.up.set(0, 0, 1);
-        if (mode === 'follow' && followTarget) {
+        if (viewerExpanded && viewMode === 'follow' && followTarget) {
             controls.target.copy(followTarget);
         }
         controls.update();
+    }
+
+    function setViewMode(mode) {
+        if (!viewerExpanded) return;
+        expandedViewMode = ['free', 'top', 'follow'].includes(mode) ? mode : 'free';
+        applyViewMode(expandedViewMode);
+    }
+
+    function setExpandedState(expanded) {
+        const nextExpanded = Boolean(expanded);
+        if (viewerExpanded === nextExpanded) {
+            if (!viewerExpanded) applyCollapsedTopView();
+            return;
+        }
+
+        if (!nextExpanded) {
+            expandedViewMode = viewMode;
+        }
+        viewerExpanded = nextExpanded;
+        setInteractionMode('view');
+
+        if (viewerExpanded) {
+            applyViewMode(expandedViewMode || 'free');
+        } else {
+            applyViewMode('top');
+        }
+        resize();
     }
 
     root.querySelectorAll('[data-lidar-view]').forEach(button => {
@@ -1357,8 +1439,10 @@ if (root && canvas) {
     });
 
     controls.addEventListener('start', () => {
+        if (!viewerExpanded) return;
         if (viewMode === 'top') {
             viewMode = 'free';
+            expandedViewMode = 'free';
             setActiveViewButton('free');
             camera.up.set(0, 0, 1);
         }
@@ -1374,6 +1458,7 @@ if (root && canvas) {
             renderer.setSize(width, height, false);
             camera.aspect = width / height;
             camera.updateProjectionMatrix();
+            if (!viewerExpanded) applyCollapsedTopView();
         }
     }
 
@@ -1440,6 +1525,7 @@ if (root && canvas) {
         world,
         layers: layerGroups,
         setViewMode,
+        setExpandedState,
         setInteractionMode,
         interactionMode() {
             return interactionMode;
@@ -1456,5 +1542,10 @@ if (root && canvas) {
     applyControlState(window.dabomNavigationControlState);
     setInteractionMode('view');
     resize();
+    if (viewerExpanded) {
+        applyViewMode(expandedViewMode);
+    } else {
+        applyViewMode('top');
+    }
     animate();
 }
