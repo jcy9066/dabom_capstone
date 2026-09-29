@@ -887,26 +887,26 @@ function toggleMinimapExpand() {
 
 window.navigationMapView = {
     canvasToWorld(event) {
-        const canvas = document.getElementById('lidar-map-canvas');
-        if (!canvas || !lidarState.map) return null;
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / Math.max(rect.width, 1);
-        const scaleY = canvas.height / Math.max(rect.height, 1);
-        const layout = getCanvasLayout(canvas, lidarState.map);
-        return canvasToWorld(
-            (event.clientX - rect.left) * scaleX,
-            (event.clientY - rect.top) * scaleY,
-            layout,
-        );
+        return window.dabomLidar3D?.screenToGround?.(event) || null;
     },
     snapshot() {
         return {
             map: lidarState.map,
             pose: lidarState.pose,
-            expanded: minimapExpanded,
+            expanded: true,
+            interactionMode: window.dabomLidar3D?.interactionMode?.() || 'view',
         };
     },
-    requestRender: requestLidarRender,
+    interactionMode() {
+        return window.dabomLidar3D?.interactionMode?.() || 'view';
+    },
+    setInteractionMode(mode) {
+        window.dabomLidar3D?.setInteractionMode?.(mode);
+    },
+    requestRender() {
+        requestLidarRender();
+        window.dabomLidar3D?.requestRender?.();
+    },
 };
 
 // ===================================================
