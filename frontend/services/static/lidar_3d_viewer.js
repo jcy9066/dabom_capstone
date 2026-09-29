@@ -1449,10 +1449,6 @@ if (root && canvas) {
             followTarget = target ? new THREE.Vector3(target.x, target.y, target.z || 0) : null;
             if (viewMode === 'follow' && followTarget) controls.target.copy(followTarget);
         },
-        requestRender() {
-            controls.update();
-            renderer.render(scene, camera);
-        },
     };
 
     buildRobotModel();
