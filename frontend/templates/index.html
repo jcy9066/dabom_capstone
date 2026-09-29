@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="static/system_control.css?v=20260831-dashboard-lightweight">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20260831-dashboard-lightweight">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260831-dashboard-lightweight">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260929-3d-viewer-stage1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260831-dashboard-lightweight">
     <link rel="stylesheet" href="/components/records/records.css?v=20260831-dashboard-lightweight">
     <link rel="stylesheet" href="/components/controls/controls.css?v=20260831-dashboard-lightweight">
@@ -156,14 +157,42 @@
                 </div>
 
                 <div
-                    class="minimap-overlay"
+                    class="minimap-overlay lidar-viewer-overlay expanded"
                     id="minimap-overlay"
                 >
-                    <canvas
-                        id="lidar-map-canvas"
-                        class="lidar-map-canvas"
-                        aria-label="LiDAR map visualization"
-                    ></canvas>
+                    <div
+                        id="lidar-3d-viewer"
+                        class="lidar-3d-viewer"
+                        aria-label="3D LiDAR navigation visualization"
+                    >
+                        <canvas
+                            id="lidar-3d-canvas"
+                            class="lidar-3d-canvas"
+                        ></canvas>
+
+                        <div class="lidar-view-controls" aria-label="3D viewpoint controls">
+                            <button type="button" data-lidar-view="free" class="active">FREE</button>
+                            <button type="button" data-lidar-view="top">TOP</button>
+                            <button type="button" data-lidar-view="follow">FOLLOW</button>
+                        </div>
+
+                        <details class="lidar-display-panel">
+                            <summary>DISPLAY</summary>
+                            <div class="lidar-display-options">
+                                <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
+                                <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
+                                <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
+                                <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
+                                <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
+                                <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
+                                <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
+                                <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
+                                <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
+                                <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
+                                <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
+                            </div>
+                        </details>
+                    </div>
 
                     <div
                         class="lidar-live-badge offline"
@@ -243,14 +272,6 @@
                         SAVE
                     </button>
 
-                    <button
-                        class="minimap-expand-btn"
-                        id="minimapExpandBtn"
-                        onclick="toggleMinimapExpand()"
-                        title="미니맵 확대"
-                    >
-                        ⛶
-                    </button>
                 </div>
             </div>
 
@@ -551,6 +572,15 @@
     <script src="/components/controls/navigation_mode_control.js?v=20260831-dashboard-lightweight"></script>
     <script src="/components/gallery/image_detail.js?v=20260831-dashboard-lightweight"></script>
     <script src="/components/current_situation/current_situation.js?v=20260831-dashboard-lightweight"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="static/lidar_3d_viewer.js?v=20260929-3d-viewer-stage1"></script>
     <script src="static/script.js?v=20260831-dashboard-lightweight"></script>
     <script src="static/system_control.js?v=20260831-dashboard-lightweight"></script>
     <script src="static/navigation_map_control.js?v=20260831-dashboard-lightweight"></script>
