@@ -168,12 +168,16 @@
                         <canvas
                             id="lidar-3d-canvas"
                             class="lidar-3d-canvas"
+                            tabindex="0"
                         ></canvas>
 
-                        <div class="lidar-view-controls" aria-label="3D viewpoint controls">
+                        <div class="lidar-view-controls" aria-label="3D viewer controls">
                             <button type="button" data-lidar-view="free" class="active">FREE</button>
                             <button type="button" data-lidar-view="top">TOP</button>
                             <button type="button" data-lidar-view="follow">FOLLOW</button>
+                            <span class="lidar-control-separator" aria-hidden="true"></span>
+                            <button type="button" data-lidar-interaction="view" class="active">VIEW</button>
+                            <button type="button" data-lidar-interaction="set-goal">SET GOAL</button>
                         </div>
 
                         <details class="lidar-display-panel">
