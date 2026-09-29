@@ -1,0 +1,164 @@
+
+/* 3D LiDAR viewer: replaces only the former LiDAR minimap visualization area. */
+.minimap-overlay.lidar-viewer-overlay {
+    inset: 0;
+    width: auto;
+    height: auto;
+    border: 0;
+    border-radius: 0;
+    background: #0f1720;
+    box-shadow: none;
+    backdrop-filter: none;
+    transition: none;
+}
+
+.lidar-viewer-overlay .lidar-3d-viewer,
+.lidar-viewer-overlay .lidar-3d-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.lidar-viewer-overlay .lidar-3d-viewer {
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 50% 45%, rgba(56, 74, 90, 0.22), transparent 52%),
+        #101821;
+}
+
+.lidar-viewer-overlay .lidar-3d-canvas {
+    display: block;
+    touch-action: none;
+    cursor: grab;
+}
+
+.lidar-viewer-overlay .lidar-3d-canvas:active {
+    cursor: grabbing;
+}
+
+.lidar-view-controls {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 31;
+    display: flex;
+    gap: 5px;
+    pointer-events: auto;
+}
+
+.lidar-view-controls button,
+.lidar-display-panel summary {
+    min-height: 27px;
+    padding: 4px 8px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.82);
+    color: #cbd5e1;
+    font: 700 9px var(--mono);
+    letter-spacing: 0.25px;
+    cursor: pointer;
+}
+
+.lidar-view-controls button:hover,
+.lidar-view-controls button.active,
+.lidar-display-panel summary:hover {
+    border-color: rgba(125, 211, 252, 0.62);
+    color: #e0f2fe;
+    background: rgba(30, 58, 78, 0.84);
+}
+
+.lidar-display-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 31;
+    width: 146px;
+    color: #dbeafe;
+    font: 700 9px var(--mono);
+    pointer-events: auto;
+}
+
+.lidar-display-panel summary {
+    list-style: none;
+    text-align: center;
+}
+
+.lidar-display-panel summary::-webkit-details-marker {
+    display: none;
+}
+
+.lidar-display-options {
+    display: grid;
+    gap: 5px;
+    margin-top: 5px;
+    padding: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 5px;
+    background: rgba(8, 15, 29, 0.9);
+    backdrop-filter: blur(4px);
+}
+
+.lidar-display-options label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 18px;
+    color: #cbd5e1;
+    cursor: pointer;
+}
+
+.lidar-display-options input {
+    margin: 0;
+    accent-color: #38bdf8;
+}
+
+.lidar-viewer-overlay .lidar-live-badge {
+    top: 42px;
+    left: 8px;
+}
+
+.lidar-viewer-overlay .lidar-map-meta {
+    top: 66px;
+    left: 8px;
+    right: auto;
+    max-width: 230px;
+}
+
+.lidar-viewer-overlay .lidar-map-status.has-data {
+    bottom: 8px;
+    left: 8px;
+    max-width: 55%;
+}
+
+.lidar-viewer-overlay .lidar-map-save-btn {
+    top: auto;
+    right: 58px;
+    bottom: 8px;
+    opacity: 1;
+}
+
+.lidar-viewer-overlay .lidar-map-select-btn {
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    opacity: 1;
+}
+
+.lidar-viewer-overlay .navigation-control-panel {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 42px;
+}
+
+@media (max-width: 760px) {
+    .lidar-display-panel {
+        width: 132px;
+    }
+
+    .lidar-display-options {
+        gap: 4px;
+        padding: 6px;
+    }
+}
