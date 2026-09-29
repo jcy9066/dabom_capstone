@@ -264,6 +264,12 @@
         element.classList.toggle('error', error);
     }
 
+    function publishGoalDraft() {
+        document.dispatchEvent(new CustomEvent('dabom:navigation-goal-draft', {
+            detail: state.draftGoal ? { ...state.draftGoal } : null,
+        }));
+    }
+
     function applyControlState(payload) {
         state.control = payload;
         window.setDashboardRobotConnection?.(payload?.connected === true);
@@ -290,12 +296,13 @@
         const hint = $('navigation-goal-hint');
         if (hint) {
             hint.textContent = ready
-                ? '확대 지도에서 누른 뒤 드래그하여 Goal 방향을 지정하세요.'
+                ? '3D Viewer에서 SET GOAL을 선택한 뒤 드래그하여 방향을 지정하세요.'
                 : 'DRIVING 및 localization/Nav2 준비 후 Goal을 지정할 수 있습니다.';
         }
         syncControlComponents(payload);
         updateHazardHooks(payload);
         resolveControlWaiters(payload);
+        window.dabomNavigationControlState = payload;
         document.dispatchEvent(new CustomEvent('dabom:navigation-control-state', { detail: payload }));
         window.navigationMapView?.requestRender();
     }
@@ -366,7 +373,20 @@
     }
 
     function beginGoal(event) {
-        if (event.button !== 0 && event.button !== 2) return;
+        const interactionMode = window.navigationMapView?.interactionMode?.() || 'view';
+        if (interactionMode !== 'set-goal') return;
+        if (event.button === 2) {
+            event.preventDefault();
+            state.pointerId = null;
+            state.pointerStart = null;
+            state.draftGoal = null;
+            publishGoalDraft();
+            window.navigationMapView?.setInteractionMode?.('view');
+            setFeedback('Goal 지정을 취소했습니다.');
+            window.navigationMapView?.requestRender();
+            return;
+        }
+        if (event.button !== 0) return;
         const view = window.navigationMapView?.snapshot();
         if (view?.expanded && state.control?.navigation_mode === 'MAPPING') {
             setFeedback('Mapping 모드에서는 주행 목표를 설정할 수 없습니다. Driving 모드로 전환해주세요.', true);
@@ -385,6 +405,7 @@
         state.pointerId = event.pointerId;
         state.pointerStart = point;
         state.draftGoal = { ...point, yaw: 0 };
+        publishGoalDraft();
         event.currentTarget.setPointerCapture?.(event.pointerId);
         window.navigationMapView?.requestRender();
     }
@@ -397,6 +418,7 @@
             ...state.pointerStart,
             yaw: Math.atan2(point.y - state.pointerStart.y, point.x - state.pointerStart.x),
         };
+        publishGoalDraft();
         window.navigationMapView?.requestRender();
     }
 
@@ -417,20 +439,25 @@
             }
             applyControlState(await mutate('/api/navigation/control/goal', { goal }));
             state.draftGoal = null;
+            publishGoalDraft();
             setFeedback('경로 미리보기가 준비되었습니다. 주행 시작 전에는 로봇이 움직이지 않습니다.');
         } catch (error) {
             state.draftGoal = null;
+            publishGoalDraft();
             setFeedback(`경로 계산 실패: ${error.message}`, true);
         } finally {
+            window.navigationMapView?.setInteractionMode?.('view');
             window.navigationMapView?.requestRender();
         }
     }
 
-    function cancelGoalDraft(event) {
-        if (state.pointerId !== event.pointerId) return;
+    function cancelGoalDraft(event = null) {
+        if (event && state.pointerId !== event.pointerId) return;
         state.pointerId = null;
         state.pointerStart = null;
         state.draftGoal = null;
+        publishGoalDraft();
+        window.navigationMapView?.setInteractionMode?.('view');
         setFeedback('Goal 지정을 취소했습니다.');
         window.navigationMapView?.requestRender();
     }
@@ -606,7 +633,6 @@
         const target = String(mode || '').toUpperCase();
         if (target === 'MAPPING') return setMappingMode();
         if (target !== 'DRIVING' || state.drivePending || state.navigationPending || state.control?.navigation_mode === 'DRIVING') return;
-        if (!window.navigationMapView?.snapshot()?.expanded) window.toggleMinimapExpand?.();
         setFeedback('Driving 준비를 위해 저장 지도와 Initial Pose를 지정해주세요.');
         return window.openSavedMapModal?.();
     }
@@ -702,7 +728,7 @@
     }
 
     function initialize() {
-        const canvas = $('lidar-map-canvas');
+        const canvas = $('lidar-3d-canvas') || $('lidar-map-canvas');
         canvas?.addEventListener('contextmenu', event => event.preventDefault());
         canvas?.addEventListener('pointerdown', beginGoal);
         canvas?.addEventListener('pointermove', moveGoal);
@@ -723,6 +749,15 @@
             clearControlPollTimer();
             if (document.hidden) scheduleControlPoll();
             else pollControlState();
+        });
+        document.addEventListener('keydown', event => {
+            if (
+                event.key === 'Escape'
+                && window.navigationMapView?.interactionMode?.() === 'set-goal'
+            ) {
+                event.preventDefault();
+                cancelGoalDraft();
+            }
         });
         const alertBox = $('alertBox');
         if (alertBox && window.MutationObserver) {
