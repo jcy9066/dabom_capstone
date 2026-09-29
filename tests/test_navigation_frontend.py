@@ -46,6 +46,29 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("GLTFLoader", viewer)
         self.assertIn("robot_upper_chassis.glb", viewer)
 
+    def test_3d_viewer_reuses_existing_minimap_shell_and_local_assets(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+        dashboard = (
+            ROOT / "frontend/services/static/script.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('id="camera-stream"', template)
+        self.assertIn('class="minimap-overlay lidar-viewer-overlay"', template)
+        self.assertNotIn('class="minimap-overlay lidar-viewer-overlay expanded"', template)
+        self.assertIn('id="minimapExpandBtn"', template)
+        self.assertIn("minimap.classList.add('expanded')", dashboard)
+        self.assertIn("expanded: minimapExpanded", dashboard)
+        self.assertNotIn("lidar-map-canvas", template)
+        self.assertNotIn("cdn.jsdelivr.net", template)
+        self.assertIn("/static/vendor/three/three.module.min.js", template)
+        self.assertIn("GLTFLoader", viewer)
+        self.assertIn("robot_upper_chassis.glb", viewer)
+        self.assertIn("robot_lower_chassis.glb", viewer)
+        self.assertNotIn("ThreeMFLoader", viewer)
+
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)
         self.assertIn("controls?.syncNavigationMode?.(payload.navigation_mode", self.control)
