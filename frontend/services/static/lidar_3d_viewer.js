@@ -182,6 +182,19 @@ if (root && canvas) {
     let cameraTextureCanvas = null;
     let cameraTextureContext = null;
     let lastCameraTextureAt = 0;
+    let targetPose = null;
+    let renderedPose = null;
+    let lastAnimationAt = 0;
+    let currentScanKey = null;
+    let scanRayGeometry = null;
+    let scanPointGeometry = null;
+    let scanRayPositions = null;
+    let scanPointPositions = null;
+    let scanCapacity = 0;
+    let currentPathKey = null;
+    let currentGoalKey = null;
+    let trajectoryGeometry = null;
+    let trajectoryPositions = null;
 
     const cameraImage = document.getElementById('camera-stream');
     const raycaster = new THREE.Raycaster();
@@ -753,38 +766,94 @@ if (root && canvas) {
         }
     }
 
-    function updateRobotPose(pose) {
-        const available = pose
-            && Number.isFinite(Number(pose.x))
-            && Number.isFinite(Number(pose.y));
-        robotPoseGroup.visible = Boolean(available && robotModelReady);
-        tfPoseGroup.visible = Boolean(available);
-        if (!available) {
-            cameraFrustumPoseGroup.visible = false;
-            cameraViewPoseGroup.visible = false;
+    function poseFromPayload(pose) {
+        if (
+            !pose
+            || !Number.isFinite(Number(pose.x))
+            || !Number.isFinite(Number(pose.y))
+        ) return null;
+        return {
+            x: Number(pose.x),
+            y: Number(pose.y),
+            yaw: Number(pose.yaw) || 0,
+            z: 0.006,
+        };
+    }
+
+    function setPoseVisibility(visible) {
+        robotPoseGroup.visible = Boolean(visible && robotModelReady);
+        tfPoseGroup.visible = Boolean(visible);
+        cameraFrustumPoseGroup.visible = Boolean(visible && cameraVisualReady);
+        cameraViewPoseGroup.visible = Boolean(visible && cameraVisualReady);
+        scanRoot.visible = Boolean(visible && scanRayGeometry);
+        pointsRoot.visible = Boolean(visible && scanPointGeometry);
+    }
+
+    function applyRenderedPose(pose) {
+        if (!pose) {
+            setPoseVisibility(false);
             followTarget = null;
             return;
         }
 
-        const x = Number(pose.x);
-        const y = Number(pose.y);
-        const yaw = Number(pose.yaw) || 0;
-        const z = 0.006;
-        robotPoseGroup.position.set(x, y, z);
-        robotPoseGroup.rotation.z = yaw;
-        tfPoseGroup.position.set(x, y, z);
-        tfPoseGroup.rotation.z = yaw;
-        cameraFrustumPoseGroup.visible = cameraVisualReady;
-        cameraFrustumPoseGroup.position.set(x, y, z);
-        cameraFrustumPoseGroup.rotation.z = yaw;
-        cameraViewPoseGroup.visible = cameraVisualReady;
-        cameraViewPoseGroup.position.set(x, y, z);
-        cameraViewPoseGroup.rotation.z = yaw;
-
-        followTarget = new THREE.Vector3(x, y, z);
-        if (viewMode === 'follow') {
-            controls.target.copy(followTarget);
+        const groups = [
+            robotPoseGroup,
+            tfPoseGroup,
+            cameraFrustumPoseGroup,
+            cameraViewPoseGroup,
+            scanRoot,
+            pointsRoot,
+        ];
+        for (const group of groups) {
+            group.position.set(pose.x, pose.y, pose.z);
+            group.rotation.z = pose.yaw;
         }
+        setPoseVisibility(true);
+
+        followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
+    }
+
+    function updateRobotPose(pose) {
+        const next = poseFromPayload(pose);
+        targetPose = next;
+        if (!next) {
+            renderedPose = null;
+            applyRenderedPose(null);
+            return;
+        }
+
+        if (!renderedPose) {
+            renderedPose = { ...next };
+            applyRenderedPose(renderedPose);
+        }
+    }
+
+    function interpolateRobotPose(now) {
+        if (!targetPose || !renderedPose) return;
+        const deltaSec = lastAnimationAt > 0
+            ? Math.min(0.1, Math.max(0, (now - lastAnimationAt) / 1000))
+            : 0;
+        lastAnimationAt = now;
+
+        const distance = Math.hypot(
+            targetPose.x - renderedPose.x,
+            targetPose.y - renderedPose.y,
+        );
+        if (distance > 1.5) {
+            renderedPose = { ...targetPose };
+            applyRenderedPose(renderedPose);
+            return;
+        }
+
+        const alpha = 1 - Math.exp(-12 * deltaSec);
+        renderedPose.x += (targetPose.x - renderedPose.x) * alpha;
+        renderedPose.y += (targetPose.y - renderedPose.y) * alpha;
+        renderedPose.z += (targetPose.z - renderedPose.z) * alpha;
+
+        let yawDelta = targetPose.yaw - renderedPose.yaw;
+        yawDelta = Math.atan2(Math.sin(yawDelta), Math.cos(yawDelta));
+        renderedPose.yaw += yawDelta * alpha;
+        applyRenderedPose(renderedPose);
     }
 
     function validPose(pose) {
@@ -795,14 +864,87 @@ if (root && canvas) {
         );
     }
 
-    function rebuildScan(scan, pose) {
+    function scanKey(scan) {
+        if (!scan || !Array.isArray(scan.ranges)) return null;
+        return [
+            scan.timestamp || '',
+            scan.received_at || '',
+            scan.ranges.length,
+            scan.ranges[0] ?? '',
+            scan.ranges[scan.ranges.length - 1] ?? '',
+        ].join(':');
+    }
+
+    function nextPowerOfTwo(value) {
+        let result = 1;
+        while (result < value) result *= 2;
+        return result;
+    }
+
+    function ensureScanCapacity(required) {
+        if (required <= scanCapacity && scanRayGeometry && scanPointGeometry) return;
+
+        scanCapacity = nextPowerOfTwo(Math.max(1, required));
+        scanRayPositions = new Float32Array(scanCapacity * 2 * 3);
+        scanPointPositions = new Float32Array(scanCapacity * 3);
+
         clearGroup(scanRoot);
         clearGroup(pointsRoot);
-        if (!scan || !Array.isArray(scan.ranges) || !validPose(pose)) return;
 
-        const robotX = Number(pose.x);
-        const robotY = Number(pose.y);
-        const robotYaw = Number(pose.yaw) || 0;
+        scanRayGeometry = new THREE.BufferGeometry();
+        const rayAttribute = new THREE.BufferAttribute(scanRayPositions, 3);
+        rayAttribute.setUsage(THREE.DynamicDrawUsage);
+        scanRayGeometry.setAttribute('position', rayAttribute);
+        scanRayGeometry.setDrawRange(0, 0);
+
+        const rays = new THREE.LineSegments(
+            scanRayGeometry,
+            new THREE.LineBasicMaterial({
+                color: COLORS.scanRay,
+                transparent: true,
+                opacity: 0.34,
+                depthWrite: false,
+            }),
+        );
+        rays.frustumCulled = false;
+        scanRoot.add(rays);
+
+        scanPointGeometry = new THREE.BufferGeometry();
+        const pointAttribute = new THREE.BufferAttribute(scanPointPositions, 3);
+        pointAttribute.setUsage(THREE.DynamicDrawUsage);
+        scanPointGeometry.setAttribute('position', pointAttribute);
+        scanPointGeometry.setDrawRange(0, 0);
+
+        const points = new THREE.Points(
+            scanPointGeometry,
+            new THREE.PointsMaterial({
+                color: COLORS.scanPoint,
+                size: 0.035,
+                sizeAttenuation: true,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false,
+            }),
+        );
+        points.frustumCulled = false;
+        pointsRoot.add(points);
+    }
+
+    function rebuildScan(scan) {
+        const nextKey = scanKey(scan);
+        if (nextKey === currentScanKey) return;
+        currentScanKey = nextKey;
+
+        if (!scan || !Array.isArray(scan.ranges) || !scan.ranges.length) {
+            if (scanRayGeometry) scanRayGeometry.setDrawRange(0, 0);
+            if (scanPointGeometry) scanPointGeometry.setDrawRange(0, 0);
+            scanRoot.visible = false;
+            pointsRoot.visible = false;
+            return;
+        }
+
+        ensureScanCapacity(scan.ranges.length);
+
         const angleMin = Number(scan.angle_min) || 0;
         const angleIncrement = Number(scan.angle_increment) || 0;
         const rangeMin = Math.max(0, Number(scan.range_min) || 0);
@@ -810,56 +952,57 @@ if (root && canvas) {
             ? Number(scan.range_max)
             : 12;
 
-        const rayPositions = [];
-        const pointPositions = [];
+        let validCount = 0;
         for (let index = 0; index < scan.ranges.length; index += 1) {
             const distance = Number(scan.ranges[index]);
             if (!Number.isFinite(distance) || distance < rangeMin || distance > rangeMax) continue;
 
-            const angle = robotYaw + angleMin + angleIncrement * index;
-            const x = robotX + Math.cos(angle) * distance;
-            const y = robotY + Math.sin(angle) * distance;
-            rayPositions.push(
-                robotX, robotY, LIDAR_HEIGHT_M,
-                x, y, LIDAR_HEIGHT_M,
-            );
-            pointPositions.push(x, y, LIDAR_HEIGHT_M);
+            const angle = angleMin + angleIncrement * index;
+            const x = Math.cos(angle) * distance;
+            const y = Math.sin(angle) * distance;
+
+            const rayOffset = validCount * 6;
+            scanRayPositions[rayOffset] = 0;
+            scanRayPositions[rayOffset + 1] = 0;
+            scanRayPositions[rayOffset + 2] = LIDAR_HEIGHT_M;
+            scanRayPositions[rayOffset + 3] = x;
+            scanRayPositions[rayOffset + 4] = y;
+            scanRayPositions[rayOffset + 5] = LIDAR_HEIGHT_M;
+
+            const pointOffset = validCount * 3;
+            scanPointPositions[pointOffset] = x;
+            scanPointPositions[pointOffset + 1] = y;
+            scanPointPositions[pointOffset + 2] = LIDAR_HEIGHT_M;
+            validCount += 1;
         }
 
-        if (rayPositions.length) {
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute(
-                'position',
-                new THREE.Float32BufferAttribute(rayPositions, 3),
-            );
-            const material = new THREE.LineBasicMaterial({
-                color: COLORS.scanRay,
-                transparent: true,
-                opacity: 0.34,
-                depthWrite: false,
-            });
-            scanRoot.add(new THREE.LineSegments(geometry, material));
-        }
+        scanRayGeometry.attributes.position.needsUpdate = true;
+        scanPointGeometry.attributes.position.needsUpdate = true;
+        scanRayGeometry.setDrawRange(0, validCount * 2);
+        scanPointGeometry.setDrawRange(0, validCount);
+        scanRoot.visible = Boolean(validCount && targetPose);
+        pointsRoot.visible = Boolean(validCount && targetPose);
+    }
 
-        if (pointPositions.length) {
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute(
-                'position',
-                new THREE.Float32BufferAttribute(pointPositions, 3),
-            );
-            const material = new THREE.PointsMaterial({
-                color: COLORS.scanPoint,
-                size: 0.035,
-                sizeAttenuation: true,
-                transparent: true,
-                opacity: 0.95,
-                depthWrite: false,
-            });
-            pointsRoot.add(new THREE.Points(geometry, material));
+    function pathKey(path) {
+        if (!Array.isArray(path) || !path.length) return 'empty';
+        let hash = 2166136261;
+        for (const point of path) {
+            const x = Math.round((Number(point?.x) || 0) * 1000);
+            const y = Math.round((Number(point?.y) || 0) * 1000);
+            hash ^= x;
+            hash = Math.imul(hash, 16777619);
+            hash ^= y;
+            hash = Math.imul(hash, 16777619);
         }
+        return `${path.length}:${hash >>> 0}`;
     }
 
     function rebuildPath(path) {
+        const nextKey = pathKey(path);
+        if (nextKey === currentPathKey) return;
+        currentPathKey = nextKey;
+
         clearGroup(pathRoot);
         if (!Array.isArray(path) || path.length < 2) return;
 
@@ -877,12 +1020,16 @@ if (root && canvas) {
             'position',
             new THREE.Float32BufferAttribute(positions, 3),
         );
-        const material = new THREE.LineBasicMaterial({
-            color: COLORS.globalPath,
-            transparent: true,
-            opacity: 0.92,
-        });
-        pathRoot.add(new THREE.Line(geometry, material));
+        const line = new THREE.Line(
+            geometry,
+            new THREE.LineBasicMaterial({
+                color: COLORS.globalPath,
+                transparent: true,
+                opacity: 0.92,
+            }),
+        );
+        line.frustumCulled = false;
+        pathRoot.add(line);
     }
 
     function createGoalMarker(goal, color) {
@@ -919,7 +1066,20 @@ if (root && canvas) {
         return marker;
     }
 
+    function goalKey(goal) {
+        if (!goal) return '';
+        return [
+            Number(goal.x).toFixed(4),
+            Number(goal.y).toFixed(4),
+            Number(goal.yaw || 0).toFixed(4),
+        ].join(':');
+    }
+
     function rebuildGoals() {
+        const nextKey = `${goalKey(currentControlState?.active_goal)}|${goalKey(currentDraftGoal)}`;
+        if (nextKey === currentGoalKey) return;
+        currentGoalKey = nextKey;
+
         clearGroup(goalRoot);
         const active = createGoalMarker(currentControlState?.active_goal, COLORS.goal);
         if (active) goalRoot.add(active);
@@ -927,38 +1087,28 @@ if (root && canvas) {
         if (draft) goalRoot.add(draft);
     }
 
-    function renderTrajectory() {
-        clearGroup(trajectoryRoot);
-        if (!trajectorySamples.length) return;
+    function ensureTrajectoryBuffer() {
+        if (trajectoryGeometry) return;
 
-        const positions = [];
-        for (const point of trajectorySamples) {
-            positions.push(point.x, point.y, 0.045);
-        }
+        trajectoryPositions = new Float32Array(MAX_TRAJECTORY_POINTS * 3);
+        trajectoryGeometry = new THREE.BufferGeometry();
+        const attribute = new THREE.BufferAttribute(trajectoryPositions, 3);
+        attribute.setUsage(THREE.DynamicDrawUsage);
+        trajectoryGeometry.setAttribute('position', attribute);
+        trajectoryGeometry.setDrawRange(0, 0);
 
-        if (positions.length >= 6) {
-            const lineGeometry = new THREE.BufferGeometry();
-            lineGeometry.setAttribute(
-                'position',
-                new THREE.Float32BufferAttribute(positions, 3),
-            );
-            trajectoryRoot.add(new THREE.Line(
-                lineGeometry,
-                new THREE.LineBasicMaterial({
-                    color: COLORS.trajectory,
-                    transparent: true,
-                    opacity: 0.9,
-                }),
-            ));
-        }
-
-        const pointGeometry = new THREE.BufferGeometry();
-        pointGeometry.setAttribute(
-            'position',
-            new THREE.Float32BufferAttribute(positions, 3),
+        const line = new THREE.Line(
+            trajectoryGeometry,
+            new THREE.LineBasicMaterial({
+                color: COLORS.trajectory,
+                transparent: true,
+                opacity: 0.9,
+            }),
         );
-        trajectoryRoot.add(new THREE.Points(
-            pointGeometry,
+        line.frustumCulled = false;
+
+        const points = new THREE.Points(
+            trajectoryGeometry,
             new THREE.PointsMaterial({
                 color: COLORS.trajectory,
                 size: 0.045,
@@ -967,7 +1117,23 @@ if (root && canvas) {
                 opacity: 0.95,
                 depthWrite: false,
             }),
-        ));
+        );
+        points.frustumCulled = false;
+        trajectoryRoot.add(line, points);
+    }
+
+    function renderTrajectory() {
+        ensureTrajectoryBuffer();
+        const count = Math.min(trajectorySamples.length, MAX_TRAJECTORY_POINTS);
+        for (let index = 0; index < count; index += 1) {
+            const point = trajectorySamples[index];
+            const offset = index * 3;
+            trajectoryPositions[offset] = point.x;
+            trajectoryPositions[offset + 1] = point.y;
+            trajectoryPositions[offset + 2] = 0.045;
+        }
+        trajectoryGeometry.setDrawRange(0, count);
+        trajectoryGeometry.attributes.position.needsUpdate = true;
     }
 
     function resetTrajectory(seedPose = null, active = false) {
@@ -1119,7 +1285,7 @@ if (root && canvas) {
         currentVisualizationState = state;
         rebuildMap(state.map || null, state.mapRevision);
         updateRobotPose(state.pose || null);
-        rebuildScan(state.scan || null, state.pose || null);
+        rebuildScan(state.scan || null);
         if (
             trajectorySessionActive
             && String(currentControlState?.navigation_mode || '').toUpperCase() === 'DRIVING'
@@ -1196,8 +1362,9 @@ if (root && canvas) {
         }
     }
 
-    function animate() {
+    function animate(now = performance.now()) {
         resize();
+        interpolateRobotPose(now);
 
         if (viewMode === 'follow' && followTarget) {
             const delta = followTarget.clone().sub(controls.target);
@@ -1207,7 +1374,7 @@ if (root && canvas) {
             }
         }
 
-        updateCameraTexture(performance.now());
+        updateCameraTexture(now);
         controls.update();
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
@@ -1241,6 +1408,9 @@ if (root && canvas) {
         clearGroup(pathRoot);
         clearGroup(trajectoryRoot);
         clearGroup(goalRoot);
+        scanRayGeometry = null;
+        scanPointGeometry = null;
+        trajectoryGeometry = null;
         clearGroup(cameraFrustumPoseGroup);
         clearGroup(cameraViewPoseGroup);
         cameraTexture?.dispose?.();
