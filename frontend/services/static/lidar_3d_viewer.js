@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const root = document.getElementById('lidar-3d-viewer');
 const canvas = document.getElementById('lidar-3d-canvas');
@@ -390,10 +390,10 @@ if (root && canvas) {
         return Math.min(max, Math.max(min, value));
     }
 
-    function loadThreeMF(url) {
-        const loader = new ThreeMFLoader();
+    function loadGlb(url) {
+        const loader = new GLTFLoader();
         return new Promise((resolve, reject) => {
-            loader.load(url, resolve, undefined, reject);
+            loader.load(url, gltf => resolve(gltf.scene), undefined, reject);
         });
     }
 
@@ -410,16 +410,6 @@ if (root && canvas) {
             child.castShadow = false;
             child.receiveShadow = false;
         });
-    }
-
-    function normalizeUnitScale(object) {
-        const box = new THREE.Box3().setFromObject(object);
-        const size = box.getSize(new THREE.Vector3());
-        const maxDimension = Math.max(size.x, size.y, size.z);
-        if (maxDimension > 5) {
-            object.scale.multiplyScalar(0.001);
-            object.updateMatrixWorld(true);
-        }
     }
 
     function placePartAtBottom(object, bottomZ) {
@@ -679,12 +669,10 @@ if (root && canvas) {
     async function buildRobotModel() {
         try {
             const [upper, lower] = await Promise.all([
-                loadThreeMF('/static/assets/robot_upper_chassis.3mf'),
-                loadThreeMF('/static/assets/robot_lower_chassis.3mf'),
+                loadGlb('/static/assets/robot_upper_chassis.glb'),
+                loadGlb('/static/assets/robot_lower_chassis.glb'),
             ]);
 
-            normalizeUnitScale(lower);
-            normalizeUnitScale(upper);
             applyNeutralMaterial(lower, COLORS.lowerChassis);
             applyNeutralMaterial(upper, COLORS.upperChassis);
 
@@ -761,7 +749,7 @@ if (root && canvas) {
                 rebuildMap(currentMap, window.dabomNavigationVisualizationState?.mapRevision);
             }
         } catch (error) {
-            console.error('3D chassis load failed:', error);
+            console.error('GLB chassis load failed:', error);
             robotModelReady = false;
         }
     }
