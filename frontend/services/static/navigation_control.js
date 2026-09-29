@@ -396,7 +396,7 @@
             if (view?.expanded) setFeedback('Driving 모드와 Pi·Localization·Nav2 상태를 확인해주세요.', true);
             return;
         }
-        const point = window.navigationMapView?.canvasToWorld(event);
+        const point = window.navigationMapView?.screenToGround(event);
         if (!point) {
             setFeedback('지도 밖에는 Goal을 지정할 수 없습니다.', true);
             return;
@@ -412,7 +412,7 @@
 
     function moveGoal(event) {
         if (state.pointerId !== event.pointerId || !state.pointerStart) return;
-        const point = window.navigationMapView?.canvasToWorld(event);
+        const point = window.navigationMapView?.screenToGround(event);
         if (!point) return;
         state.draftGoal = {
             ...state.pointerStart,
