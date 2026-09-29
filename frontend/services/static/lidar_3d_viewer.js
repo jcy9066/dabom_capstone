@@ -508,6 +508,13 @@ if (root && canvas) {
             alpha: false,
             desynchronized: true,
         });
+        cameraTextureContext.fillStyle = '#101821';
+        cameraTextureContext.fillRect(
+            0,
+            0,
+            cameraTextureCanvas.width,
+            cameraTextureCanvas.height,
+        );
         cameraTexture = new THREE.CanvasTexture(cameraTextureCanvas);
         cameraTexture.colorSpace = THREE.SRGBColorSpace;
         cameraTexture.minFilter = THREE.LinearFilter;
@@ -536,6 +543,9 @@ if (root && canvas) {
         );
         cameraFrustumPoseGroup.add(cameraFrustumLines);
 
+        if (cameraViewPlane?.material) {
+            cameraViewPlane.material.map = null;
+        }
         clearGroup(cameraViewPoseGroup);
         const texture = ensureCameraTexture();
         cameraViewPlane = new THREE.Mesh(
