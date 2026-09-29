@@ -976,8 +976,14 @@ if (root && canvas) {
             validCount += 1;
         }
 
-        scanRayGeometry.attributes.position.needsUpdate = true;
-        scanPointGeometry.attributes.position.needsUpdate = true;
+        const rayAttribute = scanRayGeometry.attributes.position;
+        const pointAttribute = scanPointGeometry.attributes.position;
+        rayAttribute.clearUpdateRanges?.();
+        pointAttribute.clearUpdateRanges?.();
+        rayAttribute.addUpdateRange?.(0, validCount * 6);
+        pointAttribute.addUpdateRange?.(0, validCount * 3);
+        rayAttribute.needsUpdate = true;
+        pointAttribute.needsUpdate = true;
         scanRayGeometry.setDrawRange(0, validCount * 2);
         scanPointGeometry.setDrawRange(0, validCount);
         scanRoot.visible = Boolean(validCount && targetPose);
@@ -1122,18 +1128,37 @@ if (root && canvas) {
         trajectoryRoot.add(line, points);
     }
 
+    function writeTrajectoryPoint(index, point) {
+        const offset = index * 3;
+        trajectoryPositions[offset] = point.x;
+        trajectoryPositions[offset + 1] = point.y;
+        trajectoryPositions[offset + 2] = 0.045;
+    }
+
+    function markTrajectoryRangeUpdated(offset, count) {
+        const attribute = trajectoryGeometry.attributes.position;
+        attribute.clearUpdateRanges?.();
+        attribute.addUpdateRange?.(offset, count);
+        attribute.needsUpdate = true;
+    }
+
     function renderTrajectory() {
         ensureTrajectoryBuffer();
         const count = Math.min(trajectorySamples.length, MAX_TRAJECTORY_POINTS);
         for (let index = 0; index < count; index += 1) {
-            const point = trajectorySamples[index];
-            const offset = index * 3;
-            trajectoryPositions[offset] = point.x;
-            trajectoryPositions[offset + 1] = point.y;
-            trajectoryPositions[offset + 2] = 0.045;
+            writeTrajectoryPoint(index, trajectorySamples[index]);
         }
         trajectoryGeometry.setDrawRange(0, count);
-        trajectoryGeometry.attributes.position.needsUpdate = true;
+        if (count) markTrajectoryRangeUpdated(0, count * 3);
+    }
+
+    function appendTrajectoryPoint(point) {
+        ensureTrajectoryBuffer();
+        const index = trajectorySamples.length - 1;
+        if (index < 0 || index >= MAX_TRAJECTORY_POINTS) return;
+        writeTrajectoryPoint(index, point);
+        trajectoryGeometry.setDrawRange(0, trajectorySamples.length);
+        markTrajectoryRangeUpdated(index * 3, 3);
     }
 
     function resetTrajectory(seedPose = null, active = false) {
@@ -1175,9 +1200,11 @@ if (root && canvas) {
                 0,
                 trajectorySamples.length - MAX_TRAJECTORY_POINTS,
             );
+            renderTrajectory();
+        } else {
+            appendTrajectoryPoint(next);
         }
         lastTrajectorySampleAt = now;
-        renderTrajectory();
     }
 
     function applyControlState(control) {
