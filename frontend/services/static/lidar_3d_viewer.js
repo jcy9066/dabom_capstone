@@ -49,7 +49,7 @@ if (root && canvas) {
         alpha: false,
         powerPreference: 'high-performance',
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     renderer.setClearColor(COLORS.background, 1);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -1390,7 +1390,6 @@ if (root && canvas) {
     }
 
     function animate(now = performance.now()) {
-        resize();
         interpolateRobotPose(now);
 
         if (viewMode === 'follow' && followTarget) {
