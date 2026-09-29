@@ -611,7 +611,7 @@ function toggleMinimapExpand() {
 }
 
 window.navigationMapView = {
-    canvasToWorld(event) {
+    screenToGround(event) {
         return window.dabomLidar3D?.screenToGround?.(event) || null;
     },
     snapshot() {
