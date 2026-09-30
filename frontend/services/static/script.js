@@ -347,31 +347,18 @@ function getLidarLiveState() {
 }
 
 function updateLidarLabels() {
-    const statusEl = document.getElementById('lidar-map-status');
     const metaEl = document.getElementById('lidar-map-meta');
-    const badgeEl = document.getElementById('lidar-live-badge');
     const overlayEl = document.getElementById('lidar-stale-overlay');
     const overlayTitleEl = document.getElementById('lidar-stale-title');
     const overlayDetailEl = document.getElementById('lidar-stale-detail');
-    if (!statusEl || !metaEl) return;
+    if (!metaEl) return;
 
     const liveState = getLidarLiveState();
-    const hasData = Boolean(lidarState.map || lidarState.scan || lidarState.pose);
     const ageText = formatAgeSeconds(liveState.age);
     const map = lidarState.map;
     const pose = lidarState.pose;
     const scanHz = getScanReceiveHz();
     const scanText = scanHz ? `RX ${scanHz.toFixed(1)}Hz` : 'RX --';
-
-    statusEl.classList.toggle('has-data', hasData);
-    statusEl.classList.toggle('stale', liveState.level !== 'live');
-    statusEl.textContent = hasData ? liveState.label : 'MAP AREA';
-
-    if (badgeEl) {
-        badgeEl.classList.remove('live', 'stale', 'offline');
-        badgeEl.classList.add(liveState.level);
-        badgeEl.textContent = liveState.level === 'live' ? `LiDAR ${liveState.label}` : liveState.label;
-    }
 
     if (overlayEl) {
         overlayEl.classList.toggle('visible', liveState.level !== 'live');
@@ -388,7 +375,7 @@ function updateLidarLabels() {
     } else if (lidarState.scan) {
         metaEl.textContent = `${liveState.label} / ${scanText} / AGE ${ageText}`;
     } else {
-        metaEl.textContent = 'LiDAR OFFLINE';
+        metaEl.textContent = `${liveState.label} / ${scanText} / AGE ${ageText}`;
     }
 }
 
