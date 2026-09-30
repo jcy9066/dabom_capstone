@@ -22,6 +22,7 @@
         controlWaiters: new Set(),
         previousConnected: null,
         previousEmergencyStop: null,
+        lastViewerStateText: '',
         lastHazardCode: null,
         hazardEntries: [],
         hazardSequence: 0,
@@ -290,6 +291,11 @@
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
+        const viewerStateText = `MODE ${mode} / NAV ${navState}`;
+        if (viewerStateText !== state.lastViewerStateText) {
+            state.lastViewerStateText = viewerStateText;
+            setFeedback(viewerStateText);
+        }
         if ($('navigation-start')) $('navigation-start').hidden = !pathReady;
         if ($('navigation-cancel')) $('navigation-cancel').hidden = !payload.active_goal;
         syncControlComponents(payload);
