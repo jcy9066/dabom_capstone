@@ -214,23 +214,6 @@
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
                                     </div>
 
-                                    <details class="lidar-display-panel" data-control-overflow-rank="70">
-                                        <summary>DISPLAY</summary>
-                                        <div class="lidar-display-options">
-                                            <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
-                                            <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
-                                            <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
-                                            <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
-                                            <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
-                                            <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
-                                            <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
-                                            <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
-                                            <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
-                                            <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
-                                            <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
-                                        </div>
-                                    </details>
-
                                     <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
                                         <button
                                             type="button"
@@ -261,6 +244,44 @@
                                 aria-controls="lidar-control-drawer-content"
                                 aria-label="제어 패널 접기"
                                 title="제어 패널 접기"
+                            >
+                                <span aria-hidden="true"></span>
+                            </button>
+                        </div>
+
+                        <div
+                            class="lidar-layer-drawer"
+                            id="lidar-layer-drawer"
+                            data-open="false"
+                        >
+                            <div
+                                class="lidar-layer-drawer-content"
+                                id="lidar-layer-drawer-content"
+                            >
+                                <div class="lidar-layer-drawer-title">LAYERS</div>
+                                <div class="lidar-display-options">
+                                    <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
+                                    <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
+                                    <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
+                                    <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
+                                    <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
+                                    <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
+                                    <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
+                                    <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
+                                    <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
+                                    <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
+                                    <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                class="lidar-layer-drawer-handle"
+                                id="lidarLayerDrawerToggle"
+                                aria-expanded="false"
+                                aria-controls="lidar-layer-drawer-content"
+                                aria-label="레이어 패널 펼치기"
+                                title="레이어 패널 펼치기"
                             >
                                 <span aria-hidden="true"></span>
                             </button>
@@ -300,15 +321,6 @@
                         title="Load saved map"
                     >
                         MAP
-                    </button>
-
-                    <button
-                        class="lidar-map-save-btn"
-                        id="lidarMapSaveBtn"
-                        onclick="saveCurrentNavigationMap()"
-                        title="현재 LiDAR map 저장"
-                    >
-                        SAVE
                     </button>
 
                     <button
