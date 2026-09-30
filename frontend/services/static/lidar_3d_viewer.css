@@ -145,3 +145,100 @@
         padding: 6px;
     }
 }
+
+
+/* Prevent text clipping in the expanded 3D LiDAR viewer. */
+.minimap-overlay.expanded .navigation-control-panel {
+    min-width: 0;
+    max-height: min(132px, 34%);
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.minimap-overlay.expanded .navigation-control-row {
+    min-width: 0;
+}
+
+.minimap-overlay.expanded .navigation-control-row button,
+.minimap-overlay.expanded .lidar-view-controls button,
+.minimap-overlay.expanded .lidar-display-panel summary {
+    white-space: nowrap;
+    line-height: 1.25;
+}
+
+.minimap-overlay.expanded .navigation-control-status {
+    flex: 1 1 180px;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+
+.minimap-overlay.expanded #navigation-goal-hint,
+.minimap-overlay.expanded #navigation-control-feedback {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+    line-height: 1.4;
+}
+
+.minimap-overlay.expanded .lidar-view-controls {
+    align-items: flex-start;
+}
+
+.minimap-overlay.expanded .lidar-display-panel {
+    width: clamp(150px, 24%, 190px);
+}
+
+.minimap-overlay.expanded .lidar-display-options {
+    max-height: min(260px, 52vh);
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.minimap-overlay.expanded .lidar-display-options label {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.minimap-overlay.expanded .lidar-map-meta {
+    max-width: calc(100% - 58px);
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.minimap-overlay.expanded .lidar-map-status.has-data {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.minimap-overlay.expanded .lidar-stale-title,
+.minimap-overlay.expanded .lidar-stale-detail {
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+
+@media (max-width: 760px) {
+    .minimap-overlay.expanded .navigation-control-panel {
+        max-height: min(150px, 38%);
+    }
+
+    .minimap-overlay.expanded .navigation-control-status {
+        flex-basis: 100%;
+    }
+
+    .minimap-overlay.expanded .lidar-display-panel {
+        width: 145px;
+    }
+}
