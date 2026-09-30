@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 순찰 관제 센터</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="static/style.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="static/system_control.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="static/navigation_map_control.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v13">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20260930-lidar3d-controls-v13">
+    <link rel="stylesheet" href="static/style.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="static/system_control.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="static/navigation_map_control.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v14">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20260930-lidar3d-controls-v14">
 </head>
 <body>
 
@@ -475,22 +475,6 @@
             </div>
 
             <div class="control-grid">
-                <div class="split-btn-container">
-                    <button
-                        class="card action-btn action-report"
-                        onclick="reportDanger()"
-                    >
-                        신고
-                    </button>
-
-                    <button
-                        class="card action-btn action-warning"
-                        onclick="warnTrespasser()"
-                    >
-                        ⚠️ 경고
-                    </button>
-                </div>
-
                 <div
                     class="card dashboard-mode-controls"
                     id="dashboard-mode-controls-mount"
@@ -537,6 +521,32 @@
                         data-dashboard-mount="dashboard-led-control"
                         aria-label="LED control"
                     ></div>
+                </div>
+
+                <div class="split-btn-container dashboard-action-controls">
+                    <button
+                        class="card action-btn action-beep"
+                        id="dashboardBeepBtn"
+                        type="button"
+                    >
+                        BEEP
+                    </button>
+
+                    <button
+                        class="card action-btn action-warning"
+                        type="button"
+                        onclick="warnTrespasser()"
+                    >
+                        경고
+                    </button>
+
+                    <button
+                        class="card action-btn action-report"
+                        type="button"
+                        onclick="reportDanger()"
+                    >
+                        신고
+                    </button>
                 </div>
 
                 <div
@@ -651,21 +661,21 @@
         </div>
     </div>
 
-    <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/navigation/saved_map_modal.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/records/record_table.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/gallery/image_detail.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="/components/current_situation/current_situation.js?v=20260930-lidar3d-controls-v13"></script>
+    <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/navigation/saved_map_modal.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/records/record_table.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/gallery/image_detail.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="/components/current_situation/current_situation.js?v=20260930-lidar3d-controls-v14"></script>
     <script type="importmap">
         {
             "imports": {
@@ -674,11 +684,11 @@
             }
         }
     </script>
-    <script type="module" src="static/lidar_3d_viewer.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="static/script.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="static/system_control.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v13"></script>
-    <script src="static/navigation_control.js?v=20260930-lidar3d-controls-v13"></script>
+    <script type="module" src="static/lidar_3d_viewer.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="static/script.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="static/system_control.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v14"></script>
+    <script src="static/navigation_control.js?v=20260930-lidar3d-controls-v14"></script>
 </body>
 </html>

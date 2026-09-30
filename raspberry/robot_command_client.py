@@ -404,6 +404,15 @@ class RobotCommandClient:
                     str(message.get("text", ""))
                 )
 
+            elif command_type == "beep":
+                duration_ms = self._duration_ms(
+                    message.get("duration_ms", 350)
+                )
+                await asyncio.to_thread(
+                    self.motor.beep,
+                    duration_ms,
+                )
+
             elif command_type == "led":
                 enabled = message.get("enabled")
                 if not isinstance(enabled, bool):

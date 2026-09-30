@@ -592,6 +592,25 @@ class NavigationControlApi:
             self._touch_locked()
         return {**self.state_response(), "navigation": navigation, "replanned": True}
 
+    async def beep(self, payload: dict[str, Any]) -> dict[str, Any]:
+        duration_ms = self._bounded_int(
+            payload.get("duration_ms", 350),
+            50,
+            2000,
+            "duration_ms",
+        )
+        delivered = await self._send_robot_command(
+            self._robot_id,
+            {"type": "beep", "duration_ms": duration_ms},
+        )
+        if not delivered:
+            raise NavigationControlError(
+                "PI_OFFLINE",
+                "The beep command was not delivered.",
+                409,
+            )
+        return {"ok": True, "delivered": True, "duration_ms": duration_ms}
+
     async def set_led(self, payload: dict[str, Any]) -> dict[str, Any]:
         enabled = payload.get("enabled")
         if not isinstance(enabled, bool):
@@ -902,6 +921,10 @@ class NavigationControlApi:
         @self._app.post("/api/navigation/control/resume")
         async def resume_navigation(request: Request):
             return await self._mutation(request, lambda _: self.resume_navigation())
+
+        @self._app.post("/api/navigation/control/beep")
+        async def play_beep(request: Request):
+            return await self._mutation(request, self.beep)
 
         @self._app.post("/api/navigation/control/led")
         async def control_led(request: Request):

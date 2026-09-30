@@ -4,7 +4,7 @@
 
 #dashboard-mode-controls-mount.dashboard-mode-controls-upgraded {
     display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
     align-items: stretch;
     gap: 0;
     cursor: default !important;
@@ -451,7 +451,7 @@
 }
 
 
-/* Persistent robot LED control in the dashboard's 20% mode segment. */
+/* Persistent robot LED control in the shared mode panel. */
 .dashboard-led-control-mount {
     display: flex;
     align-items: center;
@@ -499,7 +499,9 @@
 }
 
 .dashboard-led-toggle-state {
-    display: none;
+    min-width: 20px;
+    text-align: left;
+    opacity: 0.65;
 }
 
 .dashboard-led-toggle-track {

@@ -70,9 +70,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="lidarControlDrawerToggle"', template)
         self.assertIn("syncControlDrawerState", viewer)
         self.assertIn("dabom:drawer-toggle", viewer)
-        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v13', template)
-        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v13', template)
-        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v13', template)
+        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v14', template)
+        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v14', template)
+        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v14', template)
         self.assertIn('data-drawer-target="lidar-control-drawer"', template)
         self.assertIn('data-drawer-target="lidar-layer-drawer"', template)
         self.assertIn('dashboard-drawer-toggle--top', template)
@@ -95,15 +95,20 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="dashboard-led-control-mount"', template)
         self.assertNotIn('id="lidar-led-control-mount"', template)
         self.assertIn("dashboard-led-control-mount", self.control)
-        self.assertIn(
-            "grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);",
-            self.controls_css,
-        )
-        self.assertIn(".dashboard-mode-controls > *", dashboard_css := (
+        dashboard_css = (
             ROOT / "frontend/services/static/style.css"
-        ).read_text(encoding="utf-8"))
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "grid-template-columns: minmax(0, 38fr) minmax(88px, 20fr) minmax(190px, 42fr);",
+            dashboard_css,
+        )
+        self.assertIn("grid-template-rows: repeat(3, minmax(0, 1fr));", dashboard_css)
+        self.assertIn(".dashboard-mode-controls > *", dashboard_css)
         self.assertIn("overflow: hidden;", dashboard_css)
-        self.assertIn(".dashboard-led-toggle-state {\n    display: none;", self.controls_css)
+        self.assertIn(".dashboard-led-toggle-state {\n    min-width: 20px;", self.controls_css)
+        self.assertIn('id="dashboardBeepBtn"', template)
+        self.assertIn('class="card action-btn action-beep"', template)
+        self.assertIn("'/api/navigation/control/beep'", self.control)
         self.assertNotIn('id="navigation-led-test"', template)
         self.assertNotIn('id="navigation-estop"', template)
         self.assertNotIn('id="navigation-resume"', template)

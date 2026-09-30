@@ -633,8 +633,8 @@ body.dark-mode .no-camera-bg {
 =================================================== */
 .control-grid {
     flex: 0 0 clamp(176px, 23vh, 200px); display: grid; gap: 8px; min-height: 0;
-    grid-template-columns: minmax(0, 1fr) minmax(190px, 42%);
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 38fr) minmax(88px, 20fr) minmax(190px, 42fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
 }
 .action-btn {
     display: flex; justify-content: center; align-items: center;
@@ -662,12 +662,26 @@ body.dark-mode .no-camera-bg {
 }
 .action-warning:hover { background-color: rgba(217, 119, 6, 0.15); border-color: var(--warning-color); color: var(--warning-color); }
 
-/* 분할 버튼 */
-.split-btn-container { display: flex; gap: 8px; grid-column: 1; grid-row: 2; min-width: 0; }
-.split-btn-container .action-btn { flex: 1; width: 100%; margin: 0; height: 100%; }
+.action-beep {
+    background-color: rgba(8, 145, 178, 0.06);
+    color: var(--accent);
+    border: 1px solid rgba(8, 145, 178, 0.24);
+}
+.action-beep:hover { background-color: rgba(8, 145, 178, 0.13); border-color: var(--accent); color: var(--accent); }
+
+/* BEEP / 경고 / 신고 */
+.split-btn-container {
+    display: grid;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    grid-column: 2;
+    grid-row: 1 / 4;
+    min-width: 0;
+}
+.split-btn-container .action-btn { width: 100%; margin: 0; height: 100%; min-height: 0; }
 
 /* D-Pad */
-.d-pad-container { grid-column: 2; grid-row: 1 / 3; display: flex; justify-content: center; align-items: center; padding: 10px; }
+.d-pad-container { grid-column: 3; grid-row: 1 / 4; display: flex; justify-content: center; align-items: center; padding: 10px; }
 .d-pad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 5px; width: 100%; height: 100%; }
 .d-btn {
     background-color: var(--card-bg2); border: 1px solid var(--border-color);
@@ -732,13 +746,13 @@ body.dark-mode .no-camera-bg {
 
 .dashboard-mode-controls {
     grid-column: 1;
-    grid-row: 1;
+    grid-row: 1 / 4;
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
     align-items: stretch;
     gap: 0;
-    padding: 8px 10px;
+    padding: 0;
 }
 .dashboard-drive-mode-control {
     min-width: 0;
@@ -746,70 +760,54 @@ body.dark-mode .no-camera-bg {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 0 8px;
+    gap: 8px;
+    padding: 0 10px;
     box-sizing: border-box;
     border: 0;
     background: transparent;
     color: inherit;
     cursor: pointer;
 }
-.dashboard-navigation-mode-controls {
+.dashboard-navigation-mode-controls,
+.dashboard-led-control-mount {
     min-width: 0;
     width: 100%;
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
     justify-content: center;
-    padding: 0 8px;
+    padding: 0 10px;
     box-sizing: border-box;
-    border-left: 1px solid var(--border-color);
+    border-top: 1px solid var(--border-color);
 }
-.dashboard-led-control-mount {
-    min-width: 0;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 4px 0 8px;
-    box-sizing: border-box;
-    border-left: 1px solid var(--border-color);
-}
-
 .dashboard-mode-controls > * {
     min-width: 0;
     overflow: hidden;
 }
-
 .dashboard-navigation-mode-controls .navigation-mode-toggle {
     width: 100%;
     max-width: 100%;
-    gap: 4px;
+    gap: 6px;
     overflow: hidden;
 }
-
 .dashboard-navigation-mode-controls .navigation-mode-toggle-label {
     flex: 0 1 auto;
     min-width: 0;
-    font-size: 8px;
-    letter-spacing: 0;
+    font-size: 9px;
+    letter-spacing: 0.1px;
 }
-
 .dashboard-navigation-mode-controls .navigation-mode-toggle-track {
-    flex: 0 0 34px;
-    width: 34px;
-    height: 21px;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 23px;
 }
-
 .dashboard-navigation-mode-controls .navigation-mode-toggle-slider {
-    width: 13px;
-    height: 13px;
+    width: 15px;
+    height: 15px;
 }
-
 .dashboard-navigation-mode-controls .navigation-mode-toggle.driving .navigation-mode-toggle-slider {
-    left: calc(100% - 16px);
+    left: calc(100% - 18px);
 }
-
 .dashboard-drive-mode-control:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
@@ -1148,11 +1146,11 @@ body.dark-mode .no-camera-bg {
     .map-bookmark-panel .mb-btn { flex-basis: 100%; }
     .server-state-grid { grid-template-columns: minmax(0, 1fr); }
     .server-state-field-wide { grid-column: auto; }
-    .control-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(3, minmax(88px, auto)); }
-    .split-btn-container { grid-column: 1; grid-row: 1; }
-    .dashboard-mode-controls { grid-column: 1; grid-row: 2; }
+    .control-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(190px, auto); }
+    .dashboard-mode-controls { grid-column: 1; grid-row: 1; min-height: 150px; }
+    .split-btn-container { grid-column: 1; grid-row: 2; min-height: 150px; }
     .d-pad-container { grid-column: 1; grid-row: 3; min-height: 190px; }
-    .dashboard-mode-controls { align-content: center; }
+    .dashboard-mode-controls { align-content: stretch; }
     .dashboard-drive-mode-control { width: 100%; }
     .gallery-grid { grid-template-columns: 1fr; }
 }

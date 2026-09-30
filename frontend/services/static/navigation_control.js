@@ -17,6 +17,7 @@
         navigationPending: false,
         estopPending: false,
         warningPending: false,
+        beepPending: false,
         ledPending: false,
         estopCooldownUntil: 0,
         controlWaiters: new Set(),
@@ -254,6 +255,14 @@
             connected: payload.connected === true,
             pending: state.ledPending,
         });
+        const beepButton = $('dashboardBeepBtn');
+        if (beepButton) {
+            beepButton.disabled = payload.connected !== true || state.beepPending;
+            beepButton.setAttribute('aria-busy', String(state.beepPending));
+            beepButton.title = payload.connected === true
+                ? '짧은 비프음을 1회 재생합니다.'
+                : 'Pi가 연결되어야 비프음을 재생할 수 있습니다.';
+        }
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) {
             warningButton.disabled = payload.connected !== true || state.warningPending;
@@ -665,6 +674,28 @@
         }
     }
 
+    async function beep() {
+        if (state.beepPending) return false;
+        if (state.control?.connected !== true) {
+            setFeedback('Pi가 연결되지 않아 비프음 명령을 전달하지 못했습니다.', true);
+            syncControlComponents();
+            return false;
+        }
+        state.beepPending = true;
+        syncControlComponents();
+        try {
+            await mutate('/api/navigation/control/beep', { duration_ms: 350 });
+            setFeedback('비프음을 재생했습니다.');
+            return true;
+        } catch (error) {
+            setFeedback(`비프음 재생 실패: ${error.message}`, true);
+            return false;
+        } finally {
+            state.beepPending = false;
+            syncControlComponents();
+        }
+    }
+
     async function warning() {
         if (state.warningPending) return false;
         if (state.control?.connected !== true) {
@@ -707,6 +738,11 @@
         controls?.mountNavigationMode($('navigation-viewer-mode-controls-mount'), { request: requestNavigationMode });
         controls?.mountEmergencyStop($('dpad-center-action-mount'), { request: requestEmergencyToggle });
         controls?.mountLedToggle?.($('dashboard-led-control-mount'), { request: requestLedToggle });
+        const beepButton = $('dashboardBeepBtn');
+        if (beepButton) {
+            beepButton.disabled = true;
+            beepButton.addEventListener('click', beep);
+        }
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = true;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
@@ -734,6 +770,7 @@
         $('navigation-cancel')?.addEventListener('click', () => simpleAction('/api/navigation/control/cancel', '목표 취소 중...'));
         window.navigationControl = {
             applyState: applyControlState,
+            beep,
             emergencyStop,
             refreshState,
             requestDriveMode,

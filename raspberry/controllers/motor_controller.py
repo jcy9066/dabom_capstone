@@ -47,6 +47,7 @@ class MotorController:
       ENC_RESET
       ENC_STREAM,0|1
       LED,0|1
+      BEEP,<duration_ms>
 
     Pico → Pi:
       OK,...
@@ -479,6 +480,17 @@ class MotorController:
             self._exchange_locked(f"LED,{1 if enabled else 0}")
             with self._state_lock:
                 self.led_enabled = enabled
+
+    def beep(self, duration_ms: int = 350) -> None:
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+            raise MotorControllerError("beep duration must be an integer")
+        if duration_ms < 50 or duration_ms > 2000:
+            raise MotorControllerError(
+                "beep duration must be between 50 and 2000 ms"
+            )
+        with self._command_lock:
+            self._ensure_connected_locked()
+            self._exchange_locked(f"BEEP,{duration_ms}")
 
     def move(
         self,
