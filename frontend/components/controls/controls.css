@@ -375,7 +375,7 @@
 }
 
 .navigation-mode-toggle-label.active {
-    color: #e0f2fe;
+    color: #22d3ee;
     opacity: 1;
 }
 
@@ -404,14 +404,14 @@
 }
 
 .navigation-mode-toggle.driving .navigation-mode-toggle-track {
-    border-color: rgba(59, 130, 246, 0.45);
-    background: rgba(37, 99, 235, 0.12);
+    border-color: rgba(34, 211, 238, 0.35);
+    background: rgba(8, 145, 178, 0.12);
 }
 
 .navigation-mode-toggle.driving .navigation-mode-toggle-slider {
     left: calc(100% - 21px);
-    background: #60a5fa;
-    box-shadow: 0 2px 7px rgba(59, 130, 246, 0.3);
+    background: #22d3ee;
+    box-shadow: 0 2px 7px rgba(34, 211, 238, 0.3);
 }
 
 .navigation-mode-toggle.unknown .navigation-mode-toggle-track {
@@ -449,10 +449,10 @@
     min-width: 0;
     max-width: 100%;
     min-height: 27px;
-    display: inline-flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
     align-items: center;
-    justify-content: center;
-    gap: 4px;
+    column-gap: 8px;
     padding: 0;
     overflow: hidden;
     border: 0;
@@ -475,7 +475,7 @@
 
 .dashboard-led-toggle-label,
 .dashboard-led-toggle-state {
-    color: #94a3b8;
+    color: #22c55e;
     font-size: 8px;
     font-weight: 700;
     line-height: 1;
@@ -483,21 +483,28 @@
     white-space: nowrap;
 }
 
+.dashboard-led-toggle-label {
+    justify-self: end;
+    text-align: right;
+    opacity: 0.7;
+}
+
 .dashboard-led-toggle-state {
-    min-width: 20px;
+    min-width: 0;
+    justify-self: start;
     text-align: left;
-    opacity: 0.65;
+    opacity: 0.7;
 }
 
 .dashboard-led-toggle-track {
     position: relative;
-    flex: 0 0 48px;
+    justify-self: center;
     width: 48px;
     height: 26px;
     box-sizing: border-box;
-    border: 1px solid rgba(100, 116, 139, 0.35);
+    border: 1px solid rgba(34, 197, 94, 0.42);
     border-radius: 7px;
-    background: rgba(100, 116, 139, 0.12);
+    background: rgba(22, 163, 74, 0.12);
     transition: background 0.18s ease, border-color 0.18s ease;
 }
 
@@ -508,13 +515,14 @@
     width: 18px;
     height: 20px;
     border-radius: 5px;
-    background: #64748b;
+    background: #22c55e;
+    box-shadow: 0 2px 7px rgba(34, 197, 94, 0.28);
     transition: left 0.2s ease, background 0.18s ease;
 }
 
 .dashboard-led-toggle.active .dashboard-led-toggle-track {
-    border-color: rgba(34, 197, 94, 0.55);
-    background: rgba(22, 163, 74, 0.14);
+    border-color: rgba(34, 197, 94, 0.42);
+    background: rgba(22, 163, 74, 0.12);
 }
 
 .dashboard-led-toggle.active .dashboard-led-toggle-slider {
@@ -523,10 +531,17 @@
 }
 
 .dashboard-led-toggle.active .dashboard-led-toggle-state {
-    color: #16a34a;
+    color: #22c55e;
     opacity: 1;
+}
+
+.dashboard-led-toggle.unknown .dashboard-led-toggle-track {
+    border-color: rgba(100, 116, 139, 0.35);
+    background: rgba(100, 116, 139, 0.12);
 }
 
 .dashboard-led-toggle.unknown .dashboard-led-toggle-slider {
     left: calc(50% - 9px);
+    background: #64748b;
+    box-shadow: none;
 }

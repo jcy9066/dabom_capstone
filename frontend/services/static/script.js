@@ -630,8 +630,35 @@ function setMinimapExpanded(expanded) {
     requestLidarRender();
 }
 
-function toggleMinimapExpand() {
-    setMinimapExpanded(!minimapExpanded);
+async function toggleMinimapExpand() {
+    const minimap = document.getElementById('minimap-overlay');
+    const cameraView = document.getElementById('video-wrapper');
+    const collapsingFromLidarFullscreen = (
+        minimapExpanded
+        && minimap
+        && currentFullscreenElement() === minimap
+    );
+
+    if (!collapsingFromLidarFullscreen) {
+        setMinimapExpanded(!minimapExpanded);
+        return true;
+    }
+
+    setMinimapExpanded(false);
+
+    try {
+        await exitDocumentFullscreen();
+        if (!cameraView) return true;
+
+        const entered = await requestElementFullscreen(cameraView);
+        if (!entered) {
+            throw new Error('이 브라우저는 Element Fullscreen API를 지원하지 않습니다.');
+        }
+        return true;
+    } catch (error) {
+        console.error('3D Viewer 축소 후 카메라 전체화면 전환 실패:', error);
+        return false;
+    }
 }
 
 async function toggleLidarViewerFullscreen(event = null) {
