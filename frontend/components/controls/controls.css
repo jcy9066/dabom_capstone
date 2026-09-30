@@ -202,3 +202,112 @@
         letter-spacing: 0;
     }
 }
+
+
+/* Shared drawer-toggle component. The hit target can be large while the visible tab stays compact. */
+.dashboard-drawer-toggle {
+    position: relative;
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: #67e8f9;
+    z-index: 1;
+}
+
+.dashboard-drawer-toggle::before {
+    content: "";
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    background: rgba(8, 15, 29, 0.62);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+    transition:
+        background 0.14s ease,
+        border-color 0.14s ease,
+        box-shadow 0.14s ease;
+}
+
+.dashboard-drawer-toggle:hover::before,
+.dashboard-drawer-toggle:focus-visible::before {
+    border-color: rgba(103, 232, 249, 0.72);
+    background: rgba(8, 145, 178, 0.34);
+    box-shadow: 0 3px 10px rgba(8, 145, 178, 0.22);
+}
+
+.dashboard-drawer-toggle:focus-visible {
+    outline: none;
+}
+
+.dashboard-drawer-toggle-icon {
+    position: absolute;
+    z-index: 2;
+    width: 0;
+    height: 0;
+    filter: drop-shadow(0 0 2px rgba(34, 211, 238, 0.26));
+}
+
+/* Top-edge drawer: full-width hit target, compact centered visual tab. */
+.dashboard-drawer-toggle--top {
+    width: 100%;
+    height: 15.4px;
+}
+
+.dashboard-drawer-toggle--top::before {
+    top: 0;
+    left: 50%;
+    width: 66px;
+    height: 13px;
+    transform: translateX(-50%);
+    border-top: 0;
+    border-radius: 0 0 7px 7px;
+}
+
+.dashboard-drawer-toggle--top .dashboard-drawer-toggle-icon {
+    top: 3px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+}
+
+.dashboard-drawer-toggle--top[aria-expanded="true"] .dashboard-drawer-toggle-icon {
+    border-bottom: 5px solid currentColor;
+}
+
+.dashboard-drawer-toggle--top[aria-expanded="false"] .dashboard-drawer-toggle-icon {
+    border-top: 5px solid currentColor;
+}
+
+/* Left-edge drawer: full-height hit target, compact centered visual tab. */
+.dashboard-drawer-toggle--left {
+    width: 15.4px;
+    min-height: 118px;
+}
+
+.dashboard-drawer-toggle--left::before {
+    top: 50%;
+    left: 0;
+    width: 13px;
+    height: 66px;
+    transform: translateY(-50%);
+    border-left: 0;
+    border-radius: 0 7px 7px 0;
+}
+
+.dashboard-drawer-toggle--left .dashboard-drawer-toggle-icon {
+    top: 50%;
+    left: 3px;
+    transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+}
+
+.dashboard-drawer-toggle--left[aria-expanded="true"] .dashboard-drawer-toggle-icon {
+    border-right: 5px solid currentColor;
+}
+
+.dashboard-drawer-toggle--left[aria-expanded="false"] .dashboard-drawer-toggle-icon {
+    border-left: 5px solid currentColor;
+}
