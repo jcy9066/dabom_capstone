@@ -41,7 +41,7 @@ if (root && canvas) {
     const CAMERA_TEXTURE_MAX_WIDTH = 512;
     const CAMERA_TEXTURE_FPS = 12;
     const CAMERA_MOUNT_FORWARD_RATIO = 0.44;
-    const CAMERA_MOUNT_Z_OFFSET_M = 0.03;
+    const ORIGINAL_CAMERA_HEIGHT_OFFSET_M = 0.03;
 
     const renderer = new THREE.WebGLRenderer({
         canvas,
@@ -751,7 +751,7 @@ if (root && canvas) {
     }
 
     function addCameraBody(model, chassisLength, chassisWidth, topZ) {
-        scanVisualHeightM = topZ + CAMERA_MOUNT_Z_OFFSET_M;
+        scanVisualHeightM = topZ + ORIGINAL_CAMERA_HEIGHT_OFFSET_M;
         cameraMountLocal.set(
             chassisLength * CAMERA_MOUNT_FORWARD_RATIO,
             0,
