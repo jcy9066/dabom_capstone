@@ -283,9 +283,7 @@
         window.applyServerPatrolMode?.(payload?.robot_mode);
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
-        const ready = mode === 'DRIVING' && payload.localization_ready && payload.nav2_ready;
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
-        const stopped = Boolean(payload.emergency_stop);
         if ($('navigation-start')) $('navigation-start').hidden = !pathReady;
         if ($('navigation-cancel')) $('navigation-cancel').hidden = !payload.active_goal;
         syncControlComponents(payload);
