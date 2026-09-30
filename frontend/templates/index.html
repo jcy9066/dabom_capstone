@@ -185,7 +185,7 @@
                                         <div class="navigation-control-row">
                                             <button id="navigation-mode-mapping" type="button" data-control-button="mode">MAPPING</button>
                                             <button id="navigation-mode-driving" type="button" data-control-button="mode">DRIVING</button>
-                                            <span class="navigation-control-status">
+                                            <span class="navigation-control-status" data-control-overflow-rank="100">
                                                 MODE <strong id="navigation-mode-label">--</strong>
                                                 / NAV <strong id="navigation-state-label">--</strong>
                                             </span>
@@ -195,9 +195,9 @@
                                             <button id="navigation-cancel" type="button" data-control-button="secondary" hidden>목표 취소</button>
                                             <button id="navigation-estop" class="danger" type="button" data-control-button="danger">긴급 정지</button>
                                             <button id="navigation-resume" class="resume" type="button" data-control-button="success" hidden>Resume</button>
-                                            <button id="navigation-led-test" type="button" data-control-button="secondary">LED TEST</button>
+                                            <button id="navigation-led-test" type="button" data-control-button="secondary" data-control-overflow-rank="95">LED TEST</button>
                                         </div>
-                                        <div class="navigation-control-messages">
+                                        <div class="navigation-control-messages" data-control-overflow-rank="90">
                                             <span id="navigation-goal-hint"></span>
                                             <span id="navigation-control-feedback" role="status" aria-live="polite"></span>
                                         </div>
@@ -208,13 +208,13 @@
                                     <div class="lidar-view-controls" aria-label="3D viewer controls">
                                         <button type="button" data-lidar-view="free" data-control-button="view" class="active">FREE</button>
                                         <button type="button" data-lidar-view="top" data-control-button="view">TOP</button>
-                                        <button type="button" data-lidar-view="follow" data-control-button="view">FOLLOW</button>
+                                        <button type="button" data-lidar-view="follow" data-control-button="view" data-control-overflow-rank="80">FOLLOW</button>
                                         <span class="lidar-control-separator" aria-hidden="true"></span>
                                         <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
                                     </div>
 
-                                    <details class="lidar-display-panel">
+                                    <details class="lidar-display-panel" data-control-overflow-rank="70">
                                         <summary>DISPLAY</summary>
                                         <div class="lidar-display-options">
                                             <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
@@ -230,6 +230,26 @@
                                             <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
                                         </div>
                                     </details>
+
+                                    <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
+                                        <button
+                                            type="button"
+                                            class="lidar-control-overflow-toggle"
+                                            id="lidarControlOverflowToggle"
+                                            data-control-button="secondary"
+                                            aria-expanded="false"
+                                            aria-controls="lidar-control-overflow-menu"
+                                            aria-label="추가 제어 열기"
+                                            title="추가 제어"
+                                        >
+                                            ⋯
+                                        </button>
+                                        <div
+                                            class="lidar-control-overflow-menu"
+                                            id="lidar-control-overflow-menu"
+                                            hidden
+                                        ></div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -245,20 +265,6 @@
                                 <span aria-hidden="true"></span>
                             </button>
                         </div>
-                    </div>
-
-                    <div
-                        class="lidar-live-badge offline"
-                        id="lidar-live-badge"
-                    >
-                        OFFLINE
-                    </div>
-
-                    <div
-                        class="lidar-map-status"
-                        id="lidar-map-status"
-                    >
-                        MAP AREA
                     </div>
 
                     <div
