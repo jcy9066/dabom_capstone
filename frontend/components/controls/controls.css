@@ -446,3 +446,26 @@
         left: calc(100% - 16px);
     }
 }
+
+
+/* Persistent robot LED control reuses the shared control-button foundation. */
+.lidar-led-control-mount {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+}
+
+.lidar-led-toggle {
+    min-width: 42px;
+}
+
+.lidar-led-toggle.active {
+    border-color: rgba(34, 197, 94, 0.72) !important;
+    color: #86efac !important;
+    background: rgba(22, 163, 74, 0.2) !important;
+}
+
+.lidar-led-toggle.unknown:not(:disabled) {
+    border-color: rgba(148, 163, 184, 0.34) !important;
+    color: #94a3b8 !important;
+}
