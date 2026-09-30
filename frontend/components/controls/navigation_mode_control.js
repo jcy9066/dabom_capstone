@@ -9,50 +9,47 @@
         return Boolean(root?.ownerDocument?.createElement && root.replaceChildren);
     }
 
-    function buildToggle(root, controller) {
+    function render(root, controller) {
         if (!canRender(root)) return;
 
         const document = root.ownerDocument;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'navigation-mode-toggle';
-        button.setAttribute('aria-label', 'Navigation mode');
-        button.setAttribute('aria-pressed', 'false');
+        button.setAttribute('aria-label', 'Mapping / Driving 전환');
 
-        const mapping = document.createElement('span');
-        mapping.className = 'navigation-mode-toggle-label';
-        mapping.dataset.navigationModeLabel = 'MAPPING';
-        mapping.textContent = 'Mapping';
+        const mappingLabel = document.createElement('span');
+        mappingLabel.className = 'navigation-mode-toggle-label';
+        mappingLabel.textContent = 'MAPPING';
 
         const track = document.createElement('span');
         track.className = 'navigation-mode-toggle-track';
         track.setAttribute('aria-hidden', 'true');
 
-        const thumb = document.createElement('span');
-        thumb.className = 'navigation-mode-toggle-thumb';
-        track.append(thumb);
+        const slider = document.createElement('span');
+        slider.className = 'navigation-mode-toggle-slider';
+        track.append(slider);
 
-        const driving = document.createElement('span');
-        driving.className = 'navigation-mode-toggle-label';
-        driving.dataset.navigationModeLabel = 'DRIVING';
-        driving.textContent = 'Driving';
+        const drivingLabel = document.createElement('span');
+        drivingLabel.className = 'navigation-mode-toggle-label';
+        drivingLabel.textContent = 'DRIVING';
 
-        button.append(mapping, track, driving);
+        button.append(mappingLabel, track, drivingLabel);
         root.replaceChildren(button);
+
+        controller.button = button;
+        controller.mappingLabel = mappingLabel;
+        controller.drivingLabel = drivingLabel;
 
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
             if (controller.pending) return;
-            const target = controller.mode === 'DRIVING' ? 'MAPPING' : 'DRIVING';
-            controller.request(target);
-        });
 
-        controller.button = button;
-        controller.mappingLabel = mapping;
-        controller.drivingLabel = driving;
-        controller.track = track;
-        controller.render();
+            const current = controller.mode;
+            const next = current === 'MAPPING' ? 'DRIVING' : 'MAPPING';
+            controller.request(next);
+        });
     }
 
     controls.mountNavigationMode = function mountNavigationMode(root, handlers = {}) {
@@ -62,7 +59,6 @@
         const existing = root._dabomNavigationModeController;
         if (existing) {
             existing.handlers = { ...existing.handlers, ...handlers };
-            existing.render();
             return existing;
         }
 
@@ -74,47 +70,49 @@
             button: null,
             mappingLabel: null,
             drivingLabel: null,
-            track: null,
+
             request(mode) {
                 const normalized = String(mode || '').toUpperCase();
                 if (!['MAPPING', 'DRIVING'].includes(normalized)) return false;
                 const request = this.handlers.request || global.navigationControl?.requestNavigationMode;
                 return request?.(normalized);
             },
+
             sync(mode, options = {}) {
                 this.mode = String(mode || '').toUpperCase();
                 this.pending = Boolean(options.pending);
-                root.dataset.navigationMode = this.mode || 'UNKNOWN';
-                this.render();
-                this.handlers.sync?.(this.mode, options);
-            },
-            render() {
-                if (!this.button) return;
-                const known = this.mode === 'MAPPING' || this.mode === 'DRIVING';
-                const driving = this.mode === 'DRIVING';
+                root.dataset.navigationMode = this.mode;
 
-                this.button.disabled = this.pending || !known;
-                this.button.setAttribute('aria-busy', String(this.pending));
-                this.button.setAttribute('aria-pressed', String(driving));
-                this.button.classList.toggle('driving', driving);
-                this.button.classList.toggle('mapping', this.mode === 'MAPPING');
-                this.button.classList.toggle('unknown', !known);
+                const isMapping = this.mode === 'MAPPING';
+                const isDriving = this.mode === 'DRIVING';
 
-                this.mappingLabel?.classList.toggle('active', this.mode === 'MAPPING');
-                this.mappingLabel?.classList.toggle('inactive', this.mode !== 'MAPPING');
-                this.drivingLabel?.classList.toggle('active', driving);
-                this.drivingLabel?.classList.toggle('inactive', !driving);
-
-                if (this.track) {
-                    this.track.dataset.mode = known ? this.mode : 'UNKNOWN';
+                this.button?.classList.toggle('mapping', isMapping);
+                this.button?.classList.toggle('driving', isDriving);
+                this.button?.classList.toggle('unknown', !isMapping && !isDriving);
+                if (this.button) {
+                    this.button.disabled = this.pending;
+                    this.button.setAttribute('aria-busy', String(this.pending));
+                    this.button.setAttribute(
+                        'aria-label',
+                        isMapping
+                            ? '현재 Mapping. Driving으로 전환'
+                            : isDriving
+                                ? '현재 Driving. Mapping으로 전환'
+                                : 'Navigation mode 선택',
+                    );
                 }
+
+                this.mappingLabel?.classList.toggle('active', isMapping);
+                this.drivingLabel?.classList.toggle('active', isDriving);
+                this.handlers.sync?.(this.mode, options);
             },
         };
 
+        render(root, controller);
         root._dabomNavigationModeController = controller;
         instances.push(controller);
         controls.navigationMode = controller;
-        buildToggle(root, controller);
+        controller.sync('', { pending: false });
         return controller;
     };
 
