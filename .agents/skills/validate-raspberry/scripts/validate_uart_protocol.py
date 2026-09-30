@@ -137,20 +137,10 @@ def check_required_files(root: Path, findings: list[Finding]) -> None:
         if not (root / relative).is_file():
             add(findings, "ERROR", "required-file", f"필수 파일이 없습니다: {relative}")
 
-    legacy = root / "raspberry" / "pico_w" / "main.py"
-    if not legacy.is_file():
-        add(
-            findings,
-            "WARN",
-            "legacy-firmware",
-            "raspberry/pico_w/main.py를 찾지 못했습니다. 사용하지 않는다면 문제없습니다.",
-        )
-
 
 def check_python_syntax(root: Path, findings: list[Finding]) -> None:
     for path in (
         root / "raspberry" / "controllers" / "motor_controller.py",
-        root / "raspberry" / "pico_w" / "main.py",
     ):
         if not path.is_file():
             continue
@@ -293,30 +283,6 @@ def check_protocol_alignment(root: Path, findings: list[Finding]) -> None:
         )
 
 
-def check_legacy_firmware(root: Path, findings: list[Finding]) -> None:
-    path = root / "raspberry" / "pico_w" / "main.py"
-    if not path.is_file():
-        return
-    source = read_text(path)
-
-    missing = [
-        command
-        for command in ("DRIVE", "ENC_RESET", "ENC_STREAM", "ENC_GET")
-        if command not in source
-    ]
-    if missing:
-        add(
-            findings,
-            "WARN",
-            "legacy-firmware",
-            (
-                "raspberry/pico_w/main.py는 legacy/minimal firmware입니다. "
-                "현재 MotorController와 완전한 protocol 호환이 아닙니다. "
-                "누락: " + ", ".join(missing)
-            ),
-        )
-
-
 def run_runtime(
     serial_port: str | None,
     baudrate: int,
@@ -400,7 +366,6 @@ def main() -> int:
     check_pi_controller(root, findings)
     check_pico_sdk(root, findings)
     check_protocol_alignment(root, findings)
-    check_legacy_firmware(root, findings)
 
     runtime = run_runtime(
         args.serial_port,
