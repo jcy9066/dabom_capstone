@@ -238,14 +238,18 @@
 
                             <button
                                 type="button"
-                                class="lidar-control-drawer-handle"
+                                class="dashboard-drawer-toggle dashboard-drawer-toggle--top lidar-control-drawer-handle"
                                 id="lidarControlDrawerToggle"
+                                data-drawer-toggle
+                                data-drawer-target="lidar-control-drawer"
+                                data-drawer-open-label="제어 패널 접기"
+                                data-drawer-closed-label="제어 패널 펼치기"
                                 aria-expanded="true"
                                 aria-controls="lidar-control-drawer-content"
                                 aria-label="제어 패널 접기"
                                 title="제어 패널 접기"
                             >
-                                <span aria-hidden="true"></span>
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
                             </button>
                         </div>
 
@@ -276,14 +280,18 @@
 
                             <button
                                 type="button"
-                                class="lidar-layer-drawer-handle"
+                                class="dashboard-drawer-toggle dashboard-drawer-toggle--left lidar-layer-drawer-handle"
                                 id="lidarLayerDrawerToggle"
+                                data-drawer-toggle
+                                data-drawer-target="lidar-layer-drawer"
+                                data-drawer-open-label="레이어 패널 접기"
+                                data-drawer-closed-label="레이어 패널 펼치기"
                                 aria-expanded="false"
                                 aria-controls="lidar-layer-drawer-content"
                                 aria-label="레이어 패널 펼치기"
                                 title="레이어 패널 펼치기"
                             >
-                                <span aria-hidden="true"></span>
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
                             </button>
                         </div>
                     </div>
@@ -640,6 +648,7 @@
     <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v5"></script>
     <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v5"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v5"></script>
+    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v5"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v5"></script>
     <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v5"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-controls-v5"></script>
