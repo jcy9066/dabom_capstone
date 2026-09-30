@@ -550,15 +550,66 @@ requestLidarRender();
 // ===================================================
 // 전체화면
 // ===================================================
-function toggleFullscreen(elementId) {
-    const elem = document.getElementById(elementId);
-    if (!document.fullscreenElement) {
-        if (elem.requestFullscreen) elem.requestFullscreen();
-        else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
-        else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
-    } else {
-        if (document.exitFullscreen) document.exitFullscreen();
+function currentFullscreenElement() {
+    return document.fullscreenElement
+        || document.webkitFullscreenElement
+        || document.msFullscreenElement
+        || null;
+}
+
+async function requestElementFullscreen(element) {
+    if (!element) return false;
+
+    if (element.requestFullscreen) {
+        try {
+            await element.requestFullscreen({ navigationUI: 'hide' });
+        } catch (error) {
+            if (error?.name === 'TypeError') {
+                await element.requestFullscreen();
+            } else {
+                throw error;
+            }
+        }
+        return true;
     }
+
+    if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen();
+        return true;
+    }
+
+    if (element.msRequestFullscreen) {
+        element.msRequestFullscreen();
+        return true;
+    }
+
+    return false;
+}
+
+async function exitDocumentFullscreen() {
+    if (document.exitFullscreen) {
+        await document.exitFullscreen();
+        return true;
+    }
+    if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+        return true;
+    }
+    if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+        return true;
+    }
+    return false;
+}
+
+async function toggleFullscreen(elementId) {
+    const element = document.getElementById(elementId);
+    if (!element) return false;
+
+    if (currentFullscreenElement() === element) {
+        return exitDocumentFullscreen();
+    }
+    return requestElementFullscreen(element);
 }
 
 // ===================================================
@@ -583,30 +634,38 @@ function toggleMinimapExpand() {
     setMinimapExpanded(!minimapExpanded);
 }
 
-async function toggleLidarViewerFullscreen() {
+async function toggleLidarViewerFullscreen(event = null) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
     const minimap = document.getElementById('minimap-overlay');
-    if (!minimap) return;
+    if (!minimap) return false;
 
     try {
-        if (document.fullscreenElement === minimap) {
-            await document.exitFullscreen();
-            return;
+        if (currentFullscreenElement() === minimap) {
+            return await exitDocumentFullscreen();
         }
 
         if (!minimapExpanded) setMinimapExpanded(true);
-        await minimap.requestFullscreen();
+        const entered = await requestElementFullscreen(minimap);
+        if (!entered) throw new Error('이 브라우저는 Element Fullscreen API를 지원하지 않습니다.');
+        return true;
     } catch (error) {
         console.error('3D Viewer 전체화면 전환 실패:', error);
+        const button = document.getElementById('lidarViewerFullscreenBtn');
+        if (button) button.title = `전체화면 전환 실패: ${error.message || error}`;
+        return false;
     }
 }
 
 const lidarFullscreenBtn = document.getElementById('lidarViewerFullscreenBtn');
+lidarFullscreenBtn?.addEventListener('pointerdown', event => event.stopPropagation());
 lidarFullscreenBtn?.addEventListener('click', toggleLidarViewerFullscreen);
 
-document.addEventListener('fullscreenchange', () => {
+function syncLidarViewerFullscreenState() {
     const minimap = document.getElementById('minimap-overlay');
     const button = document.getElementById('lidarViewerFullscreenBtn');
-    const active = document.fullscreenElement === minimap;
+    const active = currentFullscreenElement() === minimap;
 
     button?.classList.toggle('is-fullscreen', active);
     if (button) {
@@ -617,7 +676,10 @@ document.addEventListener('fullscreenchange', () => {
 
     if (active && !minimapExpanded) setMinimapExpanded(true);
     requestLidarRender();
-});
+}
+
+document.addEventListener('fullscreenchange', syncLidarViewerFullscreenState);
+document.addEventListener('webkitfullscreenchange', syncLidarViewerFullscreenState);
 
 window.navigationMapView = {
     screenToGround(event) {
