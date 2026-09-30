@@ -554,3 +554,31 @@
     opacity: 1;
     pointer-events: auto;
 }
+
+
+/* Viewer actions must remain clickable above the full-width control drawer hit target. */
+.minimap-overlay.expanded .lidar-viewer-fullscreen-btn,
+.minimap-overlay:fullscreen .lidar-viewer-fullscreen-btn,
+.minimap-overlay:-webkit-full-screen .lidar-viewer-fullscreen-btn,
+.minimap-overlay.expanded .minimap-expand-btn,
+.minimap-overlay:fullscreen .minimap-expand-btn,
+.minimap-overlay:-webkit-full-screen .minimap-expand-btn,
+.minimap-overlay.expanded .lidar-map-select-btn,
+.minimap-overlay:fullscreen .lidar-map-select-btn,
+.minimap-overlay:-webkit-full-screen .lidar-map-select-btn {
+    z-index: 70;
+    pointer-events: auto;
+}
+
+/* When the control drawer is collapsed, its reopen tab stays attached to the viewer top edge. */
+.lidar-control-drawer[data-open="false"] {
+    top: 0 !important;
+}
+
+.lidar-control-drawer[data-open="false"] .lidar-control-drawer-handle {
+    position: absolute;
+    top: 0 !important;
+    bottom: auto !important;
+    left: 0;
+    transform: none;
+}
