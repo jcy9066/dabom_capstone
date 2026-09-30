@@ -454,7 +454,27 @@ class NavigationRosControl:
         with self._lock:
             if tf_ok:
                 self._last_tf_at = time.monotonic()
+
             monotonic_now = time.monotonic()
+            amcl_age_sec = self._monotonic_age(
+                monotonic_now,
+                self._amcl.received_at,
+            )
+
+            # /amcl_pose is not a heartbeat. While the robot is stationary,
+            # AMCL may keep a valid map->odom transform without publishing a
+            # new pose message. Treat a fresh map->base_link TF as current
+            # localization evidence once AMCL has produced an initial pose.
+            localization_ok = (
+                self._amcl.received_at is not None
+                and tf_ok
+            )
+            localization_age_sec = (
+                min(amcl_age_sec, tf_source_age_sec)
+                if localization_ok
+                else amcl_age_sec
+            )
+
             return {
                 "available": True,
                 "scan_age_sec": self._monotonic_age(monotonic_now, self._last_scan_at),
@@ -462,8 +482,8 @@ class NavigationRosControl:
                 "tf_ok": tf_ok,
                 "tf_age_sec": self._monotonic_age(monotonic_now, self._last_tf_at),
                 "tf_source_age_sec": tf_source_age_sec,
-                "localization_ok": self._amcl.received_at is not None,
-                "localization_age_sec": self._monotonic_age(monotonic_now, self._amcl.received_at),
+                "localization_ok": localization_ok,
+                "localization_age_sec": localization_age_sec,
             }
 
     def _require_started(self) -> None:

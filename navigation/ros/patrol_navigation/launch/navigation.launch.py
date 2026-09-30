@@ -2,7 +2,7 @@
 #
 # 실행 구조:
 #   localization.launch.py
-#     - SLLIDAR
+#     - existing /scan from lidar_websocket_bridge
 #     - map_server
 #     - AMCL
 #     - odom -> base_link TF
@@ -78,16 +78,6 @@ def generate_launch_description():
         "navigation_mode"
     )
 
-    serial_port = LaunchConfiguration(
-        "serial_port"
-    )
-    serial_baudrate = LaunchConfiguration(
-        "serial_baudrate"
-    )
-
-    start_lidar = LaunchConfiguration(
-        "start_lidar"
-    )
     start_bridge = LaunchConfiguration(
         "start_bridge"
     )
@@ -131,12 +121,6 @@ def generate_launch_description():
                     navigation_mode
                 ),
 
-                "serial_port": serial_port,
-                "serial_baudrate": (
-                    serial_baudrate
-                ),
-
-                "start_lidar": start_lidar,
                 "start_bridge": start_bridge,
                 "start_fake_odom": (
                     start_fake_odom
@@ -309,7 +293,7 @@ def generate_launch_description():
                 "cmd_vel_topic": (
                     "/cmd_vel_nav_dry_run"
                 ),
-                "wheel_track_m": 0.201,
+                "wheel_track_m": 0.4023,
                 "max_wheel_mps": 0.50,
                 "twist_timeout_sec": nav2_twist_timeout_sec,
                 "server_base_url": (
@@ -424,24 +408,8 @@ def generate_launch_description():
             ),
 
             # -------------------------------------------------
-            # LiDAR
-            # -------------------------------------------------
-            DeclareLaunchArgument(
-                "serial_port",
-                default_value="/dev/ttyUSB0",
-            ),
-            DeclareLaunchArgument(
-                "serial_baudrate",
-                default_value="115200",
-            ),
-
-            # -------------------------------------------------
             # 실행 여부
             # -------------------------------------------------
-            DeclareLaunchArgument(
-                "start_lidar",
-                default_value="true",
-            ),
             DeclareLaunchArgument(
                 "start_bridge",
                 default_value="true",

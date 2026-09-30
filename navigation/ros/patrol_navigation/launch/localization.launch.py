@@ -2,7 +2,7 @@
 #
 # 실행 구조:
 #   map_server -> /map
-#   SLLIDAR    -> /scan
+#   lidar_websocket_bridge -> /scan
 #   AMCL       -> /amcl_pose + map->odom TF
 #   odometry   -> odom->base_link TF
 #   map_bridge -> FastAPI server
@@ -22,13 +22,9 @@
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    IncludeLaunchDescription,
     TimerAction,
 )
 from launch.conditions import IfCondition
-from launch.launch_description_sources import (
-    PythonLaunchDescriptionSource,
-)
 from launch.substitutions import (
     EnvironmentVariable,
     LaunchConfiguration,
@@ -47,14 +43,6 @@ from launch_ros.substitutions import (
 def generate_launch_description():
     pkg_share = FindPackageShare(
         "patrol_navigation"
-    )
-
-    lidar_launch = PathJoinSubstitution(
-        [
-            pkg_share,
-            "launch",
-            "lidar.launch.py",
-        ]
     )
 
     # ---------------------------------------------------------
@@ -84,9 +72,6 @@ def generate_launch_description():
     # ---------------------------------------------------------
     # 실행 여부
     # ---------------------------------------------------------
-    start_lidar = LaunchConfiguration(
-        "start_lidar"
-    )
     start_bridge = LaunchConfiguration(
         "start_bridge"
     )
@@ -102,22 +87,6 @@ def generate_launch_description():
     )
     base_frame = LaunchConfiguration(
         "base_frame"
-    )
-
-    # ---------------------------------------------------------
-    # LiDAR 설정
-    # ---------------------------------------------------------
-    serial_port = LaunchConfiguration(
-        "serial_port"
-    )
-    serial_baudrate = LaunchConfiguration(
-        "serial_baudrate"
-    )
-    driver_package = LaunchConfiguration(
-        "driver_package"
-    )
-    driver_executable = LaunchConfiguration(
-        "driver_executable"
     )
 
     # ---------------------------------------------------------
@@ -324,10 +293,6 @@ def generate_launch_description():
             # 실행 스위치
             # -------------------------------------------------
             DeclareLaunchArgument(
-                "start_lidar",
-                default_value="true",
-            ),
-            DeclareLaunchArgument(
                 "start_bridge",
                 default_value="true",
             ),
@@ -346,55 +311,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "base_frame",
                 default_value="base_link",
-            ),
-
-            # -------------------------------------------------
-            # LiDAR 설정
-            # -------------------------------------------------
-            DeclareLaunchArgument(
-                "serial_port",
-                default_value="/dev/ttyUSB0",
-            ),
-            DeclareLaunchArgument(
-                "serial_baudrate",
-                default_value="115200",
-            ),
-            DeclareLaunchArgument(
-                "driver_package",
-                default_value="sllidar_ros2",
-            ),
-            DeclareLaunchArgument(
-                "driver_executable",
-                default_value=(
-                    "sllidar_node"
-                ),
-            ),
-
-            # -------------------------------------------------
-            # LiDAR + base_link -> laser TF
-            # -------------------------------------------------
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    lidar_launch
-                ),
-                condition=IfCondition(
-                    start_lidar
-                ),
-                launch_arguments={
-                    "serial_port": (
-                        serial_port
-                    ),
-                    "serial_baudrate": (
-                        serial_baudrate
-                    ),
-                    "driver_package": (
-                        driver_package
-                    ),
-                    "driver_executable": (
-                        driver_executable
-                    ),
-                    "base_frame": base_frame,
-                }.items(),
             ),
 
             # -------------------------------------------------
