@@ -394,26 +394,28 @@ function defaultNavigationMapName() {
     return `patrol_area_${yyyy}${mm}${dd}_${hh}${mi}${ss}`;
 }
 
-function saveCurrentNavigationMap() {
-    const button = document.getElementById('lidarMapSaveBtn');
+function saveCurrentNavigationMap(button = null) {
     if (!lidarState.map) {
         alert('저장할 LiDAR map이 아직 없습니다. mapping 데이터 수신 후 다시 시도하세요.');
-        return;
+        return Promise.resolve(null);
     }
+
     const mapName = prompt('저장할 map 이름을 입력하세요.', defaultNavigationMapName());
-    if (mapName === null) return;
+    if (mapName === null) return Promise.resolve(null);
+
     const trimmedName = mapName.trim();
     if (!trimmedName) {
         alert('map 이름이 비어 있습니다.');
-        return;
+        return Promise.resolve(null);
     }
 
+    const previousText = button?.textContent || '';
     if (button) {
         button.disabled = true;
-        button.textContent = '...';
+        button.textContent = '저장 중...';
     }
 
-    fetch('/api/navigation/maps/save', {
+    return fetch('/api/navigation/maps/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ map_name: trimmedName }),
@@ -422,19 +424,21 @@ function saveCurrentNavigationMap() {
         .then(({ ok, data }) => {
             if (!ok) {
                 alert(`map 저장 실패: ${data.error || 'unknown error'}`);
-                return;
+                return null;
             }
             const savedName = data.map?.map_name || trimmedName;
             alert(`map 저장 완료: ${savedName}`);
+            return savedName;
         })
         .catch(error => {
             console.error('map 저장 오류:', error);
             alert('서버 통신 오류로 map을 저장하지 못했습니다.');
+            return null;
         })
         .finally(() => {
             if (button) {
                 button.disabled = false;
-                button.textContent = 'SAVE';
+                button.textContent = previousText || '현재 지도 저장';
             }
         });
 }
