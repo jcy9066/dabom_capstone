@@ -183,23 +183,17 @@
                                 <div class="lidar-control-strip">
                                     <div class="navigation-control-panel" id="navigation-control-panel">
                                         <div class="navigation-control-row">
-                                            <button id="navigation-mode-mapping" type="button" data-control-button="mode">MAPPING</button>
-                                            <button id="navigation-mode-driving" type="button" data-control-button="mode">DRIVING</button>
-                                            <span class="navigation-control-status" data-control-overflow-rank="100">
-                                                MODE <strong id="navigation-mode-label">--</strong>
-                                                / NAV <strong id="navigation-state-label">--</strong>
-                                            </span>
+                                            <div
+                                                id="navigation-viewer-mode-controls-mount"
+                                                class="viewer-navigation-mode-controls"
+                                                data-dashboard-mount="navigation-viewer-mode-controls"
+                                                aria-label="Navigation mode"
+                                            ></div>
                                         </div>
                                         <div class="navigation-control-row">
                                             <button id="navigation-start" type="button" data-control-button="accent" hidden>주행 시작</button>
                                             <button id="navigation-cancel" type="button" data-control-button="secondary" hidden>목표 취소</button>
-                                            <button id="navigation-estop" class="danger" type="button" data-control-button="danger">긴급 정지</button>
-                                            <button id="navigation-resume" class="resume" type="button" data-control-button="success" hidden>Resume</button>
                                             <button id="navigation-led-test" type="button" data-control-button="secondary" data-control-overflow-rank="95">LED TEST</button>
-                                        </div>
-                                        <div class="navigation-control-messages" data-control-overflow-rank="90">
-                                            <span id="navigation-goal-hint"></span>
-                                            <span id="navigation-control-feedback" role="status" aria-live="polite"></span>
                                         </div>
                                     </div>
 
@@ -296,11 +290,26 @@
                         </div>
                     </div>
 
-                    <div
-                        class="lidar-map-meta"
-                        id="lidar-map-meta"
-                    >
-                        LiDAR OFFLINE
+                    <div class="lidar-bottom-status" id="lidar-bottom-status">
+                        <div
+                            class="lidar-control-message"
+                            id="lidar-control-message"
+                            role="status"
+                            aria-live="polite"
+                            hidden
+                        ></div>
+                        <div
+                            class="lidar-gps-meta"
+                            id="lidar-gps-meta"
+                        >
+                            GPS LAT -- / LNG -- / ALT --
+                        </div>
+                        <div
+                            class="lidar-map-meta"
+                            id="lidar-map-meta"
+                        >
+                            LiDAR OFFLINE
+                        </div>
                     </div>
 
                     <div
@@ -523,10 +532,7 @@
                         class="dashboard-navigation-mode-controls"
                         data-dashboard-mount="navigation-mode-controls"
                         aria-label="Navigation mode"
-                    >
-                        <button class="navigation-mode-option" type="button" data-navigation-mode="MAPPING">Mapping</button>
-                        <button class="navigation-mode-option" type="button" data-navigation-mode="DRIVING">Driving</button>
-                    </div>
+                    ></div>
                 </div>
 
                 <div
@@ -649,6 +655,7 @@
     <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v9"></script>
+    <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-controls-v9"></script>
