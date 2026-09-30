@@ -460,9 +460,12 @@ body.dark-mode .no-camera-bg {
 
 .lidar-map-meta {
     position: absolute;
-    top: 32px;
+    top: auto;
+    bottom: 7px;
     left: 7px;
-    right: 7px;
+    right: auto;
+    width: max-content;
+    max-width: 58%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
