@@ -157,6 +157,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn("getElementById('lidar-live-badge')", dashboard)
         self.assertNotIn("getElementById('lidar-map-status')", dashboard)
         self.assertNotIn("lidar-map-canvas", template)
+        self.assertNotIn("lidar-map-canvas", self.control)
         self.assertNotIn("cdn.jsdelivr.net", template)
         self.assertIn("/static/vendor/three/three.module.min.js", template)
         self.assertIn("GLTFLoader", viewer)

@@ -724,7 +724,7 @@
     }
 
     function initialize() {
-        const canvas = $('lidar-3d-canvas') || $('lidar-map-canvas');
+        const canvas = $('lidar-3d-canvas');
         canvas?.addEventListener('contextmenu', event => event.preventDefault());
         canvas?.addEventListener('pointerdown', beginGoal);
         canvas?.addEventListener('pointermove', moveGoal);
