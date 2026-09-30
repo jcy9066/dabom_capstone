@@ -17,6 +17,7 @@
         navigationPending: false,
         estopPending: false,
         warningPending: false,
+        ledPending: false,
         estopCooldownUntil: 0,
         controlWaiters: new Set(),
         previousConnected: null,
@@ -246,6 +247,11 @@
             connected: payload.connected === true && dashboardConfig(payload).estopCooldownSec !== null,
             pending: state.estopPending,
             cooldownUntil: state.estopCooldownUntil,
+        });
+        controls?.ledToggle?.sync({
+            enabled: typeof payload.led_enabled === 'boolean' ? payload.led_enabled : null,
+            connected: payload.connected === true,
+            pending: state.ledPending,
         });
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) {
@@ -582,6 +588,31 @@
         }
     }
 
+    async function requestLedToggle(enabled) {
+        if (state.ledPending) return false;
+        if (state.control?.connected !== true) {
+            setFeedback('Pi가 연결되어 있지 않아 LED를 제어할 수 없습니다.', true);
+            return false;
+        }
+
+        state.ledPending = true;
+        syncControlComponents();
+        setFeedback(enabled ? 'LED 켜는 중...' : 'LED 끄는 중...');
+
+        try {
+            const response = await mutate('/api/navigation/control/led', { enabled: Boolean(enabled) });
+            applyControlState(response);
+            setFeedback(response.led_enabled ? 'LED를 켰습니다.' : 'LED를 껐습니다.');
+            return true;
+        } catch (error) {
+            setFeedback(`LED 제어 실패: ${error.message}`, true);
+            return false;
+        } finally {
+            state.ledPending = false;
+            syncControlComponents();
+        }
+    }
+
     async function emergencyStop(reason = 'dashboard_emergency_stop', keepalive = false) {
         setFeedback('긴급 정지 및 Nav2 goal 취소 중...');
         try {
@@ -669,6 +700,7 @@
         controls?.mountNavigationMode(dashboardNavigation, { request: requestNavigationMode });
         controls?.mountNavigationMode($('navigation-viewer-mode-controls-mount'), { request: requestNavigationMode });
         controls?.mountEmergencyStop($('dpad-center-action-mount'), { request: requestEmergencyToggle });
+        controls?.mountLedToggle?.($('lidar-led-control-mount'), { request: requestLedToggle });
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = true;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
@@ -694,13 +726,13 @@
         }
         $('navigation-start')?.addEventListener('click', () => simpleAction('/api/navigation/control/start', 'NavigateToPose 시작 중...'));
         $('navigation-cancel')?.addEventListener('click', () => simpleAction('/api/navigation/control/cancel', '목표 취소 중...'));
-        $('navigation-led-test')?.addEventListener('click', () => simpleAction('/api/navigation/control/led-test', 'LED test 명령 전송 중...'));
         window.navigationControl = {
             applyState: applyControlState,
             emergencyStop,
             refreshState,
             requestDriveMode,
             requestEmergencyToggle,
+            requestLedToggle,
             requestNavigationMode,
             warning,
         };
