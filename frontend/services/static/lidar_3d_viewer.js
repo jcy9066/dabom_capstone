@@ -738,7 +738,9 @@ if (root && canvas) {
 
             const cad = new THREE.Group();
             cad.name = 'actual-chassis';
-            cad.rotation.z = longAxisIsY ? -Math.PI / 2 : 0;
+            // The physical robot uses the CAD rear as its actual front.
+            // Keep +X as the real driving/camera direction and rotate only the CAD shell.
+            cad.rotation.z = (longAxisIsY ? -Math.PI / 2 : 0) + Math.PI;
 
             const lowerBox = placePartAtBottom(lower, wheelRadius * 0.72);
             const upperBox = placePartAtBottom(upper, lowerBox.max.z + 0.012);
