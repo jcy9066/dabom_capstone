@@ -183,10 +183,10 @@ class NavigationProcessControl:
             launch_name,
             f"server_base_url:={env_text('SERVER_BASE_URL')}",
             f"robot_id:={env_text('ROBOT_ID')}",
-            "start_lidar:=false",
             "start_fake_odom:=false",
         ]
         if mode == "MAPPING":
+            command.append("start_lidar:=false")
             command.append("start_rviz:=false")
         if mode == "DRIVING":
             command.append(f"map:={map_yaml}")

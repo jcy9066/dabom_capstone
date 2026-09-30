@@ -337,29 +337,46 @@ yaw = 0.0
 
 ---
 
-## 9. LiDAR driver 구현 차이
+## 9. LiDAR 데이터 경로
 
-현재 launch 구성에는 driver default가 서로 다를 수 있다.
+현재 최종 runtime에서 LiDAR 하드웨어는 Raspberry Pi가 담당한다.
 
-`lidar.launch.py` 자체 기본값:
+```text
+Raspberry Pi
+  -> RPLIDAR
+  -> lidar_scan_sender.py
+  -> WebSocket
+  -> GPU FastAPI
+  -> lidar_websocket_bridge
+  -> /scan
+```
+
+`localization.launch.py`와 `navigation.launch.py`는 LiDAR driver를 직접 실행하지 않는다.
+
+두 launch는 GPU의 `lidar_websocket_bridge`가 이미 publish하고 있는 `/scan`을 사용한다.
+
+따라서 localization/DRIVING 경로에는 다음과 같은 직접 LiDAR 실행 설정이 존재하면 안 된다.
+
+```text
+sllidar_ros2
+start_lidar
+serial_port
+serial_baudrate
+driver_package
+driver_executable
+lidar.launch.py include
+```
+
+반면 `mapping.launch.py`의 선택적 직접 LiDAR 실행 경로와 `lidar.launch.py`는 별도로 유지한다.
+
+`lidar.launch.py`의 기본 driver는 다음과 같다.
 
 ```text
 driver_package = rplidar_ros
 driver_executable = rplidar_composition
 ```
 
-`localization.launch.py`에서 전달하는 기본값:
-
-```text
-driver_package = sllidar_ros2
-driver_executable = sllidar_node
-```
-
-따라서 validator는 단순 문자열 일치만으로 오류를 판단하지 않는다.
-
-실제 환경에서 선택된 driver package/executable이 설치되어 있고 `/scan`을 정상 publish하는지가 최종 기준이다.
-
-다만 mapping과 localization에서 서로 다른 driver를 사용하는 것이 의도되지 않은 경우 WARN으로 보고할 수 있다.
+최종 runtime의 localization/Navigation에서는 기존 `/scan`이 정상 publish되고 있는지가 기준이다.
 
 ---
 
