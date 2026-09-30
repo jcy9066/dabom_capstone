@@ -176,70 +176,74 @@
                             id="lidar-control-drawer"
                             data-open="true"
                         >
-                            <button
-                                type="button"
-                                class="lidar-control-drawer-toggle"
-                                id="lidarControlDrawerToggle"
-                                aria-expanded="true"
-                                aria-controls="lidar-control-drawer-content"
-                            >
-                                CONTROLS ▴
-                            </button>
-
                             <div
                                 class="lidar-control-drawer-content"
                                 id="lidar-control-drawer-content"
                             >
-                                <div class="lidar-control-scroll">
+                                <div class="lidar-control-strip">
                                     <div class="navigation-control-panel" id="navigation-control-panel">
                                         <div class="navigation-control-row">
-                                            <button id="navigation-mode-mapping" type="button">MAPPING</button>
-                                            <button id="navigation-mode-driving" type="button">DRIVING</button>
+                                            <button id="navigation-mode-mapping" type="button" data-control-button="mode">MAPPING</button>
+                                            <button id="navigation-mode-driving" type="button" data-control-button="mode">DRIVING</button>
                                             <span class="navigation-control-status">
                                                 MODE <strong id="navigation-mode-label">--</strong>
                                                 / NAV <strong id="navigation-state-label">--</strong>
                                             </span>
                                         </div>
                                         <div class="navigation-control-row">
-                                            <button id="navigation-start" type="button" hidden>주행 시작</button>
-                                            <button id="navigation-cancel" type="button" hidden>목표 취소</button>
-                                            <button id="navigation-estop" class="danger" type="button">긴급 정지</button>
-                                            <button id="navigation-resume" class="resume" type="button" hidden>Resume</button>
-                                            <button id="navigation-led-test" type="button">LED TEST</button>
+                                            <button id="navigation-start" type="button" data-control-button="accent" hidden>주행 시작</button>
+                                            <button id="navigation-cancel" type="button" data-control-button="secondary" hidden>목표 취소</button>
+                                            <button id="navigation-estop" class="danger" type="button" data-control-button="danger">긴급 정지</button>
+                                            <button id="navigation-resume" class="resume" type="button" data-control-button="success" hidden>Resume</button>
+                                            <button id="navigation-led-test" type="button" data-control-button="secondary">LED TEST</button>
                                         </div>
-                                        <div id="navigation-goal-hint"></div>
-                                        <div id="navigation-control-feedback" role="status" aria-live="polite"></div>
+                                        <div class="navigation-control-messages">
+                                            <span id="navigation-goal-hint"></span>
+                                            <span id="navigation-control-feedback" role="status" aria-live="polite"></span>
+                                        </div>
                                     </div>
 
                                     <span class="lidar-control-separator" aria-hidden="true"></span>
 
                                     <div class="lidar-view-controls" aria-label="3D viewer controls">
-                                        <button type="button" data-lidar-view="free" class="active">FREE</button>
-                                        <button type="button" data-lidar-view="top">TOP</button>
-                                        <button type="button" data-lidar-view="follow">FOLLOW</button>
+                                        <button type="button" data-lidar-view="free" data-control-button="view" class="active">FREE</button>
+                                        <button type="button" data-lidar-view="top" data-control-button="view">TOP</button>
+                                        <button type="button" data-lidar-view="follow" data-control-button="view">FOLLOW</button>
                                         <span class="lidar-control-separator" aria-hidden="true"></span>
-                                        <button type="button" data-lidar-interaction="view" class="active">VIEW</button>
-                                        <button type="button" data-lidar-interaction="set-goal">SET GOAL</button>
+                                        <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
+                                        <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
                                     </div>
-                                </div>
 
-                                <details class="lidar-display-panel">
-                                    <summary>DISPLAY</summary>
-                                    <div class="lidar-display-options">
-                                        <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
-                                        <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
-                                        <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
-                                        <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
-                                        <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
-                                        <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
-                                        <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
-                                        <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
-                                        <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
-                                        <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
-                                        <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
-                                    </div>
-                                </details>
+                                    <details class="lidar-display-panel">
+                                        <summary>DISPLAY</summary>
+                                        <div class="lidar-display-options">
+                                            <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
+                                            <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
+                                            <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
+                                            <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
+                                            <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
+                                            <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
+                                            <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
+                                            <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
+                                            <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
+                                            <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
+                                            <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
+                                        </div>
+                                    </details>
+                                </div>
                             </div>
+
+                            <button
+                                type="button"
+                                class="lidar-control-drawer-handle"
+                                id="lidarControlDrawerToggle"
+                                aria-expanded="true"
+                                aria-controls="lidar-control-drawer-content"
+                                aria-label="제어 패널 접기"
+                                title="제어 패널 접기"
+                            >
+                                <span aria-hidden="true"></span>
+                            </button>
                         </div>
                     </div>
 
@@ -299,6 +303,19 @@
                         title="현재 LiDAR map 저장"
                     >
                         SAVE
+                    </button>
+
+                    <button
+                        class="lidar-viewer-fullscreen-btn"
+                        id="lidarViewerFullscreenBtn"
+                        type="button"
+                        title="3D Viewer 전체화면"
+                        aria-label="3D Viewer 전체화면"
+                    >
+                        <span class="fullscreen-corner corner-tl" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-tr" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-bl" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-br" aria-hidden="true"></span>
                     </button>
 
                     <button
@@ -604,6 +621,7 @@
     <script src="/components/records/record_table.js?v=20260930-lidar3d-drawer"></script>
     <script src="/components/records/pagination.js?v=20260930-lidar3d-drawer"></script>
     <script src="/components/records/record_modal.js?v=20260930-lidar3d-drawer"></script>
+    <script src="/components/controls/control_button.js?v=20260930-lidar3d-drawer"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-drawer"></script>
     <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-drawer"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-drawer"></script>
