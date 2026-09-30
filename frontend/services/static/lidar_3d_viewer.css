@@ -541,18 +541,6 @@
 }
 
 
-/* Drawer handles remain visibly button-like before hover. */
-.minimap-overlay.expanded .lidar-control-drawer-handle,
-.minimap-overlay:fullscreen .lidar-control-drawer-handle,
-.minimap-overlay:-webkit-full-screen .lidar-control-drawer-handle,
-.minimap-overlay.expanded .lidar-layer-drawer-handle,
-.minimap-overlay:fullscreen .lidar-layer-drawer-handle,
-.minimap-overlay:-webkit-full-screen .lidar-layer-drawer-handle {
-    opacity: 1;
-    pointer-events: auto;
-}
-
-
 /* Viewer actions must remain clickable above the full-width control drawer hit target. */
 .minimap-overlay.expanded .lidar-viewer-fullscreen-btn,
 .minimap-overlay:fullscreen .lidar-viewer-fullscreen-btn,
