@@ -1492,7 +1492,9 @@ if (root && canvas) {
         const isOpen = Boolean(open);
         controlDrawer.dataset.open = isOpen ? 'true' : 'false';
         controlDrawerToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        controlDrawerToggle.textContent = isOpen ? 'CONTROLS ▴' : 'CONTROLS ▾';
+        const label = isOpen ? '제어 패널 접기' : '제어 패널 펼치기';
+        controlDrawerToggle.setAttribute('aria-label', label);
+        controlDrawerToggle.title = label;
     }
 
     controlDrawerToggle?.addEventListener('click', () => {
