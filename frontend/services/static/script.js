@@ -576,37 +576,14 @@ function toggleFullscreen(elementId) {
 let minimapExpanded = false;
 function toggleMinimapExpand() {
     const minimap = document.getElementById('minimap-overlay');
-    const videoWrapper = document.getElementById('video-wrapper');
     const btn = document.getElementById('minimapExpandBtn');
 
-    if (!minimapExpanded) {
-        // 카메라 화면 크기 가져오기
-        const wRect = videoWrapper.getBoundingClientRect();
-        minimap.style.width = wRect.width + 'px';
-        minimap.style.height = wRect.height + 'px';
-        minimap.style.bottom = '0';
-        minimap.style.right = '0';
-        minimap.style.borderRadius = '6px';
-        minimap.style.zIndex = '50';
-        btn.textContent = '⊡';
-        btn.title = '미니맵 축소';
-        minimap.classList.add('expanded');
-        minimapExpanded = true;
-        window.dabomLidar3D?.setExpandedState?.(true);
-        requestLidarRender();
-    } else {
-        minimap.style.width = '';
-        minimap.style.height = '';
-        minimap.style.bottom = '';
-        minimap.style.right = '';
-        minimap.style.zIndex = '';
-        btn.textContent = '⛶';
-        btn.title = '미니맵 확대';
-        minimap.classList.remove('expanded');
-        minimapExpanded = false;
-        window.dabomLidar3D?.setExpandedState?.(false);
-        requestLidarRender();
-    }
+    minimapExpanded = !minimapExpanded;
+    minimap.classList.toggle('expanded', minimapExpanded);
+    btn.textContent = minimapExpanded ? '⊡' : '⛶';
+    btn.title = minimapExpanded ? '미니맵 축소' : '미니맵 확대';
+    window.dabomLidar3D?.setExpandedState?.(minimapExpanded);
+    requestLidarRender();
 }
 
 window.navigationMapView = {
