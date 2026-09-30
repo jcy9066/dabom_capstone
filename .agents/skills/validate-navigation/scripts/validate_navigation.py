@@ -324,18 +324,28 @@ def check_launch_contracts(package_dir: Path, findings: list[Finding]) -> None:
             )
 
     localization = package_dir / "launch" / "localization.launch.py"
-    lidar = package_dir / "launch" / "lidar.launch.py"
-    if localization.is_file() and lidar.is_file():
-        if (
-            'default_value="sllidar_ros2"' in read_text(localization)
-            and 'default_value="rplidar_ros"' in read_text(lidar)
-        ):
-            add(
-                findings,
-                "WARN",
-                "lidar-driver-default-mismatch",
-                "localization.launch.py와 lidar.launch.py의 기본 LiDAR driver가 서로 다릅니다.",
-            )
+    if localization.is_file():
+        localization_source = read_text(localization)
+        obsolete_direct_lidar_tokens = (
+            "sllidar_ros2",
+            '"start_lidar"',
+            '"serial_port"',
+            '"serial_baudrate"',
+            '"driver_package"',
+            '"driver_executable"',
+            "lidar.launch.py",
+        )
+        for token in obsolete_direct_lidar_tokens:
+            if token in localization_source:
+                add(
+                    findings,
+                    "ERROR",
+                    "localization-direct-lidar",
+                    (
+                        "localization.launch.py는 기존 /scan을 사용해야 하며 "
+                        f"직접 LiDAR 실행 설정을 포함하면 안 됩니다: {token}"
+                    ),
+                )
 
     navigation = package_dir / "launch" / "navigation.launch.py"
     if navigation.is_file() and '"/cmd_vel"' in read_text(navigation):
