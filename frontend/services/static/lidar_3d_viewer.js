@@ -1575,6 +1575,22 @@ if (root && canvas) {
     const observer = new ResizeObserver(resize);
     observer.observe(root);
 
+    const controlMutationObserver = controlStrip
+        ? new MutationObserver(() => scheduleControlOverflowLayout())
+        : null;
+    controlMutationObserver?.observe(controlStrip, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['hidden', 'class', 'style', 'aria-pressed'],
+    });
+
+    controlStrip?.addEventListener('wheel', event => {
+        if (controlStrip.scrollWidth <= controlStrip.clientWidth + 1) return;
+        if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        event.preventDefault();
+        controlStrip.scrollLeft += event.deltaY;
+    }, { passive: false });
+
     function setControlDrawerOpen(open) {
         if (!controlDrawer || !controlDrawerToggle) return;
         const isOpen = Boolean(open);
@@ -1635,6 +1651,7 @@ if (root && canvas) {
 
     window.addEventListener('beforeunload', () => {
         observer.disconnect();
+        controlMutationObserver?.disconnect();
         if (overflowLayoutFrame) cancelAnimationFrame(overflowLayoutFrame);
         controls.dispose();
         clearGroup(mapRoot);
