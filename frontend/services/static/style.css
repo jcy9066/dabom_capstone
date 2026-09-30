@@ -459,13 +459,9 @@ body.dark-mode .no-camera-bg {
 .minimap-expand-btn:hover { background: rgba(8, 145, 178, 0.5); }
 
 .lidar-map-meta {
-    position: absolute;
-    top: auto;
-    bottom: 7px;
-    left: 7px;
-    right: auto;
+    position: static;
     width: max-content;
-    max-width: 58%;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -479,7 +475,6 @@ body.dark-mode .no-camera-bg {
     background: rgba(10, 14, 26, 0.68);
     border: 1px solid rgba(34, 211, 238, 0.16);
     pointer-events: none;
-    z-index: 13;
 }
 
 .lidar-stale-overlay {
