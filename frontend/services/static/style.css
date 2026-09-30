@@ -712,7 +712,7 @@ body.dark-mode .no-camera-bg {
 
 /* 모드 토글 */
 .toggle-switch {
-    flex: 0 0 auto; width: 48px; height: 26px;
+    flex: 0 0 48px; width: 48px; height: 26px;
     background: rgba(8,145,178,0.12);
     border: 1px solid rgba(8,145,178,0.35);
     border-radius: 8px; position: relative; transition: all 0.3s;
@@ -797,16 +797,17 @@ body.dark-mode .no-camera-bg {
     letter-spacing: 0.1px;
 }
 .dashboard-navigation-mode-controls .navigation-mode-toggle-track {
-    flex: 0 0 42px;
-    width: 42px;
-    height: 23px;
+    flex: 0 0 48px;
+    width: 48px;
+    height: 26px;
 }
 .dashboard-navigation-mode-controls .navigation-mode-toggle-slider {
-    width: 15px;
-    height: 15px;
+    top: 3px;
+    width: 18px;
+    height: 20px;
 }
 .dashboard-navigation-mode-controls .navigation-mode-toggle.driving .navigation-mode-toggle-slider {
-    left: calc(100% - 18px);
+    left: calc(100% - 21px);
 }
 .dashboard-drive-mode-control:focus-visible {
     outline: 2px solid var(--accent);

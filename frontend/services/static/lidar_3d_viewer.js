@@ -697,9 +697,11 @@ if (root && canvas) {
                 color: COLORS.cameraFrustum,
                 transparent: true,
                 opacity: 0.68,
+                depthTest: false,
                 depthWrite: false,
             }),
         );
+        cameraFrustumLines.renderOrder = 40;
         cameraFrustumPoseGroup.add(cameraFrustumLines);
 
         if (cameraViewPlane?.material) {
@@ -713,9 +715,12 @@ if (root && canvas) {
                 map: texture,
                 side: THREE.DoubleSide,
                 toneMapped: false,
+                depthTest: false,
                 depthWrite: false,
             }),
         );
+        cameraViewPlane.frustumCulled = false;
+        cameraViewPlane.renderOrder = 50;
         cameraViewPoseGroup.add(cameraViewPlane);
 
         cameraViewBorder = new THREE.LineLoop(
@@ -724,9 +729,12 @@ if (root && canvas) {
                 color: COLORS.cameraViewBorder,
                 transparent: true,
                 opacity: 0.78,
+                depthTest: false,
                 depthWrite: false,
             }),
         );
+        cameraViewBorder.frustumCulled = false;
+        cameraViewBorder.renderOrder = 51;
         cameraViewPoseGroup.add(cameraViewBorder);
         cameraVisualReady = true;
     }
