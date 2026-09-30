@@ -36,6 +36,9 @@ def test_gpu_launcher_enforces_sensor_transport_contract():
     script = read("start_gpu_server.sh")
 
     assert '[[ "${ROS_LOCALHOST_ONLY}" == "1" ]]' in script
+    assert "LIDAR_ENABLE must be enabled for the final runtime" in script
+    assert "ENCODER_ROS_ENABLE must be enabled for the final runtime" in script
+    assert "LIDAR_ROS_TOPIC" in script
     assert '[[ "${ENCODER_ROS_TOPIC}" == "${WHEEL_TICKS_TOPIC}" ]]' in script
     assert 'ros2 topic echo "${WHEEL_TICKS_TOPIC}" --once' in script
     assert 'ros2 topic echo "${ODOM_TOPIC}" --once' in script
@@ -52,11 +55,13 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert "fresh encoder telemetry" in script
 
 
-def test_navigation_launch_control_disables_local_lidar_and_fake_odom():
+def test_navigation_launch_control_uses_live_rc_sensor_bridges():
     control = read("server/navigation_process_control.py")
 
     assert '"start_lidar:=false"' in control
-    assert '"start_fake_odom:=false"' in control
+    assert "start_fake_odom" not in control
+    assert "LidarRosBridge" in control
+    assert "live RC encoder telemetry" in control
     assert "_stop_legacy_map_bridges" in control
     assert '["run", "patrol_navigation", "map_bridge"]' in control
 
@@ -79,7 +84,7 @@ def test_gpu_lidar_bridge_supports_full_mounting_orientation():
     assert 'os.getenv("LIDAR_PITCH", "0")' in bridge
 
 
-def test_navigation_launches_default_fake_odom_off_but_keep_opt_in_fallback():
+def test_navigation_launches_have_no_test_data_fallbacks():
     launch_paths = (
         "navigation/ros/patrol_navigation/launch/mapping.launch.py",
         "navigation/ros/patrol_navigation/launch/localization.launch.py",
@@ -88,17 +93,15 @@ def test_navigation_launches_default_fake_odom_off_but_keep_opt_in_fallback():
 
     for path in launch_paths:
         content = read(path)
-        marker = '"start_fake_odom",'
-        index = content.index(marker)
-        declaration = content[index:index + 160]
-        assert 'default_value="false"' in declaration
+        assert "start_fake_odom" not in content
+        assert "temporary_odom_to_base_tf" not in content
+        assert "slam_test_01" not in content
+        assert "test_map" not in content
 
-    mapping = read(launch_paths[0])
     localization = read(launch_paths[1])
     navigation = read(launch_paths[2])
 
-    assert "static_transform_publisher" in mapping
-    assert "static_transform_publisher" in localization
-    assert "condition=IfCondition(start_fake_odom)" in mapping
-    assert "start_fake_odom" in localization
-    assert '"start_fake_odom": (' in navigation
+    assert 'DeclareLaunchArgument(\n                "map",\n                description=' in localization
+    assert 'DeclareLaunchArgument(\n                "map",\n                description=' in navigation
+    assert "No bundled test-map default is used." in localization
+    assert "No bundled test-map default is used." in navigation

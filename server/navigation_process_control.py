@@ -183,8 +183,9 @@ class NavigationProcessControl:
             launch_name,
             f"server_base_url:={env_text('SERVER_BASE_URL')}",
             f"robot_id:={env_text('ROBOT_ID')}",
+            # /scan is supplied from the RC car through LidarRosBridge.
+            # odom->base_link is supplied from live RC encoder telemetry.
             "start_lidar:=false",
-            "start_fake_odom:=false",
         ]
         if mode == "MAPPING":
             command.append("start_rviz:=false")

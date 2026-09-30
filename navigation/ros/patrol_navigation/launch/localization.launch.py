@@ -7,10 +7,11 @@
 #   odometry   -> odom->base_link TF
 #   map_bridge -> FastAPI server
 #
-# 최종 runtime에서는 root start_gpu_server.sh가 server/wheel_odometry.py를 실행하여
+# 최종 runtime에서는 RC카의 실제 encoder가
+# Pi -> WebSocket -> EncoderRosBridge -> /wheel_ticks로 들어오고,
+# root start_gpu_server.sh의 server/wheel_odometry.py가
 # /odom과 dynamic odom->base_link TF를 제공한다.
-# fake odometry는 launch 단독 테스트용 opt-in fallback이며 기본값은 false이다.
-# 필요한 경우에만 start_fake_odom:=true를 명시적으로 전달한다.
+# static/fake odometry fallback은 사용하지 않는다.
 #
 # navigation_mode:
 #   localization
@@ -30,7 +31,6 @@ from launch.launch_description_sources import (
     PythonLaunchDescriptionSource,
 )
 from launch.substitutions import (
-    EnvironmentVariable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
@@ -90,16 +90,10 @@ def generate_launch_description():
     start_bridge = LaunchConfiguration(
         "start_bridge"
     )
-    start_fake_odom = LaunchConfiguration(
-        "start_fake_odom"
-    )
 
     # ---------------------------------------------------------
     # TF frame
     # ---------------------------------------------------------
-    odom_frame = LaunchConfiguration(
-        "odom_frame"
-    )
     base_frame = LaunchConfiguration(
         "base_frame"
     )
@@ -289,18 +283,9 @@ def generate_launch_description():
             # -------------------------------------------------
             DeclareLaunchArgument(
                 "map",
-                default_value=(
-                    PathJoinSubstitution(
-                        [
-                            EnvironmentVariable(
-                                "HOME"
-                            ),
-                            "dabom_capstone",
-                            "navigation",
-                            "maps",
-                            "slam_test_01.yaml",
-                        ]
-                    )
+                description=(
+                    "Saved map YAML selected for the real RC car. "
+                    "No bundled test-map default is used."
                 ),
             ),
 
@@ -331,18 +316,10 @@ def generate_launch_description():
                 "start_bridge",
                 default_value="true",
             ),
-            DeclareLaunchArgument(
-                "start_fake_odom",
-                default_value="false",
-            ),
 
             # -------------------------------------------------
             # TF frame
             # -------------------------------------------------
-            DeclareLaunchArgument(
-                "odom_frame",
-                default_value="odom",
-            ),
             DeclareLaunchArgument(
                 "base_frame",
                 default_value="base_link",
@@ -395,44 +372,6 @@ def generate_launch_description():
                     ),
                     "base_frame": base_frame,
                 }.items(),
-            ),
-
-            # -------------------------------------------------
-            # 테스트용 fake odom -> base_link TF
-            # -------------------------------------------------
-            # 최종 runtime에서는 server/wheel_odometry.py가 dynamic TF를
-            # 제공한다. 아래 static TF는 start_fake_odom:=true를 명시한
-            # 독립 launch 테스트에서만 활성화한다.
-            Node(
-                package="tf2_ros",
-                executable=(
-                    "static_transform_publisher"
-                ),
-                name=(
-                    "temporary_odom_to_base_tf"
-                ),
-                output="screen",
-                condition=IfCondition(
-                    start_fake_odom
-                ),
-                arguments=[
-                    "--x",
-                    "0",
-                    "--y",
-                    "0",
-                    "--z",
-                    "0",
-                    "--roll",
-                    "0",
-                    "--pitch",
-                    "0",
-                    "--yaw",
-                    "0",
-                    "--frame-id",
-                    odom_frame,
-                    "--child-frame-id",
-                    base_frame,
-                ],
             ),
 
             # bridge가 map publish 전에 먼저 구독
