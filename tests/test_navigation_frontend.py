@@ -81,6 +81,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('data-control-button="view"', template)
         self.assertNotIn("CONTROLS ▴", template)
         self.assertIn("toggleLidarViewerFullscreen", dashboard)
+        self.assertIn("requestElementFullscreen", dashboard)
+        self.assertIn("webkitRequestFullscreen", dashboard)
+        self.assertIn("webkitfullscreenchange", dashboard)
         self.assertIn('id="lidarControlOverflow"', template)
         self.assertIn('id="lidarControlOverflowToggle"', template)
         self.assertIn('data-control-overflow-rank="100"', template)
@@ -144,6 +147,10 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn('onclick="openSavedMapModal()"', template)
         self.assertIn("/components/navigation/saved_map_modal.js", template)
         self.assertIn("components.navigationMaps?.mount({", dashboard)
+        modal_source = (ROOT / "frontend/components/modal/modal_manager.js").read_text(encoding="utf-8")
+        self.assertIn("syncFullscreenHost", modal_source)
+        self.assertIn("currentFullscreenElement", modal_source)
+        self.assertIn("fullscreenElement.appendChild(this.root)", modal_source)
 
     def test_saved_map_contracts_and_pending_cursor_remain_scoped(self):
         for contract in (
