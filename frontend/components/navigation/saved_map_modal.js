@@ -9,6 +9,7 @@
         description: '\uc9c0\ub3c4\ub97c \ubd88\ub7ec\uc624\uba74 \ud604\uc7ac localization \uc704\uce58\uac00 \ucd08\uae30\ud654\ub429\ub2c8\ub2e4.',
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
+        saveCurrent: '\ud604\uc7ac \uc9c0\ub3c4 \uc800\uc7a5',
         loading: '\uc9c0\ub3c4 \ubd88\ub7ec\uc624\ub294 \uc911...',
         resetting: 'AMCL \ucd08\uae30 \uc704\uce58 \uc124\uc815 \uc911...',
         verifying: '\uc9c0\ub3c4 \ubc0f localization \ud655\uc778 \uc911...',
@@ -334,19 +335,36 @@
         container.append(progress);
 
         const actions = create('div', 'saved-map-actions');
+
+        const save = create('button', 'saved-map-save-current', labels.saveCurrent);
+        save.type = 'button';
+        save.dataset.controlButton = 'accent';
+        components.controls?.controlButton?.enhance?.(save);
+        save.addEventListener('click', async () => {
+            const savedName = await global.saveCurrentNavigationMap?.(save);
+            if (savedName) await controller?.open?.();
+        });
+
         const cancel = create('button', '', labels.cancel);
         cancel.type = 'button';
+        cancel.dataset.controlButton = 'secondary';
+        components.controls?.controlButton?.enhance?.(cancel);
         cancel.addEventListener('click', () => manager?.close());
+
         const load = create('button', 'saved-map-load', labels.load);
         load.type = 'button';
+        load.dataset.controlButton = 'accent';
+        components.controls?.controlButton?.enhance?.(load);
         load.disabled = !selectedMapName(container);
         load.addEventListener('click', () => loadSelectedMap(container, progress));
+
         container.addEventListener('change', event => {
             if (event.target?.name !== 'saved-navigation-map') return;
             load.disabled = !selectedMapName(container);
             showMessage(progress, '');
         });
-        actions.append(cancel, load);
+
+        actions.append(save, cancel, load);
         container.append(actions);
         return container;
     }
