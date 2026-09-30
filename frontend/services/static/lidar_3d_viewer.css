@@ -33,82 +33,119 @@
     z-index: 50;
 }
 
-/* Compact, always-reachable control drawer for the expanded viewer. */
+.minimap-overlay:fullscreen,
+.minimap-overlay:-webkit-full-screen {
+    width: 100% !important;
+    height: 100% !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    border-radius: 0;
+    background: #101821;
+}
+
+/* ===== Compact vertical drawer ===== */
 .lidar-control-drawer {
     position: absolute;
-    top: 38px;
-    left: 8px;
-    right: 8px;
+    top: 42px;
+    left: 6px;
+    right: 154px;
     z-index: 40;
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
     min-width: 0;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 0.15s ease;
 }
 
-.minimap-overlay.expanded .lidar-control-drawer {
+.minimap-overlay.expanded .lidar-control-drawer,
+.minimap-overlay:fullscreen .lidar-control-drawer,
+.minimap-overlay:-webkit-full-screen .lidar-control-drawer {
     opacity: 1;
     pointer-events: auto;
 }
 
-.lidar-control-drawer-toggle {
-    flex: 0 0 auto;
-    min-height: 31px;
-    padding: 5px 9px;
-    border: 1px solid rgba(34, 211, 238, 0.42);
-    border-radius: 5px;
-    background: rgba(8, 15, 29, 0.9);
-    color: #67e8f9;
-    font: 700 9px var(--mono);
-    letter-spacing: 0.3px;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
 .lidar-control-drawer-content {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    flex: 1 1 auto;
-    padding: 4px;
-    border: 1px solid rgba(34, 211, 238, 0.25);
-    border-radius: 6px;
-    background: rgba(8, 15, 29, 0.88);
-    backdrop-filter: blur(5px);
+    max-height: 46px;
+    opacity: 1;
+    transform: translateY(0);
+    overflow: visible;
+    transition:
+        max-height 0.2s ease,
+        opacity 0.18s ease,
+        transform 0.2s ease;
 }
 
 .lidar-control-drawer[data-open="false"] .lidar-control-drawer-content {
-    display: none;
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-10px);
+    overflow: hidden;
+    pointer-events: none;
 }
 
-.lidar-control-scroll {
+.lidar-control-strip {
     display: flex;
     align-items: center;
     gap: 5px;
-    flex: 1 1 auto;
     min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-    overscroll-behavior-x: contain;
+    width: 100%;
+    padding: 4px 5px;
+    box-sizing: border-box;
+    border: 1px solid rgba(34, 211, 238, 0.24);
+    border-radius: 6px;
+    background: rgba(8, 15, 29, 0.9);
+    backdrop-filter: blur(5px);
+    overflow: visible;
 }
 
-/* Flatten the existing navigation controls into one horizontal line. */
+/* The handle is an invisible hover target until the pointer reaches the panel bottom. */
+.lidar-control-drawer-handle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 14px;
+    margin: -1px auto 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.06;
+    transition: opacity 0.14s ease;
+}
+
+.lidar-control-drawer-handle:hover,
+.lidar-control-drawer-handle:focus-visible,
+.lidar-control-drawer[data-open="false"] .lidar-control-drawer-handle {
+    opacity: 0.92;
+}
+
+.lidar-control-drawer-handle:focus-visible {
+    outline: none;
+}
+
+.lidar-control-drawer-handle span {
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid rgba(103, 232, 249, 0.9);
+    filter: drop-shadow(0 0 3px rgba(34, 211, 238, 0.35));
+}
+
+.lidar-control-drawer[data-open="false"] .lidar-control-drawer-handle span {
+    border-bottom: 0;
+    border-top: 6px solid rgba(103, 232, 249, 0.9);
+}
+
 .minimap-overlay.expanded .lidar-control-drawer .navigation-control-panel {
     position: static;
-    left: auto;
-    right: auto;
-    top: auto;
+    inset: auto;
     z-index: auto;
     display: flex;
     align-items: center;
     gap: 5px;
-    flex: 0 0 auto;
-    min-width: max-content;
+    flex: 1 1 auto;
+    min-width: 0;
     max-height: none;
     padding: 0;
     border: 0;
@@ -121,32 +158,30 @@
 
 .minimap-overlay.expanded .lidar-control-drawer .navigation-control-row {
     display: flex;
+    flex: 0 0 auto;
     flex-wrap: nowrap;
     align-items: center;
     gap: 5px;
-    min-width: max-content;
+    min-width: 0;
 }
 
-.minimap-overlay.expanded .lidar-control-drawer .navigation-control-row button,
-.lidar-view-controls button,
-.lidar-display-panel summary {
-    min-height: 27px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    white-space: nowrap;
-    line-height: 1.25;
+.navigation-control-messages {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .minimap-overlay.expanded .lidar-control-drawer .navigation-control-status,
 .minimap-overlay.expanded .lidar-control-drawer #navigation-goal-hint,
 .minimap-overlay.expanded .lidar-control-drawer #navigation-control-feedback {
-    flex: 0 0 auto;
-    min-width: max-content;
-    max-width: none;
+    min-width: 0;
+    max-width: 210px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-    overflow: visible;
-    word-break: normal;
-    line-height: 1.3;
+    line-height: 1.25;
 }
 
 .minimap-overlay.expanded .lidar-control-drawer #navigation-goal-hint:empty,
@@ -156,33 +191,14 @@
 
 .lidar-view-controls {
     position: static;
-    z-index: auto;
     display: flex;
-    flex: 0 0 auto;
     align-items: center;
+    flex: 0 0 auto;
     flex-wrap: nowrap;
     gap: 5px;
-    max-width: none;
+    min-width: 0;
     opacity: 1;
     pointer-events: auto;
-}
-
-.lidar-view-controls button,
-.lidar-display-panel summary {
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    background: rgba(15, 23, 42, 0.82);
-    color: #cbd5e1;
-    font: 700 9px var(--mono);
-    letter-spacing: 0.25px;
-    cursor: pointer;
-}
-
-.lidar-view-controls button:hover,
-.lidar-view-controls button.active,
-.lidar-display-panel summary:hover {
-    border-color: rgba(125, 211, 252, 0.62);
-    color: #e0f2fe;
-    background: rgba(30, 58, 78, 0.84);
 }
 
 .lidar-control-separator {
@@ -190,39 +206,53 @@
     flex: 0 0 1px;
     width: 1px;
     height: 20px;
-    margin: 0 2px;
+    margin: 0 1px;
     background: rgba(148, 163, 184, 0.28);
-}
-
-.lidar-view-controls [data-lidar-interaction="set-goal"].active {
-    border-color: rgba(251, 191, 36, 0.7);
-    color: #fde68a;
-    background: rgba(120, 53, 15, 0.72);
 }
 
 .lidar-viewer-overlay.goal-input-active .lidar-3d-canvas {
     cursor: crosshair;
 }
 
-/* DISPLAY stays on the same horizontal control line; its menu opens downward. */
+/* DISPLAY stays in the same row and opens downward. */
 .lidar-display-panel {
     position: relative;
     z-index: 42;
-    flex: 0 0 112px;
-    width: 112px;
+    flex: 0 0 90px;
+    width: 90px;
     color: #dbeafe;
     font: 700 9px var(--mono);
-    opacity: 1;
-    pointer-events: auto;
 }
 
 .lidar-display-panel summary {
+    min-height: 27px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 4px 7px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.86);
+    color: #cbd5e1;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
     list-style: none;
-    text-align: center;
+    white-space: nowrap;
+    cursor: pointer;
 }
 
 .lidar-display-panel summary::-webkit-details-marker {
     display: none;
+}
+
+.lidar-display-panel summary:hover {
+    border-color: rgba(125, 211, 252, 0.62);
+    color: #e0f2fe;
+    background: rgba(30, 58, 78, 0.84);
 }
 
 .lidar-display-options {
@@ -232,15 +262,13 @@
     width: 170px;
     display: grid;
     gap: 5px;
-    max-height: min(300px, 60vh);
-    overflow-x: hidden;
-    overflow-y: auto;
     margin: 0;
     padding: 7px;
     border: 1px solid rgba(148, 163, 184, 0.24);
     border-radius: 5px;
-    background: rgba(8, 15, 29, 0.96);
+    background: rgba(8, 15, 29, 0.97);
     backdrop-filter: blur(4px);
+    overflow: visible;
 }
 
 .lidar-display-options label {
@@ -251,8 +279,7 @@
     min-width: 0;
     color: #cbd5e1;
     line-height: 1.3;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
     cursor: pointer;
 }
 
@@ -261,11 +288,128 @@
     accent-color: #38bdf8;
 }
 
-/* Keep map metadata in the top status row instead of consuming drawer height. */
-.minimap-overlay.expanded .lidar-map-meta {
+/* ===== Top-right viewer actions ===== */
+.lidar-viewer-fullscreen-btn {
+    display: none;
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid rgba(34, 211, 238, 0.42);
+    border-radius: 4px;
+    background: rgba(8, 145, 178, 0.22);
+    cursor: pointer;
+    z-index: 21;
+    opacity: 0;
+    transition:
+        opacity 0.16s ease,
+        background 0.16s ease,
+        border-color 0.16s ease;
+    backdrop-filter: blur(4px);
+}
+
+.minimap-overlay.expanded .lidar-viewer-fullscreen-btn,
+.minimap-overlay:fullscreen .lidar-viewer-fullscreen-btn,
+.minimap-overlay:-webkit-full-screen .lidar-viewer-fullscreen-btn {
+    display: block;
+}
+
+.minimap-overlay:hover .lidar-viewer-fullscreen-btn,
+.lidar-viewer-fullscreen-btn:focus-visible {
+    opacity: 1;
+}
+
+.lidar-viewer-fullscreen-btn:hover {
+    background: rgba(8, 145, 178, 0.48);
+    border-color: rgba(103, 232, 249, 0.78);
+}
+
+.lidar-viewer-fullscreen-btn:focus-visible {
+    outline: 2px solid rgba(103, 232, 249, 0.75);
+    outline-offset: 2px;
+}
+
+.fullscreen-corner {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    box-sizing: border-box;
+    border-color: #67e8f9;
+}
+
+.corner-tl {
+    top: 5px;
+    left: 5px;
+    border-top: 2px solid;
+    border-left: 2px solid;
+}
+
+.corner-tr {
+    top: 5px;
+    right: 5px;
+    border-top: 2px solid;
+    border-right: 2px solid;
+}
+
+.corner-bl {
+    bottom: 5px;
+    left: 5px;
+    border-bottom: 2px solid;
+    border-left: 2px solid;
+}
+
+.corner-br {
+    right: 5px;
+    bottom: 5px;
+    border-right: 2px solid;
+    border-bottom: 2px solid;
+}
+
+.lidar-viewer-fullscreen-btn.is-fullscreen .corner-tl {
     top: 8px;
-    left: 118px;
-    right: 136px;
+    left: 8px;
+}
+.lidar-viewer-fullscreen-btn.is-fullscreen .corner-tr {
+    top: 8px;
+    right: 8px;
+}
+.lidar-viewer-fullscreen-btn.is-fullscreen .corner-bl {
+    bottom: 8px;
+    left: 8px;
+}
+.lidar-viewer-fullscreen-btn.is-fullscreen .corner-br {
+    right: 8px;
+    bottom: 8px;
+}
+
+/* Make room for fullscreen while shifting the existing controls slightly left. */
+.minimap-overlay.expanded .minimap-expand-btn,
+.minimap-overlay:fullscreen .minimap-expand-btn,
+.minimap-overlay:-webkit-full-screen .minimap-expand-btn {
+    right: 36px;
+}
+
+.minimap-overlay.expanded .lidar-map-save-btn,
+.minimap-overlay:fullscreen .lidar-map-save-btn,
+.minimap-overlay:-webkit-full-screen .lidar-map-save-btn {
+    right: 64px;
+}
+
+.minimap-overlay.expanded .lidar-map-select-btn,
+.minimap-overlay:fullscreen .lidar-map-select-btn,
+.minimap-overlay:-webkit-full-screen .lidar-map-select-btn {
+    right: 112px;
+}
+
+/* Keep status text away from the top-left live badge. */
+.minimap-overlay.expanded .lidar-map-meta,
+.minimap-overlay:fullscreen .lidar-map-meta,
+.minimap-overlay:-webkit-full-screen .lidar-map-meta {
+    top: 8px;
+    left: 112px;
+    right: 166px;
     max-width: none;
     white-space: nowrap;
     overflow: hidden;
@@ -274,11 +418,34 @@
 }
 
 .minimap-overlay.expanded .lidar-map-status.has-data {
+    bottom: 8px;
+    left: 8px;
+    max-width: 42%;
     font-size: 10px;
-    max-width: 55%;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lidar-active-map-status {
+    left: auto !important;
+    right: 7px !important;
+    bottom: 7px !important;
+    max-width: calc(100% - 14px);
+    padding: 3px 5px;
+    box-sizing: border-box;
+    border-radius: 3px;
+    background: rgba(10, 14, 26, 0.74);
+    border: 1px solid rgba(34, 211, 238, 0.16);
+    text-align: right;
+}
+
+.minimap-overlay.expanded .lidar-active-map-status,
+.minimap-overlay:fullscreen .lidar-active-map-status,
+.minimap-overlay:-webkit-full-screen .lidar-active-map-status {
+    max-width: 42%;
+    padding: 4px 6px;
+    font-size: 10px;
 }
 
 .minimap-overlay.expanded .lidar-stale-title,
@@ -289,28 +456,52 @@
     line-height: 1.35;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1180px) {
     .lidar-control-drawer {
-        left: 6px;
-        right: 6px;
-        gap: 4px;
+        right: 138px;
     }
 
-    .lidar-control-drawer-toggle {
-        padding-inline: 7px;
+    .lidar-control-strip {
+        gap: 3px;
+        padding-inline: 4px;
+    }
+
+    .minimap-overlay.expanded .lidar-control-drawer .navigation-control-row {
+        gap: 3px;
+    }
+
+    .minimap-overlay.expanded .lidar-control-drawer .navigation-control-status {
+        max-width: 120px;
+        font-size: 8px;
+    }
+
+    .navigation-control-messages {
+        display: none;
     }
 
     .lidar-display-panel {
-        flex-basis: 92px;
-        width: 92px;
+        flex-basis: 78px;
+        width: 78px;
     }
 
-    .lidar-display-options {
-        width: 150px;
+    .lidar-display-panel summary {
+        min-height: 25px;
+        padding: 3px 5px;
+        font-size: 8px;
     }
+}
 
-    .minimap-overlay.expanded .lidar-map-meta {
-        left: 110px;
+@media (max-width: 860px) {
+    .lidar-control-drawer {
+        left: 4px;
         right: 126px;
+    }
+
+    .minimap-overlay.expanded .lidar-control-drawer .navigation-control-status {
+        display: none;
+    }
+
+    .lidar-control-separator {
+        margin-inline: 0;
     }
 }
