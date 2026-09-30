@@ -58,6 +58,10 @@
 
 #define COMMAND_TIMEOUT_MS 350U
 #define WARNING_LED_FAILSAFE_TIMEOUT_MS 12000U
+#define BEEP_FREQUENCY_HZ 2000.0f
+#define BEEP_PWM_WRAP 999U
+#define BEEP_MIN_DURATION_MS 50U
+#define BEEP_MAX_DURATION_MS 2000U
 #define CURVE_INNER_RATIO 0.35f
 #define RX_BUFFER_SIZE 128U
 
@@ -101,6 +105,10 @@ static bool encoder_stream_enabled = false;
 static uint64_t last_encoder_report_ms = 0;
 static bool warning_led_enabled = false;
 static uint64_t last_warning_led_command_ms = 0;
+static uint speaker_pwm_slice = 0;
+static uint speaker_pwm_channel = 0;
+static bool speaker_beep_active = false;
+static uint64_t speaker_beep_until_ms = 0;
 
 
 /*
@@ -148,6 +156,49 @@ static void set_warning_led(bool enabled) {
     gpio_put(WARNING_LED_PIN, enabled ? 1 : 0);
     warning_led_enabled = enabled;
     last_warning_led_command_ms = to_ms_since_boot(get_absolute_time());
+}
+
+
+static void speaker_stop_beep(void) {
+    pwm_set_chan_level(speaker_pwm_slice, speaker_pwm_channel, 0);
+    speaker_beep_active = false;
+    speaker_beep_until_ms = 0;
+}
+
+
+static void speaker_init(void) {
+    gpio_set_function(SPEAKER_PIN, GPIO_FUNC_PWM);
+    speaker_pwm_slice = pwm_gpio_to_slice_num(SPEAKER_PIN);
+    speaker_pwm_channel = pwm_gpio_to_channel(SPEAKER_PIN);
+
+    const float divider =
+        (float)clock_get_hz(clk_sys) /
+        (BEEP_FREQUENCY_HZ * ((float)BEEP_PWM_WRAP + 1.0f));
+
+    pwm_set_clkdiv(speaker_pwm_slice, divider);
+    pwm_set_wrap(speaker_pwm_slice, BEEP_PWM_WRAP);
+    pwm_set_chan_level(speaker_pwm_slice, speaker_pwm_channel, 0);
+    pwm_set_enabled(speaker_pwm_slice, true);
+    speaker_stop_beep();
+}
+
+
+static void speaker_start_beep(uint32_t duration_ms) {
+    pwm_set_chan_level(
+        speaker_pwm_slice,
+        speaker_pwm_channel,
+        BEEP_PWM_WRAP / 2U
+    );
+    speaker_beep_active = true;
+    speaker_beep_until_ms =
+        to_ms_since_boot(get_absolute_time()) + (uint64_t)duration_ms;
+}
+
+
+static void speaker_tick(uint64_t now_ms) {
+    if (speaker_beep_active && now_ms >= speaker_beep_until_ms) {
+        speaker_stop_beep();
+    }
 }
 
 
@@ -748,6 +799,42 @@ static void handle_command(char *line) {
         return;
     }
 
+    if (strcmp(command, "BEEP") == 0) {
+        char *duration_text = strtok_r(NULL, ",", &save_pointer);
+        char *extra_argument = strtok_r(NULL, ",", &save_pointer);
+
+        if (duration_text == NULL || extra_argument != NULL) {
+            speaker_stop_beep();
+            uart_reply("ERR,BEEP requires duration_ms");
+            return;
+        }
+
+        char *end_pointer = NULL;
+        const unsigned long duration_ms = strtoul(
+            duration_text,
+            &end_pointer,
+            10
+        );
+
+        if (
+            end_pointer == duration_text ||
+            *end_pointer != '\0' ||
+            duration_ms < BEEP_MIN_DURATION_MS ||
+            duration_ms > BEEP_MAX_DURATION_MS
+        ) {
+            speaker_stop_beep();
+            uart_reply("ERR,BEEP duration out of range");
+            return;
+        }
+
+        speaker_start_beep((uint32_t)duration_ms);
+
+        char response[32];
+        snprintf(response, sizeof(response), "OK,BEEP,%lu", duration_ms);
+        uart_reply(response);
+        return;
+    }
+
     if (strcmp(command, "LED") == 0) {
         char *enabled_text = strtok_r(
             NULL,
@@ -975,6 +1062,7 @@ int main(void) {
 
     encoder_init();
     encoder_reset();
+    speaker_init();
     gpio_init(WARNING_LED_PIN);
     gpio_set_dir(WARNING_LED_PIN, GPIO_OUT);
     set_warning_led(false);
@@ -1041,6 +1129,8 @@ int main(void) {
             to_ms_since_boot(
                 get_absolute_time()
             );
+
+        speaker_tick(now_ms);
 
         if (is_moving) {
             if (

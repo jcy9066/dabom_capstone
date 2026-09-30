@@ -66,6 +66,9 @@ class RobotCommandClient:
         self.emergency_stop_latched = False
         self.led_enabled = False
         self._led_task = None
+        self._cpu_sample = None
+        self._last_status_latency_ms = None
+        self._server_reachable = None
 
         self.motor = MotorController(
             serial_port=args.serial_port,
@@ -108,13 +111,87 @@ class RobotCommandClient:
             self.encoder_ros.close()
             self.motor.close()
 
+    @staticmethod
+    def _read_cpu_times() -> tuple[int, int] | None:
+        try:
+            line = Path("/proc/stat").read_text(
+                encoding="utf-8"
+            ).splitlines()[0]
+            fields = line.split()
+            if not fields or fields[0] != "cpu":
+                return None
+            values = [int(value) for value in fields[1:]]
+            if len(values) < 4:
+                return None
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            return sum(values), idle
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _cpu_usage_percent(self) -> float | None:
+        current = self._read_cpu_times()
+        if current is None:
+            return None
+        previous = self._cpu_sample
+        self._cpu_sample = current
+        if previous is None:
+            return None
+        total_delta = current[0] - previous[0]
+        idle_delta = current[1] - previous[1]
+        if total_delta <= 0:
+            return None
+        busy = 100.0 * (total_delta - idle_delta) / total_delta
+        return round(max(0.0, min(100.0, busy)), 1)
+
+    @staticmethod
+    def _ram_usage_percent() -> float | None:
+        try:
+            values = {}
+            for line in Path("/proc/meminfo").read_text(
+                encoding="utf-8"
+            ).splitlines():
+                key, _, raw = line.partition(":")
+                if key in {"MemTotal", "MemAvailable"}:
+                    values[key] = int(raw.strip().split()[0])
+            total = values.get("MemTotal", 0)
+            available = values.get("MemAvailable", 0)
+            if total <= 0:
+                return None
+            used = 100.0 * (total - available) / total
+            return round(max(0.0, min(100.0, used)), 1)
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _cpu_temp_c() -> float | None:
+        for path in (
+            Path("/sys/class/thermal/thermal_zone0/temp"),
+            Path("/sys/devices/virtual/thermal/thermal_zone0/temp"),
+        ):
+            try:
+                raw = float(path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                continue
+            value = raw / 1000.0 if raw > 200.0 else raw
+            if -40.0 <= value <= 150.0:
+                return round(value, 1)
+        return None
+
     def status_payload(self) -> dict:
+        if self._server_reachable is True:
+            internet = "ok"
+        elif self._server_reachable is False:
+            internet = "offline"
+        else:
+            internet = "unknown"
+
         return {
             "robot_id": self.robot_id,
-            "cpu_usage": "0.0",
-            "cpu_temp": "0.0",
-            "ram_usage": "0.0",
-            "internet": "ok",
+            "cpu_usage": self._cpu_usage_percent(),
+            "cpu_temp": self._cpu_temp_c(),
+            "ram_usage": self._ram_usage_percent(),
+            "internet": internet,
+            "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
             "navigation_mode": self.navigation_mode,
             "navigation_state": (
@@ -130,6 +207,7 @@ class RobotCommandClient:
 
     def status_loop(self) -> None:
         while self.running:
+            started_at = time.monotonic()
             try:
                 requests.post(
                     self.status_url,
@@ -137,8 +215,15 @@ class RobotCommandClient:
                     headers={"X-Robot-Control-Token": self.control_token},
                     timeout=self.status_request_timeout_sec,
                 )
+                self._last_status_latency_ms = round(
+                    (time.monotonic() - started_at) * 1000.0,
+                    1,
+                )
+                self._server_reachable = True
 
             except requests.RequestException as exc:
+                self._last_status_latency_ms = None
+                self._server_reachable = False
                 print(f"[status] 전송 실패: {exc}")
 
             time.sleep(self.status_interval_sec)
@@ -404,6 +489,15 @@ class RobotCommandClient:
                     str(message.get("text", ""))
                 )
 
+            elif command_type == "beep":
+                duration_ms = self._duration_ms(
+                    message.get("duration_ms", 350)
+                )
+                await asyncio.to_thread(
+                    self.motor.beep,
+                    duration_ms,
+                )
+
             elif command_type == "led":
                 enabled = message.get("enabled")
                 if not isinstance(enabled, bool):
@@ -425,11 +519,6 @@ class RobotCommandClient:
                 await asyncio.to_thread(
                     self.speaker.speak,
                     str(message.get("text", "")),
-                )
-
-            elif command_type == "camera_config":
-                print(
-                    f"[camera_config] {message}"
                 )
 
             else:

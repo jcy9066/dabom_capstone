@@ -90,9 +90,27 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("manual", client.current_mode)
         self.assertTrue(socket.messages[-1]["ok"])
 
-    async def test_led_and_warning_use_pico_led_contract_and_existing_speaker(self):
+    async def test_removed_camera_config_command_is_rejected(self):
         client = self.make_client()
         socket = FakeWebSocket()
+        await client.handle_command(
+            socket,
+            {"type": "camera_config", "command_id": "legacy-camera"},
+        )
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertIn("unknown command type", socket.messages[-1]["error"])
+
+    async def test_beep_led_and_warning_use_pico_contract_and_existing_speaker(self):
+        client = self.make_client()
+        socket = FakeWebSocket()
+
+        await client.handle_command(
+            socket,
+            {"type": "beep", "duration_ms": 350, "command_id": "beep"},
+        )
+        client.motor.beep.assert_called_once_with(350)
+        self.assertTrue(socket.messages[-1]["ok"])
+
         await client.handle_command(
             socket,
             {"type": "led", "enabled": True, "duration_ms": 0, "command_id": "led"},
@@ -130,6 +148,21 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("battery", payload)
         self.assertNotIn("battery_level", payload)
 
+    def test_status_payload_uses_measured_system_metrics(self):
+        client = self.configured_client()
+        client._server_reachable = True
+        client._last_status_latency_ms = 12.4
+        with patch.object(client, "_cpu_usage_percent", return_value=23.5), patch.object(
+            client, "_cpu_temp_c", return_value=48.2
+        ), patch.object(client, "_ram_usage_percent", return_value=41.7):
+            payload = client.status_payload()
+
+        self.assertEqual(23.5, payload["cpu_usage"])
+        self.assertEqual(48.2, payload["cpu_temp"])
+        self.assertEqual(41.7, payload["ram_usage"])
+        self.assertEqual("ok", payload["internet"])
+        self.assertEqual(12.4, payload["ping"])
+
     def test_status_request_uses_robot_control_token_header(self):
         client = self.configured_client()
 
@@ -145,6 +178,8 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
             post.call_args.kwargs["headers"],
         )
         self.assertEqual(0.75, post.call_args.kwargs["timeout"])
+        self.assertTrue(client._server_reachable)
+        self.assertIsNotNone(client._last_status_latency_ms)
 
 
 if __name__ == "__main__":

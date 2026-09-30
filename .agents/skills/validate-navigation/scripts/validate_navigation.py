@@ -286,7 +286,6 @@ def check_launch_contracts(package_dir: Path, findings: list[Finding]) -> None:
             '"/map"',
             '"/scan"',
             '"map_bridge"',
-            '"start_fake_odom"',
         ),
         "localization.launch.py": (
             '"nav2_map_server"',
@@ -344,6 +343,33 @@ def check_launch_contracts(package_dir: Path, findings: list[Finding]) -> None:
                     (
                         "localization.launch.py는 기존 /scan을 사용해야 하며 "
                         f"직접 LiDAR 실행 설정을 포함하면 안 됩니다: {token}"
+                    ),
+                )
+
+    # Final hardware runtime must always use live wheel odometry.
+    # Static/fake odometry fallbacks are no longer supported.
+    for filename in (
+        "mapping.launch.py",
+        "localization.launch.py",
+        "navigation.launch.py",
+    ):
+        path = package_dir / "launch" / filename
+        if not path.is_file():
+            continue
+
+        source = read_text(path)
+        for token in (
+            "start_fake_odom",
+            "temporary_odom_to_base_tf",
+        ):
+            if token in source:
+                add(
+                    findings,
+                    "ERROR",
+                    "fake-odom-fallback",
+                    (
+                        f"{filename}에 최종 runtime에서 사용하지 않는 "
+                        f"fake odometry 설정이 남아 있습니다: {token}"
                     ),
                 )
 

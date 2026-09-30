@@ -8,10 +8,11 @@
 #       -> map_bridge
 #       -> FastAPI server
 #
-# 최종 runtime에서는 root start_gpu_server.sh가 server/wheel_odometry.py를 실행하고
-# /wheel_ticks를 입력으로 /odom과 dynamic odom->base_link TF를 생성한다.
-# fake odometry는 launch 단독 테스트용으로만 유지하며 기본값은 비활성화한다.
-# 필요한 경우에만 start_fake_odom:=true를 명시적으로 전달한다.
+# 최종 runtime에서는 RC카의 실제 encoder가
+# Pi -> WebSocket -> EncoderRosBridge -> /wheel_ticks로 들어오고,
+# root start_gpu_server.sh의 server/wheel_odometry.py가
+# /odom과 dynamic odom->base_link TF를 생성한다.
+# static/fake odometry fallback은 사용하지 않는다.
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -45,12 +46,7 @@ def generate_launch_description():
     # 실행 여부 제어
     start_lidar = LaunchConfiguration("start_lidar")
     start_bridge = LaunchConfiguration("start_bridge")
-    start_fake_odom = LaunchConfiguration("start_fake_odom")
     start_rviz = LaunchConfiguration("start_rviz")
-
-    # TF frame
-    odom_frame = LaunchConfiguration("odom_frame")
-    base_frame = LaunchConfiguration("base_frame")
 
     # RViz 설정
     rviz_config = LaunchConfiguration("rviz_config")
@@ -143,22 +139,8 @@ def generate_launch_description():
             default_value="true",
         ),
         DeclareLaunchArgument(
-            "start_fake_odom",
-            default_value="false",
-        ),
-        DeclareLaunchArgument(
             "start_rviz",
             default_value="false",
-        ),
-
-        # TF frame
-        DeclareLaunchArgument(
-            "odom_frame",
-            default_value="odom",
-        ),
-        DeclareLaunchArgument(
-            "base_frame",
-            default_value="base_link",
         ),
 
         DeclareLaunchArgument(
@@ -208,31 +190,6 @@ def generate_launch_description():
                     "serial_baudrate"
                 ),
             }.items(),
-        ),
-
-        # -----------------------------------------------------
-        # 임시 odom -> base_link TF
-        # -----------------------------------------------------
-        #
-        # encoder/wheel odometry 없이 launch만 독립 테스트할 때 사용하는
-        # opt-in fallback이다. 최종 runtime에서는 비활성화되며
-        # server/wheel_odometry.py의 dynamic odom->base_link TF만 사용한다.
-        Node(
-            package="tf2_ros",
-            executable="static_transform_publisher",
-            name="temporary_odom_to_base_tf",
-            output="screen",
-            condition=IfCondition(start_fake_odom),
-            arguments=[
-                "--x", "0",
-                "--y", "0",
-                "--z", "0",
-                "--roll", "0",
-                "--pitch", "0",
-                "--yaw", "0",
-                "--frame-id", odom_frame,
-                "--child-frame-id", base_frame,
-            ],
         ),
 
         # -----------------------------------------------------

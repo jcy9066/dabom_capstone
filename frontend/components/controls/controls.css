@@ -3,16 +3,19 @@
 }
 
 #dashboard-mode-controls-mount.dashboard-mode-controls-upgraded {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+    display: grid;
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0;
     cursor: default !important;
 }
 
 .dashboard-navigation-mode-group {
-    display: inline-flex;
+    display: flex;
     align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
     gap: 4px;
 }
 
@@ -105,4 +108,440 @@
 .dpad-estop-button:disabled {
     cursor: not-allowed;
     opacity: 0.5;
+}
+
+
+/* Shared visual foundation for compact control-panel buttons. */
+.dashboard-control-button[data-control-button] {
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: 27px;
+    padding: 4px 7px;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.88);
+    color: #cbd5e1;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
+    text-align: center;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background 0.16s ease,
+        border-color 0.16s ease,
+        color 0.16s ease,
+        opacity 0.16s ease;
+}
+
+.dashboard-control-button[data-control-button]:focus-visible {
+    outline: 2px solid rgba(34, 211, 238, 0.8);
+    outline-offset: 2px;
+}
+
+.dashboard-control-button[data-control-button]:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.dashboard-control-button--mode {
+    border-color: rgba(34, 211, 238, 0.42);
+}
+
+.dashboard-control-button--mode:hover:not(:disabled),
+.dashboard-control-button--mode.active {
+    border-color: #22d3ee;
+    color: #67e8f9;
+    background: rgba(8, 145, 178, 0.18);
+}
+
+.dashboard-control-button--accent {
+    border-color: rgba(34, 211, 238, 0.55);
+    color: #67e8f9;
+}
+
+.dashboard-control-button--secondary:hover:not(:disabled),
+.dashboard-control-button--view:hover:not(:disabled),
+.dashboard-control-button--view.active {
+    border-color: rgba(125, 211, 252, 0.62);
+    color: #e0f2fe;
+    background: rgba(30, 58, 78, 0.84);
+}
+
+.dashboard-control-button--danger {
+    border-color: rgba(244, 63, 94, 0.68) !important;
+    color: #fb7185 !important;
+}
+
+.dashboard-control-button--danger:hover:not(:disabled),
+.dashboard-control-button--danger.latched {
+    background: rgba(190, 18, 60, 0.42) !important;
+    color: #fff !important;
+}
+
+.dashboard-control-button--success {
+    border-color: rgba(34, 197, 94, 0.65) !important;
+    color: #4ade80 !important;
+}
+
+.dashboard-control-button--goal {
+    border-color: rgba(148, 163, 184, 0.36);
+}
+
+.dashboard-control-button--goal:hover:not(:disabled),
+.dashboard-control-button--goal.active {
+    border-color: rgba(251, 191, 36, 0.72);
+    color: #fde68a;
+    background: rgba(120, 53, 15, 0.66);
+}
+
+@media (max-width: 1100px) {
+    .dashboard-control-button[data-control-button] {
+        min-height: 25px;
+        padding: 3px 5px;
+        font-size: 8px;
+        letter-spacing: 0;
+    }
+}
+
+
+/* Shared drawer-toggle component. The hit target can be large while the visible tab stays compact. */
+.dashboard-drawer-toggle {
+    position: relative;
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: #67e8f9;
+    z-index: 1;
+}
+
+.dashboard-drawer-toggle::before {
+    content: "";
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    background: rgba(8, 15, 29, 0.62);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+    transition:
+        background 0.14s ease,
+        border-color 0.14s ease,
+        box-shadow 0.14s ease;
+}
+
+.dashboard-drawer-toggle:hover::before,
+.dashboard-drawer-toggle:focus-visible::before {
+    border-color: rgba(103, 232, 249, 0.72);
+    background: rgba(8, 145, 178, 0.34);
+    box-shadow: 0 3px 10px rgba(8, 145, 178, 0.22);
+}
+
+.dashboard-drawer-toggle:focus-visible {
+    outline: none;
+}
+
+.dashboard-drawer-toggle[aria-expanded="true"] {
+    opacity: 0;
+    transition: opacity 0.14s ease;
+}
+
+.dashboard-drawer-toggle[aria-expanded="true"]:hover,
+.dashboard-drawer-toggle[aria-expanded="true"]:focus-visible {
+    opacity: 1;
+}
+
+.dashboard-drawer-toggle[aria-expanded="false"] {
+    opacity: 1;
+}
+
+.dashboard-drawer-toggle-icon {
+    position: absolute;
+    z-index: 2;
+    width: 0;
+    height: 0;
+    filter: drop-shadow(0 0 2px rgba(34, 211, 238, 0.26));
+}
+
+/* Top-edge drawer: full-width hit target, compact centered visual tab. */
+.dashboard-drawer-toggle--top {
+    width: 100%;
+    height: 15.4px;
+}
+
+.dashboard-drawer-toggle--top::before {
+    top: 0;
+    left: 50%;
+    width: 66px;
+    height: 13px;
+    transform: translateX(-50%);
+    border-top: 0;
+    border-radius: 0 0 7px 7px;
+}
+
+.dashboard-drawer-toggle--top .dashboard-drawer-toggle-icon {
+    top: 3px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+}
+
+.dashboard-drawer-toggle--top[aria-expanded="true"] .dashboard-drawer-toggle-icon {
+    border-bottom: 5px solid currentColor;
+}
+
+.dashboard-drawer-toggle--top[aria-expanded="false"] .dashboard-drawer-toggle-icon {
+    border-top: 5px solid currentColor;
+}
+
+/* Left-edge drawer: full-height hit target, compact centered visual tab. */
+.dashboard-drawer-toggle--left {
+    width: 15.4px;
+    min-height: 118px;
+}
+
+.dashboard-drawer-toggle--left::before {
+    top: 50%;
+    left: 0;
+    width: 13px;
+    height: 66px;
+    transform: translateY(-50%);
+    border-left: 0;
+    border-radius: 0 7px 7px 0;
+}
+
+.dashboard-drawer-toggle--left .dashboard-drawer-toggle-icon {
+    top: 50%;
+    left: 3px;
+    transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+}
+
+.dashboard-drawer-toggle--left[aria-expanded="true"] .dashboard-drawer-toggle-icon {
+    border-right: 5px solid currentColor;
+}
+
+.dashboard-drawer-toggle--left[aria-expanded="false"] .dashboard-drawer-toggle-icon {
+    border-left: 5px solid currentColor;
+}
+
+
+/* Shared Mapping / Driving toggle, aligned with the existing Auto / Manual switch language. */
+.dashboard-navigation-mode-group,
+.viewer-navigation-mode-controls {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.navigation-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 27px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-family: var(--mono);
+}
+
+.navigation-mode-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.navigation-mode-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 5px;
+}
+
+.navigation-mode-toggle-label {
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.2px;
+    opacity: 0.45;
+    transition: color 0.16s ease, opacity 0.16s ease;
+    white-space: nowrap;
+}
+
+.navigation-mode-toggle-label.active {
+    color: #22d3ee;
+    opacity: 1;
+}
+
+.navigation-mode-toggle-track {
+    position: relative;
+    flex: 0 0 48px;
+    width: 48px;
+    height: 26px;
+    box-sizing: border-box;
+    border: 1px solid rgba(34, 211, 238, 0.35);
+    border-radius: 7px;
+    background: rgba(8, 145, 178, 0.12);
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.navigation-mode-toggle-slider {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 20px;
+    border-radius: 5px;
+    background: #22d3ee;
+    box-shadow: 0 2px 7px rgba(34, 211, 238, 0.3);
+    transition: left 0.2s ease, background 0.18s ease;
+}
+
+.navigation-mode-toggle.driving .navigation-mode-toggle-track {
+    border-color: rgba(34, 211, 238, 0.35);
+    background: rgba(8, 145, 178, 0.12);
+}
+
+.navigation-mode-toggle.driving .navigation-mode-toggle-slider {
+    left: calc(100% - 21px);
+    background: #22d3ee;
+    box-shadow: 0 2px 7px rgba(34, 211, 238, 0.3);
+}
+
+.navigation-mode-toggle.unknown .navigation-mode-toggle-track {
+    border-color: rgba(100, 116, 139, 0.35);
+    background: rgba(100, 116, 139, 0.12);
+}
+
+.navigation-mode-toggle.unknown .navigation-mode-toggle-slider {
+    left: calc(50% - 9px);
+    background: #64748b;
+    box-shadow: none;
+}
+
+@media (max-width: 1100px) {
+    .navigation-mode-toggle {
+        gap: 4px;
+    }
+
+    .navigation-mode-toggle-label {
+        font-size: 8px;
+    }
+}
+
+
+/* Persistent robot LED control in the shared mode panel. */
+.dashboard-led-control-mount {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+}
+
+.dashboard-led-toggle {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 27px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-family: var(--mono);
+}
+
+.dashboard-led-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 5px;
+}
+
+.dashboard-led-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.dashboard-led-toggle-label,
+.dashboard-led-toggle-state {
+    color: #22c55e;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+
+.dashboard-led-toggle-label {
+    justify-self: end;
+    text-align: right;
+    opacity: 0.7;
+}
+
+.dashboard-led-toggle-state {
+    min-width: 0;
+    justify-self: start;
+    text-align: left;
+    opacity: 0.7;
+}
+
+.dashboard-led-toggle-track {
+    position: relative;
+    justify-self: center;
+    width: 48px;
+    height: 26px;
+    box-sizing: border-box;
+    border: 1px solid rgba(34, 197, 94, 0.42);
+    border-radius: 7px;
+    background: rgba(22, 163, 74, 0.12);
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.dashboard-led-toggle-slider {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 20px;
+    border-radius: 5px;
+    background: #22c55e;
+    box-shadow: 0 2px 7px rgba(34, 197, 94, 0.28);
+    transition: left 0.2s ease, background 0.18s ease;
+}
+
+.dashboard-led-toggle.active .dashboard-led-toggle-track {
+    border-color: rgba(34, 197, 94, 0.42);
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.dashboard-led-toggle.active .dashboard-led-toggle-slider {
+    left: calc(100% - 21px);
+    background: #22c55e;
+}
+
+.dashboard-led-toggle.active .dashboard-led-toggle-state {
+    color: #22c55e;
+    opacity: 1;
+}
+
+.dashboard-led-toggle.unknown .dashboard-led-toggle-track {
+    border-color: rgba(100, 116, 139, 0.35);
+    background: rgba(100, 116, 139, 0.12);
+}
+
+.dashboard-led-toggle.unknown .dashboard-led-toggle-slider {
+    left: calc(50% - 9px);
+    background: #64748b;
+    box-shadow: none;
 }

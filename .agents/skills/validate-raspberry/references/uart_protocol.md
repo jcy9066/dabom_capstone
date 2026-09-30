@@ -21,14 +21,6 @@ raspberry/controllers/motor_controller.py
 raspberry/pico_w_sdk/main.c
 ```
 
-다음 파일은 이전 MicroPython 구현이다.
-
-```text
-raspberry/pico_w/main.py
-```
-
-이 파일은 현재 전체 protocol의 일부만 구현하므로, 전체 UART contract의 기준으로 사용하지 않는다.
-
 ---
 
 ## 2. 물리 UART 구성
@@ -208,14 +200,6 @@ ENC_STREAM,1
 
 복구 성공 후 encoder stream을 다시 사용한다.
 
-이전 MicroPython firmware는 다음 메시지를 사용할 수 있다.
-
-```text
-READY,PICO_W_MOTOR
-```
-
-이 값은 해당 legacy firmware를 명시적으로 테스트할 때만 정상으로 간주한다.
-
 ---
 
 ## 7. 전체 command 목록
@@ -231,6 +215,8 @@ READY,PICO_W_MOTOR
 | Pi → Pico | `ENC_GET` |
 | Pi → Pico | `ENC_RESET` |
 | Pi → Pico | `ENC_STREAM,<enabled>` |
+| Pi → Pico | `LED,<enabled>` |
+| Pi → Pico | `BEEP,<duration_ms>` |
 | Pico → Pi | `READY,...` |
 | Pico → Pi | `OK,...` |
 | Pico → Pi | `ERR,...` |
@@ -896,66 +882,36 @@ ERR,receive buffer overflow
 
 ---
 
-## 23. 이전 MicroPython firmware
+## 23. Pico firmware 기준
 
-파일:
-
-```text
-raspberry/pico_w/main.py
-```
-
-현재 이 firmware가 구현하는 command:
+현재 배포 및 검증 대상 Pico firmware는 다음 하나입니다.
 
 ```text
-PING
-STOP
-MOVE
+raspberry/pico_w_sdk/main.c
 ```
 
-현재 전체 SDK protocol에서 지원하지만 MicroPython 구현에는 없는 항목:
-
-```text
-DRIVE
-ENC_GET
-ENC_RESET
-ENC_STREAM
-EVENT,ENC
-```
-
-boot identifier도 다르다.
-
-```text
-READY,PICO_W_MOTOR
-```
-
-따라서 validator는 다음 원칙을 따른다.
-
-- 전체 protocol 기준은 `pico_w_sdk/main.c`로 한다.
-- `pico_w/main.py`와 SDK firmware를 하나의 동일 구현으로 합쳐 판단하지 않는다.
-- legacy MicroPython firmware가 저장소에 존재하는 것은 WARN으로 처리할 수 있다.
-- 실제 배포 firmware가 MicroPython이라고 명시되어 있는데 Pi가 `DRIVE` 또는 encoder stream을 요구하면 ERROR다.
+Pi ↔ Pico UART contract는 위 SDK firmware와
+`raspberry/controllers/motor_controller.py`를 기준으로 검증합니다.
 
 ---
 
 ## 24. Speaker 및 기타 출력
 
-WebSocket command의 다음 type:
+WebSocket의 `speak` command는 기존대로 Raspberry Pi의
+`SpeakerController`가 처리한다. 이 경로는 이번 정리에서 변경하지 않는다.
+
+Pico UART에는 별도로 다음 출력 command가 있다.
 
 ```text
-speak
+LED,0|1
+BEEP,<duration_ms>
 ```
 
-은 Raspberry Pi의 `SpeakerController`가 처리한다.
+`LED`는 GPIO20 경고 LED/MOSFET 출력을 지속 ON/OFF하고,
+`BEEP`은 GPIO16 speaker PWM을 지정 시간 동안 재생한다.
+현재 BEEP 허용 범위는 50~2000 ms이며 firmware main loop를 block하지 않는다.
 
-현재 motor/encoder UART protocol에는 다음 command가 없다.
-
-```text
-SPEAK,...
-```
-
-따라서 speaker 검증을 Pico UART protocol 검증에 포함하지 않는다.
-
-Pico firmware에 speaker 또는 MOSFET GPIO define이 존재하더라도 UART command가 구현되어 있지 않다면 protocol 기능으로 간주하지 않는다.
+`speak`는 Pico UART의 `SPEAK` command로 변환되지 않는다.
 
 ---
 
@@ -974,6 +930,8 @@ DRIVE
 ENC_GET
 ENC_RESET
 ENC_STREAM
+LED
+BEEP
 READY 처리
 EVENT,FAILSAFE_STOP
 EVENT,ENC
@@ -983,13 +941,6 @@ encoder event field 수
 encoder stream 주기
 Pico failsafe timeout
 Pi command timeout
-```
-
-또한 다음 두 firmware를 구분해야 한다.
-
-```text
-current Pico SDK firmware
-legacy MicroPython firmware
 ```
 
 ---
@@ -1146,7 +1097,6 @@ UART timeout 이후 연결 상태가 안전하게 정리되지 않음
 다음은 WARN으로 처리할 수 있다.
 
 ```text
-legacy MicroPython firmware가 SDK firmware와 함께 존재
 response text가 다르지만 Pi parser와 호환됨
 encoder sign calibration이 hardware 확인 필요
 정적 검사 환경에서 /dev/serial0 사용 불가

@@ -404,6 +404,7 @@ robot_status = {
     "ram_usage": None,
     "internet": "unknown",
     "mode": "manual",
+    "led_enabled": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -2494,6 +2495,7 @@ async def update_status(request: Request):
                 "ram_usage": status_value("ram_usage", robot_status["ram_usage"]),
                 "internet": status_value("internet", robot_status["internet"]),
                 "mode": status_value("mode", robot_status.get("mode", "manual")),
+                "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
