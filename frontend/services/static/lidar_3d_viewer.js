@@ -199,8 +199,9 @@ if (root && canvas) {
     let trajectoryPositions = null;
 
     const cameraImage = document.getElementById('camera-stream');
-    const navigationPanel = document.getElementById('navigation-control-panel');
     const viewerOverlay = root.closest('.minimap-overlay');
+    const controlDrawer = document.getElementById('lidar-control-drawer');
+    const controlDrawerToggle = document.getElementById('lidarControlDrawerToggle');
     const raycaster = new THREE.Raycaster();
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
@@ -1418,9 +1419,7 @@ if (root && canvas) {
 
         if (viewerExpanded) {
             applyViewMode(expandedViewMode || 'free');
-            requestAnimationFrame(updateExpandedControlOffset);
         } else {
-            root.style.removeProperty('--lidar-expanded-controls-top');
             applyViewMode('top');
         }
         resize();
@@ -1455,17 +1454,6 @@ if (root && canvas) {
         }
     });
 
-    function updateExpandedControlOffset() {
-        if (!viewerExpanded || !navigationPanel || !viewerOverlay) return;
-
-        const overlayRect = viewerOverlay.getBoundingClientRect();
-        const panelRect = navigationPanel.getBoundingClientRect();
-        if (!panelRect.height) return;
-
-        const top = Math.ceil(panelRect.bottom - overlayRect.top + 8);
-        root.style.setProperty('--lidar-expanded-controls-top', `${top}px`);
-    }
-
     function resize() {
         const rect = root.getBoundingClientRect();
         const width = Math.max(1, Math.floor(rect.width));
@@ -1478,7 +1466,6 @@ if (root && canvas) {
             camera.updateProjectionMatrix();
             if (!viewerExpanded) applyCollapsedTopView();
         }
-        if (viewerExpanded) updateExpandedControlOffset();
     }
 
     function animate(now = performance.now()) {
@@ -1501,14 +1488,18 @@ if (root && canvas) {
     const observer = new ResizeObserver(resize);
     observer.observe(root);
 
-    const navigationPanelObserver = navigationPanel
-        ? new ResizeObserver(() => {
-            if (viewerExpanded) updateExpandedControlOffset();
-        })
-        : null;
-    if (navigationPanel && navigationPanelObserver) {
-        navigationPanelObserver.observe(navigationPanel);
+    function setControlDrawerOpen(open) {
+        if (!controlDrawer || !controlDrawerToggle) return;
+        const isOpen = Boolean(open);
+        controlDrawer.dataset.open = isOpen ? 'true' : 'false';
+        controlDrawerToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        controlDrawerToggle.textContent = isOpen ? 'CONTROLS ▴' : 'CONTROLS ▾';
     }
+
+    controlDrawerToggle?.addEventListener('click', () => {
+        const isOpen = controlDrawer?.dataset.open !== 'false';
+        setControlDrawerOpen(!isOpen);
+    });
 
     document.addEventListener('dabom:navigation-visualization-state', event => {
         applyVisualizationState(event.detail);
@@ -1525,7 +1516,6 @@ if (root && canvas) {
 
     window.addEventListener('beforeunload', () => {
         observer.disconnect();
-        navigationPanelObserver?.disconnect();
         controls.dispose();
         clearGroup(mapRoot);
         clearGroup(gridRoot);
@@ -1569,6 +1559,7 @@ if (root && canvas) {
     buildRobotModel();
     applyVisualizationState(window.dabomNavigationVisualizationState);
     applyControlState(window.dabomNavigationControlState);
+    setControlDrawerOpen(controlDrawer?.dataset.open !== 'false');
     setInteractionMode('view');
     resize();
     if (viewerExpanded) {
