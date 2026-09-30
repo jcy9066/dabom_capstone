@@ -211,6 +211,7 @@ if (root && canvas) {
     const controlOverflowMenu = document.getElementById('lidar-control-overflow-menu');
     const overflowCandidates = [];
     let overflowLayoutFrame = 0;
+    let controlOverflowExpanded = false;
     const raycaster = new THREE.Raycaster();
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
@@ -237,10 +238,16 @@ if (root && canvas) {
 
     function setControlOverflowOpen(open) {
         if (!controlOverflow || !controlOverflowToggle || !controlOverflowMenu) return;
-        const isOpen = Boolean(open) && !controlOverflow.hidden;
+        const isOpen = Boolean(open)
+            && !controlOverflow.hidden
+            && controlOverflowMenu.children.length > 0;
+
+        controlOverflowExpanded = isOpen;
+        controlOverflowToggle.hidden = isOpen;
         controlOverflowToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
         controlOverflow.classList.toggle('is-open', isOpen);
         controlOverflowMenu.hidden = !isOpen;
+
         if (isOpen) {
             requestAnimationFrame(() => {
                 controlStrip?.scrollTo?.({
@@ -254,16 +261,26 @@ if (root && canvas) {
     function layoutControlOverflow() {
         if (!controlStrip || !controlOverflow || !controlOverflowMenu) return;
 
+        const keepExpanded = controlOverflowExpanded;
         restoreOverflowCandidates();
         controlOverflow.hidden = true;
-        setControlOverflowOpen(false);
+        controlOverflowToggle.hidden = false;
+        controlOverflowToggle.setAttribute('aria-expanded', 'false');
+        controlOverflow.classList.remove('is-open');
+        controlOverflowMenu.hidden = true;
 
-        if (!viewerExpanded || controlDrawer?.dataset.open === 'false') return;
+        if (!viewerExpanded || controlDrawer?.dataset.open === 'false') {
+            controlOverflowExpanded = false;
+            return;
+        }
 
         const overflows = () => (
             controlStrip.scrollWidth > controlStrip.clientWidth + 1
         );
-        if (!overflows()) return;
+        if (!overflows()) {
+            controlOverflowExpanded = false;
+            return;
+        }
 
         controlOverflow.hidden = false;
         for (const item of overflowCandidates) {
@@ -273,6 +290,16 @@ if (root && canvas) {
 
         if (!controlOverflowMenu.children.length) {
             controlOverflow.hidden = true;
+            controlOverflowExpanded = false;
+            return;
+        }
+
+        if (keepExpanded) {
+            controlOverflowExpanded = true;
+            controlOverflowToggle.hidden = true;
+            controlOverflowToggle.setAttribute('aria-expanded', 'true');
+            controlOverflow.classList.add('is-open');
+            controlOverflowMenu.hidden = false;
         }
     }
 
@@ -1627,13 +1654,7 @@ if (root && canvas) {
     controlOverflowToggle?.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        const isOpen = controlOverflowToggle.getAttribute('aria-expanded') === 'true';
-        setControlOverflowOpen(!isOpen);
-    });
-
-    document.addEventListener('pointerdown', event => {
-        if (!controlOverflow || controlOverflow.hidden) return;
-        if (!controlOverflow.contains(event.target)) setControlOverflowOpen(false);
+        setControlOverflowOpen(true);
     });
 
     document.addEventListener('dabom:navigation-visualization-state', event => {
