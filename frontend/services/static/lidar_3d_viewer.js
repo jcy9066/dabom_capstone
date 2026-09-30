@@ -1331,6 +1331,32 @@ if (root && canvas) {
         lastTrajectorySampleAt = now;
     }
 
+    function goalInteractionAllowed(control = currentControlState) {
+        return Boolean(
+            viewerExpanded
+            && String(control?.navigation_mode || '').toUpperCase() === 'DRIVING'
+            && control?.localization_ready
+            && control?.nav2_ready
+            && !control?.emergency_stop
+            && control?.connected === true
+        );
+    }
+
+    function syncGoalInteractionAvailability(control = currentControlState) {
+        const allowed = goalInteractionAllowed(control);
+        const button = root.querySelector('[data-lidar-interaction="set-goal"]');
+        if (button) {
+            button.disabled = !allowed;
+            button.setAttribute('aria-disabled', String(!allowed));
+            button.title = allowed
+                ? '지도에서 Goal 위치와 방향을 지정합니다.'
+                : 'DRIVING 및 Pi·Localization·Nav2 준비 후 사용할 수 있습니다.';
+        }
+        if (!allowed && interactionMode === 'set-goal') {
+            setInteractionMode('view');
+        }
+    }
+
     function applyControlState(control) {
         if (!control) return;
         const mode = String(control.navigation_mode || '').toUpperCase();
@@ -1348,6 +1374,7 @@ if (root && canvas) {
         );
 
         currentControlState = control;
+        syncGoalInteractionAvailability(control);
         rebuildPath(control.planned_path || []);
         rebuildGoals();
 
@@ -1416,7 +1443,7 @@ if (root && canvas) {
 
     function setInteractionMode(mode) {
         interactionMode = (
-            viewerExpanded && mode === 'set-goal'
+            mode === 'set-goal' && goalInteractionAllowed()
                 ? 'set-goal'
                 : 'view'
         );
@@ -1501,6 +1528,7 @@ if (root && canvas) {
         }
         viewerExpanded = nextExpanded;
         setInteractionMode('view');
+        syncGoalInteractionAvailability();
 
         if (viewerExpanded) {
             applyViewMode(expandedViewMode || 'free');
@@ -1575,15 +1603,6 @@ if (root && canvas) {
     const observer = new ResizeObserver(resize);
     observer.observe(root);
 
-    const controlMutationObserver = controlStrip
-        ? new MutationObserver(() => scheduleControlOverflowLayout())
-        : null;
-    controlMutationObserver?.observe(controlStrip, {
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['hidden', 'class', 'style', 'aria-pressed'],
-    });
-
     controlStrip?.addEventListener('wheel', event => {
         if (controlStrip.scrollWidth <= controlStrip.clientWidth + 1) return;
         if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
@@ -1632,7 +1651,6 @@ if (root && canvas) {
 
     window.addEventListener('beforeunload', () => {
         observer.disconnect();
-        controlMutationObserver?.disconnect();
         if (overflowLayoutFrame) cancelAnimationFrame(overflowLayoutFrame);
         controls.dispose();
         clearGroup(mapRoot);
