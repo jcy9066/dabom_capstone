@@ -574,17 +574,59 @@ function toggleFullscreen(elementId) {
 // 미니맵 확대 토글 (카메라 화면 크기만큼 확장)
 // ===================================================
 let minimapExpanded = false;
-function toggleMinimapExpand() {
+
+function setMinimapExpanded(expanded) {
     const minimap = document.getElementById('minimap-overlay');
     const btn = document.getElementById('minimapExpandBtn');
+    if (!minimap || !btn) return;
 
-    minimapExpanded = !minimapExpanded;
+    minimapExpanded = Boolean(expanded);
     minimap.classList.toggle('expanded', minimapExpanded);
     btn.textContent = minimapExpanded ? '⊡' : '⛶';
     btn.title = minimapExpanded ? '미니맵 축소' : '미니맵 확대';
     window.dabomLidar3D?.setExpandedState?.(minimapExpanded);
     requestLidarRender();
 }
+
+function toggleMinimapExpand() {
+    setMinimapExpanded(!minimapExpanded);
+}
+
+async function toggleLidarViewerFullscreen() {
+    const minimap = document.getElementById('minimap-overlay');
+    if (!minimap) return;
+
+    try {
+        if (document.fullscreenElement === minimap) {
+            await document.exitFullscreen();
+            return;
+        }
+
+        if (!minimapExpanded) setMinimapExpanded(true);
+        await minimap.requestFullscreen();
+    } catch (error) {
+        console.error('3D Viewer 전체화면 전환 실패:', error);
+    }
+}
+
+const lidarFullscreenBtn = document.getElementById('lidarViewerFullscreenBtn');
+lidarFullscreenBtn?.addEventListener('click', toggleLidarViewerFullscreen);
+
+document.addEventListener('fullscreenchange', () => {
+    const minimap = document.getElementById('minimap-overlay');
+    const button = document.getElementById('lidarViewerFullscreenBtn');
+    const active = document.fullscreenElement === minimap;
+
+    button?.classList.toggle('is-fullscreen', active);
+    if (button) {
+        const label = active ? '3D Viewer 전체화면 해제' : '3D Viewer 전체화면';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+    }
+
+    if (active && !minimapExpanded) setMinimapExpanded(true);
+    requestLidarRender();
+});
 
 window.navigationMapView = {
     screenToGround(event) {
