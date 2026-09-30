@@ -13,12 +13,29 @@
             return existing;
         }
 
-        const button = root.ownerDocument.createElement('button');
+        const document = root.ownerDocument;
+        const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = 'LED';
-        button.dataset.controlButton = 'secondary';
-        button.className = 'lidar-led-toggle';
-        controls.controlButton?.enhance?.(button);
+        button.className = 'dashboard-led-toggle';
+        button.setAttribute('aria-label', 'LED ON / OFF');
+
+        const label = document.createElement('span');
+        label.className = 'dashboard-led-toggle-label';
+        label.textContent = 'LED';
+
+        const track = document.createElement('span');
+        track.className = 'dashboard-led-toggle-track';
+        track.setAttribute('aria-hidden', 'true');
+
+        const slider = document.createElement('span');
+        slider.className = 'dashboard-led-toggle-slider';
+        track.append(slider);
+
+        const stateLabel = document.createElement('span');
+        stateLabel.className = 'dashboard-led-toggle-state';
+        stateLabel.textContent = '--';
+
+        button.append(label, track, stateLabel);
         root.replaceChildren(button);
 
         const controller = {
@@ -49,11 +66,13 @@
                 }
 
                 const active = this.enabled === true;
+                const known = this.enabled !== null;
                 button.classList.toggle('active', active);
-                button.classList.toggle('unknown', this.enabled === null);
+                button.classList.toggle('unknown', !known);
                 button.setAttribute('aria-pressed', String(active));
                 button.setAttribute('aria-busy', String(this.pending));
                 button.disabled = this.connected !== true || this.pending;
+                stateLabel.textContent = known ? (active ? 'ON' : 'OFF') : '--';
                 button.title = this.connected !== true
                     ? 'Pi 연결 후 LED를 제어할 수 있습니다.'
                     : active

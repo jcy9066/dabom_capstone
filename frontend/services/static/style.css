@@ -734,37 +734,46 @@ body.dark-mode .no-camera-bg {
     grid-column: 1;
     grid-row: 1;
     min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
     padding: 8px 10px;
 }
 .dashboard-drive-mode-control {
     min-width: 0;
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 0;
+    padding: 0 8px;
+    box-sizing: border-box;
     border: 0;
     background: transparent;
     color: inherit;
     cursor: pointer;
 }
-.mode-control-divider {
-    align-self: stretch;
-    width: 1px;
-    background: var(--border-color);
-}
 .dashboard-navigation-mode-controls {
     min-width: 0;
-    flex: 0 0 auto;
-    display: inline-flex;
+    width: 100%;
+    display: flex;
     flex-wrap: nowrap;
     align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    box-sizing: border-box;
+    border-left: 1px solid var(--border-color);
+}
+.dashboard-led-control-mount {
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px 0 8px;
+    box-sizing: border-box;
+    border-left: 1px solid var(--border-color);
 }
 
 .dashboard-drive-mode-control:focus-visible {
@@ -1110,8 +1119,7 @@ body.dark-mode .no-camera-bg {
     .dashboard-mode-controls { grid-column: 1; grid-row: 2; }
     .d-pad-container { grid-column: 1; grid-row: 3; min-height: 190px; }
     .dashboard-mode-controls { align-content: center; }
-    .mode-control-divider { flex-basis: 100%; width: auto; height: 1px; }
-    .dashboard-drive-mode-control { flex: 1 1 100%; }
+    .dashboard-drive-mode-control { width: 100%; }
     .gallery-grid { grid-template-columns: 1fr; }
 }
 

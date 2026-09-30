@@ -70,9 +70,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="lidarControlDrawerToggle"', template)
         self.assertIn("syncControlDrawerState", viewer)
         self.assertIn("dabom:drawer-toggle", viewer)
-        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v11', template)
-        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v11', template)
-        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v11', template)
+        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v12', template)
+        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v12', template)
+        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v12', template)
         self.assertIn('data-drawer-target="lidar-control-drawer"', template)
         self.assertIn('data-drawer-target="lidar-layer-drawer"', template)
         self.assertIn('dashboard-drawer-toggle--top', template)
@@ -92,7 +92,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("webkitfullscreenchange", dashboard)
         self.assertIn('id="lidarControlOverflow"', template)
         self.assertIn('id="lidarControlOverflowToggle"', template)
-        self.assertIn('id="lidar-led-control-mount"', template)
+        self.assertIn('id="dashboard-led-control-mount"', template)
+        self.assertNotIn('id="lidar-led-control-mount"', template)
+        self.assertIn("dashboard-led-control-mount", self.control)
+        self.assertIn(
+            "grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);",
+            self.controls_css,
+        )
         self.assertNotIn('id="navigation-led-test"', template)
         self.assertNotIn('id="navigation-estop"', template)
         self.assertNotIn('id="navigation-resume"', template)

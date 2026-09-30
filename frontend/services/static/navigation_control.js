@@ -706,7 +706,7 @@
         controls?.mountNavigationMode(dashboardNavigation, { request: requestNavigationMode });
         controls?.mountNavigationMode($('navigation-viewer-mode-controls-mount'), { request: requestNavigationMode });
         controls?.mountEmergencyStop($('dpad-center-action-mount'), { request: requestEmergencyToggle });
-        controls?.mountLedToggle?.($('lidar-led-control-mount'), { request: requestLedToggle });
+        controls?.mountLedToggle?.($('dashboard-led-control-mount'), { request: requestLedToggle });
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = true;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
