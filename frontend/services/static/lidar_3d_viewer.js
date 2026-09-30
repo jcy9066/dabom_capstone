@@ -713,6 +713,7 @@ if (root && canvas) {
                 map: texture,
                 side: THREE.DoubleSide,
                 toneMapped: false,
+                depthWrite: false,
             }),
         );
         cameraViewPoseGroup.add(cameraViewPlane);
