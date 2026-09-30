@@ -427,6 +427,24 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(warning["delivered"])
         self.assertEqual(["led", "warning"], [item[1]["type"] for item in self.commands[-2:]])
 
+    async def test_persistent_led_control_tracks_state(self):
+        enabled = await self.api.set_led({"enabled": True})
+        self.assertTrue(enabled["led_enabled"])
+        self.assertEqual(
+            {"type": "led", "enabled": True, "duration_ms": 0},
+            self.commands[-1][1],
+        )
+
+        disabled = await self.api.set_led({"enabled": False})
+        self.assertFalse(disabled["led_enabled"])
+        self.assertEqual(
+            {"type": "led", "enabled": False, "duration_ms": 0},
+            self.commands[-1][1],
+        )
+
+        self.api.note_pi_status({"led_enabled": True})
+        self.assertTrue(self.api.state_response()["led_enabled"])
+
     def test_duration_rejects_fractional_values(self):
         with self.assertRaises(NavigationControlError):
             self.api._bounded_int(1.5, 0, 10000, "duration_ms")
@@ -448,15 +466,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             state_response.json()["dashboard_config"],
         )
 
-        denied = client.post("/api/navigation/control/led-test", json={"duration_ms": 10})
+        denied = client.post("/api/navigation/control/led", json={"enabled": True})
         self.assertEqual(403, denied.status_code)
         accepted = client.post(
-            "/api/navigation/control/led-test",
-            json={"duration_ms": 10},
+            "/api/navigation/control/led",
+            json={"enabled": True},
             headers={"X-CSRF-Token": "test-token"},
         )
         self.assertEqual(200, accepted.status_code)
-        self.assertTrue(accepted.json()["delivered"])
+        self.assertTrue(accepted.json()["led_enabled"])
 
     def test_state_contract_is_json_safe_while_offline(self):
         offline = NavigationControlApi(
