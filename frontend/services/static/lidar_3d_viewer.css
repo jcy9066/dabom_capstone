@@ -39,7 +39,7 @@
 
 .lidar-view-controls {
     position: absolute;
-    top: 108px;
+    top: var(--lidar-expanded-controls-top, 180px);
     left: 8px;
     z-index: 31;
     display: flex;
@@ -89,7 +89,7 @@
 
 .lidar-display-panel {
     position: absolute;
-    top: 108px;
+    top: var(--lidar-expanded-controls-top, 180px);
     right: 8px;
     z-index: 31;
     width: 146px;
@@ -150,7 +150,7 @@
 /* Prevent text clipping in the expanded 3D LiDAR viewer. */
 .minimap-overlay.expanded .navigation-control-panel {
     min-width: 0;
-    max-height: min(132px, 34%);
+    max-height: min(220px, 42%);
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: thin;
@@ -231,7 +231,7 @@
 
 @media (max-width: 760px) {
     .minimap-overlay.expanded .navigation-control-panel {
-        max-height: min(150px, 38%);
+        max-height: min(220px, 44%);
     }
 
     .minimap-overlay.expanded .navigation-control-status {
