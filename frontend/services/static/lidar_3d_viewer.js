@@ -1591,37 +1591,18 @@ if (root && canvas) {
         controlStrip.scrollLeft += event.deltaY;
     }, { passive: false });
 
-    function setControlDrawerOpen(open) {
-        if (!controlDrawer || !controlDrawerToggle) return;
+    function syncControlDrawerState(open) {
         const isOpen = Boolean(open);
-        controlDrawer.dataset.open = isOpen ? 'true' : 'false';
-        controlDrawerToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        const label = isOpen ? '제어 패널 접기' : '제어 패널 펼치기';
-        controlDrawerToggle.setAttribute('aria-label', label);
-        controlDrawerToggle.title = label;
         viewerOverlay?.classList.toggle('controls-collapsed', !isOpen);
         if (!isOpen) setControlOverflowOpen(false);
         scheduleControlOverflowLayout();
     }
 
-    function setLayerDrawerOpen(open) {
-        if (!layerDrawer || !layerDrawerToggle) return;
-        const isOpen = Boolean(open);
-        layerDrawer.dataset.open = isOpen ? 'true' : 'false';
-        layerDrawerToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-        const label = isOpen ? '레이어 패널 접기' : '레이어 패널 펼치기';
-        layerDrawerToggle.setAttribute('aria-label', label);
-        layerDrawerToggle.title = label;
-    }
-
-    controlDrawerToggle?.addEventListener('click', () => {
-        const isOpen = controlDrawer?.dataset.open !== 'false';
-        setControlDrawerOpen(!isOpen);
-    });
-
-    layerDrawerToggle?.addEventListener('click', () => {
-        const isOpen = layerDrawer?.dataset.open === 'true';
-        setLayerDrawerOpen(!isOpen);
+    document.addEventListener('dabom:drawer-toggle', event => {
+        const detail = event.detail || {};
+        if (detail.targetId === 'lidar-control-drawer') {
+            syncControlDrawerState(detail.open);
+        }
     });
 
     controlOverflowToggle?.addEventListener('click', event => {
@@ -1696,8 +1677,8 @@ if (root && canvas) {
     buildRobotModel();
     applyVisualizationState(window.dabomNavigationVisualizationState);
     applyControlState(window.dabomNavigationControlState);
-    setControlDrawerOpen(controlDrawer?.dataset.open !== 'false');
-    setLayerDrawerOpen(layerDrawer?.dataset.open === 'true');
+    window.DabomDashboardComponents?.controls?.drawerToggle?.enhanceAll?.();
+    syncControlDrawerState(controlDrawer?.dataset.open !== 'false');
     setInteractionMode('view');
     resize();
     scheduleControlOverflowLayout();
