@@ -258,10 +258,17 @@
     }
 
     function setFeedback(message, error = false) {
-        const element = $('navigation-control-feedback');
+        const viewerStatus = window.DabomDashboardComponents?.controls?.viewerStatus;
+        if (viewerStatus?.show) {
+            viewerStatus.show(message, { error });
+            return;
+        }
+
+        const element = $('lidar-control-message');
         if (!element) return;
         element.textContent = message || '';
         element.classList.toggle('error', error);
+        element.hidden = !message;
     }
 
     function publishGoalDraft() {
@@ -276,29 +283,11 @@
         window.applyServerPatrolMode?.(payload?.robot_mode);
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
-        const modeLabel = $('navigation-mode-label');
-        const stateLabel = $('navigation-state-label');
-        if (modeLabel) modeLabel.textContent = mode;
-        if (stateLabel) stateLabel.textContent = navState;
-        $('navigation-mode-mapping')?.classList.toggle('active', mode === 'MAPPING');
-        $('navigation-mode-driving')?.classList.toggle('active', mode === 'DRIVING');
-
         const ready = mode === 'DRIVING' && payload.localization_ready && payload.nav2_ready;
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
         const stopped = Boolean(payload.emergency_stop);
         if ($('navigation-start')) $('navigation-start').hidden = !pathReady;
         if ($('navigation-cancel')) $('navigation-cancel').hidden = !payload.active_goal;
-        if ($('navigation-resume')) $('navigation-resume').hidden = !stopped;
-        if ($('navigation-resume')) $('navigation-resume').textContent = '정지 해제';
-        if ($('navigation-estop')) $('navigation-estop').classList.toggle('latched', stopped);
-        if ($('navigation-estop')) $('navigation-estop').disabled = payload?.connected !== true || state.estopPending || Date.now() < state.estopCooldownUntil;
-        if ($('navigation-resume')) $('navigation-resume').disabled = payload?.connected !== true || state.estopPending || Date.now() < state.estopCooldownUntil;
-        const hint = $('navigation-goal-hint');
-        if (hint) {
-            hint.textContent = ready
-                ? '3D Viewer에서 SET GOAL을 선택한 뒤 드래그하여 방향을 지정하세요.'
-                : 'DRIVING 및 localization/Nav2 준비 후 Goal을 지정할 수 있습니다.';
-        }
         syncControlComponents(payload);
         updateHazardHooks(payload);
         resolveControlWaiters(payload);
@@ -680,7 +669,7 @@
         controls?.mountDriveMode(dashboardModes, { request: requestDriveMode });
         const dashboardNavigation = $('dashboard-navigation-mode-controls-mount');
         controls?.mountNavigationMode(dashboardNavigation, { request: requestNavigationMode });
-        controls?.mountNavigationMode($('navigation-control-panel'), { request: requestNavigationMode });
+        controls?.mountNavigationMode($('navigation-viewer-mode-controls-mount'), { request: requestNavigationMode });
         controls?.mountEmergencyStop($('dpad-center-action-mount'), { request: requestEmergencyToggle });
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = true;
@@ -707,8 +696,6 @@
         }
         $('navigation-start')?.addEventListener('click', () => simpleAction('/api/navigation/control/start', 'NavigateToPose 시작 중...'));
         $('navigation-cancel')?.addEventListener('click', () => simpleAction('/api/navigation/control/cancel', '목표 취소 중...'));
-        $('navigation-estop')?.addEventListener('click', () => requestEmergencyToggle('STOP'));
-        $('navigation-resume')?.addEventListener('click', () => requestEmergencyToggle('RESUME'));
         $('navigation-led-test')?.addEventListener('click', () => simpleAction('/api/navigation/control/led-test', 'LED test 명령 전송 중...'));
         window.navigationControl = {
             applyState: applyControlState,
