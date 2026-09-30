@@ -78,21 +78,30 @@ function fetchRobotStatus() {
             return response.json();
         })
         .then(data => {
+            const displayMetric = value => (
+                Number.isFinite(Number(value))
+                    ? String(value)
+                    : '--'
+            );
+            const ping = Number(data.ping);
+
             document.getElementById(
                 'sys-cpu-usage',
-            ).innerText = data.cpu_usage;
+            ).innerText = displayMetric(data.cpu_usage);
 
             document.getElementById(
                 'sys-cpu-temp',
-            ).innerText = data.cpu_temp;
+            ).innerText = displayMetric(data.cpu_temp);
 
             document.getElementById(
                 'sys-ram',
-            ).innerText = data.ram_usage;
+            ).innerText = displayMetric(data.ram_usage);
 
             document.getElementById(
                 'sys-internet',
-            ).innerText = data.internet;
+            ).innerText = Number.isFinite(ping)
+                ? `${ping.toFixed(1)} ms`
+                : (data.internet === 'offline' ? 'OFFLINE' : '--');
 
             document.dispatchEvent(new CustomEvent(
                 'dabom:telemetry-status',
