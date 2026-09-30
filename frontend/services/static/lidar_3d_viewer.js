@@ -175,7 +175,8 @@ if (root && canvas) {
     let trajectorySamples = [];
     let lastTrajectorySampleAt = 0;
     let cameraVisualReady = false;
-    let cameraMountLocal = new THREE.Vector3(0.12, 0, 0.16);
+    let cameraMountLocal = new THREE.Vector3(0.12, 0, LIDAR_HEIGHT_M);
+    let scanVisualHeightM = 0.16;
     let cameraAspect = 4 / 3;
     let cameraViewPlane = null;
     let cameraViewBorder = null;
@@ -201,6 +202,9 @@ if (root && canvas) {
     const cameraImage = document.getElementById('camera-stream');
     const controlDrawer = document.getElementById('lidar-control-drawer');
     const controlDrawerToggle = document.getElementById('lidarControlDrawerToggle');
+    const layerDrawer = document.getElementById('lidar-layer-drawer');
+    const layerDrawerToggle = document.getElementById('lidarLayerDrawerToggle');
+    const viewerOverlay = root.closest('.minimap-overlay');
     const controlStrip = root.querySelector('.lidar-control-strip');
     const controlOverflow = document.getElementById('lidarControlOverflow');
     const controlOverflowToggle = document.getElementById('lidarControlOverflowToggle');
@@ -235,7 +239,16 @@ if (root && canvas) {
         if (!controlOverflow || !controlOverflowToggle || !controlOverflowMenu) return;
         const isOpen = Boolean(open) && !controlOverflow.hidden;
         controlOverflowToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        controlOverflow.classList.toggle('is-open', isOpen);
         controlOverflowMenu.hidden = !isOpen;
+        if (isOpen) {
+            requestAnimationFrame(() => {
+                controlStrip?.scrollTo?.({
+                    left: controlStrip.scrollWidth,
+                    behavior: 'smooth',
+                });
+            });
+        }
     }
 
     function layoutControlOverflow() {
@@ -738,10 +751,11 @@ if (root && canvas) {
     }
 
     function addCameraBody(model, chassisLength, chassisWidth, topZ) {
+        scanVisualHeightM = topZ + CAMERA_MOUNT_Z_OFFSET_M;
         cameraMountLocal.set(
             chassisLength * CAMERA_MOUNT_FORWARD_RATIO,
             0,
-            topZ + CAMERA_MOUNT_Z_OFFSET_M,
+            LIDAR_HEIGHT_M,
         );
 
         const bodyLength = clamp(chassisLength * 0.08, 0.032, 0.055);
@@ -780,6 +794,10 @@ if (root && canvas) {
         model.add(lens);
 
         rebuildCameraGeometry(cameraAspect);
+        if (currentVisualizationState?.scan) {
+            currentScanKey = null;
+            rebuildScan(currentVisualizationState.scan);
+        }
     }
 
     async function buildRobotModel() {
@@ -1070,15 +1088,15 @@ if (root && canvas) {
             const rayOffset = validCount * 6;
             scanRayPositions[rayOffset] = 0;
             scanRayPositions[rayOffset + 1] = 0;
-            scanRayPositions[rayOffset + 2] = LIDAR_HEIGHT_M;
+            scanRayPositions[rayOffset + 2] = scanVisualHeightM;
             scanRayPositions[rayOffset + 3] = x;
             scanRayPositions[rayOffset + 4] = y;
-            scanRayPositions[rayOffset + 5] = LIDAR_HEIGHT_M;
+            scanRayPositions[rayOffset + 5] = scanVisualHeightM;
 
             const pointOffset = validCount * 3;
             scanPointPositions[pointOffset] = x;
             scanPointPositions[pointOffset + 1] = y;
-            scanPointPositions[pointOffset + 2] = LIDAR_HEIGHT_M;
+            scanPointPositions[pointOffset + 2] = scanVisualHeightM;
             validCount += 1;
         }
 
@@ -1565,12 +1583,29 @@ if (root && canvas) {
         const label = isOpen ? '제어 패널 접기' : '제어 패널 펼치기';
         controlDrawerToggle.setAttribute('aria-label', label);
         controlDrawerToggle.title = label;
+        viewerOverlay?.classList.toggle('controls-collapsed', !isOpen);
+        if (!isOpen) setControlOverflowOpen(false);
         scheduleControlOverflowLayout();
+    }
+
+    function setLayerDrawerOpen(open) {
+        if (!layerDrawer || !layerDrawerToggle) return;
+        const isOpen = Boolean(open);
+        layerDrawer.dataset.open = isOpen ? 'true' : 'false';
+        layerDrawerToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        const label = isOpen ? '레이어 패널 접기' : '레이어 패널 펼치기';
+        layerDrawerToggle.setAttribute('aria-label', label);
+        layerDrawerToggle.title = label;
     }
 
     controlDrawerToggle?.addEventListener('click', () => {
         const isOpen = controlDrawer?.dataset.open !== 'false';
         setControlDrawerOpen(!isOpen);
+    });
+
+    layerDrawerToggle?.addEventListener('click', () => {
+        const isOpen = layerDrawer?.dataset.open === 'true';
+        setLayerDrawerOpen(!isOpen);
     });
 
     controlOverflowToggle?.addEventListener('click', event => {
@@ -1645,6 +1680,7 @@ if (root && canvas) {
     applyVisualizationState(window.dabomNavigationVisualizationState);
     applyControlState(window.dabomNavigationControlState);
     setControlDrawerOpen(controlDrawer?.dataset.open !== 'false');
+    setLayerDrawerOpen(layerDrawer?.dataset.open === 'true');
     setInteractionMode('view');
     resize();
     scheduleControlOverflowLayout();
