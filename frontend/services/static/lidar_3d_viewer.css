@@ -269,6 +269,7 @@
 }
 
 .lidar-control-overflow[hidden],
+.lidar-control-overflow-toggle[hidden],
 .lidar-control-overflow-menu[hidden] {
     display: none !important;
 }
@@ -302,19 +303,6 @@
 .lidar-control-overflow.is-open .lidar-control-overflow-toggle {
     border-color: rgba(103, 232, 249, 0.72);
     color: #67e8f9;
-}
-
-.lidar-control-overflow-menu .navigation-control-status,
-.lidar-control-overflow-menu .navigation-control-messages {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex: 0 0 auto;
-    max-width: none;
-    color: #cbd5e1;
-    font: 700 9px var(--mono);
-    line-height: 1.25;
-    white-space: nowrap;
 }
 
 /* Container-based density keeps essential actions visible before overflow kicks in. */
