@@ -191,9 +191,8 @@
                                             ></div>
                                         </div>
                                         <div class="navigation-control-row">
-                                            <button id="navigation-start" type="button" data-control-button="accent" hidden>주행 시작</button>
-                                            <button id="navigation-cancel" type="button" data-control-button="secondary" hidden>목표 취소</button>
-                                            <button id="navigation-led-test" type="button" data-control-button="secondary" data-control-overflow-rank="95">LED TEST</button>
+                                            <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
+                                            <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>목표 취소</button>
                                         </div>
                                     </div>
 
@@ -207,6 +206,13 @@
                                         <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
                                     </div>
+
+                                    <div
+                                        id="lidar-led-control-mount"
+                                        class="lidar-led-control-mount"
+                                        data-control-overflow-rank="70"
+                                        data-dashboard-mount="lidar-led-control"
+                                    ></div>
 
                                     <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
                                         <button
@@ -656,6 +662,7 @@
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v9"></script>
+    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v9"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20260930-lidar3d-controls-v9"></script>
