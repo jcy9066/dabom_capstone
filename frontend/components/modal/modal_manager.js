@@ -34,8 +34,8 @@
         }
 
         bindFullscreenEvents() {
-            document.addEventListener('fullscreenchange', () => this.syncFullscreenHost());
-            document.addEventListener('webkitfullscreenchange', () => this.syncFullscreenHost());
+            document.addEventListener?.('fullscreenchange', () => this.syncFullscreenHost());
+            document.addEventListener?.('webkitfullscreenchange', () => this.syncFullscreenHost());
         }
 
         currentFullscreenElement() {
