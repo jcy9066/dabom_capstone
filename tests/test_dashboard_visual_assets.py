@@ -30,14 +30,14 @@ def test_dashboard_guide_explains_state_information_sources():
 def test_all_component_assets_share_cache_busting_key():
     component_assets = re.findall(r'(?:href|src)="(/components/[^"]+)"', TEMPLATE)
     assert component_assets
-    assert all(asset.endswith("?v=20260930-lidar3d-controls-v3") for asset in component_assets)
+    assert all(asset.endswith("?v=20260930-lidar3d-controls-v4") for asset in component_assets)
     assert len(component_assets) == 15
 
 
 def test_static_assets_use_same_cache_busting_strategy():
     static_assets = re.findall(r'(?:href|src)="(static/[^"]+)"', TEMPLATE)
     assert static_assets
-    assert all(asset.endswith("?v=20260930-lidar3d-controls-v3") for asset in static_assets)
+    assert all(asset.endswith("?v=20260930-lidar3d-controls-v4") for asset in static_assets)
 
 
 def test_space_mono_is_not_requested_or_referenced():
