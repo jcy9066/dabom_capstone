@@ -201,8 +201,75 @@ if (root && canvas) {
     const cameraImage = document.getElementById('camera-stream');
     const controlDrawer = document.getElementById('lidar-control-drawer');
     const controlDrawerToggle = document.getElementById('lidarControlDrawerToggle');
+    const controlStrip = root.querySelector('.lidar-control-strip');
+    const controlOverflow = document.getElementById('lidarControlOverflow');
+    const controlOverflowToggle = document.getElementById('lidarControlOverflowToggle');
+    const controlOverflowMenu = document.getElementById('lidar-control-overflow-menu');
+    const overflowCandidates = [];
+    let overflowLayoutFrame = 0;
     const raycaster = new THREE.Raycaster();
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+    if (controlStrip && controlOverflowMenu) {
+        controlStrip.querySelectorAll('[data-control-overflow-rank]').forEach(element => {
+            const placeholder = document.createComment('lidar-control-overflow-slot');
+            element.parentNode?.insertBefore(placeholder, element);
+            overflowCandidates.push({
+                element,
+                placeholder,
+                rank: Number(element.dataset.controlOverflowRank) || 0,
+            });
+        });
+        overflowCandidates.sort((a, b) => b.rank - a.rank);
+    }
+
+    function restoreOverflowCandidates() {
+        for (const item of overflowCandidates) {
+            const parent = item.placeholder.parentNode;
+            if (!parent) continue;
+            parent.insertBefore(item.element, item.placeholder.nextSibling);
+        }
+    }
+
+    function setControlOverflowOpen(open) {
+        if (!controlOverflow || !controlOverflowToggle || !controlOverflowMenu) return;
+        const isOpen = Boolean(open) && !controlOverflow.hidden;
+        controlOverflowToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        controlOverflowMenu.hidden = !isOpen;
+    }
+
+    function layoutControlOverflow() {
+        if (!controlStrip || !controlOverflow || !controlOverflowMenu) return;
+
+        restoreOverflowCandidates();
+        controlOverflow.hidden = true;
+        setControlOverflowOpen(false);
+
+        if (!viewerExpanded || controlDrawer?.dataset.open === 'false') return;
+
+        const overflows = () => (
+            controlStrip.scrollWidth > controlStrip.clientWidth + 1
+        );
+        if (!overflows()) return;
+
+        controlOverflow.hidden = false;
+        for (const item of overflowCandidates) {
+            controlOverflowMenu.append(item.element);
+            if (!overflows()) break;
+        }
+
+        if (!controlOverflowMenu.children.length) {
+            controlOverflow.hidden = true;
+        }
+    }
+
+    function scheduleControlOverflowLayout() {
+        if (overflowLayoutFrame) return;
+        overflowLayoutFrame = requestAnimationFrame(() => {
+            overflowLayoutFrame = 0;
+            layoutControlOverflow();
+        });
+    }
 
     function disposeMaterial(material) {
         if (!material) return;
@@ -1285,6 +1352,7 @@ if (root && canvas) {
 
         previousNavigationMode = mode;
         previousNavigationState = navState;
+        scheduleControlOverflowLayout();
     }
 
     function pointInsideCurrentMap(x, y) {
@@ -1422,6 +1490,7 @@ if (root && canvas) {
             applyViewMode('top');
         }
         resize();
+        scheduleControlOverflowLayout();
     }
 
     root.querySelectorAll('[data-lidar-view]').forEach(button => {
@@ -1465,6 +1534,7 @@ if (root && canvas) {
             camera.updateProjectionMatrix();
             if (!viewerExpanded) applyCollapsedTopView();
         }
+        scheduleControlOverflowLayout();
     }
 
     function animate(now = performance.now()) {
@@ -1495,11 +1565,24 @@ if (root && canvas) {
         const label = isOpen ? '제어 패널 접기' : '제어 패널 펼치기';
         controlDrawerToggle.setAttribute('aria-label', label);
         controlDrawerToggle.title = label;
+        scheduleControlOverflowLayout();
     }
 
     controlDrawerToggle?.addEventListener('click', () => {
         const isOpen = controlDrawer?.dataset.open !== 'false';
         setControlDrawerOpen(!isOpen);
+    });
+
+    controlOverflowToggle?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOpen = controlOverflowToggle.getAttribute('aria-expanded') === 'true';
+        setControlOverflowOpen(!isOpen);
+    });
+
+    document.addEventListener('pointerdown', event => {
+        if (!controlOverflow || controlOverflow.hidden) return;
+        if (!controlOverflow.contains(event.target)) setControlOverflowOpen(false);
     });
 
     document.addEventListener('dabom:navigation-visualization-state', event => {
@@ -1517,6 +1600,7 @@ if (root && canvas) {
 
     window.addEventListener('beforeunload', () => {
         observer.disconnect();
+        if (overflowLayoutFrame) cancelAnimationFrame(overflowLayoutFrame);
         controls.dispose();
         clearGroup(mapRoot);
         clearGroup(gridRoot);
@@ -1563,6 +1647,7 @@ if (root && canvas) {
     setControlDrawerOpen(controlDrawer?.dataset.open !== 'false');
     setInteractionMode('view');
     resize();
+    scheduleControlOverflowLayout();
     if (viewerExpanded) {
         applyViewMode(expandedViewMode);
     } else {
