@@ -90,6 +90,16 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("manual", client.current_mode)
         self.assertTrue(socket.messages[-1]["ok"])
 
+    async def test_removed_camera_config_command_is_rejected(self):
+        client = self.make_client()
+        socket = FakeWebSocket()
+        await client.handle_command(
+            socket,
+            {"type": "camera_config", "command_id": "legacy-camera"},
+        )
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertIn("unknown command type", socket.messages[-1]["error"])
+
     async def test_led_and_warning_use_pico_led_contract_and_existing_speaker(self):
         client = self.make_client()
         socket = FakeWebSocket()

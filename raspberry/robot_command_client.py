@@ -521,11 +521,6 @@ class RobotCommandClient:
                     str(message.get("text", "")),
                 )
 
-            elif command_type == "camera_config":
-                print(
-                    f"[camera_config] {message}"
-                )
-
             else:
                 raise RuntimeError(
                     f"unknown command type: "
