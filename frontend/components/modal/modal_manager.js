@@ -17,7 +17,10 @@
             this.views = new Map();
             this.stack = [];
             this.activeView = null;
+            this.originalParent = this.root?.parentNode || null;
+            this.originalNextSibling = this.root?.nextSibling || null;
             this.bindDismissEvents();
+            this.bindFullscreenEvents();
         }
 
         bindDismissEvents() {
@@ -28,6 +31,37 @@
             this.root?.addEventListener?.('click', event => {
                 if (event.target === this.root) this.close();
             });
+        }
+
+        bindFullscreenEvents() {
+            document.addEventListener?.('fullscreenchange', () => this.syncFullscreenHost());
+            document.addEventListener?.('webkitfullscreenchange', () => this.syncFullscreenHost());
+        }
+
+        currentFullscreenElement() {
+            return document.fullscreenElement || document.webkitFullscreenElement || null;
+        }
+
+        restoreRootParent() {
+            if (!this.root || !this.originalParent || this.root.parentNode === this.originalParent) return;
+            if (this.originalNextSibling && this.originalNextSibling.parentNode === this.originalParent) {
+                this.originalParent.insertBefore(this.root, this.originalNextSibling);
+            } else {
+                this.originalParent.appendChild(this.root);
+            }
+        }
+
+        syncFullscreenHost() {
+            if (!this.root) return;
+            const fullscreenElement = this.currentFullscreenElement();
+            const visible = this.root.style.display !== 'none';
+
+            if (fullscreenElement && visible) {
+                if (this.root.parentNode !== fullscreenElement) fullscreenElement.appendChild(this.root);
+                return;
+            }
+
+            this.restoreRootParent();
         }
 
         register(name, descriptor) {
@@ -48,10 +82,12 @@
 
         show() {
             if (this.root) this.root.style.display = 'flex';
+            this.syncFullscreenHost();
         }
 
         hide() {
             if (this.root) this.root.style.display = 'none';
+            this.restoreRootParent();
         }
 
         snapshot() {

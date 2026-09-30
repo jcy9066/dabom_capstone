@@ -21,9 +21,9 @@
 #   localization_nav2
 #
 # odometry 설정:
-#   최종 runtime에서는 server/wheel_odometry.py의 /odom 및 dynamic
-#   odom->base_link TF를 사용한다. fake odometry는 기본 비활성화이며
-#   독립 테스트가 필요할 때만 start_fake_odom:=true로 활성화한다.
+#   최종 runtime에서는 RC카 encoder -> EncoderRosBridge -> /wheel_ticks
+#   -> server/wheel_odometry.py -> /odom + dynamic odom->base_link TF만 사용한다.
+#   static/fake odometry fallback은 사용하지 않는다.
 #
 # 안전 설정:
 #   Nav2 최종 속도 명령은 실제 /cmd_vel이 아니라
@@ -81,9 +81,6 @@ def generate_launch_description():
     start_bridge = LaunchConfiguration(
         "start_bridge"
     )
-    start_fake_odom = LaunchConfiguration(
-        "start_fake_odom"
-    )
     start_nav2_command_bridge = LaunchConfiguration(
         "start_nav2_command_bridge"
     )
@@ -122,9 +119,6 @@ def generate_launch_description():
                 ),
 
                 "start_bridge": start_bridge,
-                "start_fake_odom": (
-                    start_fake_odom
-                ),
 
                 "use_sim_time": "false",
             }.items(),
@@ -353,14 +347,9 @@ def generate_launch_description():
             # -------------------------------------------------
             DeclareLaunchArgument(
                 "map",
-                default_value=(
-                    PathJoinSubstitution(
-                        [
-                            pkg_share,
-                            "maps",
-                            "slam_test_01.yaml",
-                        ]
-                    )
+                description=(
+                    "Saved map YAML selected for the real RC car. "
+                    "No bundled test-map default is used."
                 ),
             ),
 
@@ -413,10 +402,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "start_bridge",
                 default_value="true",
-            ),
-            DeclareLaunchArgument(
-                "start_fake_odom",
-                default_value="false",
             ),
             DeclareLaunchArgument(
                 "start_nav2_command_bridge",

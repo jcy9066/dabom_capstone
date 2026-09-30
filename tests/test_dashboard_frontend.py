@@ -77,7 +77,7 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertIn("payload.connected !== true || state.warningPending", navigation_source)
 
     def test_changed_assets_have_matching_cache_busters(self):
-        version = "v=20260831-dashboard-lightweight"
+        version = "v=20260930-lidar3d-controls-v16"
         assets = (
             "static/style.css",
             "static/system_control.css",
@@ -145,6 +145,8 @@ class DashboardFrontendContractTests(unittest.TestCase):
             "controls/cycle_filter_button.js",
             "controls/drive_mode_control.js",
             "controls/navigation_mode_control.js",
+            "controls/viewer_status.js",
+            "controls/led_toggle.js",
             "controls/controls.css",
             "gallery/image_detail.js",
             "current_situation/current_situation.js",
@@ -204,13 +206,15 @@ class DashboardFrontendContractTests(unittest.TestCase):
             mount_source.index("</button>"),
             mount_source.index('id="dashboard-navigation-mode-controls-mount"'),
         )
-        for mode in ("MAPPING", "DRIVING"):
-            self.assertIn(
-                f'<button class="navigation-mode-option" type="button" data-navigation-mode="{mode}">',
-                mount_source,
-            )
-        self.assertEqual(self.template_source.count('id="navigation-mode-mapping"'), 1)
-        self.assertEqual(self.template_source.count('id="navigation-mode-driving"'), 1)
+        self.assertNotIn('class="navigation-mode-option"', mount_source)
+        self.assertNotIn('id="navigation-mode-mapping"', self.template_source)
+        self.assertNotIn('id="navigation-mode-driving"', self.template_source)
+        navigation_mode_source = (
+            COMPONENT_DIR / "controls" / "navigation_mode_control.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("navigation-mode-toggle", navigation_mode_source)
+        self.assertIn("mappingLabel.textContent = 'MAPPING'", navigation_mode_source)
+        self.assertIn("drivingLabel.textContent = 'DRIVING'", navigation_mode_source)
 
     def test_dashboard_layout_contract_is_compact_and_consistent(self):
         toolbar_start = self.template_source.index('id="records-toolbar-mount"')
@@ -223,9 +227,10 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertNotIn('.current-situation-record-btn { order:', self.style_source)
 
         for contract in (
-            "grid-template-rows: repeat(2, minmax(0, 1fr))",
-            "grid-column: 1; grid-row: 2",
-            "grid-column: 2; grid-row: 1 / 3",
+            "grid-template-rows: repeat(3, minmax(0, 1fr))",
+            "grid-column: 2;",
+            "grid-row: 1 / 4;",
+            ".d-pad-container { grid-column: 3; grid-row: 1 / 4;",
             "min-height: 32px",
             "--font-family: 'Noto Sans KR', 'Noto Sans', sans-serif",
         ):

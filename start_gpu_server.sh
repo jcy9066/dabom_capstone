@@ -169,6 +169,8 @@ required_env=(
     SERVER_PORT
     ROS_DOMAIN_ID
     ROS_LOCALHOST_ONLY
+    LIDAR_ENABLE
+    LIDAR_ROS_TOPIC
     ENCODER_ROS_ENABLE
     ENCODER_ROS_TOPIC
     WHEEL_DIAMETER_M
@@ -183,6 +185,11 @@ required_env=(
 for key in "${required_env[@]}"; do
     [[ -n "${!key:-}" ]] || fail "${key} is required"
 done
+
+case "${LIDAR_ENABLE,,}" in
+    true|1|yes|on) ;;
+    *) fail "LIDAR_ENABLE must be enabled for the final runtime" ;;
+esac
 
 case "${ENCODER_ROS_ENABLE,,}" in
     true|1|yes|on) ;;

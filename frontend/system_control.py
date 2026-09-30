@@ -328,8 +328,9 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
                 return
             command = [
                 "ros2", "launch", "patrol_navigation", "mapping.launch.py",
-                "server_base_url:=http://127.0.0.1:21063", "robot_id:=pi-01",
-                "start_lidar:=false", "start_fake_odom:=false", "start_rviz:=false",
+                f"server_base_url:={env_text('SERVER_BASE_URL')}",
+                f"robot_id:={env_text('ROBOT_ID')}",
+                "start_lidar:=false", "start_rviz:=false",
             ]
         else:
             raise RuntimeError(f"{component_id} is owned by the root runtime supervisor or navigation launch")

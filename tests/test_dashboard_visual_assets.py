@@ -30,14 +30,14 @@ def test_dashboard_guide_explains_state_information_sources():
 def test_all_component_assets_share_cache_busting_key():
     component_assets = re.findall(r'(?:href|src)="(/components/[^"]+)"', TEMPLATE)
     assert component_assets
-    assert all(asset.endswith("?v=20260831-dashboard-lightweight") for asset in component_assets)
-    assert len(component_assets) == 14
+    assert all(asset.endswith("?v=20260930-lidar3d-controls-v16") for asset in component_assets)
+    assert len(component_assets) == 18
 
 
 def test_static_assets_use_same_cache_busting_strategy():
     static_assets = re.findall(r'(?:href|src)="(static/[^"]+)"', TEMPLATE)
     assert static_assets
-    assert all(asset.endswith("?v=20260831-dashboard-lightweight") for asset in static_assets)
+    assert all(asset.endswith("?v=20260930-lidar3d-controls-v16") for asset in static_assets)
 
 
 def test_space_mono_is_not_requested_or_referenced():
@@ -73,8 +73,8 @@ def test_component_buttons_follow_dashboard_visual_states():
 def test_dashboard_controls_preserve_text_at_compact_widths():
     assert "flex-wrap: wrap; gap: 6px; flex-shrink: 0;" in STYLE
     assert "line-height: 1.25; overflow-wrap: anywhere; white-space: normal;" in STYLE
-    assert "flex: 1 1 168px;" in STYLE
-    assert "flex: 1 1 76px;" in STYLE
+    assert "flex: 1 1 112px;" in STYLE
+    assert "flex-basis: 100%;" in STYLE
     assert "max-width: calc(100% - 40px);" in STYLE
     assert "@media (max-width: 520px)" in STYLE
     assert ".control-grid { grid-template-columns: minmax(0, 1fr);" in STYLE

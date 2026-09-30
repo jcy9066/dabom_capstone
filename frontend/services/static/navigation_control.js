@@ -17,10 +17,13 @@
         navigationPending: false,
         estopPending: false,
         warningPending: false,
+        beepPending: false,
+        ledPending: false,
         estopCooldownUntil: 0,
         controlWaiters: new Set(),
         previousConnected: null,
         previousEmergencyStop: null,
+        lastViewerStateText: '',
         lastHazardCode: null,
         hazardEntries: [],
         hazardSequence: 0,
@@ -247,6 +250,19 @@
             pending: state.estopPending,
             cooldownUntil: state.estopCooldownUntil,
         });
+        controls?.ledToggle?.sync({
+            enabled: typeof payload.led_enabled === 'boolean' ? payload.led_enabled : null,
+            connected: payload.connected === true,
+            pending: state.ledPending,
+        });
+        const beepButton = $('dashboardBeepBtn');
+        if (beepButton) {
+            beepButton.disabled = payload.connected !== true || state.beepPending;
+            beepButton.setAttribute('aria-busy', String(state.beepPending));
+            beepButton.title = payload.connected === true
+                ? '짧은 비프음을 1회 재생합니다.'
+                : 'Pi가 연결되어야 비프음을 재생할 수 있습니다.';
+        }
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) {
             warningButton.disabled = payload.connected !== true || state.warningPending;
@@ -258,10 +274,23 @@
     }
 
     function setFeedback(message, error = false) {
-        const element = $('navigation-control-feedback');
+        const viewerStatus = window.DabomDashboardComponents?.controls?.viewerStatus;
+        if (viewerStatus?.show) {
+            viewerStatus.show(message, { error });
+            return;
+        }
+
+        const element = $('lidar-control-message');
         if (!element) return;
         element.textContent = message || '';
         element.classList.toggle('error', error);
+        element.hidden = !message;
+    }
+
+    function publishGoalDraft() {
+        document.dispatchEvent(new CustomEvent('dabom:navigation-goal-draft', {
+            detail: state.draftGoal ? { ...state.draftGoal } : null,
+        }));
     }
 
     function applyControlState(payload) {
@@ -270,32 +299,18 @@
         window.applyServerPatrolMode?.(payload?.robot_mode);
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
-        const modeLabel = $('navigation-mode-label');
-        const stateLabel = $('navigation-state-label');
-        if (modeLabel) modeLabel.textContent = mode;
-        if (stateLabel) stateLabel.textContent = navState;
-        $('navigation-mode-mapping')?.classList.toggle('active', mode === 'MAPPING');
-        $('navigation-mode-driving')?.classList.toggle('active', mode === 'DRIVING');
-
-        const ready = mode === 'DRIVING' && payload.localization_ready && payload.nav2_ready;
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
-        const stopped = Boolean(payload.emergency_stop);
+        const viewerStateText = `MODE ${mode} / NAV ${navState}`;
+        if (viewerStateText !== state.lastViewerStateText) {
+            state.lastViewerStateText = viewerStateText;
+            setFeedback(viewerStateText);
+        }
         if ($('navigation-start')) $('navigation-start').hidden = !pathReady;
         if ($('navigation-cancel')) $('navigation-cancel').hidden = !payload.active_goal;
-        if ($('navigation-resume')) $('navigation-resume').hidden = !stopped;
-        if ($('navigation-resume')) $('navigation-resume').textContent = '정지 해제';
-        if ($('navigation-estop')) $('navigation-estop').classList.toggle('latched', stopped);
-        if ($('navigation-estop')) $('navigation-estop').disabled = payload?.connected !== true || state.estopPending || Date.now() < state.estopCooldownUntil;
-        if ($('navigation-resume')) $('navigation-resume').disabled = payload?.connected !== true || state.estopPending || Date.now() < state.estopCooldownUntil;
-        const hint = $('navigation-goal-hint');
-        if (hint) {
-            hint.textContent = ready
-                ? '확대 지도에서 누른 뒤 드래그하여 Goal 방향을 지정하세요.'
-                : 'DRIVING 및 localization/Nav2 준비 후 Goal을 지정할 수 있습니다.';
-        }
         syncControlComponents(payload);
         updateHazardHooks(payload);
         resolveControlWaiters(payload);
+        window.dabomNavigationControlState = payload;
         document.dispatchEvent(new CustomEvent('dabom:navigation-control-state', { detail: payload }));
         window.navigationMapView?.requestRender();
     }
@@ -366,7 +381,20 @@
     }
 
     function beginGoal(event) {
-        if (event.button !== 0 && event.button !== 2) return;
+        const interactionMode = window.navigationMapView?.interactionMode?.() || 'view';
+        if (interactionMode !== 'set-goal') return;
+        if (event.button === 2) {
+            event.preventDefault();
+            state.pointerId = null;
+            state.pointerStart = null;
+            state.draftGoal = null;
+            publishGoalDraft();
+            window.navigationMapView?.setInteractionMode?.('view');
+            setFeedback('Goal 지정을 취소했습니다.');
+            window.navigationMapView?.requestRender();
+            return;
+        }
+        if (event.button !== 0) return;
         const view = window.navigationMapView?.snapshot();
         if (view?.expanded && state.control?.navigation_mode === 'MAPPING') {
             setFeedback('Mapping 모드에서는 주행 목표를 설정할 수 없습니다. Driving 모드로 전환해주세요.', true);
@@ -376,7 +404,7 @@
             if (view?.expanded) setFeedback('Driving 모드와 Pi·Localization·Nav2 상태를 확인해주세요.', true);
             return;
         }
-        const point = window.navigationMapView?.canvasToWorld(event);
+        const point = window.navigationMapView?.screenToGround(event);
         if (!point) {
             setFeedback('지도 밖에는 Goal을 지정할 수 없습니다.', true);
             return;
@@ -385,18 +413,20 @@
         state.pointerId = event.pointerId;
         state.pointerStart = point;
         state.draftGoal = { ...point, yaw: 0 };
+        publishGoalDraft();
         event.currentTarget.setPointerCapture?.(event.pointerId);
         window.navigationMapView?.requestRender();
     }
 
     function moveGoal(event) {
         if (state.pointerId !== event.pointerId || !state.pointerStart) return;
-        const point = window.navigationMapView?.canvasToWorld(event);
+        const point = window.navigationMapView?.screenToGround(event);
         if (!point) return;
         state.draftGoal = {
             ...state.pointerStart,
             yaw: Math.atan2(point.y - state.pointerStart.y, point.x - state.pointerStart.x),
         };
+        publishGoalDraft();
         window.navigationMapView?.requestRender();
     }
 
@@ -417,83 +447,28 @@
             }
             applyControlState(await mutate('/api/navigation/control/goal', { goal }));
             state.draftGoal = null;
+            publishGoalDraft();
             setFeedback('경로 미리보기가 준비되었습니다. 주행 시작 전에는 로봇이 움직이지 않습니다.');
         } catch (error) {
             state.draftGoal = null;
+            publishGoalDraft();
             setFeedback(`경로 계산 실패: ${error.message}`, true);
         } finally {
+            window.navigationMapView?.setInteractionMode?.('view');
             window.navigationMapView?.requestRender();
         }
     }
 
-    function cancelGoalDraft(event) {
-        if (state.pointerId !== event.pointerId) return;
+    function cancelGoalDraft(event = null) {
+        if (event && state.pointerId !== event.pointerId) return;
         state.pointerId = null;
         state.pointerStart = null;
         state.draftGoal = null;
+        publishGoalDraft();
+        window.navigationMapView?.setInteractionMode?.('view');
         setFeedback('Goal 지정을 취소했습니다.');
         window.navigationMapView?.requestRender();
     }
-
-    function drawArrow(ctx, goal, worldToCanvas, layout, color) {
-        if (!goal) return;
-        const point = worldToCanvas(goal.x, goal.y, layout);
-        const length = Math.max(20, 0.45 * layout.scale);
-        const endX = point.x + Math.cos(goal.yaw) * length;
-        const endY = point.y - Math.sin(goal.yaw) * length;
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(point.x, point.y);
-        ctx.lineTo(endX, endY);
-        ctx.stroke();
-        ctx.translate(endX, endY);
-        ctx.rotate(-goal.yaw);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(-11, -6);
-        ctx.lineTo(-11, 6);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-    }
-
-    function drawGoalFlag(ctx, goal, worldToCanvas, layout) {
-        if (!goal) return;
-        const point = worldToCanvas(goal.x, goal.y, layout);
-        const size = Math.max(24, Math.min(40, 0.62 * layout.scale));
-        ctx.save();
-        ctx.font = `${size}px 'Noto Sans KR', 'Noto Sans', sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText('🚩', point.x, point.y + 5);
-        ctx.restore();
-    }
-
-    window.navigationControlOverlay = {
-        draw(ctx, layout, worldToCanvas) {
-            const path = state.control?.planned_path || [];
-            if (path.length > 1) {
-                ctx.save();
-                ctx.strokeStyle = '#a855f7';
-                ctx.lineWidth = 3;
-                ctx.shadowColor = 'rgba(168, 85, 247, 0.55)';
-                ctx.shadowBlur = 5;
-                ctx.beginPath();
-                path.forEach((item, index) => {
-                    const point = worldToCanvas(item.x, item.y, layout);
-                    if (index === 0) ctx.moveTo(point.x, point.y);
-                    else ctx.lineTo(point.x, point.y);
-                });
-                ctx.stroke();
-                ctx.restore();
-            }
-            if (state.control?.active_goal) drawGoalFlag(ctx, state.control.active_goal, worldToCanvas, layout);
-            if (state.draftGoal) drawArrow(ctx, state.draftGoal, worldToCanvas, layout, '#f59e0b');
-        },
-    };
 
     async function requestDriveMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
@@ -628,6 +603,31 @@
         }
     }
 
+    async function requestLedToggle(enabled) {
+        if (state.ledPending) return false;
+        if (state.control?.connected !== true) {
+            setFeedback('Pi가 연결되어 있지 않아 LED를 제어할 수 없습니다.', true);
+            return false;
+        }
+
+        state.ledPending = true;
+        syncControlComponents();
+        setFeedback(enabled ? 'LED 켜는 중...' : 'LED 끄는 중...');
+
+        try {
+            const response = await mutate('/api/navigation/control/led', { enabled: Boolean(enabled) });
+            applyControlState(response);
+            setFeedback(response.led_enabled ? 'LED를 켰습니다.' : 'LED를 껐습니다.');
+            return true;
+        } catch (error) {
+            setFeedback(`LED 제어 실패: ${error.message}`, true);
+            return false;
+        } finally {
+            state.ledPending = false;
+            syncControlComponents();
+        }
+    }
+
     async function emergencyStop(reason = 'dashboard_emergency_stop', keepalive = false) {
         setFeedback('긴급 정지 및 Nav2 goal 취소 중...');
         try {
@@ -674,6 +674,28 @@
         }
     }
 
+    async function beep() {
+        if (state.beepPending) return false;
+        if (state.control?.connected !== true) {
+            setFeedback('Pi가 연결되지 않아 비프음 명령을 전달하지 못했습니다.', true);
+            syncControlComponents();
+            return false;
+        }
+        state.beepPending = true;
+        syncControlComponents();
+        try {
+            await mutate('/api/navigation/control/beep', { duration_ms: 350 });
+            setFeedback('비프음을 재생했습니다.');
+            return true;
+        } catch (error) {
+            setFeedback(`비프음 재생 실패: ${error.message}`, true);
+            return false;
+        } finally {
+            state.beepPending = false;
+            syncControlComponents();
+        }
+    }
+
     async function warning() {
         if (state.warningPending) return false;
         if (state.control?.connected !== true) {
@@ -702,7 +724,7 @@
     }
 
     function initialize() {
-        const canvas = $('lidar-map-canvas');
+        const canvas = $('lidar-3d-canvas');
         canvas?.addEventListener('contextmenu', event => event.preventDefault());
         canvas?.addEventListener('pointerdown', beginGoal);
         canvas?.addEventListener('pointermove', moveGoal);
@@ -713,8 +735,14 @@
         controls?.mountDriveMode(dashboardModes, { request: requestDriveMode });
         const dashboardNavigation = $('dashboard-navigation-mode-controls-mount');
         controls?.mountNavigationMode(dashboardNavigation, { request: requestNavigationMode });
-        controls?.mountNavigationMode($('navigation-control-panel'), { request: requestNavigationMode });
+        controls?.mountNavigationMode($('navigation-viewer-mode-controls-mount'), { request: requestNavigationMode });
         controls?.mountEmergencyStop($('dpad-center-action-mount'), { request: requestEmergencyToggle });
+        controls?.mountLedToggle?.($('dashboard-led-control-mount'), { request: requestLedToggle });
+        const beepButton = $('dashboardBeepBtn');
+        if (beepButton) {
+            beepButton.disabled = true;
+            beepButton.addEventListener('click', beep);
+        }
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = true;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
@@ -724,6 +752,15 @@
             if (document.hidden) scheduleControlPoll();
             else pollControlState();
         });
+        document.addEventListener('keydown', event => {
+            if (
+                event.key === 'Escape'
+                && window.navigationMapView?.interactionMode?.() === 'set-goal'
+            ) {
+                event.preventDefault();
+                cancelGoalDraft();
+            }
+        });
         const alertBox = $('alertBox');
         if (alertBox && window.MutationObserver) {
             state.hazardObserver = new MutationObserver(scheduleHazardReconcile);
@@ -731,15 +768,14 @@
         }
         $('navigation-start')?.addEventListener('click', () => simpleAction('/api/navigation/control/start', 'NavigateToPose 시작 중...'));
         $('navigation-cancel')?.addEventListener('click', () => simpleAction('/api/navigation/control/cancel', '목표 취소 중...'));
-        $('navigation-estop')?.addEventListener('click', () => requestEmergencyToggle('STOP'));
-        $('navigation-resume')?.addEventListener('click', () => requestEmergencyToggle('RESUME'));
-        $('navigation-led-test')?.addEventListener('click', () => simpleAction('/api/navigation/control/led-test', 'LED test 명령 전송 중...'));
         window.navigationControl = {
             applyState: applyControlState,
+            beep,
             emergencyStop,
             refreshState,
             requestDriveMode,
             requestEmergencyToggle,
+            requestLedToggle,
             requestNavigationMode,
             warning,
         };
