@@ -199,7 +199,6 @@ if (root && canvas) {
     let trajectoryPositions = null;
 
     const cameraImage = document.getElementById('camera-stream');
-    const viewerOverlay = root.closest('.minimap-overlay');
     const controlDrawer = document.getElementById('lidar-control-drawer');
     const controlDrawerToggle = document.getElementById('lidarControlDrawerToggle');
     const raycaster = new THREE.Raycaster();
