@@ -70,9 +70,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="lidarControlDrawerToggle"', template)
         self.assertIn("syncControlDrawerState", viewer)
         self.assertIn("dabom:drawer-toggle", viewer)
-        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v12', template)
-        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v12', template)
-        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v12', template)
+        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v13', template)
+        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v13', template)
+        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v13', template)
         self.assertIn('data-drawer-target="lidar-control-drawer"', template)
         self.assertIn('data-drawer-target="lidar-layer-drawer"', template)
         self.assertIn('dashboard-drawer-toggle--top', template)
@@ -99,6 +99,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);",
             self.controls_css,
         )
+        self.assertIn(".dashboard-mode-controls > *", dashboard_css := (
+            ROOT / "frontend/services/static/style.css"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("overflow: hidden;", dashboard_css)
+        self.assertIn(".dashboard-led-toggle-state {\n    display: none;", self.controls_css)
         self.assertNotIn('id="navigation-led-test"', template)
         self.assertNotIn('id="navigation-estop"', template)
         self.assertNotIn('id="navigation-resume"', template)
