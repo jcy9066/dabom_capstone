@@ -100,9 +100,17 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.messages[-1]["ok"])
         self.assertIn("unknown command type", socket.messages[-1]["error"])
 
-    async def test_led_and_warning_use_pico_led_contract_and_existing_speaker(self):
+    async def test_beep_led_and_warning_use_pico_contract_and_existing_speaker(self):
         client = self.make_client()
         socket = FakeWebSocket()
+
+        await client.handle_command(
+            socket,
+            {"type": "beep", "duration_ms": 350, "command_id": "beep"},
+        )
+        client.motor.beep.assert_called_once_with(350)
+        self.assertTrue(socket.messages[-1]["ok"])
+
         await client.handle_command(
             socket,
             {"type": "led", "enabled": True, "duration_ms": 0, "command_id": "led"},

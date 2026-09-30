@@ -31,6 +31,8 @@ PI_TO_PICO_REQUIRED = (
     "STOP",
     "ENC_RESET",
     "ENC_STREAM",
+    "LED",
+    "BEEP",
 )
 
 PICO_EXTRA = ("ENC_GET",)
@@ -141,6 +143,7 @@ def check_required_files(root: Path, findings: list[Finding]) -> None:
 def check_python_syntax(root: Path, findings: list[Finding]) -> None:
     for path in (
         root / "raspberry" / "controllers" / "motor_controller.py",
+        root / "raspberry" / "robot_command_client.py",
     ):
         if not path.is_file():
             continue
@@ -229,6 +232,8 @@ def check_pico_sdk(root: Path, findings: list[Finding]) -> None:
             "#define MOSFET_PIN 20",
             "#define ENCODER_REPORT_INTERVAL_MS 50U",
             "#define COMMAND_TIMEOUT_MS 350U",
+            "#define BEEP_MIN_DURATION_MS 50U",
+            "#define BEEP_MAX_DURATION_MS 2000U",
             "#define RX_BUFFER_SIZE 128U",
             "#define LEFT_FRONT_ENCODER_SIGN 1",
             "#define RIGHT_FRONT_ENCODER_SIGN -1",
@@ -239,6 +244,9 @@ def check_pico_sdk(root: Path, findings: list[Finding]) -> None:
             '"READY,PICO_W_MOTOR_ENCODER"',
             '"ERR,receive buffer overflow"',
             '"ERR,unknown command"',
+            'speaker_tick(now_ms)',
+            '"OK,LED,1"',
+            '"OK,BEEP,%lu"',
         ),
         findings,
         "pico-sdk-contract",

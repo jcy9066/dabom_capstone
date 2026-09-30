@@ -420,12 +420,18 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         self.assertEqual("GOAL_OUT_OF_BOUNDS", raised.exception.error_code)
 
-    async def test_led_and_warning_use_single_robot_command_path(self):
+    async def test_beep_led_and_warning_use_single_robot_command_path(self):
+        beep = await self.api.beep({"duration_ms": 350})
         led = await self.api.led_test({"duration_ms": 500})
         warning = await self.api.warning({"text": "warning", "led_duration_ms": 700})
+        self.assertTrue(beep["delivered"])
         self.assertTrue(led["delivered"])
         self.assertTrue(warning["delivered"])
-        self.assertEqual(["led", "warning"], [item[1]["type"] for item in self.commands[-2:]])
+        self.assertEqual(
+            ["beep", "led", "warning"],
+            [item[1]["type"] for item in self.commands[-3:]],
+        )
+        self.assertEqual(350, self.commands[-3][1]["duration_ms"])
 
     async def test_persistent_led_control_tracks_state(self):
         enabled = await self.api.set_led({"enabled": True})
@@ -465,6 +471,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             },
             state_response.json()["dashboard_config"],
         )
+
+        denied_beep = client.post(
+            "/api/navigation/control/beep",
+            json={"duration_ms": 350},
+        )
+        self.assertEqual(403, denied_beep.status_code)
+        accepted_beep = client.post(
+            "/api/navigation/control/beep",
+            json={"duration_ms": 350},
+            headers={"X-CSRF-Token": "test-token"},
+        )
+        self.assertEqual(200, accepted_beep.status_code)
+        self.assertTrue(accepted_beep.json()["delivered"])
+        self.assertEqual(350, accepted_beep.json()["duration_ms"])
 
         denied = client.post("/api/navigation/control/led", json={"enabled": True})
         self.assertEqual(403, denied.status_code)

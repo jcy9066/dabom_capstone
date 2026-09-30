@@ -215,6 +215,8 @@ ENC_STREAM,1
 | Pi → Pico | `ENC_GET` |
 | Pi → Pico | `ENC_RESET` |
 | Pi → Pico | `ENC_STREAM,<enabled>` |
+| Pi → Pico | `LED,<enabled>` |
+| Pi → Pico | `BEEP,<duration_ms>` |
 | Pico → Pi | `READY,...` |
 | Pico → Pi | `OK,...` |
 | Pico → Pi | `ERR,...` |
@@ -895,23 +897,21 @@ Pi ↔ Pico UART contract는 위 SDK firmware와
 
 ## 24. Speaker 및 기타 출력
 
-WebSocket command의 다음 type:
+WebSocket의 `speak` command는 기존대로 Raspberry Pi의
+`SpeakerController`가 처리한다. 이 경로는 이번 정리에서 변경하지 않는다.
+
+Pico UART에는 별도로 다음 출력 command가 있다.
 
 ```text
-speak
+LED,0|1
+BEEP,<duration_ms>
 ```
 
-은 Raspberry Pi의 `SpeakerController`가 처리한다.
+`LED`는 GPIO20 경고 LED/MOSFET 출력을 지속 ON/OFF하고,
+`BEEP`은 GPIO16 speaker PWM을 지정 시간 동안 재생한다.
+현재 BEEP 허용 범위는 50~2000 ms이며 firmware main loop를 block하지 않는다.
 
-현재 motor/encoder UART protocol에는 다음 command가 없다.
-
-```text
-SPEAK,...
-```
-
-따라서 speaker 검증을 Pico UART protocol 검증에 포함하지 않는다.
-
-Pico firmware에 speaker 또는 MOSFET GPIO define이 존재하더라도 UART command가 구현되어 있지 않다면 protocol 기능으로 간주하지 않는다.
+`speak`는 Pico UART의 `SPEAK` command로 변환되지 않는다.
 
 ---
 
@@ -930,6 +930,8 @@ DRIVE
 ENC_GET
 ENC_RESET
 ENC_STREAM
+LED
+BEEP
 READY 처리
 EVENT,FAILSAFE_STOP
 EVENT,ENC
