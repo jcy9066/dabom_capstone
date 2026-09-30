@@ -240,6 +240,20 @@
     outline: none;
 }
 
+.dashboard-drawer-toggle[aria-expanded="true"] {
+    opacity: 0;
+    transition: opacity 0.14s ease;
+}
+
+.dashboard-drawer-toggle[aria-expanded="true"]:hover,
+.dashboard-drawer-toggle[aria-expanded="true"]:focus-visible {
+    opacity: 1;
+}
+
+.dashboard-drawer-toggle[aria-expanded="false"] {
+    opacity: 1;
+}
+
 .dashboard-drawer-toggle-icon {
     position: absolute;
     z-index: 2;
