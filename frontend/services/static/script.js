@@ -1525,7 +1525,12 @@ function initializeDashboardComponentFoundation() {
     });
     components.records?.mount(components.mounts.recordsToolbar);
     components.controls?.mountDriveMode(components.mounts.dashboardModeControls);
-    components.controls?.mountNavigationMode(document.getElementById('navigation-control-panel'));
+    components.controls?.mountNavigationMode(document.getElementById('navigation-viewer-mode-controls-mount'));
+    components.controls?.mountViewerStatus?.({
+        messageElement: document.getElementById('lidar-control-message'),
+        gpsElement: document.getElementById('lidar-gps-meta'),
+        durationMs: 3000,
+    });
     components.navigationMaps?.mount({
         trigger: document.getElementById('lidarMapSelectBtn'),
     });
