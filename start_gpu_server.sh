@@ -364,6 +364,19 @@ stop_matching "server/wheel_odometry.py" TERM || true
 stop_matching "ros2 launch patrol_navigation mapping.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation navigation.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation localization.launch.py" TERM || true
+# One-time compatibility cleanup for ROS children that may have outlived an old
+# launch parent before ownership tagging was introduced.
+stop_matching "async_slam_toolbox_node" TERM || true
+stop_matching "controller_server" TERM || true
+stop_matching "smoother_server" TERM || true
+stop_matching "planner_server" TERM || true
+stop_matching "behavior_server" TERM || true
+stop_matching "bt_navigator" TERM || true
+stop_matching "waypoint_follower" TERM || true
+stop_matching "velocity_smoother" TERM || true
+stop_matching "nav2_command_bridge" TERM || true
+stop_matching "map_server" TERM || true
+stop_matching "amcl" TERM || true
 # Old dashboard builds could create a standalone map_bridge. The current
 # navigation launch owns map_bridge, so no standalone copy may survive restart.
 stop_matching "ros2 run patrol_navigation map_bridge" TERM || true
