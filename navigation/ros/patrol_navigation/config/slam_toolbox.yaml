@@ -21,9 +21,9 @@ slam_toolbox:
     use_scan_matching: true
     use_scan_barycenter: true
 
-    # 로봇이 이 거리/각도 이상 움직였을 때 새 scan을 graph에 반영한다.
-    minimum_travel_distance: 0.08
-    minimum_travel_heading: 0.08
+    # Mapping 화면에서 벽이 이동과 함께 바로 생성되도록 작은 이동/회전도 scan graph에 반영한다.
+    minimum_travel_distance: 0.02
+    minimum_travel_heading: 0.02
 
     # scan matching에 사용할 최근 scan buffer다.
     scan_buffer_size: 10
@@ -46,10 +46,11 @@ slam_toolbox:
     min_laser_range: 0.2
     max_laser_range: 12.0
 
-    # TF publish와 map update 관련 시간 설정이다.
-    minimum_time_interval: 0.5
+    # RViz2 Mapping처럼 LaserScan은 센서 주기에 가깝게 반영하고,
+    # slam_toolbox /map은 내부/진단용 1 Hz. Dashboard/save map은 live occupancy mapper가 1 Hz로 갱신한다.
+    minimum_time_interval: 0.1
     transform_publish_period: 0.02
-    map_update_interval: 2.0
+    map_update_interval: 1.0
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
 

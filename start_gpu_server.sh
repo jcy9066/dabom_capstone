@@ -77,11 +77,106 @@ wait_pid_exit() {
     return 1
 }
 
+process_group_alive() {
+    local pgid="$1"
+    [[ -n "${pgid}" ]] || return 1
+    kill -0 -- "-${pgid}" 2>/dev/null
+}
+
+wait_process_group_exit() {
+    local pgid="$1"
+    local attempts="${2:-30}"
+    local index
+
+    for ((index = 0; index < attempts; index++)); do
+        if ! process_group_alive "${pgid}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    return 1
+}
+
+list_owned_pgids() {
+    local owner="$1"
+    local proc pid pgid
+    local -A seen=()
+
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        [[ "${pid}" == "$$" ]] && continue
+
+        if tr '\0' '\n' < "${proc}/environ" 2>/dev/null \
+            | grep -Fqx "DABOM_PROCESS_OWNER=${owner}"; then
+            pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+            [[ "${pgid}" =~ ^[0-9]+$ ]] || continue
+            [[ -n "${seen[${pgid}]+x}" ]] && continue
+            seen["${pgid}"]=1
+            printf '%s\n' "${pgid}"
+        fi
+    done
+}
+
+stop_owned_groups() {
+    local owner="$1"
+    local first_signal="${2:-TERM}"
+    local pgid
+    local -a groups=()
+
+    mapfile -t groups < <(list_owned_pgids "${owner}")
+    (("${#groups[@]}" > 0)) || return 0
+
+    for pgid in "${groups[@]}"; do
+        log "Stopping owned process group pgid=${pgid}: ${owner}"
+        kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..30}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    for pgid in "${groups[@]}"; do
+        kill -TERM -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..20}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    for pgid in "${groups[@]}"; do
+        kill -KILL -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..10}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    warn "Owned process groups still alive after SIGKILL: ${owner} -> ${groups[*]}"
+    return 1
+}
+
 stop_pid() {
     local pid="$1"
     local first_signal="${2:-TERM}"
+    local pgid
 
     kill -0 "${pid}" 2>/dev/null || return 0
+
+    # Snapshot the process group before signalling. If this PID is a setsid
+    # leader, the leader can exit before its children; waiting only on the PID
+    # would falsely report success while descendants remain alive.
+    pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "${pgid}" =~ ^[0-9]+$ ]] && [[ "${pgid}" == "${pid}" ]]; then
+        stop_own_group "${pgid}" "${first_signal}"
+        return
+    fi
 
     signal_pid "${pid}" "${first_signal}"
     if wait_pid_exit "${pid}" 30; then
@@ -114,24 +209,29 @@ stop_matching() {
 }
 
 stop_own_group() {
-    local pid="$1"
+    local pgid="$1"
     local first_signal="${2:-TERM}"
 
-    [[ -n "${pid}" ]] || return 0
-    kill -0 "${pid}" 2>/dev/null || return 0
+    [[ -n "${pgid}" ]] || return 0
 
-    kill "-${first_signal}" -- "-${pid}" 2>/dev/null || kill "-${first_signal}" "${pid}" 2>/dev/null || true
-    if wait_pid_exit "${pid}" 30; then
+    if process_group_alive "${pgid}"; then
+        kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
+        if wait_process_group_exit "${pgid}" 30; then
+            return 0
+        fi
+
+        kill -TERM -- "-${pgid}" 2>/dev/null || true
+        if wait_process_group_exit "${pgid}" 20; then
+            return 0
+        fi
+
+        kill -KILL -- "-${pgid}" 2>/dev/null || true
+        wait_process_group_exit "${pgid}" 10 || true
         return 0
     fi
 
-    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
-    if wait_pid_exit "${pid}" 20; then
-        return 0
-    fi
-
-    kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
-    wait_pid_exit "${pid}" 10 || true
+    kill -0 "${pgid}" 2>/dev/null || return 0
+    stop_pid "${pgid}" "${first_signal}"
 }
 
 remove_own_pid_file() {
@@ -145,6 +245,14 @@ cleanup() {
 
     trap - EXIT INT TERM
     log "Shutting down GPU stack"
+
+    stop_owned_groups "dabom-gpu-odom" TERM || true
+    stop_owned_groups "dabom-gpu-fastapi" TERM || true
+
+    # FastAPI normally stops navigation launches in its shutdown hook. These
+    # ownership sweeps are the fallback for forced/partial shutdowns.
+    stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM || true
+    stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM || true
 
     stop_own_group "${ODOM_PID}" TERM
     stop_own_group "${SERVER_PID}" TERM
@@ -251,6 +359,13 @@ if [[ -f "${PID_FILE}" ]]; then
     fi
 fi
 
+# Clean all tagged runtime roles before starting replacements. This makes a
+# stack restart idempotent even if an earlier parent died before its children.
+stop_owned_groups "dabom-gpu-odom" TERM || true
+stop_owned_groups "dabom-gpu-fastapi" TERM || true
+stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM || true
+stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM || true
+
 # Compatibility cleanup for removed launchers and stale workers.
 stop_matching "server/scripts/start_gpu_server.sh" TERM || true
 stop_matching "python3 -m uvicorn server.app:app" TERM || true
@@ -259,6 +374,19 @@ stop_matching "server/wheel_odometry.py" TERM || true
 stop_matching "ros2 launch patrol_navigation mapping.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation navigation.launch.py" TERM || true
 stop_matching "ros2 launch patrol_navigation localization.launch.py" TERM || true
+# One-time compatibility cleanup for ROS children that may have outlived an old
+# launch parent before ownership tagging was introduced.
+stop_matching "async_slam_toolbox_node" TERM || true
+stop_matching "controller_server" TERM || true
+stop_matching "smoother_server" TERM || true
+stop_matching "planner_server" TERM || true
+stop_matching "behavior_server" TERM || true
+stop_matching "bt_navigator" TERM || true
+stop_matching "waypoint_follower" TERM || true
+stop_matching "velocity_smoother" TERM || true
+stop_matching "nav2_command_bridge" TERM || true
+stop_matching "map_server" TERM || true
+stop_matching "amcl" TERM || true
 # Old dashboard builds could create a standalone map_bridge. The current
 # navigation launch owns map_bridge, so no standalone copy may survive restart.
 stop_matching "ros2 run patrol_navigation map_bridge" TERM || true
@@ -268,7 +396,7 @@ printf '%s\n' "$$" > "${PID_FILE}"
 cd "${ROOT_DIR}"
 
 log "Starting FastAPI"
-setsid python3 -m uvicorn \
+setsid env DABOM_PROCESS_OWNER="dabom-gpu-fastapi" python3 -m uvicorn \
     server.app:app \
     --host "${SERVER_HOST}" \
     --port "${SERVER_PORT}" &
@@ -298,7 +426,7 @@ fi
 
 start_odometry() {
     log "Starting wheel odometry"
-    setsid python3 server/wheel_odometry.py &
+    setsid env DABOM_PROCESS_OWNER="dabom-gpu-odom" python3 server/wheel_odometry.py &
     ODOM_PID=$!
 
     local publisher_ready=0

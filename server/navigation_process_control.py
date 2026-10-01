@@ -26,6 +26,24 @@ class NavigationProcessControl:
     """
 
     MODES = frozenset({"MAPPING", "DRIVING"})
+    OWNER_PREFIX = "dabom-gpu-navigation"
+    LEGACY_CHILD_EXECUTABLES = {
+        "MAPPING": frozenset({"async_slam_toolbox_node"}),
+        "DRIVING": frozenset(
+            {
+                "map_server",
+                "amcl",
+                "controller_server",
+                "smoother_server",
+                "planner_server",
+                "behavior_server",
+                "bt_navigator",
+                "waypoint_follower",
+                "velocity_smoother",
+                "nav2_command_bridge",
+            }
+        ),
+    }
 
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = Path(root_dir)
@@ -36,8 +54,8 @@ class NavigationProcessControl:
         self._lock = threading.RLock()
 
     def status(self) -> dict[str, Any]:
-        mapping = self._matching("MAPPING")
-        driving = self._matching("DRIVING")
+        mapping = self._mode_processes("MAPPING")
+        driving = self._mode_processes("DRIVING")
         if mapping and driving:
             mode = "CONFLICT"
         elif mapping:
@@ -49,11 +67,18 @@ class NavigationProcessControl:
         return {
             "available": Path("/proc").is_dir(),
             "mode": mode,
-            "mapping_pids": [item["pid"] for item in mapping],
-            "driving_pids": [item["pid"] for item in driving],
+            "mapping_pids": sorted(mapping),
+            "driving_pids": sorted(driving),
+            "mapping_pgids": sorted(self._mode_pgids("MAPPING")),
+            "driving_pgids": sorted(self._mode_pgids("DRIVING")),
         }
 
-    def transition(self, mode: str, map_yaml: str | None = None) -> dict[str, Any]:
+    def transition(
+        self,
+        mode: str,
+        map_yaml: str | None = None,
+        restart: bool = False,
+    ) -> dict[str, Any]:
         normalized = str(mode).strip().upper()
         if normalized not in self.MODES:
             raise NavigationProcessError(f"Unsupported navigation mode: {mode}")
@@ -70,15 +95,45 @@ class NavigationProcessControl:
 
             other = "DRIVING" if normalized == "MAPPING" else "MAPPING"
             self._stop_locked(other)
+
             matches = self._matching(normalized)
-            if len(matches) > 1:
+            mode_processes = self._mode_processes(normalized)
+            mode_pgids = self._mode_pgids(normalized)
+            orphaned_mode_children = bool(mode_processes) and not matches
+            duplicate_mode_groups = len(mode_pgids) > 1
+            stale_mapping = (
+                normalized == "MAPPING"
+                and bool(matches or mode_processes)
+                and not self._mapping_children_healthy()
+            )
+
+            if (
+                restart
+                or len(matches) > 1
+                or orphaned_mode_children
+                or duplicate_mode_groups
+                or stale_mapping
+            ):
                 self._stop_locked(normalized)
                 matches = []
+
             if not matches:
                 self._start_locked(normalized, map_yaml)
+
             status = self.status()
-            if status["mode"] != normalized:
-                raise NavigationProcessError(f"{normalized} launch did not reach a running state.")
+            pgid_key = (
+                "mapping_pgids"
+                if normalized == "MAPPING"
+                else "driving_pgids"
+            )
+            if (
+                status["mode"] != normalized
+                or len(status[pgid_key]) != 1
+            ):
+                self._stop_locked(normalized)
+                raise NavigationProcessError(
+                    f"{normalized} launch did not reach exactly one owned process group."
+                )
             return status
 
     def stop(self, mode: str | None = None) -> dict[str, Any]:
@@ -101,6 +156,89 @@ class NavigationProcessControl:
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             return []
 
+    def _proc_environment(self, entry: Path) -> dict[str, str]:
+        try:
+            parts = (entry / "environ").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return {}
+
+        environment: dict[str, str] = {}
+        for part in parts:
+            if not part or b"=" not in part:
+                continue
+            key, value = part.split(b"=", 1)
+            environment[
+                key.decode("utf-8", errors="replace")
+            ] = value.decode("utf-8", errors="replace")
+        return environment
+
+    def _owner_name(self, mode: str) -> str:
+        return f"{self.OWNER_PREFIX}-{mode}"
+
+    def _owned_processes(self, mode: str) -> set[int]:
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return set()
+        owner = self._owner_name(mode)
+        found: set[int] = set()
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            environment = self._proc_environment(entry)
+            if environment.get("DABOM_PROCESS_OWNER") == owner:
+                found.add(int(entry.name))
+        return found
+
+    def _legacy_child_processes(self, mode: str) -> set[int]:
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return set()
+
+        wanted = self.LEGACY_CHILD_EXECUTABLES[mode]
+        found: set[int] = set()
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            args = self._proc_args(entry)
+            if any(Path(arg).name in wanted for arg in args):
+                found.add(int(entry.name))
+        return found
+
+    def _mode_processes(self, mode: str) -> set[int]:
+        found = self._owned_processes(mode)
+        found.update(item["pid"] for item in self._matching(mode))
+
+        # Backward-compatible recovery for processes created before ownership
+        # tagging existed. Only use executable discovery when no tagged process
+        # exists, so a current healthy mode cannot absorb unrelated legacy nodes.
+        if not found:
+            found.update(self._legacy_child_processes(mode))
+        return found
+
+    def _mode_pgids(self, mode: str) -> set[int]:
+        pgids: set[int] = set()
+        for pid in self._mode_processes(mode):
+            try:
+                pgids.add(os.getpgid(pid))
+            except ProcessLookupError:
+                continue
+        return {pgid for pgid in pgids if pgid > 1}
+
+    def _signal_mode_groups(self, mode: str, sig: signal.Signals) -> None:
+        for pgid in self._mode_pgids(mode):
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
+                continue
+
+    def _wait_mode_exit(self, mode: str, timeout_sec: float) -> bool:
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            if not self._mode_processes(mode):
+                return True
+            time.sleep(0.1)
+        return not self._mode_processes(mode)
+
     def _matching(self, mode: str) -> list[dict[str, Any]]:
         proc = Path("/proc")
         if not proc.is_dir():
@@ -119,6 +257,53 @@ class NavigationProcessControl:
                 found.append({"pid": int(entry.name), "args": args})
         return found
 
+    def _process_exists(self, *names: str) -> bool:
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return False
+        wanted = {str(name).strip() for name in names if str(name).strip()}
+        if not wanted:
+            return False
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            args = self._proc_args(entry)
+            for arg in args:
+                base = Path(arg).name
+                if base in wanted:
+                    return True
+        return False
+
+    def _owned_executable_exists(self, mode: str, name: str) -> bool:
+        wanted = str(name).strip()
+        if not wanted:
+            return False
+        for pid in self._owned_processes(mode):
+            entry = Path("/proc") / str(pid)
+            args = self._proc_args(entry)
+            if any(Path(arg).name == wanted for arg in args):
+                return True
+        return False
+
+    def _mapping_children_healthy(self) -> bool:
+        # Prefer ownership-aware checks so an unrelated/orphaned ROS node cannot
+        # make a broken Mapping session look healthy.
+        if self._owned_processes("MAPPING"):
+            return self._owned_executable_exists(
+                "MAPPING",
+                "async_slam_toolbox_node",
+            ) and self._owned_executable_exists(
+                "MAPPING",
+                "map_bridge",
+            )
+
+        # Compatibility only for a pre-ownership launch that is still running.
+        return self._process_exists(
+            "async_slam_toolbox_node",
+        ) and self._process_exists(
+            "map_bridge",
+        )
+
     def _matching_legacy_map_bridges(self) -> list[dict[str, Any]]:
         proc = Path("/proc")
         if not proc.is_dir():
@@ -127,37 +312,57 @@ class NavigationProcessControl:
         for entry in proc.iterdir():
             if not entry.name.isdigit():
                 continue
+            environment = self._proc_environment(entry)
+            owner = environment.get("DABOM_PROCESS_OWNER", "")
+            if owner.startswith(self.OWNER_PREFIX):
+                continue
+
             args = self._proc_args(entry)
-            if any(
+            standalone_launcher = any(
                 Path(args[index]).name == "ros2"
-                and args[index + 1:index + 4] == ["run", "patrol_navigation", "map_bridge"]
+                and args[index + 1:index + 4]
+                == ["run", "patrol_navigation", "map_bridge"]
                 for index in range(len(args))
-            ):
+            )
+            orphan_executable = any(
+                Path(arg).name == "map_bridge"
+                for arg in args
+            )
+            if standalone_launcher or orphan_executable:
                 found.append({"pid": int(entry.name), "args": args})
         return found
 
     def _stop_legacy_map_bridges(self) -> None:
         targets = self._matching_legacy_map_bridges()
+        pgids: set[int] = set()
         for item in targets:
             try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGTERM)
-                else:
-                    os.kill(item["pid"], signal.SIGTERM)
+                pgids.add(os.getpgid(item["pid"]))
+            except ProcessLookupError:
+                continue
+
+        for pgid in pgids:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
             except ProcessLookupError:
                 continue
 
         deadline = time.monotonic() + self.stop_timeout_sec
-        while targets and time.monotonic() < deadline:
-            time.sleep(0.1)
-            targets = self._matching_legacy_map_bridges()
+        while pgids and time.monotonic() < deadline:
+            alive: set[int] = set()
+            for pgid in pgids:
+                try:
+                    os.killpg(pgid, 0)
+                    alive.add(pgid)
+                except ProcessLookupError:
+                    continue
+            pgids = alive
+            if pgids:
+                time.sleep(0.1)
 
-        for item in targets:
+        for pgid in pgids:
             try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGKILL)
-                else:
-                    os.kill(item["pid"], signal.SIGKILL)
+                os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 continue
 
@@ -193,6 +398,10 @@ class NavigationProcessControl:
             command.append(f"map:={map_yaml}")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"navigation_{mode.lower()}.log"
+        process_env = os.environ.copy()
+        process_env["DABOM_PROCESS_OWNER"] = self._owner_name(mode)
+        process_env["DABOM_NAV_MODE"] = mode
+
         with log_path.open("ab") as log_file:
             subprocess.Popen(
                 self._ros_command(command),
@@ -200,28 +409,23 @@ class NavigationProcessControl:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env=process_env,
             )
         time.sleep(self.start_timeout_sec)
 
     def _stop_locked(self, mode: str) -> None:
-        targets = self._matching(mode)
-        for item in targets:
-            try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGTERM)
-                else:
-                    os.kill(item["pid"], signal.SIGTERM)
-            except ProcessLookupError:
-                continue
-        deadline = time.monotonic() + self.stop_timeout_sec
-        while targets and time.monotonic() < deadline:
-            time.sleep(0.1)
-            targets = self._matching(mode)
-        for item in targets:
-            try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGKILL)
-                else:
-                    os.kill(item["pid"], signal.SIGKILL)
-            except ProcessLookupError:
-                continue
+        if not self._mode_processes(mode):
+            return
+
+        self._signal_mode_groups(mode, signal.SIGTERM)
+        if self._wait_mode_exit(mode, self.stop_timeout_sec):
+            return
+
+        self._signal_mode_groups(mode, signal.SIGKILL)
+        if self._wait_mode_exit(mode, self.stop_timeout_sec):
+            return
+
+        survivors = sorted(self._mode_processes(mode))
+        raise NavigationProcessError(
+            f"{mode} processes survived SIGKILL: {survivors}"
+        )

@@ -70,6 +70,7 @@ from server.location_security_api import LocationSecurityApi
 from server.location_security_notifications import build_location_transition_message
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
+from server.live_mapping_grid import LiveMappingGrid
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -465,6 +466,15 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+
+live_mapping_grid = LiveMappingGrid(
+    resolution=0.05,
+    refresh_sec=1.0,
+    max_clear_range_m=8.0,
+    sensor_x=env_float("LIDAR_X"),
+    sensor_y=env_float("LIDAR_Y"),
+    sensor_yaw=env_float("LIDAR_YAW"),
+)
 frame_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 decode_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 publish_stats = {"last_time": time.time(), "count": 0, "fps": 0, "last_publish_at": None}
@@ -724,6 +734,54 @@ class RobotConnectionManager:
 
 connections = RobotConnectionManager()
 
+
+class NavigationVisualizationHub:
+    """Push latest navigation visualization events to dashboard clients."""
+
+    def __init__(self, max_queue_size=32):
+        self.max_queue_size = max(1, int(max_queue_size))
+        self._loop = None
+        self._queues = {}
+
+    def bind_loop(self, loop):
+        self._loop = loop
+
+    async def register(self, websocket):
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        await websocket.accept()
+        queue = asyncio.Queue(maxsize=self.max_queue_size)
+        self._queues[id(websocket)] = queue
+        return queue
+
+    def unregister(self, websocket):
+        self._queues.pop(id(websocket), None)
+
+    def publish(self, event):
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        payload = dict(event)
+        try:
+            loop.call_soon_threadsafe(self._enqueue, payload)
+        except RuntimeError:
+            pass
+
+    def _enqueue(self, payload):
+        for queue in tuple(self._queues.values()):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass
+
+
+navigation_visualization_hub = NavigationVisualizationHub()
+
 # Load the dashboard-only routes without importing frontend.__init__.
 _system_control_spec = spec_from_file_location(
     "dabom_system_control",
@@ -769,6 +827,35 @@ def current_navigation_map_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def clear_navigation_visualization_state():
+    live_mapping_grid.reset()
+    with state_lock:
+        navigation_state["map"] = None
+        navigation_state["pose"] = None
+        navigation_state["decision"] = None
+        navigation_state["map_updated_at"] = None
+        navigation_state["pose_updated_at"] = None
+        navigation_state["map_revision"] = None
+    navigation_visualization_hub.publish({"type": "reset"})
+
+
+def publish_live_mapping_map(map_payload, received_at):
+    map_revision = build_navigation_map_revision(map_payload)
+    stored_map = received_payload(map_payload, received_at)
+    with state_lock:
+        navigation_state["map"] = stored_map
+        navigation_state["map_updated_at"] = received_at
+        navigation_state["map_revision"] = map_revision
+    navigation_visualization_hub.publish(
+        {
+            "type": "map",
+            "map": stored_map,
+            "map_revision": map_revision,
+        }
+    )
+    return stored_map
+
+
 navigation_control_api = NavigationControlApi(
     app=app,
     map_api=navigation_map_api,
@@ -778,6 +865,7 @@ navigation_control_api = NavigationControlApi(
     get_live_map=current_navigation_map_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(payload, name),
     send_robot_command=connections.send_command_wait_ack,
+    clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
 
@@ -1633,6 +1721,7 @@ def start_inference_worker():
 async def startup():
     global lidar_ros_bridge, encoder_ros_bridge
 
+    navigation_visualization_hub.bind_loop(asyncio.get_running_loop())
     start_persistence_workers()
     ensure_runtime_model_config(force=True, reason="startup")
 
@@ -2529,13 +2618,9 @@ async def update_status(request: Request):
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
                 "gps_lng": status_value("gps_lng", robot_status.get("gps_lng")),
                 "gps_alt": status_value("gps_alt", robot_status.get("gps_alt")),
-                "gps_satellites": status_value(
-                    "gps_satellites", robot_status.get("gps_satellites")
-                ),
+                "gps_satellites": status_value("gps_satellites", robot_status.get("gps_satellites")),
                 "gps_hdop": status_value("gps_hdop", robot_status.get("gps_hdop")),
-                "gps_updated_at": status_value(
-                    "gps_updated_at", robot_status.get("gps_updated_at")
-                ),
+                "gps_updated_at": status_value("gps_updated_at", robot_status.get("gps_updated_at")),
                 "lidar_x": status_value("lidar_x", robot_status.get("lidar_x")),
                 "lidar_y": status_value("lidar_y", robot_status.get("lidar_y")),
                 "lidar_z": status_value("lidar_z", robot_status.get("lidar_z")),
@@ -2813,17 +2898,11 @@ def current_navigation_map_location_metadata():
     gps = snapshot.get("gps")
     if not isinstance(gps, dict) or gps.get("fix") is not True:
         return None
-
-    location = {
-        "gps": {
-            "lat": gps.get("lat"),
-            "lng": gps.get("lng"),
-            "alt": gps.get("alt"),
-            "satellites": gps.get("satellites"),
-            "hdop": gps.get("hdop"),
-            "captured_at": gps.get("updated_at"),
-        }
-    }
+    location = {"gps": {
+        "lat": gps.get("lat"), "lng": gps.get("lng"), "alt": gps.get("alt"),
+        "satellites": gps.get("satellites"), "hdop": gps.get("hdop"),
+        "captured_at": gps.get("updated_at"),
+    }}
     if gps.get("matched_location_id"):
         location["location_id"] = gps.get("matched_location_id")
         location["name"] = gps.get("matched_location_name")
@@ -2863,16 +2942,57 @@ async def update_navigation_map(request: Request):
         return denied
 
     received_at = time.time()
+
+    if navigation_mode == "mapping":
+        # Mirror RViz2 Map behavior: every slam_toolbox /map refresh becomes the
+        # persistent base OccupancyGrid. Then re-apply the newest LiDAR sample so
+        # dynamic walls clear/appear on the same one-second cadence. The composed
+        # grid is both what the Viewer renders and what "현재 지도 저장" persists.
+        with state_lock:
+            navigation_state["robot_id"] = data.get(
+                "robot_id",
+                navigation_state["robot_id"],
+            )
+            store_navigation_mode(navigation_mode, received_at)
+
+        live_mapping_grid.update_base_map(data)
+        live_map_payload = live_mapping_grid.maybe_update(
+            robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+            monotonic_now=time.monotonic(),
+            wall_time=received_at,
+            force=True,
+        )
+        if live_map_payload is None:
+            live_map_payload = live_mapping_grid.snapshot(
+                robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+                wall_time=received_at,
+            )
+        if live_map_payload is not None:
+            publish_live_mapping_map(live_map_payload, received_at)
+        return {
+            "ok": True,
+            "source": "slam_toolbox+live_scan",
+            "used_for_live_map": live_map_payload is not None,
+        }
+
     map_revision = build_navigation_map_revision(data)
+    stored_map = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["map"] = received_payload(data, received_at)
+        navigation_state["map"] = stored_map
         navigation_state["map_updated_at"] = received_at
         navigation_state["map_revision"] = map_revision
+    navigation_visualization_hub.publish(
+        {
+            "type": "map",
+            "map": stored_map,
+            "map_revision": map_revision,
+        }
+    )
     return {"ok": True}
 
 
@@ -2896,15 +3016,24 @@ async def update_navigation_pose(request: Request):
         return denied
 
     received_at = time.time()
+    stored_pose = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["pose"] = received_payload(data, received_at)
+        navigation_state["pose"] = stored_pose
         navigation_state["pose_updated_at"] = received_at
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_pose(data)
     navigation_control_api.note_navigation_sample("pose", received_at, data)
+    navigation_visualization_hub.publish(
+        {
+            "type": "pose",
+            "pose": stored_pose,
+        }
+    )
     return {"ok": True}
 
 
@@ -2927,16 +3056,27 @@ async def update_navigation_scan(request: Request):
         return denied
 
     received_at = time.time()
+    stored_scan = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["scan"] = received_payload(data, received_at)
+        navigation_state["scan"] = stored_scan
         navigation_state["scan_updated_at"] = received_at
         build_navigation_decision(received_at)
+        status = build_navigation_status(received_at)
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_scan(data)
     navigation_control_api.note_navigation_sample("scan", received_at)
+    navigation_visualization_hub.publish(
+        {
+            "type": "scan",
+            "scan": stored_scan,
+            "status": status,
+        }
+    )
     return {"ok": True}
 
 
@@ -2946,9 +3086,8 @@ async def get_navigation_status():
         return build_navigation_status()
 
 
-@app.get("/api/navigation/snapshot")
-async def get_navigation_snapshot(map_revision: str | None = None):
-    """Return one atomic visual snapshot, including map data only when changed."""
+def build_navigation_snapshot_payload(map_revision=None):
+    """Build the current dashboard state used for HTTP recovery and WS startup."""
     with state_lock:
         status = build_navigation_status()
         current_map = navigation_state.get("map")
@@ -2978,6 +3117,37 @@ async def get_navigation_snapshot(map_revision: str | None = None):
         if map_changed:
             snapshot["map"] = current_map
         return snapshot
+
+
+@app.get("/api/navigation/snapshot")
+async def get_navigation_snapshot(map_revision: str | None = None):
+    """HTTP recovery snapshot; live visualization uses the WebSocket stream."""
+    return build_navigation_snapshot_payload(map_revision)
+
+
+@app.websocket("/ws/navigation/visualization")
+async def navigation_visualization_websocket(websocket: WebSocket):
+    session = websocket.scope.get("session")
+    user = session.get("user") if isinstance(session, dict) else None
+    if not isinstance(user, dict) or not user.get("user_id"):
+        await websocket.close(code=1008, reason="authentication required")
+        return
+
+    queue = await navigation_visualization_hub.register(websocket)
+    try:
+        await websocket.send_json(
+            {
+                "type": "snapshot",
+                "snapshot": build_navigation_snapshot_payload(),
+            }
+        )
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        navigation_visualization_hub.unregister(websocket)
 
 
 @app.get("/api/navigation/decision")
@@ -3799,13 +3969,61 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 continue
 
             received_at = time.time()
+
+            # The Pi LiDAR WebSocket is the highest-rate scan source. Tag each
+            # dashboard scan with the server's active navigation session so the
+            # 3D viewer can accept live points during Mapping instead of
+            # discarding these untagged scans as stale Driving data.
+            control_navigation_mode = str(
+                navigation_control_api.state_response().get(
+                    "navigation_mode"
+                )
+                or ""
+            ).strip().upper()
+            sensor_navigation_mode = {
+                "MAPPING": "mapping",
+                "DRIVING": "localization_nav2",
+            }.get(control_navigation_mode)
+            if sensor_navigation_mode is not None:
+                dashboard_scan = dict(dashboard_scan)
+                dashboard_scan["navigation_mode"] = sensor_navigation_mode
+
+            live_map_payload = None
+            if sensor_navigation_mode == "mapping":
+                live_mapping_grid.update_scan(message)
+                live_map_payload = live_mapping_grid.maybe_update(
+                    robot_id=robot_id,
+                    monotonic_now=time.monotonic(),
+                    wall_time=received_at,
+                )
+
+            stored_scan = received_payload(
+                dashboard_scan,
+                received_at,
+            )
             with state_lock:
                 navigation_state["robot_id"] = robot_id
-                navigation_state["scan"] = received_payload(
-                    dashboard_scan,
+                if sensor_navigation_mode is not None:
+                    store_navigation_mode(
+                        sensor_navigation_mode,
+                        received_at,
+                    )
+                navigation_state["scan"] = stored_scan
+                navigation_state["scan_updated_at"] = received_at
+                status = build_navigation_status(received_at)
+
+            navigation_visualization_hub.publish(
+                {
+                    "type": "scan",
+                    "scan": stored_scan,
+                    "status": status,
+                }
+            )
+            if live_map_payload is not None:
+                publish_live_mapping_map(
+                    live_map_payload,
                     received_at,
                 )
-                navigation_state["scan_updated_at"] = received_at
 
             stats = lidar_ros_bridge.stats()
             if stats["received"] % 100 == 0:
@@ -3834,10 +4052,19 @@ async def get_lidar_bridge_status():
             "error": "LiDAR ROS bridge is not running",
         }
 
+    stats = lidar_ros_bridge.stats()
+    last_received_at = stats.get("last_received_at")
+    age_sec = (
+        None
+        if last_received_at is None
+        else max(0.0, time.time() - float(last_received_at))
+    )
     return {
         "ok": True,
         "enabled": True,
-        "stats": lidar_ros_bridge.stats(),
+        "fresh": age_sec is not None and age_sec <= 3.0,
+        "age_sec": age_sec,
+        "stats": stats,
     }
 
 

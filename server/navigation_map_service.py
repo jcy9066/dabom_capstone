@@ -385,8 +385,6 @@ class NavigationMapService:
             origin_y=origin_y,
             origin_yaw=origin_yaw,
             saved_at_iso=metadata.get("saved_at_iso") if isinstance(metadata.get("saved_at_iso"), str) else None,
-            # Location metadata is auxiliary by design. Invalid or absent location
-            # data must never make an otherwise valid navigation map unusable.
             location=dict(metadata["location"]) if isinstance(metadata.get("location"), dict) else None,
         )
 
