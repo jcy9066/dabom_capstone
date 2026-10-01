@@ -109,14 +109,19 @@ def test_navigation_launches_have_no_test_data_fallbacks():
 
 def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
     mapping = read("navigation/ros/patrol_navigation/launch/mapping.launch.py")
+    slam = read("navigation/ros/patrol_navigation/config/slam_toolbox.yaml")
+    dashboard = read("frontend/services/static/script.js")
 
     assert "TimerAction" not in mapping
-    assert '"map_publish_period_sec": 1.0' in mapping
-    assert '"pose_publish_period_sec": 0.2' in mapping
-    assert '"scan_publish_period_sec": 0.2' in mapping
+    assert '"map_publish_period_sec": 0.5' in mapping
+    assert '"pose_publish_period_sec": 0.1' in mapping
+    assert '"scan_publish_period_sec": 0.0' in mapping
     assert '"send_map": True' in mapping
     assert '"send_pose": True' in mapping
-    assert '"send_scan": True' in mapping
+    assert '"send_scan": False' in mapping
+    assert "minimum_time_interval: 0.1" in slam
+    assert "map_update_interval: 0.5" in slam
+    assert "const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;" in dashboard
 
 def test_lidar_websocket_tags_scans_with_active_navigation_mode():
     app = read("server/app.py")
