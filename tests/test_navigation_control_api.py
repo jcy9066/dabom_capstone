@@ -258,6 +258,19 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resumed["replanned"])
         self.assertEqual("IDLE", resumed["navigation_state"])
 
+    async def test_mapping_transition_clears_stale_visualization(self):
+        await self.driving_ready()
+        resets = []
+        self.api._clear_visualization = lambda: resets.append(True)
+
+        mapped = await self.api.switch_mode({"mode": "MAPPING"})
+
+        self.assertEqual([True], resets)
+        self.assertEqual("MAPPING", mapped["navigation_mode"])
+        self.assertIsNone(mapped["active_map"])
+        self.assertFalse(mapped["localization_ready"])
+        self.assertFalse(mapped["nav2_ready"])
+
     async def test_active_navigation_requires_confirmed_estop_before_mapping(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
