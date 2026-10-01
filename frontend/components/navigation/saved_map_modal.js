@@ -10,6 +10,11 @@
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
         saveCurrent: '\ud604\uc7ac \uc9c0\ub3c4 \uc800\uc7a5',
+        startMapping: '\uc0c8 Mapping \uc2dc\uc791',
+        clearCurrentMap: '\ud604\uc7ac \uc9c0\ub3c4 \uc81c\uac70',
+        mappingStarting: 'Mapping \ubaa8\ub4dc\ub85c \uc804\ud658 \uc911...',
+        mappingStarted: '\uc0c8 Mapping\uc744 \uc2dc\uc791\ud588\uc2b5\ub2c8\ub2e4.',
+        currentMapCleared: '\ud604\uc7ac \uc9c0\ub3c4\ub97c 3D Viewer\uc5d0\uc11c \uc81c\uac70\ud588\uc2b5\ub2c8\ub2e4.',
         loading: '\uc9c0\ub3c4 \ubd88\ub7ec\uc624\ub294 \uc911...',
         resetting: 'AMCL \ucd08\uae30 \uc704\uce58 \uc124\uc815 \uc911...',
         verifying: '\uc9c0\ub3c4 \ubc0f localization \ud655\uc778 \uc911...',
@@ -241,6 +246,7 @@
         scheduleProgress(progress, labels.verifying, 1800);
         let succeeded = false;
         try {
+            global.navigationMapView?.restoreMapDisplay?.();
             const token = await csrfToken();
             const payload = await requestJson('/api/navigation/control/mode', {
                 method: 'POST',
@@ -267,6 +273,45 @@
             clearProgressTimers();
             state.busy = false;
             if (!succeeded) container?.classList?.remove('is-pending');
+        }
+    }
+
+    async function startMappingFromModal(container, progress) {
+        if (state.busy) return;
+
+        state.busy = true;
+        setControlsDisabled(container, true, true);
+        showMessage(progress, labels.mappingStarting);
+        global.navigationMapView?.clearMapDisplay?.();
+
+        try {
+            const request = global.navigationControl?.requestNavigationMode;
+            if (typeof request !== 'function') {
+                throw new Error('Navigation control is unavailable.');
+            }
+            const switched = await request('MAPPING');
+            if (switched === false) {
+                throw new Error('Mapping mode transition failed.');
+            }
+            showMessage(progress, labels.mappingStarted);
+            state.closeTimer = global.setTimeout(() => {
+                if (manager?.activeView?.name === VIEW_NAME) manager.close();
+            }, 300);
+        } catch (error) {
+            global.navigationMapView?.restoreMapDisplay?.();
+            showMessage(progress, `Mapping \uc2dc\uc791 \uc2e4\ud328: ${error.message || error}`, true);
+            setControlsDisabled(container, false);
+        } finally {
+            state.busy = false;
+        }
+    }
+
+    function clearCurrentMapFromViewer(progress) {
+        const cleared = global.navigationMapView?.clearMapDisplay?.();
+        if (cleared) {
+            showMessage(progress, labels.currentMapCleared);
+        } else {
+            showMessage(progress, '\uc81c\uac70\ud560 \ud604\uc7ac \uc9c0\ub3c4\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.', true);
         }
     }
 
@@ -333,6 +378,28 @@
         progress = create('div', 'saved-map-progress', context.feedback || '');
         if (context.feedback) showMessage(progress, context.feedback, context.feedbackIsError);
         container.append(progress);
+
+        const mappingActions = create('div', 'saved-map-mode-actions');
+
+        const startMapping = create('button', 'saved-map-start-mapping', labels.startMapping);
+        startMapping.type = 'button';
+        startMapping.dataset.controlButton = 'success';
+        components.controls?.controlButton?.enhance?.(startMapping);
+        startMapping.addEventListener('click', () => startMappingFromModal(container, progress));
+
+        const clearCurrentMap = create('button', 'saved-map-clear-current', labels.clearCurrentMap);
+        clearCurrentMap.type = 'button';
+        clearCurrentMap.dataset.controlButton = 'secondary';
+        clearCurrentMap.title = '\uc800\uc7a5 \ud30c\uc77c\uc740 \uc720\uc9c0\ud558\uace0 3D Viewer\uc5d0\uc11c \ud604\uc7ac \uc9c0\ub3c4\ub9cc \uc81c\uac70\ud569\ub2c8\ub2e4.';
+        components.controls?.controlButton?.enhance?.(clearCurrentMap);
+        clearCurrentMap.disabled = !global.navigationMapView?.snapshot?.()?.map;
+        clearCurrentMap.addEventListener('click', () => {
+            clearCurrentMapFromViewer(progress);
+            clearCurrentMap.disabled = true;
+        });
+
+        mappingActions.append(startMapping, clearCurrentMap);
+        container.append(mappingActions);
 
         const actions = create('div', 'saved-map-actions');
 
