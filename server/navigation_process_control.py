@@ -28,12 +28,11 @@ class NavigationProcessControl:
     MODES = frozenset({"MAPPING", "DRIVING"})
     OWNER_PREFIX = "dabom-gpu-navigation"
     LEGACY_CHILD_EXECUTABLES = {
-        "MAPPING": frozenset({"async_slam_toolbox_node", "map_bridge"}),
+        "MAPPING": frozenset({"async_slam_toolbox_node"}),
         "DRIVING": frozenset(
             {
                 "map_server",
                 "amcl",
-                "map_bridge",
                 "controller_server",
                 "smoother_server",
                 "planner_server",
