@@ -165,8 +165,18 @@ stop_owned_groups() {
 stop_pid() {
     local pid="$1"
     local first_signal="${2:-TERM}"
+    local pgid
 
     kill -0 "${pid}" 2>/dev/null || return 0
+
+    # Snapshot the process group before signalling. If this PID is a setsid
+    # leader, the leader can exit before its children; waiting only on the PID
+    # would falsely report success while descendants remain alive.
+    pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "${pgid}" =~ ^[0-9]+$ ]] && [[ "${pgid}" == "${pid}" ]]; then
+        stop_own_group "${pgid}" "${first_signal}"
+        return
+    fi
 
     signal_pid "${pid}" "${first_signal}"
     if wait_pid_exit "${pid}" 30; then
