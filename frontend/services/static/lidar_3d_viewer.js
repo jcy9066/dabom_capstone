@@ -638,11 +638,15 @@ if (root && canvas) {
             x, halfWidth, z + halfHeight,
             x, -halfWidth, z + halfHeight,
         ]);
+        // ROS base_link uses +Y as vehicle-left. The camera plane vertices are
+        // ordered from -Y (right) to +Y (left), so U must run in the opposite
+        // direction to keep the 3D camera view's left/right physically correct.
+        // This mirrors only the WebGL camera plane; the main camera stream is unchanged.
         const uvs = new Float32Array([
-            0, 0,
             1, 0,
-            1, 1,
+            0, 0,
             0, 1,
+            1, 1,
         ]);
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));

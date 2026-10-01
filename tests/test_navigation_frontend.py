@@ -59,7 +59,24 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-lidar-yaw-v17',
+            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
+            template,
+        )
+
+    def test_3d_camera_view_is_mirrored_horizontally_only(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const uvs = new Float32Array([\n            1, 0,\n            0, 0,\n            0, 1,\n            1, 1,",
+            viewer,
+        )
+        self.assertIn("cameraTextureContext.drawImage(", viewer)
+        self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
             template,
         )
 
@@ -97,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-robot-motion-v19',
+            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
             template,
         )
 
