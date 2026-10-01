@@ -53,7 +53,12 @@ class NavigationProcessControl:
             "driving_pids": [item["pid"] for item in driving],
         }
 
-    def transition(self, mode: str, map_yaml: str | None = None) -> dict[str, Any]:
+    def transition(
+        self,
+        mode: str,
+        map_yaml: str | None = None,
+        restart: bool = False,
+    ) -> dict[str, Any]:
         normalized = str(mode).strip().upper()
         if normalized not in self.MODES:
             raise NavigationProcessError(f"Unsupported navigation mode: {mode}")
@@ -71,7 +76,12 @@ class NavigationProcessControl:
             other = "DRIVING" if normalized == "MAPPING" else "MAPPING"
             self._stop_locked(other)
             matches = self._matching(normalized)
-            if len(matches) > 1:
+            stale_mapping = (
+                normalized == "MAPPING"
+                and bool(matches)
+                and not self._mapping_children_healthy()
+            )
+            if restart or len(matches) > 1 or stale_mapping:
                 self._stop_locked(normalized)
                 matches = []
             if not matches:
@@ -118,6 +128,32 @@ class NavigationProcessControl:
             ):
                 found.append({"pid": int(entry.name), "args": args})
         return found
+
+    def _process_exists(self, *names: str) -> bool:
+        proc = Path("/proc")
+        if not proc.is_dir():
+            return False
+        wanted = {str(name).strip() for name in names if str(name).strip()}
+        if not wanted:
+            return False
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            args = self._proc_args(entry)
+            for arg in args:
+                base = Path(arg).name
+                if base in wanted:
+                    return True
+        return False
+
+    def _mapping_children_healthy(self) -> bool:
+        # A lingering ros2 launch parent is not enough. Mapping is only usable
+        # when slam_toolbox and the dashboard map bridge are both alive.
+        return self._process_exists(
+            "async_slam_toolbox_node",
+        ) and self._process_exists(
+            "map_bridge",
+        )
 
     def _matching_legacy_map_bridges(self) -> list[dict[str, Any]]:
         proc = Path("/proc")
