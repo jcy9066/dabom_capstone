@@ -171,6 +171,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("robot_lower_chassis.glb", viewer)
         self.assertNotIn("ThreeMFLoader", viewer)
 
+    def test_navigation_mode_labels_request_explicit_targets(self):
+        self.assertIn("mappingLabel.dataset.navigationModeTarget = 'MAPPING'", self.navigation_component)
+        self.assertIn("drivingLabel.dataset.navigationModeTarget = 'DRIVING'", self.navigation_component)
+        self.assertIn("const explicitTarget = event.target?.closest?.(", self.navigation_component)
+        self.assertIn("if (next === current) return;", self.navigation_component)
+
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)
         self.assertIn("controls?.syncNavigationMode?.(payload.navigation_mode", self.control)
