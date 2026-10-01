@@ -1691,16 +1691,13 @@ if (root && canvas) {
         if (!state) return;
         currentVisualizationState = state;
 
-        // A new Mapping session must not briefly render a stale saved/localization
-        // map from the previous Driving session. The mapping bridge tags each new
-        // map/pose/scan payload with navigation_mode=mapping.
+        // Mapping transition now clears server-side map/pose state before
+        // the new slam_toolbox session starts. Therefore the latest state received
+        // after reset is authoritative and must be rendered immediately, just like
+        // RViz2 renders the newest /map and TF messages.
         const mappingMode = isMappingMode();
-        const liveMap = mappingMode
-            ? (payloadMatchesMappingSession(state.map) ? state.map : null)
-            : (state.map || null);
-        const livePose = mappingMode
-            ? (payloadMatchesMappingSession(state.pose) ? state.pose : null)
-            : (state.pose || null);
+        const liveMap = state.map || null;
+        const livePose = state.pose || null;
         // Raw LiDAR is a live robot-relative sensor stream. Do not gate it
         // by the Mapping session tag: the high-rate Pi WebSocket path may update
         // before the ROS map bridge has produced its first tagged Mapping sample.

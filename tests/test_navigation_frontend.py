@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v25',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v25',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v25',
             template,
         )
 
@@ -137,6 +137,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const liveScan = state.scan || null;", viewer)
         self.assertIn("function applyTfPose(pose)", viewer)
         self.assertIn("applyTfPose(livePose);", viewer)
+        self.assertIn("const liveMap = state.map || null;", viewer)
+        self.assertIn("const livePose = state.pose || null;", viewer)
+        self.assertNotIn(
+            "payloadMatchesMappingSession(state.map)",
+            viewer,
+        )
         self.assertNotIn(
             "robotPoseGroup,\n            tfPoseGroup,",
             viewer,
@@ -166,7 +172,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v25',
             template,
         )
 
@@ -259,7 +265,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("components.controls?.controlButton?.enhance?.(save)", self.map_control)
         self.assertIn("saved-map-start-mapping", self.map_control)
         self.assertIn("saved-map-clear-current", self.map_control)
-        self.assertIn("request('MAPPING')", self.map_control)
+        self.assertIn("request('MAPPING', { restart: true })", self.map_control)
         self.assertIn("global.navigationMapView?.clearMapDisplay?.()", self.map_control)
         self.assertIn("components.controls?.controlButton?.enhance?.(startMapping)", self.map_control)
         self.assertIn("components.controls?.controlButton?.enhance?.(clearCurrentMap)", self.map_control)
@@ -306,6 +312,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("drivingLabel.dataset.navigationModeTarget = 'DRIVING'", self.navigation_component)
         self.assertIn("const explicitTarget = event.target?.closest?.(", self.navigation_component)
         self.assertIn("if (next === current) return;", self.navigation_component)
+        self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
+        self.assertIn("setMappingMode(options)", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)

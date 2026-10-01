@@ -289,7 +289,9 @@
             if (typeof request !== 'function') {
                 throw new Error('Navigation control is unavailable.');
             }
-            const switched = await request('MAPPING');
+            // "새 Mapping 시작"은 이미 MAPPING 상태여도 SLAM session을
+            // 완전히 재시작해 이전 map/pose state를 남기지 않는다.
+            const switched = await request('MAPPING', { restart: true });
             if (switched === false) {
                 throw new Error('Mapping mode transition failed.');
             }

@@ -539,8 +539,8 @@
             || ['NAVIGATING', 'RESUMING'].includes(rosState);
     }
 
-    async function setMappingMode() {
-        if (state.control?.navigation_mode === 'MAPPING') return true;
+    async function setMappingMode({ restart = false } = {}) {
+        if (state.control?.navigation_mode === 'MAPPING' && !restart) return true;
         if (state.busy || state.drivePending || state.navigationPending) return false;
         const moving = navigationIsMoving();
         if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return false;
@@ -580,9 +580,9 @@
         }
     }
 
-    async function requestNavigationMode(mode) {
+    async function requestNavigationMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
-        if (target === 'MAPPING') return setMappingMode();
+        if (target === 'MAPPING') return setMappingMode(options);
         if (target !== 'DRIVING' || state.drivePending || state.navigationPending || state.control?.navigation_mode === 'DRIVING') return;
         if (!window.navigationMapView?.snapshot()?.expanded) window.toggleMinimapExpand?.();
         setFeedback('Driving 준비를 위해 저장 지도와 Initial Pose를 지정해주세요.');
