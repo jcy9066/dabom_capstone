@@ -163,7 +163,8 @@ def test_mapping_restart_recovers_stale_launch_parent():
 
     assert "restart: bool = False" in process
     assert "and not self._mapping_children_healthy()" in process
-    assert "if restart or len(matches) > 1 or stale_mapping:" in process
+    assert "or orphaned_owned_children" in process
+    assert "or stale_mapping" in process
     assert '"async_slam_toolbox_node"' in process
     assert '"map_bridge"' in process
     assert 'bool(payload.get("restart"))' in control
@@ -184,3 +185,32 @@ def test_pi_stack_recovers_runtime_lidar_scan_stall():
     assert '"fresh": age_sec is not None and age_sec <= 3.0' in app
     assert '"age_sec": age_sec' in app
 
+def test_runtime_process_roles_use_owned_process_groups():
+    pi = read("start_pi_stack.sh")
+    gpu = read("start_gpu_server.sh")
+    navigation = read("server/navigation_process_control.py")
+
+    for script in (pi, gpu):
+        assert "list_owned_pgids()" in script
+        assert "stop_owned_groups()" in script
+        assert "wait_process_group_exit()" in script
+        assert 'kill -KILL -- "-${pgid}"' in script
+
+    assert 'DABOM_PROCESS_OWNER="dabom-pi-robot"' in pi
+    assert 'DABOM_PROCESS_OWNER="dabom-pi-lidar-sender"' in pi
+    assert 'DABOM_PROCESS_OWNER="dabom-pi-lidar"' in pi
+    assert 'DABOM_PROCESS_OWNER="dabom-pi-camera"' in pi
+
+    assert 'DABOM_PROCESS_OWNER="dabom-gpu-fastapi"' in gpu
+    assert 'DABOM_PROCESS_OWNER="dabom-gpu-odom"' in gpu
+    assert 'stop_owned_groups "dabom-gpu-navigation-MAPPING"' in gpu
+    assert 'stop_owned_groups "dabom-gpu-navigation-DRIVING"' in gpu
+
+    assert 'OWNER_PREFIX = "dabom-gpu-navigation"' in navigation
+    assert 'process_env["DABOM_PROCESS_OWNER"] = self._owner_name(mode)' in navigation
+    assert 'process_env["DABOM_NAV_MODE"] = mode' in navigation
+    assert "def _owned_processes(self, mode: str)" in navigation
+    assert "def _mode_pgids(self, mode: str)" in navigation
+    assert "os.killpg(pgid, signal.SIGTERM)" in navigation
+    assert "os.killpg(pgid, signal.SIGKILL)" in navigation
+    assert "processes survived SIGKILL" in navigation
