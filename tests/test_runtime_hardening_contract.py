@@ -117,3 +117,13 @@ def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
     assert '"send_map": True' in mapping
     assert '"send_pose": True' in mapping
     assert '"send_scan": True' in mapping
+
+def test_lidar_websocket_tags_scans_with_active_navigation_mode():
+    app = read("server/app.py")
+
+    assert "control_navigation_mode = str(" in app
+    assert '"MAPPING": "mapping"' in app
+    assert '"DRIVING": "localization_nav2"' in app
+    assert 'dashboard_scan["navigation_mode"] = sensor_navigation_mode' in app
+    assert "store_navigation_mode(" in app
+
