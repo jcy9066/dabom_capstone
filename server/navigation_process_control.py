@@ -291,26 +291,35 @@ class NavigationProcessControl:
 
     def _stop_legacy_map_bridges(self) -> None:
         targets = self._matching_legacy_map_bridges()
+        pgids: set[int] = set()
         for item in targets:
             try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGTERM)
-                else:
-                    os.kill(item["pid"], signal.SIGTERM)
+                pgids.add(os.getpgid(item["pid"]))
+            except ProcessLookupError:
+                continue
+
+        for pgid in pgids:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
             except ProcessLookupError:
                 continue
 
         deadline = time.monotonic() + self.stop_timeout_sec
-        while targets and time.monotonic() < deadline:
-            time.sleep(0.1)
-            targets = self._matching_legacy_map_bridges()
+        while pgids and time.monotonic() < deadline:
+            alive: set[int] = set()
+            for pgid in pgids:
+                try:
+                    os.killpg(pgid, 0)
+                    alive.add(pgid)
+                except ProcessLookupError:
+                    continue
+            pgids = alive
+            if pgids:
+                time.sleep(0.1)
 
-        for item in targets:
+        for pgid in pgids:
             try:
-                if os.getpgid(item["pid"]) == item["pid"]:
-                    os.killpg(item["pid"], signal.SIGKILL)
-                else:
-                    os.kill(item["pid"], signal.SIGKILL)
+                os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 continue
 
