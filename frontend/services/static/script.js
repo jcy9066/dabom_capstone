@@ -265,7 +265,8 @@ const LIDAR_STALE_SECONDS = 3;
 const LIDAR_OFFLINE_SECONDS = 8;
 // RViz2-style live display: latest LaserScan is sampled at about 10 Hz.
 // Map bytes are still returned only when map_revision changes.
-const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;
+// HTTP snapshot is fallback/recovery only; live visualization is WebSocket-driven.
+const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;
 const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000;
 const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000;
 
@@ -460,6 +461,11 @@ let navigationSnapshotRefreshQueued = false;
 let navigationMapRevision = null;
 let navigationMapDisplaySuppressed = false;
 let navigationMapSuppressedRevision = null;
+let navigationVisualizationSocket = null;
+let navigationVisualizationSocketOpen = false;
+let navigationVisualizationReconnectTimer = null;
+let navigationVisualizationReconnectDelayMs = 500;
+const NAVIGATION_VISUALIZATION_RECONNECT_MAX_MS = 5000;
 
 function navigationSnapshotDelayMs() {
     return document.hidden
@@ -474,11 +480,51 @@ function navigationSnapshotUrl() {
     return `/api/navigation/snapshot?map_revision=${encodeURIComponent(navigationMapRevision)}`;
 }
 
+function navigationVisualizationWsUrl() {
+    const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${window.location.host}/ws/navigation/visualization`;
+}
+
 function clearNavigationScan() {
     lidarState.scan = null;
     lidarState.lastScanKey = null;
     lidarState.lastScanSeenAtMs = 0;
     lidarState.scanIntervalsMs = [];
+}
+
+function emitNavigationVisualizationState(mapChanged = false) {
+    const visualizationState = {
+        status: lidarState.status,
+        map: lidarState.map,
+        pose: lidarState.pose,
+        scan: lidarState.scan,
+        mapRevision: navigationMapRevision,
+        mapChanged: Boolean(mapChanged),
+    };
+    window.dabomNavigationVisualizationState = visualizationState;
+    document.dispatchEvent(new CustomEvent(
+        'dabom:navigation-visualization-state',
+        { detail: visualizationState },
+    ));
+}
+
+function applyNavigationMapPayload(map, revision, mapChanged = true) {
+    const incomingMapRevision = revision ?? null;
+    if (
+        navigationMapDisplaySuppressed
+        && incomingMapRevision !== navigationMapSuppressedRevision
+    ) {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+    }
+
+    navigationMapRevision = incomingMapRevision;
+    if (navigationMapDisplaySuppressed) {
+        lidarState.map = null;
+    } else {
+        lidarState.map = map || null;
+    }
+    emitNavigationVisualizationState(mapChanged);
 }
 
 function applyNavigationSnapshot(data) {
@@ -514,22 +560,59 @@ function applyNavigationSnapshot(data) {
         lidarState.map = data.map;
     }
 
-    const visualizationState = {
-        status: lidarState.status,
-        map: lidarState.map,
-        pose: lidarState.pose,
-        scan: lidarState.scan,
-        mapRevision: navigationMapRevision,
-        mapChanged: Boolean(data.map_changed),
-    };
-    window.dabomNavigationVisualizationState = visualizationState;
-    document.dispatchEvent(new CustomEvent(
-        'dabom:navigation-visualization-state',
-        { detail: visualizationState },
-    ));
+    emitNavigationVisualizationState(Boolean(data.map_changed));
+}
+
+function applyNavigationStreamMessage(message) {
+    if (!message || typeof message !== 'object') return;
+
+    if (message.type === 'snapshot') {
+        applyNavigationSnapshot(message.snapshot);
+        return;
+    }
+
+    if (message.type === 'scan') {
+        if (message.status) {
+            lidarState.status = message.status;
+            lidarState.statusObservedAtMs = performance.now();
+        }
+        if (message.scan) {
+            lidarState.scan = message.scan;
+            noteScanUpdate(message.scan);
+        } else {
+            clearNavigationScan();
+        }
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'pose') {
+        lidarState.pose = message.pose || null;
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'map') {
+        applyNavigationMapPayload(
+            message.map || null,
+            message.map_revision ?? null,
+            true,
+        );
+        return;
+    }
+
+    if (message.type === 'reset') {
+        navigationMapRevision = null;
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+        lidarState.map = null;
+        lidarState.pose = null;
+        emitNavigationVisualizationState(true);
+    }
 }
 
 function scheduleNavigationSnapshot(delayMs = navigationSnapshotDelayMs()) {
+    if (navigationVisualizationSocketOpen) return;
     if (navigationSnapshotTimer !== null) window.clearTimeout(navigationSnapshotTimer);
     navigationSnapshotTimer = window.setTimeout(fetchNavigationSnapshot, delayMs);
 }
@@ -555,11 +638,82 @@ async function fetchNavigationSnapshot() {
         navigationSnapshotInFlight = false;
         const refreshImmediately = navigationSnapshotRefreshQueued;
         navigationSnapshotRefreshQueued = false;
-        scheduleNavigationSnapshot(refreshImmediately ? 0 : navigationSnapshotDelayMs());
+        if (!navigationVisualizationSocketOpen) {
+            scheduleNavigationSnapshot(
+                refreshImmediately ? 0 : navigationSnapshotDelayMs(),
+            );
+        }
     }
 }
 
+function clearNavigationVisualizationReconnectTimer() {
+    if (navigationVisualizationReconnectTimer !== null) {
+        window.clearTimeout(navigationVisualizationReconnectTimer);
+        navigationVisualizationReconnectTimer = null;
+    }
+}
+
+function scheduleNavigationVisualizationReconnect() {
+    clearNavigationVisualizationReconnectTimer();
+    const delay = navigationVisualizationReconnectDelayMs;
+    navigationVisualizationReconnectDelayMs = Math.min(
+        NAVIGATION_VISUALIZATION_RECONNECT_MAX_MS,
+        navigationVisualizationReconnectDelayMs * 2,
+    );
+    navigationVisualizationReconnectTimer = window.setTimeout(
+        connectNavigationVisualizationStream,
+        delay,
+    );
+}
+
+function connectNavigationVisualizationStream() {
+    if (
+        navigationVisualizationSocket
+        && (
+            navigationVisualizationSocket.readyState === WebSocket.OPEN
+            || navigationVisualizationSocket.readyState === WebSocket.CONNECTING
+        )
+    ) return;
+
+    const socket = new WebSocket(navigationVisualizationWsUrl());
+    navigationVisualizationSocket = socket;
+
+    socket.addEventListener('open', () => {
+        if (navigationVisualizationSocket !== socket) return;
+        navigationVisualizationSocketOpen = true;
+        navigationVisualizationReconnectDelayMs = 500;
+        clearNavigationVisualizationReconnectTimer();
+        if (navigationSnapshotTimer !== null) {
+            window.clearTimeout(navigationSnapshotTimer);
+            navigationSnapshotTimer = null;
+        }
+    });
+
+    socket.addEventListener('message', event => {
+        if (navigationVisualizationSocket !== socket) return;
+        try {
+            applyNavigationStreamMessage(JSON.parse(event.data));
+            requestLidarRender();
+        } catch (error) {
+            console.warn('Navigation visualization WebSocket payload error:', error);
+        }
+    });
+
+    socket.addEventListener('close', () => {
+        if (navigationVisualizationSocket !== socket) return;
+        navigationVisualizationSocketOpen = false;
+        navigationVisualizationSocket = null;
+        scheduleNavigationSnapshot(0);
+        scheduleNavigationVisualizationReconnect();
+    });
+
+    socket.addEventListener('error', () => {
+        if (navigationVisualizationSocket === socket) socket.close();
+    });
+}
+
 document.addEventListener('visibilitychange', () => {
+    if (navigationVisualizationSocketOpen) return;
     if (navigationSnapshotTimer !== null) window.clearTimeout(navigationSnapshotTimer);
     navigationSnapshotTimer = null;
     if (navigationSnapshotInFlight) {
@@ -569,6 +723,7 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 fetchNavigationSnapshot();
+connectNavigationVisualizationStream();
 requestLidarRender();
 
 // ===================================================

@@ -138,7 +138,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
         dashboard = (
             ROOT / "frontend/services/static/script.js"
         ).read_text(encoding="utf-8")
-        self.assertIn("const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;", dashboard)
+        self.assertIn("const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;", dashboard)
+        self.assertIn("/ws/navigation/visualization", dashboard)
+        self.assertIn("new WebSocket(navigationVisualizationWsUrl())", dashboard)
+        self.assertIn("applyNavigationStreamMessage", dashboard)
+        self.assertIn("if (navigationVisualizationSocketOpen) return;", dashboard)
         self.assertNotIn(
             "payloadMatchesMappingSession(state.scan)",
             viewer,

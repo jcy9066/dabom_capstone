@@ -111,6 +111,7 @@ def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
     mapping = read("navigation/ros/patrol_navigation/launch/mapping.launch.py")
     slam = read("navigation/ros/patrol_navigation/config/slam_toolbox.yaml")
     dashboard = read("frontend/services/static/script.js")
+    app = read("server/app.py")
 
     assert "TimerAction" not in mapping
     assert '"map_publish_period_sec": 0.5' in mapping
@@ -121,7 +122,12 @@ def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
     assert '"send_scan": False' in mapping
     assert "minimum_time_interval: 0.1" in slam
     assert "map_update_interval: 0.5" in slam
-    assert "const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;" in dashboard
+    assert "const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;" in dashboard
+    assert '"/ws/navigation/visualization"' in app
+    assert '"type": "map"' in app
+    assert '"type": "pose"' in app
+    assert '"type": "scan"' in app
+    assert 'navigation_visualization_hub.publish(' in app
 
 def test_lidar_websocket_tags_scans_with_active_navigation_mode():
     app = read("server/app.py")
