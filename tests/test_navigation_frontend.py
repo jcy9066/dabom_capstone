@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
+            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
+            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
             template,
         )
 
@@ -176,7 +176,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
+            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
             template,
         )
 
