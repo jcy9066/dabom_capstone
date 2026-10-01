@@ -169,3 +169,18 @@ def test_mapping_restart_recovers_stale_launch_parent():
     assert 'bool(payload.get("restart"))' in control
     assert "...(restart ? { restart: true } : {})" in frontend
 
+def test_pi_stack_recovers_runtime_lidar_scan_stall():
+    stack = read("start_pi_stack.sh")
+    supervisor = read("raspberry/lidar_driver_supervisor.py")
+    app = read("server/app.py")
+
+    assert "lidar_driver_supervisor.py" in stack
+    assert 'LIDAR_SCAN_STALE_SEC:-3.0' in stack
+    assert "class ScanMonitor:" in supervisor
+    assert 'restart_reason = "startup_scan_timeout"' in supervisor
+    assert '"scan_stale "' in supervisor
+    assert "restarting LiDAR driver" in supervisor
+    assert "start_new_session=True" in supervisor
+    assert '"fresh": age_sec is not None and age_sec <= 3.0' in app
+    assert '"age_sec": age_sec' in app
+
