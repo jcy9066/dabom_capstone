@@ -3922,6 +3922,15 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 dashboard_scan = dict(dashboard_scan)
                 dashboard_scan["navigation_mode"] = sensor_navigation_mode
 
+            live_map_payload = None
+            if sensor_navigation_mode == "mapping":
+                live_mapping_grid.update_scan(message)
+                live_map_payload = live_mapping_grid.maybe_update(
+                    robot_id=robot_id,
+                    monotonic_now=time.monotonic(),
+                    wall_time=received_at,
+                )
+
             stored_scan = received_payload(
                 dashboard_scan,
                 received_at,
