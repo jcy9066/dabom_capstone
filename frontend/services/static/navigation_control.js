@@ -551,6 +551,7 @@
         try {
             const mappingPayload = {
                 mode: 'MAPPING',
+                ...(restart ? { restart: true } : {}),
                 ...(moving ? { confirm_stop: true } : {}),
             };
             let response;
