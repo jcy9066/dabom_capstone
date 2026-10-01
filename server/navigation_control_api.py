@@ -278,7 +278,12 @@ class NavigationControlApi:
             else:
                 await asyncio.to_thread(self._ros.cancel_navigation)
             try:
-                await asyncio.to_thread(self._process.transition, "MAPPING", None)
+                await asyncio.to_thread(
+                    self._process.transition,
+                    "MAPPING",
+                    None,
+                    bool(payload.get("restart")),
+                )
             except Exception as exc:
                 with self._lock:
                     self._state["navigation_state"] = "ERROR"
