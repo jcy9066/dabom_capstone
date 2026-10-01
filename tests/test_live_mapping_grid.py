@@ -136,3 +136,58 @@ def test_refresh_is_one_second():
         monotonic_now=2.0,
         wall_time=2.0,
     ) is not None
+
+def test_slam_map_is_preserved_as_base_before_live_scan_updates():
+    grid = LiveMappingGrid(
+        resolution=0.1,
+        refresh_sec=1.0,
+        padding_cells=0,
+        sensor_yaw=0.5,
+    )
+    base = {
+        "width": 3,
+        "height": 2,
+        "resolution": 0.1,
+        "origin": {"x": -0.2, "y": -0.1, "yaw": 0.0},
+        "data_encoding": "rle",
+        "data": [[0, 3], [-1, 1], [100, 1], [0, 1]],
+    }
+
+    assert grid.update_base_map(base)
+    payload = grid.snapshot(robot_id="pi-01", wall_time=1.0)
+
+    assert payload is not None
+    assert payload["resolution"] == 0.1
+    assert cell_value(payload, -0.15, -0.05) == 0
+    assert cell_value(payload, -0.05, 0.05) == 100
+
+
+def test_latest_scan_overrides_only_currently_observed_base_cells():
+    grid = LiveMappingGrid(
+        resolution=0.1,
+        refresh_sec=1.0,
+        max_clear_range_m=2.0,
+        padding_cells=0,
+        sensor_yaw=0.5,
+    )
+    base = {
+        "width": 21,
+        "height": 3,
+        "resolution": 0.1,
+        "origin": {"x": 0.0, "y": -0.1, "yaw": 0.0},
+        "data_encoding": "rle",
+        "data": [[0, 10], [100, 1], [0, 52]],
+    }
+    assert grid.update_base_map(base)
+    assert grid.update_pose({"x": 0.0, "y": 0.0, "yaw": -0.5})
+    assert grid.update_scan(make_scan([None]))
+
+    payload = grid.maybe_update(
+        robot_id="pi-01",
+        monotonic_now=1.0,
+        wall_time=1.0,
+        force=True,
+    )
+    assert payload is not None
+    assert cell_value(payload, 1.0, 0.0) == 0
+
