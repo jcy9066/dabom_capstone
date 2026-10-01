@@ -40,15 +40,15 @@ controller_server:
       debug_trajectory_details: true
 
       # 차동 구동 로봇
-      # D-pad 35%보다 약간 높은 자동주행 최소 PWM 40%를
-      # MAX_WHEEL_MPS=0.50 기준 0.20 m/s로 환산해 사용한다.
-      min_vel_x: 0.20
+      # D-pad 35%보다 높은 자동주행 최소 PWM 50%를
+      # MAX_WHEEL_MPS=0.50 기준 0.25 m/s로 환산해 사용한다.
+      min_vel_x: 0.25
       min_vel_y: 0.0
       max_vel_x: 0.25
       max_vel_y: 0.0
       max_vel_theta: 0.60
 
-      min_speed_xy: 0.20
+      min_speed_xy: 0.25
       max_speed_xy: 0.25
       min_speed_theta: 0.0
 
