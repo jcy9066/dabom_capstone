@@ -1242,6 +1242,9 @@ if (root && canvas) {
         pointsRoot.add(points);
     }
 
+    // Same behavior as RViz2 LaserScan with Decay Time = 0:
+    // every incoming scan replaces the previous frame. A transient obstacle
+    // disappears from the live LiDAR layer on the next valid scan.
     function rebuildScan(scan) {
         const nextKey = scanKey(scan);
         if (nextKey === currentScanKey) return;
