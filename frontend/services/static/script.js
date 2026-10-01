@@ -263,7 +263,9 @@ if (cameraStream) {
 // ===================================================
 const LIDAR_STALE_SECONDS = 3;
 const LIDAR_OFFLINE_SECONDS = 8;
-const NAVIGATION_SNAPSHOT_VISIBLE_MS = 500;
+// RViz2-style live display: latest LaserScan is sampled at about 10 Hz.
+// Map bytes are still returned only when map_revision changes.
+const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;
 const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000;
 const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000;
 
