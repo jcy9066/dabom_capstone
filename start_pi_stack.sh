@@ -233,6 +233,8 @@ require_cmd systemctl
     || fail "raspberry/robot_command_client.py is missing"
 [[ -f "${ROOT_DIR}/raspberry/lidar_scan_sender.py" ]] \
     || fail "raspberry/lidar_scan_sender.py is missing"
+[[ -f "${ROOT_DIR}/raspberry/lidar_driver_supervisor.py" ]] \
+    || fail "raspberry/lidar_driver_supervisor.py is missing"
 
 [[ -e "${MOTOR_SERIAL_PORT}" ]] || fail "Pico UART device not found: ${MOTOR_SERIAL_PORT}"
 [[ -r "${MOTOR_SERIAL_PORT}" && -w "${MOTOR_SERIAL_PORT}" ]] \
@@ -351,8 +353,13 @@ printf '%s\n' "$$" > "${PID_FILE}"
 
 cd "${ROOT_DIR}"
 
-log "Starting LiDAR driver"
-setsid ros2 launch patrol_navigation lidar.launch.py \
+log "Starting LiDAR driver supervisor"
+setsid python3 "${ROOT_DIR}/raspberry/lidar_driver_supervisor.py" \
+    --topic "${LIDAR_SCAN_TOPIC}" \
+    --startup-timeout 15 \
+    --stale-timeout "${LIDAR_SCAN_STALE_SEC:-3.0}" \
+    --restart-delay 1 \
+    ros2 launch patrol_navigation lidar.launch.py \
     serial_port:="${LIDAR_SERIAL_PORT}" \
     serial_baudrate:="${LIDAR_SERIAL_BAUDRATE}" \
     driver_package:="${LIDAR_DRIVER_PACKAGE}" \
@@ -532,7 +539,7 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
         fi
 
         if [[ -n "${lidar_json}" ]] && python3 -c \
-            'import json,sys; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; raise SystemExit(0 if st.get("connected") is True and int(st.get("received") or 0) > 0 else 1)' \
+            'import json,sys,time; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; last=st.get("last_received_at"); fresh=last is not None and time.time()-float(last) <= 3.0; raise SystemExit(0 if st.get("connected") is True and int(st.get("received") or 0) > 0 and fresh else 1)' \
             "${lidar_json}" >/dev/null 2>&1; then
             lidar_connected=1
         fi
