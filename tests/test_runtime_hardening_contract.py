@@ -163,7 +163,7 @@ def test_mapping_restart_recovers_stale_launch_parent():
 
     assert "restart: bool = False" in process
     assert "and not self._mapping_children_healthy()" in process
-    assert "or orphaned_owned_children" in process
+    assert "or orphaned_mode_children" in process
     assert "or stale_mapping" in process
     assert '"async_slam_toolbox_node"' in process
     assert '"map_bridge"' in process
@@ -214,3 +214,19 @@ def test_runtime_process_roles_use_owned_process_groups():
     assert "os.killpg(pgid, signal.SIGTERM)" in navigation
     assert "os.killpg(pgid, signal.SIGKILL)" in navigation
     assert "processes survived SIGKILL" in navigation
+    assert '[[ "${pgid}" == "${pid}" ]]' in pi
+    assert '[[ "${pgid}" == "${pid}" ]]' in gpu
+    assert "stop_own_group \"${pgid}\" \"${first_signal}\"" in pi
+    assert "stop_own_group \"${pgid}\" \"${first_signal}\"" in gpu
+    assert "def process_group_alive(pgid: int) -> bool:" in read(
+        "raspberry/lidar_driver_supervisor.py"
+    )
+    assert "wait_group_exit(pgid, 3.0)" in read(
+        "raspberry/lidar_driver_supervisor.py"
+    )
+    assert "duplicate_mode_groups = len(mode_pgids) > 1" in navigation
+    assert "or orphaned_mode_children" in navigation
+    assert "or duplicate_mode_groups" in navigation
+    assert "len(status[pgid_key]) != 1" in navigation
+    assert "def _owned_executable_exists(self, mode: str, name: str)" in navigation
+    assert 'owner.startswith(self.OWNER_PREFIX)' in navigation
