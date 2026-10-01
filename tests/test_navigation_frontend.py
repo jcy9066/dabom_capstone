@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
+            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
             template,
         )
 
@@ -139,13 +139,10 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("applyTfPose(livePose);", viewer)
         self.assertIn("const liveMap = state.map || null;", viewer)
         self.assertIn("const livePose = state.pose || null;", viewer)
-        self.assertIn("const MAPPING_DYNAMIC_MAP_REFRESH_MS = 1000;", viewer)
-        self.assertIn("function composeMappingCells(map, baseCells, scan, pose)", viewer)
-        self.assertIn("const cells = new Int16Array(baseCells);", viewer)
-        self.assertIn("function refreshMappingDynamicMap()", viewer)
-        self.assertIn("raytraceComposite(", viewer)
-        self.assertNotIn("liveMapRoot.name = 'live-map-walls'", viewer)
-        self.assertNotIn("rebuildLiveMapPreview(liveScan", viewer)
+        self.assertIn("function rebuildMap(map, revision)", viewer)
+        self.assertNotIn("composeMappingCells(", viewer)
+        self.assertNotIn("live-map-walls", viewer)
+        self.assertNotIn("rebuildLiveMapPreview(", viewer)
         self.assertNotIn(
             "payloadMatchesMappingSession(state.map)",
             viewer,
