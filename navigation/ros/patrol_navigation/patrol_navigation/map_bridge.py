@@ -307,6 +307,10 @@ class MapBridge(Node):
 
     def on_map(self, msg):
         self.latest_map = msg
+        # RViz2 Map display처럼 /map callback이 도착한 순간 dashboard로
+        # 전달한다. 별도 timer polling으로 지연시키지 않는다.
+        if self.send_map:
+            self.publish_map(msg)
 
     def on_scan(self, msg):
         self.latest_scan = msg
@@ -365,8 +369,8 @@ class MapBridge(Node):
             ),
         }
 
-    def publish_map(self):
-        msg = self.latest_map
+    def publish_map(self, msg=None):
+        msg = msg or self.latest_map
 
         if msg is None:
             return

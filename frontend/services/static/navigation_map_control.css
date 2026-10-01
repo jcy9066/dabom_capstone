@@ -48,10 +48,15 @@
 .saved-map-pose { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .saved-map-pose label { display: grid; gap: 4px; color: var(--text-muted); font-size: 11px; }
 .saved-map-pose input { width: 100%; box-sizing: border-box; padding: 7px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--card-bg); color: var(--text-dark); }
+.saved-map-mode-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.saved-map-mode-actions .dashboard-control-button { width: 100%; min-height: 34px; }
 .saved-map-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .saved-map-save-current { margin-right: auto; }
 .saved-map-actions button { padding: 8px 10px; border: 1px solid var(--border-bright); border-radius: 5px; background: transparent; color: var(--text-dark); font: 700 11px var(--mono); cursor: pointer; }
 .saved-map-actions .saved-map-load { border-color: var(--accent); color: var(--accent); }
 .saved-map-actions button:disabled { cursor: not-allowed; opacity: 0.55; }
 .saved-map-modal.is-pending .saved-map-actions button:disabled { cursor: progress; }
-@media (max-width: 560px) { .saved-map-pose { grid-template-columns: 1fr; } }
+@media (max-width: 560px) {
+    .saved-map-pose,
+    .saved-map-mode-actions { grid-template-columns: 1fr; }
+}

@@ -64,6 +64,7 @@ class NavigationControlApi:
         get_live_map: Callable[[], dict[str, Any] | None],
         save_map: Callable[[dict[str, Any], str | None], dict[str, Any]],
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool]],
+        clear_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
         motor_output_enabled: bool = False,
         estop_cooldown_sec: float | None = None,
@@ -78,6 +79,7 @@ class NavigationControlApi:
         self._get_live_map = get_live_map
         self._save_map = save_map
         self._send_robot_command = send_robot_command
+        self._clear_visualization = clear_visualization
         self._watchdog = watchdog or NavigationWatchdogConfig.from_env()
         self._motor_output_enabled = bool(motor_output_enabled)
         self._driving_ready_timeout_sec = env_float(
@@ -276,13 +278,22 @@ class NavigationControlApi:
             else:
                 await asyncio.to_thread(self._ros.cancel_navigation)
             try:
-                await asyncio.to_thread(self._process.transition, "MAPPING", None)
+                await asyncio.to_thread(
+                    self._process.transition,
+                    "MAPPING",
+                    None,
+                    bool(payload.get("restart")),
+                )
             except Exception as exc:
                 with self._lock:
                     self._state["navigation_state"] = "ERROR"
                     self._state["last_error"] = str(exc)
                     self._touch_locked()
                 raise
+
+            if self._clear_visualization is not None:
+                self._clear_visualization()
+
             delivered = await self._send_robot_command(
                 self._robot_id,
                 {"type": "navigation_mode", "mode": "mapping"},

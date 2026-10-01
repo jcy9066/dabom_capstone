@@ -78,11 +78,106 @@ wait_pid_exit() {
     return 1
 }
 
+process_group_alive() {
+    local pgid="$1"
+    [[ -n "${pgid}" ]] || return 1
+    kill -0 -- "-${pgid}" 2>/dev/null
+}
+
+wait_process_group_exit() {
+    local pgid="$1"
+    local attempts="${2:-30}"
+    local index
+
+    for ((index = 0; index < attempts; index++)); do
+        if ! process_group_alive "${pgid}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+
+    return 1
+}
+
+list_owned_pgids() {
+    local owner="$1"
+    local proc pid pgid
+    local -A seen=()
+
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        [[ "${pid}" == "$$" ]] && continue
+
+        if tr '\0' '\n' < "${proc}/environ" 2>/dev/null \
+            | grep -Fqx "DABOM_PROCESS_OWNER=${owner}"; then
+            pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+            [[ "${pgid}" =~ ^[0-9]+$ ]] || continue
+            [[ -n "${seen[${pgid}]+x}" ]] && continue
+            seen["${pgid}"]=1
+            printf '%s\n' "${pgid}"
+        fi
+    done
+}
+
+stop_owned_groups() {
+    local owner="$1"
+    local first_signal="${2:-TERM}"
+    local pgid
+    local -a groups=()
+
+    mapfile -t groups < <(list_owned_pgids "${owner}")
+    (("${#groups[@]}" > 0)) || return 0
+
+    for pgid in "${groups[@]}"; do
+        log "Stopping owned process group pgid=${pgid}: ${owner}"
+        kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..30}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    for pgid in "${groups[@]}"; do
+        kill -TERM -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..20}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    for pgid in "${groups[@]}"; do
+        kill -KILL -- "-${pgid}" 2>/dev/null || true
+    done
+
+    for _ in {1..10}; do
+        mapfile -t groups < <(list_owned_pgids "${owner}")
+        (("${#groups[@]}" == 0)) && return 0
+        sleep 0.1
+    done
+
+    warn "Owned process groups still alive after SIGKILL: ${owner} -> ${groups[*]}"
+    return 1
+}
+
 stop_pid() {
     local pid="$1"
     local first_signal="${2:-TERM}"
+    local pgid
 
     kill -0 "${pid}" 2>/dev/null || return 0
+
+    # Snapshot the process group before signalling. If this PID is a setsid
+    # leader, the leader can exit before its children; waiting only on the PID
+    # would falsely report success while descendants remain alive.
+    pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "${pgid}" =~ ^[0-9]+$ ]] && [[ "${pgid}" == "${pid}" ]]; then
+        stop_own_group "${pgid}" "${first_signal}"
+        return
+    fi
 
     signal_pid "${pid}" "${first_signal}"
     if wait_pid_exit "${pid}" 30; then
@@ -111,24 +206,30 @@ stop_matching() {
 }
 
 stop_own_group() {
-    local pid="$1"
+    local pgid="$1"
     local first_signal="${2:-TERM}"
 
-    [[ -n "${pid}" ]] || return 0
-    kill -0 "${pid}" 2>/dev/null || return 0
+    [[ -n "${pgid}" ]] || return 0
 
-    kill "-${first_signal}" -- "-${pid}" 2>/dev/null || kill "-${first_signal}" "${pid}" 2>/dev/null || true
-    if wait_pid_exit "${pid}" 30; then
+    if process_group_alive "${pgid}"; then
+        kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
+        if wait_process_group_exit "${pgid}" 30; then
+            return 0
+        fi
+
+        kill -TERM -- "-${pgid}" 2>/dev/null || true
+        if wait_process_group_exit "${pgid}" 20; then
+            return 0
+        fi
+
+        kill -KILL -- "-${pgid}" 2>/dev/null || true
+        wait_process_group_exit "${pgid}" 10 || true
         return 0
     fi
 
-    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
-    if wait_pid_exit "${pid}" 20; then
-        return 0
-    fi
-
-    kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
-    wait_pid_exit "${pid}" 10 || true
+    # Compatibility fallback for a child that was not a setsid group leader.
+    kill -0 "${pgid}" 2>/dev/null || return 0
+    stop_pid "${pgid}" "${first_signal}"
 }
 
 remove_own_pid_file() {
@@ -143,7 +244,14 @@ cleanup() {
     trap - EXIT INT TERM
     log "Shutting down Pi stack"
 
-    # Robot client gets SIGINT first so MotorController.close() can issue STOP.
+    # Stop logical roles by ownership tag, not only by leader PID. This also
+    # catches descendants after a launch/supervisor parent has already exited.
+    stop_owned_groups "dabom-pi-robot" INT || true
+    stop_owned_groups "dabom-pi-lidar-sender" TERM || true
+    stop_owned_groups "dabom-pi-lidar" TERM || true
+    stop_owned_groups "dabom-pi-camera" TERM || true
+
+    # Compatibility fallback for children started before ownership tagging.
     stop_own_group "${ROBOT_PID}" INT
     stop_own_group "${LIDAR_SENDER_PID}" TERM
     stop_own_group "${LIDAR_DRIVER_PID}" TERM
@@ -233,6 +341,8 @@ require_cmd systemctl
     || fail "raspberry/robot_command_client.py is missing"
 [[ -f "${ROOT_DIR}/raspberry/lidar_scan_sender.py" ]] \
     || fail "raspberry/lidar_scan_sender.py is missing"
+[[ -f "${ROOT_DIR}/raspberry/lidar_driver_supervisor.py" ]] \
+    || fail "raspberry/lidar_driver_supervisor.py is missing"
 
 [[ -e "${MOTOR_SERIAL_PORT}" ]] || fail "Pico UART device not found: ${MOTOR_SERIAL_PORT}"
 [[ -r "${MOTOR_SERIAL_PORT}" && -w "${MOTOR_SERIAL_PORT}" ]] \
@@ -287,6 +397,13 @@ if systemctl is-active --quiet dabom-command.service 2>/dev/null; then
     fi
 fi
 
+# Remove any previous tagged runtime first. A new Pi stack owns exactly one
+# logical instance of each role.
+stop_owned_groups "dabom-pi-robot" INT || true
+stop_owned_groups "dabom-pi-lidar-sender" TERM || true
+stop_owned_groups "dabom-pi-lidar" TERM || true
+stop_owned_groups "dabom-pi-camera" TERM || true
+
 # Compatibility cleanup for the removed legacy launchers.
 stop_matching "raspberry/scripts/start_camera_stream.sh" TERM
 stop_matching "raspberry/scripts/start_lidar_sender.sh" TERM
@@ -296,6 +413,8 @@ stop_matching "raspberry/scripts/start_robot_command_client.sh" TERM
 stop_matching "raspberry/robot_command_client.py" INT
 stop_matching "raspberry/lidar_scan_sender.py" TERM
 stop_matching "ros2 launch patrol_navigation lidar.launch.py" TERM
+stop_matching "rplidar_composition" TERM
+stop_matching "static_transform_publisher" TERM
 stop_matching "rpicam-vid" TERM
 stop_matching "/stream/h264?robot_id=${ROBOT_ID}" TERM
 
@@ -351,8 +470,13 @@ printf '%s\n' "$$" > "${PID_FILE}"
 
 cd "${ROOT_DIR}"
 
-log "Starting LiDAR driver"
-setsid ros2 launch patrol_navigation lidar.launch.py \
+log "Starting LiDAR driver supervisor"
+setsid env DABOM_PROCESS_OWNER="dabom-pi-lidar" python3 "${ROOT_DIR}/raspberry/lidar_driver_supervisor.py" \
+    --topic "${LIDAR_SCAN_TOPIC}" \
+    --startup-timeout 15 \
+    --stale-timeout "${LIDAR_SCAN_STALE_SEC:-3.0}" \
+    --restart-delay 1 \
+    ros2 launch patrol_navigation lidar.launch.py \
     serial_port:="${LIDAR_SERIAL_PORT}" \
     serial_baudrate:="${LIDAR_SERIAL_BAUDRATE}" \
     driver_package:="${LIDAR_DRIVER_PACKAGE}" \
@@ -368,35 +492,70 @@ setsid ros2 launch patrol_navigation lidar.launch.py \
 LIDAR_DRIVER_PID=$!
 
 scan_ready=0
-for _ in {1..4}; do
-    if ! kill -0 "${LIDAR_DRIVER_PID}" 2>/dev/null; then
-        break
-    fi
 
-    if timeout 4 ros2 topic echo \
-        "${LIDAR_SCAN_TOPIC}" \
-        --once \
-        --qos-reliability best_effort \
-        >/dev/null 2>&1; then
-        scan_ready=1
-        break
-    fi
-done
+if timeout 15 python3 - "${LIDAR_SCAN_TOPIC}" <<'PYSCAN'
+import sys
+import time
+
+import rclpy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
+
+topic = sys.argv[1]
+
+rclpy.init()
+node = rclpy.create_node("dabom_lidar_preflight")
+
+received = False
+
+
+def on_scan(msg):
+    global received
+    received = True
+
+
+subscription = node.create_subscription(
+    LaserScan,
+    topic,
+    on_scan,
+    qos_profile_sensor_data,
+)
+
+deadline = time.monotonic() + 12.0
+
+try:
+    while time.monotonic() < deadline and not received:
+        rclpy.spin_once(
+            node,
+            timeout_sec=0.5,
+        )
+finally:
+    node.destroy_node()
+
+    if rclpy.ok():
+        rclpy.shutdown()
+
+raise SystemExit(0 if received else 1)
+PYSCAN
+then
+    scan_ready=1
+fi
 
 if (( scan_ready == 0 )); then
     fail "LiDAR driver started but no LaserScan was received on ${LIDAR_SCAN_TOPIC}"
 fi
+
 log "LiDAR scan READY"
 
 log "Starting LiDAR sender"
-setsid python3 "${ROOT_DIR}/raspberry/lidar_scan_sender.py" &
+setsid env DABOM_PROCESS_OWNER="dabom-pi-lidar-sender" python3 "${ROOT_DIR}/raspberry/lidar_scan_sender.py" &
 LIDAR_SENDER_PID=$!
 sleep 0.5
 kill -0 "${LIDAR_SENDER_PID}" 2>/dev/null \
     || fail "LiDAR sender exited during startup"
 
 log "Starting robot command client"
-setsid python3 "${ROOT_DIR}/raspberry/robot_command_client.py" &
+setsid env DABOM_PROCESS_OWNER="dabom-pi-robot" python3 "${ROOT_DIR}/raspberry/robot_command_client.py" &
 ROBOT_PID=$!
 sleep 0.5
 kill -0 "${ROBOT_PID}" 2>/dev/null \
@@ -458,7 +617,7 @@ camera_stream_loop() {
 }
 
 log "Starting camera stream"
-setsid bash -c "$(declare -f camera_stream_loop); camera_stream_loop" &
+setsid env DABOM_PROCESS_OWNER="dabom-pi-camera" bash -c "$(declare -f camera_stream_loop); camera_stream_loop" &
 CAMERA_PID=$!
 sleep 0.5
 kill -0 "${CAMERA_PID}" 2>/dev/null \
@@ -497,7 +656,7 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
         fi
 
         if [[ -n "${lidar_json}" ]] && python3 -c \
-            'import json,sys; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; raise SystemExit(0 if st.get("connected") is True and int(st.get("received") or 0) > 0 else 1)' \
+            'import json,sys,time; d=json.loads(sys.argv[1]); st=d.get("stats") or {}; last=st.get("last_received_at"); fresh=last is not None and time.time()-float(last) <= 3.0; raise SystemExit(0 if st.get("connected") is True and int(st.get("received") or 0) > 0 and fresh else 1)' \
             "${lidar_json}" >/dev/null 2>&1; then
             lidar_connected=1
         fi

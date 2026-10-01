@@ -10,7 +10,10 @@ from urllib.request import Request, urlopen
 
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
 from patrol_navigation.env_config import env_bool, env_text
 
 
@@ -45,6 +48,26 @@ class Nav2CommandBridge(Node):
         self.declare_parameter(
             "request_timeout_sec",
             0.25,
+        )
+        self.declare_parameter(
+            "odom_topic",
+            "/odom",
+        )
+        self.declare_parameter(
+            "map_frame",
+            "map",
+        )
+        self.declare_parameter(
+            "odom_frame",
+            "odom",
+        )
+        self.declare_parameter(
+            "base_frame",
+            "base_link",
+        )
+        self.declare_parameter(
+            "min_auto_drive_pwm",
+            0.50,
         )
 
         self.cmd_vel_topic = str(
@@ -94,6 +117,32 @@ class Nav2CommandBridge(Node):
             ),
         )
 
+        self.odom_topic = str(
+            self.get_parameter(
+                "odom_topic"
+            ).value
+        )
+        self.map_frame = str(
+            self.get_parameter(
+                "map_frame"
+            ).value
+        )
+        self.odom_frame = str(
+            self.get_parameter(
+                "odom_frame"
+            ).value
+        )
+        self.base_frame = str(
+            self.get_parameter(
+                "base_frame"
+            ).value
+        )
+        self.min_auto_drive_pwm = float(
+            self.get_parameter(
+                "min_auto_drive_pwm"
+            ).value
+        )
+
         if self.wheel_track_m <= 0.0:
             raise ValueError(
                 "wheel_track_m must be positive"
@@ -107,6 +156,11 @@ class Nav2CommandBridge(Node):
         if self.twist_timeout_sec <= 0.0:
             raise ValueError(
                 "twist_timeout_sec must be positive"
+            )
+
+        if not 0.0 <= self.min_auto_drive_pwm <= 1.0:
+            raise ValueError(
+                "min_auto_drive_pwm must be between 0 and 1"
             )
 
         if not self.robot_id:
@@ -135,6 +189,13 @@ class Nav2CommandBridge(Node):
         self.last_log_at = 0.0
         self.last_server_log_at = 0.0
         self.last_error_log_at = 0.0
+        self.latest_odom: Odometry | None = None
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(
+            self.tf_buffer,
+            self,
+        )
 
         self.timed_out = True
         self.received_count = 0
@@ -159,6 +220,12 @@ class Nav2CommandBridge(Node):
             self.on_twist,
             10,
         )
+        self.create_subscription(
+            Odometry,
+            self.odom_topic,
+            self.on_odom,
+            20,
+        )
 
         self.create_timer(
             0.05,
@@ -171,6 +238,7 @@ class Nav2CommandBridge(Node):
             f"wheel_track_m={self.wheel_track_m:.3f} "
             f"max_wheel_mps={self.max_wheel_mps:.3f} "
             f"command_url={self.command_url} "
+            f"odom_topic={self.odom_topic} "
             "server_request_enabled=true "
             f"motor_output_enabled={str(self.motor_output_enabled).lower()}"
         )
@@ -340,6 +408,155 @@ class Nav2CommandBridge(Node):
             }
         )
 
+    @staticmethod
+    def _yaw_from_quaternion(rotation) -> float:
+        siny_cosp = 2.0 * (
+            rotation.w * rotation.z
+            + rotation.x * rotation.y
+        )
+        cosy_cosp = 1.0 - 2.0 * (
+            rotation.y * rotation.y
+            + rotation.z * rotation.z
+        )
+        return math.atan2(
+            siny_cosp,
+            cosy_cosp,
+        )
+
+    def on_odom(
+        self,
+        msg: Odometry,
+    ) -> None:
+        self.latest_odom = msg
+
+    def _estimate_pwm(
+        self,
+        left_mps: float,
+        right_mps: float,
+    ) -> tuple[float, float]:
+        left_pwm = left_mps / self.max_wheel_mps
+        right_pwm = right_mps / self.max_wheel_mps
+
+        peak = max(
+            abs(left_pwm),
+            abs(right_pwm),
+        )
+
+        if peak > 1.0:
+            left_pwm /= peak
+            right_pwm /= peak
+            peak = 1.0
+
+        if (
+            0.0 < peak
+            < self.min_auto_drive_pwm
+        ):
+            scale = (
+                self.min_auto_drive_pwm
+                / peak
+            )
+            left_pwm *= scale
+            right_pwm *= scale
+
+        return left_pwm, right_pwm
+
+    def _lookup_pose(
+        self,
+        parent_frame: str,
+        child_frame: str,
+    ) -> tuple[float, float, float]:
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                parent_frame,
+                child_frame,
+                Time(),
+            )
+        except TransformException:
+            return math.nan, math.nan, math.nan
+
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
+        return (
+            float(translation.x),
+            float(translation.y),
+            self._yaw_from_quaternion(rotation),
+        )
+
+    def _log_drive_diagnostics(
+        self,
+        *,
+        linear_x: float,
+        angular_z: float,
+        left_mps: float,
+        right_mps: float,
+    ) -> None:
+        left_pwm, right_pwm = self._estimate_pwm(
+            left_mps,
+            right_mps,
+        )
+
+        if self.latest_odom is None:
+            odom_x = math.nan
+            odom_y = math.nan
+            odom_yaw = math.nan
+            odom_linear = math.nan
+            odom_angular = math.nan
+        else:
+            odom = self.latest_odom
+            odom_x = float(
+                odom.pose.pose.position.x
+            )
+            odom_y = float(
+                odom.pose.pose.position.y
+            )
+            odom_yaw = self._yaw_from_quaternion(
+                odom.pose.pose.orientation
+            )
+            odom_linear = float(
+                odom.twist.twist.linear.x
+            )
+            odom_angular = float(
+                odom.twist.twist.angular.z
+            )
+
+        (
+            map_odom_x,
+            map_odom_y,
+            map_odom_yaw,
+        ) = self._lookup_pose(
+            self.map_frame,
+            self.odom_frame,
+        )
+        (
+            map_base_x,
+            map_base_y,
+            map_base_yaw,
+        ) = self._lookup_pose(
+            self.map_frame,
+            self.base_frame,
+        )
+
+        self.get_logger().info(
+            "NAV_DIAG "
+            f"cmd_linear={linear_x:.4f} "
+            f"cmd_angular={angular_z:.4f} "
+            f"left_mps={left_mps:.4f} "
+            f"right_mps={right_mps:.4f} "
+            f"left_pwm_est={left_pwm:.4f} "
+            f"right_pwm_est={right_pwm:.4f} "
+            f"odom_x={odom_x:.4f} "
+            f"odom_y={odom_y:.4f} "
+            f"odom_yaw={odom_yaw:.4f} "
+            f"odom_linear={odom_linear:.4f} "
+            f"odom_angular={odom_angular:.4f} "
+            f"map_odom_x={map_odom_x:.4f} "
+            f"map_odom_y={map_odom_y:.4f} "
+            f"map_odom_yaw={map_odom_yaw:.4f} "
+            f"map_base_x={map_base_x:.4f} "
+            f"map_base_y={map_base_y:.4f} "
+            f"map_base_yaw={map_base_yaw:.4f}"
+        )
+
     def on_twist(
         self,
         msg: Twist,
@@ -428,6 +645,12 @@ class Nav2CommandBridge(Node):
                 f"would_send={str(would_send).lower()} "
                 "motor_output_enabled="
                 f"{str(self.motor_output_enabled).lower()}"
+            )
+            self._log_drive_diagnostics(
+                linear_x=linear_x,
+                angular_z=angular_z,
+                left_mps=left_mps,
+                right_mps=right_mps,
             )
 
     def check_timeout(self) -> None:

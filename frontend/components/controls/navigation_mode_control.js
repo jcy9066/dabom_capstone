@@ -20,6 +20,7 @@
 
         const mappingLabel = document.createElement('span');
         mappingLabel.className = 'navigation-mode-toggle-label';
+        mappingLabel.dataset.navigationModeTarget = 'MAPPING';
         mappingLabel.textContent = 'MAPPING';
 
         const track = document.createElement('span');
@@ -32,6 +33,7 @@
 
         const drivingLabel = document.createElement('span');
         drivingLabel.className = 'navigation-mode-toggle-label';
+        drivingLabel.dataset.navigationModeTarget = 'DRIVING';
         drivingLabel.textContent = 'DRIVING';
 
         button.append(mappingLabel, track, drivingLabel);
@@ -47,7 +49,13 @@
             if (controller.pending) return;
 
             const current = controller.mode;
-            const next = current === 'MAPPING' ? 'DRIVING' : 'MAPPING';
+            const explicitTarget = event.target?.closest?.(
+                '[data-navigation-mode-target]'
+            )?.dataset?.navigationModeTarget;
+            const next = explicitTarget
+                || (current === 'MAPPING' ? 'DRIVING' : 'MAPPING');
+
+            if (next === current) return;
             controller.request(next);
         });
     }
