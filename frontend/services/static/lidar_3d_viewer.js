@@ -1066,8 +1066,10 @@ if (root && canvas) {
             + yawDelta * wheelVisualTrackM * 0.5
         );
 
-        wheelRollRadians.left -= leftDistance / wheelVisualRadiusM;
-        wheelRollRadians.right -= rightDistance / wheelVisualRadiusM;
+        // With +X as vehicle forward and the wheel axle along +Y, positive
+        // rotation around local Y is forward wheel roll.
+        wheelRollRadians.left += leftDistance / wheelVisualRadiusM;
+        wheelRollRadians.right += rightDistance / wheelVisualRadiusM;
 
         for (const wheel of wheelVisuals.left) {
             wheel.rotation.y = wheelRollRadians.left;

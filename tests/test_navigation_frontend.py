@@ -76,12 +76,28 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const centerDistance = (", viewer)
         self.assertIn("centerDistance\n            - yawDelta * wheelVisualTrackM * 0.5", viewer)
         self.assertIn("centerDistance\n            + yawDelta * wheelVisualTrackM * 0.5", viewer)
+        self.assertIn(
+            "wheelRollRadians.left += leftDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertIn(
+            "wheelRollRadians.right += rightDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertNotIn(
+            "wheelRollRadians.left -= leftDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertNotIn(
+            "wheelRollRadians.right -= rightDistance / wheelVisualRadiusM",
+            viewer,
+        )
         self.assertIn("wheel.rotation.y = wheelRollRadians.left", viewer)
         self.assertIn("wheel.rotation.y = wheelRollRadians.right", viewer)
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-robot-motion-v18',
+            'static/lidar_3d_viewer.js?v=20261001-robot-motion-v19',
             template,
         )
 
