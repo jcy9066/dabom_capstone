@@ -46,10 +46,11 @@ slam_toolbox:
     min_laser_range: 0.2
     max_laser_range: 12.0
 
-    # TF publish와 map update 관련 시간 설정이다.
-    minimum_time_interval: 0.5
+    # RViz2 Mapping처럼 LaserScan은 센서 주기에 가깝게 반영하고,
+    # OccupancyGrid는 2 Hz로 갱신해 변화가 화면에 지속적으로 보이게 한다.
+    minimum_time_interval: 0.1
     transform_publish_period: 0.02
-    map_update_interval: 2.0
+    map_update_interval: 0.5
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
 
