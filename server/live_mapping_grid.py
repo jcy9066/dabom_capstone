@@ -34,6 +34,31 @@ def _rle_encode(values: list[int]) -> list[list[int]]:
     return runs
 
 
+def _decode_cells(payload: dict[str, Any], expected: int) -> list[int]:
+    raw = payload.get("data")
+    if not isinstance(raw, list):
+        raise ValueError("map data must be a list")
+    if payload.get("data_encoding", "raw") == "rle":
+        cells: list[int] = []
+        for run in raw:
+            if not isinstance(run, list) or len(run) < 2:
+                raise ValueError("invalid rle map data")
+            value = int(run[0])
+            count = int(run[1])
+            if count < 0:
+                raise ValueError("invalid rle map count")
+            cells.extend([value] * count)
+            if len(cells) > expected:
+                raise ValueError("rle map data is longer than expected")
+    else:
+        cells = [int(value) for value in raw]
+    if len(cells) != expected:
+        raise ValueError(
+            f"map data length mismatch: expected {expected}, got {len(cells)}"
+        )
+    return cells
+
+
 class LiveMappingGrid:
     """Persistent 2D occupancy grid updated from the newest LiDAR scan once/sec."""
 
@@ -70,6 +95,10 @@ class LiveMappingGrid:
         self._scan: dict[str, Any] | None = None
         self._last_update_monotonic: float | None = None
         self._sequence = 0
+        self._anchor_x = 0.0
+        self._anchor_y = 0.0
+        self._anchor_yaw = 0.0
+        self._base_map_seen = False
 
     def reset(self) -> None:
         with self._lock:
@@ -78,6 +107,10 @@ class LiveMappingGrid:
             self._scan = None
             self._last_update_monotonic = None
             self._sequence = 0
+            self._anchor_x = 0.0
+            self._anchor_y = 0.0
+            self._anchor_yaw = 0.0
+            self._base_map_seen = False
 
     def update_pose(self, pose: dict[str, Any]) -> bool:
         try:
@@ -144,6 +177,96 @@ class LiveMappingGrid:
             }
         return True
 
+    def update_base_map(self, payload: dict[str, Any]) -> bool:
+        """Merge the latest slam_toolbox OccupancyGrid into the persistent map."""
+        try:
+            width = int(payload["width"])
+            height = int(payload["height"])
+            resolution = float(payload["resolution"])
+            origin = payload.get("origin") or {}
+            origin_x = float(origin.get("x", 0.0))
+            origin_y = float(origin.get("y", 0.0))
+            origin_yaw = float(origin.get("yaw", 0.0))
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        if (
+            width <= 0
+            or height <= 0
+            or resolution <= 0.0
+            or not all(
+                math.isfinite(value)
+                for value in (
+                    resolution,
+                    origin_x,
+                    origin_y,
+                    origin_yaw,
+                )
+            )
+        ):
+            return False
+
+        try:
+            incoming = _decode_cells(payload, width * height)
+        except (TypeError, ValueError):
+            return False
+
+        with self._lock:
+            if not self._base_map_seen:
+                self._reanchor_locked(
+                    origin_x,
+                    origin_y,
+                    origin_yaw,
+                    resolution,
+                )
+                self._base_map_seen = True
+            elif (
+                abs(self.resolution - resolution) > 1e-9
+                or abs(self._anchor_yaw - origin_yaw) > 1e-6
+            ):
+                self._reanchor_locked(
+                    self._anchor_x,
+                    self._anchor_y,
+                    origin_yaw,
+                    resolution,
+                )
+
+            cos_yaw = math.cos(origin_yaw)
+            sin_yaw = math.sin(origin_yaw)
+            for y in range(height):
+                for x in range(width):
+                    value = int(incoming[y * width + x])
+                    local_x = (x + 0.5) * resolution
+                    local_y = (y + 0.5) * resolution
+                    world_x = (
+                        origin_x
+                        + cos_yaw * local_x
+                        - sin_yaw * local_y
+                    )
+                    world_y = (
+                        origin_y
+                        + sin_yaw * local_x
+                        + cos_yaw * local_y
+                    )
+                    cell = self._world_to_cell(world_x, world_y)
+                    if value < 0:
+                        self._cells.pop(cell, None)
+                    else:
+                        self._cells[cell] = max(0, min(100, value))
+
+        return True
+
+    def snapshot(
+        self,
+        *,
+        robot_id: str,
+        wall_time: float,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            if not self._cells:
+                return None
+            return self._snapshot_locked(robot_id, wall_time)
+
     def maybe_update(
         self,
         *,
@@ -168,10 +291,49 @@ class LiveMappingGrid:
             return self._snapshot_locked(robot_id, wall_time)
 
     def _world_to_cell(self, x: float, y: float) -> tuple[int, int]:
+        dx = x - self._anchor_x
+        dy = y - self._anchor_y
+        cos_yaw = math.cos(self._anchor_yaw)
+        sin_yaw = math.sin(self._anchor_yaw)
+        local_x = cos_yaw * dx + sin_yaw * dy
+        local_y = -sin_yaw * dx + cos_yaw * dy
         return (
-            math.floor(x / self.resolution),
-            math.floor(y / self.resolution),
+            math.floor(local_x / self.resolution),
+            math.floor(local_y / self.resolution),
         )
+
+    def _cell_center_world(
+        self,
+        cell_x: int,
+        cell_y: int,
+    ) -> tuple[float, float]:
+        local_x = (cell_x + 0.5) * self.resolution
+        local_y = (cell_y + 0.5) * self.resolution
+        cos_yaw = math.cos(self._anchor_yaw)
+        sin_yaw = math.sin(self._anchor_yaw)
+        return (
+            self._anchor_x + cos_yaw * local_x - sin_yaw * local_y,
+            self._anchor_y + sin_yaw * local_x + cos_yaw * local_y,
+        )
+
+    def _reanchor_locked(
+        self,
+        origin_x: float,
+        origin_y: float,
+        origin_yaw: float,
+        resolution: float,
+    ) -> None:
+        previous = [
+            (*self._cell_center_world(cell_x, cell_y), value)
+            for (cell_x, cell_y), value in self._cells.items()
+        ]
+        self.resolution = max(0.01, float(resolution))
+        self._anchor_x = float(origin_x)
+        self._anchor_y = float(origin_y)
+        self._anchor_yaw = float(origin_yaw)
+        self._cells.clear()
+        for world_x, world_y, value in previous:
+            self._cells[self._world_to_cell(world_x, world_y)] = value
 
     @staticmethod
     def _bresenham(
@@ -298,10 +460,18 @@ class LiveMappingGrid:
             "width": width,
             "height": height,
             "origin": {
-                "x": min_x * self.resolution,
-                "y": min_y * self.resolution,
+                "x": (
+                    self._anchor_x
+                    + math.cos(self._anchor_yaw) * min_x * self.resolution
+                    - math.sin(self._anchor_yaw) * min_y * self.resolution
+                ),
+                "y": (
+                    self._anchor_y
+                    + math.sin(self._anchor_yaw) * min_x * self.resolution
+                    + math.cos(self._anchor_yaw) * min_y * self.resolution
+                ),
                 "z": 0.0,
-                "yaw": 0.0,
+                "yaw": self._anchor_yaw,
             },
             "data_encoding": "rle",
             "data": _rle_encode(dense),
