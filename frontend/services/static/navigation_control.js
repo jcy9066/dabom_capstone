@@ -540,9 +540,10 @@
     }
 
     async function setMappingMode() {
-        if (state.busy || state.drivePending || state.navigationPending || state.control?.navigation_mode === 'MAPPING') return;
+        if (state.control?.navigation_mode === 'MAPPING') return true;
+        if (state.busy || state.drivePending || state.navigationPending) return false;
         const moving = navigationIsMoving();
-        if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return;
+        if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return false;
         state.busy = true;
         state.navigationPending = true;
         syncControlComponents();
@@ -568,8 +569,10 @@
                 : (response.emergency_stop
                     ? '주행을 긴급 정지하고 Mapping 모드로 전환했습니다. 정지 해제는 직접 실행해주세요.'
                     : 'Mapping 모드로 전환했습니다.'));
+            return true;
         } catch (error) {
             setFeedback(`모드 전환 실패: ${error.message}`, true);
+            return false;
         } finally {
             state.busy = false;
             state.navigationPending = false;
