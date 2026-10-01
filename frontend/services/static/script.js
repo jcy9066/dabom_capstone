@@ -456,6 +456,8 @@ let navigationSnapshotTimer = null;
 let navigationSnapshotInFlight = false;
 let navigationSnapshotRefreshQueued = false;
 let navigationMapRevision = null;
+let navigationMapDisplaySuppressed = false;
+let navigationMapSuppressedRevision = null;
 
 function navigationSnapshotDelayMs() {
     return document.hidden
@@ -492,8 +494,19 @@ function applyNavigationSnapshot(data) {
         clearNavigationScan();
     }
 
-    navigationMapRevision = data.map_revision ?? null;
-    if (!data.map_available) {
+    const incomingMapRevision = data.map_revision ?? null;
+    if (
+        navigationMapDisplaySuppressed
+        && incomingMapRevision !== navigationMapSuppressedRevision
+    ) {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+    }
+
+    navigationMapRevision = incomingMapRevision;
+    if (navigationMapDisplaySuppressed) {
+        lidarState.map = null;
+    } else if (!data.map_available) {
         lidarState.map = null;
     } else if (data.map_changed && data.map) {
         lidarState.map = data.map;
@@ -718,6 +731,42 @@ document.addEventListener('fullscreenchange', syncLidarViewerFullscreenState);
 document.addEventListener('webkitfullscreenchange', syncLidarViewerFullscreenState);
 
 window.navigationMapView = {
+    clearMapDisplay() {
+        navigationMapDisplaySuppressed = true;
+        navigationMapSuppressedRevision = navigationMapRevision;
+        lidarState.map = null;
+
+        const visualizationState = {
+            status: lidarState.status,
+            map: null,
+            pose: lidarState.pose,
+            scan: lidarState.scan,
+            mapRevision: navigationMapRevision,
+            mapChanged: true,
+        };
+        window.dabomNavigationVisualizationState = visualizationState;
+        document.dispatchEvent(new CustomEvent(
+            'dabom:navigation-visualization-state',
+            { detail: visualizationState },
+        ));
+        requestLidarRender();
+        return true;
+    },
+    restoreMapDisplay() {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+        navigationMapRevision = null;
+        if (navigationSnapshotTimer !== null) {
+            window.clearTimeout(navigationSnapshotTimer);
+            navigationSnapshotTimer = null;
+        }
+        if (navigationSnapshotInFlight) {
+            navigationSnapshotRefreshQueued = true;
+        } else {
+            fetchNavigationSnapshot();
+        }
+        return true;
+    },
     screenToGround(event) {
         return window.dabomLidar3D?.screenToGround?.(event) || null;
     },
