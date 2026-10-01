@@ -3749,8 +3749,32 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 continue
 
             received_at = time.time()
+
+            # The Pi LiDAR WebSocket is the highest-rate scan source. Tag each
+            # dashboard scan with the server's active navigation session so the
+            # 3D viewer can accept live points during Mapping instead of
+            # discarding these untagged scans as stale Driving data.
+            control_navigation_mode = str(
+                navigation_control_api.state_response().get(
+                    "navigation_mode"
+                )
+                or ""
+            ).strip().upper()
+            sensor_navigation_mode = {
+                "MAPPING": "mapping",
+                "DRIVING": "localization_nav2",
+            }.get(control_navigation_mode)
+            if sensor_navigation_mode is not None:
+                dashboard_scan = dict(dashboard_scan)
+                dashboard_scan["navigation_mode"] = sensor_navigation_mode
+
             with state_lock:
                 navigation_state["robot_id"] = robot_id
+                if sensor_navigation_mode is not None:
+                    store_navigation_mode(
+                        sensor_navigation_mode,
+                        received_at,
+                    )
                 navigation_state["scan"] = received_payload(
                     dashboard_scan,
                     received_at,
