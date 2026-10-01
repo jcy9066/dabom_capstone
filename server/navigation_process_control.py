@@ -97,18 +97,21 @@ class NavigationProcessControl:
             self._stop_locked(other)
 
             matches = self._matching(normalized)
-            owned_processes = self._owned_processes(normalized)
-            orphaned_owned_children = bool(owned_processes) and not matches
+            mode_processes = self._mode_processes(normalized)
+            mode_pgids = self._mode_pgids(normalized)
+            orphaned_mode_children = bool(mode_processes) and not matches
+            duplicate_mode_groups = len(mode_pgids) > 1
             stale_mapping = (
                 normalized == "MAPPING"
-                and bool(matches or owned_processes)
+                and bool(matches or mode_processes)
                 and not self._mapping_children_healthy()
             )
 
             if (
                 restart
                 or len(matches) > 1
-                or orphaned_owned_children
+                or orphaned_mode_children
+                or duplicate_mode_groups
                 or stale_mapping
             ):
                 self._stop_locked(normalized)
@@ -118,10 +121,18 @@ class NavigationProcessControl:
                 self._start_locked(normalized, map_yaml)
 
             status = self.status()
-            if status["mode"] != normalized:
+            pgid_key = (
+                "mapping_pgids"
+                if normalized == "MAPPING"
+                else "driving_pgids"
+            )
+            if (
+                status["mode"] != normalized
+                or len(status[pgid_key]) != 1
+            ):
                 self._stop_locked(normalized)
                 raise NavigationProcessError(
-                    f"{normalized} launch did not reach a single running state."
+                    f"{normalized} launch did not reach exactly one owned process group."
                 )
             return status
 
@@ -263,9 +274,30 @@ class NavigationProcessControl:
                     return True
         return False
 
+    def _owned_executable_exists(self, mode: str, name: str) -> bool:
+        wanted = str(name).strip()
+        if not wanted:
+            return False
+        for pid in self._owned_processes(mode):
+            entry = Path("/proc") / str(pid)
+            args = self._proc_args(entry)
+            if any(Path(arg).name == wanted for arg in args):
+                return True
+        return False
+
     def _mapping_children_healthy(self) -> bool:
-        # A lingering ros2 launch parent is not enough. Mapping is only usable
-        # when slam_toolbox and the dashboard map bridge are both alive.
+        # Prefer ownership-aware checks so an unrelated/orphaned ROS node cannot
+        # make a broken Mapping session look healthy.
+        if self._owned_processes("MAPPING"):
+            return self._owned_executable_exists(
+                "MAPPING",
+                "async_slam_toolbox_node",
+            ) and self._owned_executable_exists(
+                "MAPPING",
+                "map_bridge",
+            )
+
+        # Compatibility only for a pre-ownership launch that is still running.
         return self._process_exists(
             "async_slam_toolbox_node",
         ) and self._process_exists(
@@ -280,12 +312,23 @@ class NavigationProcessControl:
         for entry in proc.iterdir():
             if not entry.name.isdigit():
                 continue
+            environment = self._proc_environment(entry)
+            owner = environment.get("DABOM_PROCESS_OWNER", "")
+            if owner.startswith(self.OWNER_PREFIX):
+                continue
+
             args = self._proc_args(entry)
-            if any(
+            standalone_launcher = any(
                 Path(args[index]).name == "ros2"
-                and args[index + 1:index + 4] == ["run", "patrol_navigation", "map_bridge"]
+                and args[index + 1:index + 4]
+                == ["run", "patrol_navigation", "map_bridge"]
                 for index in range(len(args))
-            ):
+            )
+            orphan_executable = any(
+                Path(arg).name == "map_bridge"
+                for arg in args
+            )
+            if standalone_launcher or orphan_executable:
                 found.append({"pid": int(entry.name), "args": args})
         return found
 
