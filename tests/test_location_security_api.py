@@ -63,6 +63,30 @@ class LocationSecurityApiTests(unittest.TestCase):
         )
         self.assertEqual("NORMAL", result["snapshot"]["security_state"])
 
+    def test_transition_listener_fires_once_for_departure_and_return(self):
+        transitions = []
+        self.api._transition_listener = lambda result: transitions.append(result["transition"])
+        self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
+        far = {"gps_fix": True, "gps_lat": 37.001, "gps_lng": 127.0, "gps_hdop": 1.0}
+        for _ in range(3):
+            self.api.note_robot_status(far)
+        inside = {"gps_fix": True, "gps_lat": 37.0, "gps_lng": 127.0, "gps_hdop": 1.0}
+        for _ in range(5):
+            self.api.note_robot_status(inside)
+        self.assertEqual(["OUT_OF_AREA", "NORMAL"], transitions)
+
+    def test_transition_listener_failure_does_not_break_status_ingest(self):
+        def fail_listener(_result):
+            raise RuntimeError("boom")
+
+        self.api._transition_listener = fail_listener
+        self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
+        far = {"gps_fix": True, "gps_lat": 37.001, "gps_lng": 127.0, "gps_hdop": 1.0}
+        result = None
+        for _ in range(3):
+            result = self.api.note_robot_status(far)
+        self.assertEqual("OUT_OF_AREA", result["snapshot"]["security_state"])
+
 
 if __name__ == "__main__":
     unittest.main()

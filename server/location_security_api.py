@@ -17,10 +17,12 @@ class LocationSecurityApi:
         app: FastAPI,
         service: LocationSecurityService,
         csrf_failure: Callable[[Request], JSONResponse | None],
+        transition_listener: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._app = app
         self._service = service
         self._csrf_failure = csrf_failure
+        self._transition_listener = transition_listener
         self._logger = logging.getLogger(__name__)
         self._attach_routes()
 
@@ -82,7 +84,13 @@ class LocationSecurityApi:
             "updated_at": payload.get("gps_updated_at"),
         }
         try:
-            return self._service.update_live_gps(sample)
+            result = self._service.update_live_gps(sample)
+            if result.get("transition") and self._transition_listener is not None:
+                try:
+                    self._transition_listener(result)
+                except Exception:
+                    self._logger.exception("GPS transition listener failed")
+            return result
         except Exception:
             self._logger.exception("optional GPS status processing failed")
             return {"transition": None, "snapshot": self._service.snapshot()}

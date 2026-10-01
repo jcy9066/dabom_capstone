@@ -67,6 +67,7 @@ from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
 from server.location_security_api import LocationSecurityApi
+from server.location_security_notifications import build_location_transition_message
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
@@ -744,11 +745,21 @@ navigation_map_api = NavigationMapApi(
     map_dir=NAVIGATION_MAP_DIR,
     csrf_failure=csrf_failure,
 )
+
+
+def handle_location_security_transition(result):
+    message = build_location_transition_message(result)
+    if not message:
+        return
+    automatic_notifier.send_alert_async(message)
+
+
 location_security_service = LocationSecurityService(LOCATION_SECURITY_STATE_PATH)
 location_security_api = LocationSecurityApi(
     app=app,
     service=location_security_service,
     csrf_failure=csrf_failure,
+    transition_listener=handle_location_security_transition,
 )
 
 
