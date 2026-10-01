@@ -176,7 +176,7 @@ def test_latest_scan_overrides_only_currently_observed_base_cells():
         "resolution": 0.1,
         "origin": {"x": 0.0, "y": -0.1, "yaw": 0.0},
         "data_encoding": "rle",
-        "data": [[0, 10], [100, 1], [0, 52]],
+        "data": [[0, 31], [100, 1], [0, 31]],
     }
     assert grid.update_base_map(base)
     assert grid.update_pose({"x": 0.0, "y": 0.0, "yaw": -0.5})
