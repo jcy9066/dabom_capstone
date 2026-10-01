@@ -46,6 +46,23 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("GLTFLoader", viewer)
         self.assertIn("robot_upper_chassis.glb", viewer)
 
+    def test_3d_viewer_rotates_lidar_visuals_180_degrees_in_place(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;", viewer)
+        self.assertIn("for (const group of [scanRoot, pointsRoot])", viewer)
+        self.assertIn(
+            "group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;",
+            viewer,
+        )
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-lidar-yaw-v17',
+            template,
+        )
+
     def test_3d_viewer_reuses_existing_minimap_shell_and_local_assets(self):
         template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
         viewer = (

@@ -31,6 +31,9 @@ if (root && canvas) {
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
+    // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
+    // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
+    const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
     const TRAJECTORY_DISTANCE_M = 0.08;
     const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
     const TRAJECTORY_FALLBACK_MS = 500;
@@ -956,17 +959,22 @@ if (root && canvas) {
             return;
         }
 
-        const groups = [
+        const poseGroups = [
             robotPoseGroup,
             tfPoseGroup,
             cameraFrustumPoseGroup,
             cameraViewPoseGroup,
-            scanRoot,
-            pointsRoot,
         ];
-        for (const group of groups) {
+        for (const group of poseGroups) {
             group.position.set(pose.x, pose.y, pose.z);
             group.rotation.z = pose.yaw;
+        }
+
+        // Rotate both LiDAR layers in place around the current robot/LiDAR origin.
+        // This fixes the physical mount being reversed without altering ROS/map data.
+        for (const group of [scanRoot, pointsRoot]) {
+            group.position.set(pose.x, pose.y, pose.z);
+            group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
         }
         setPoseVisibility(true);
 
