@@ -742,6 +742,16 @@ def current_navigation_map_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def clear_navigation_visualization_state():
+    with state_lock:
+        navigation_state["map"] = None
+        navigation_state["pose"] = None
+        navigation_state["decision"] = None
+        navigation_state["map_updated_at"] = None
+        navigation_state["pose_updated_at"] = None
+        navigation_state["map_revision"] = None
+
+
 navigation_control_api = NavigationControlApi(
     app=app,
     map_api=navigation_map_api,
@@ -751,6 +761,7 @@ navigation_control_api = NavigationControlApi(
     get_live_map=current_navigation_map_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(payload, name),
     send_robot_command=connections.send_command_wait_ack,
+    clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
 
