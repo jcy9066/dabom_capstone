@@ -99,8 +99,8 @@ class FakeProcess:
     def __init__(self):
         self.transitions = []
 
-    def transition(self, mode, map_yaml=None):
-        self.transitions.append((mode, map_yaml))
+    def transition(self, mode, map_yaml=None, restart=False):
+        self.transitions.append((mode, map_yaml, restart))
         return {"mode": mode}
 
 
@@ -270,6 +270,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(mapped["active_map"])
         self.assertFalse(mapped["localization_ready"])
         self.assertFalse(mapped["nav2_ready"])
+
+    async def test_mapping_restart_is_forwarded_to_process_control(self):
+        mapped = await self.api.switch_mode(
+            {"mode": "MAPPING", "restart": True}
+        )
+
+        self.assertEqual("MAPPING", mapped["navigation_mode"])
+        self.assertEqual(("MAPPING", None, True), self.process.transitions[-1])
+
 
     async def test_active_navigation_requires_confirmed_estop_before_mapping(self):
         await self.driving_ready()
