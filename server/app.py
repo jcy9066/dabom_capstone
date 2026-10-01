@@ -65,6 +65,8 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
+from server.location_security import LocationSecurityService
+from server.location_security_api import LocationSecurityApi
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
@@ -379,6 +381,7 @@ ROBOT_STATUS_TIMEOUT_SEC = env_float("ROBOT_STATUS_TIMEOUT_SEC", minimum=0.1)
 SAVE_DIR = ROOT_DIR / "received_frames"
 NAVIGATION_MAP_DIR = ROOT_DIR / "navigation" / "maps"
 NAVIGATION_MAP_DIR.mkdir(parents=True, exist_ok=True)
+LOCATION_SECURITY_STATE_PATH = ROOT_DIR / "data" / "runtime" / "gps_locations.json"
 
 TELEGRAM_TOKEN = env_text("TELEGRAM_TOKEN", allow_empty=True)
 TELEGRAM_CHAT_ID = env_text("TELEGRAM_CHAT_ID", allow_empty=True)
@@ -405,6 +408,13 @@ robot_status = {
     "internet": "unknown",
     "mode": "manual",
     "led_enabled": None,
+    "gps_fix": False,
+    "gps_lat": None,
+    "gps_lng": None,
+    "gps_alt": None,
+    "gps_satellites": None,
+    "gps_hdop": None,
+    "gps_updated_at": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -732,6 +742,12 @@ navigation_map_api = NavigationMapApi(
     app=app,
     root_dir=ROOT_DIR,
     map_dir=NAVIGATION_MAP_DIR,
+    csrf_failure=csrf_failure,
+)
+location_security_service = LocationSecurityService(LOCATION_SECURITY_STATE_PATH)
+location_security_api = LocationSecurityApi(
+    app=app,
+    service=location_security_service,
     csrf_failure=csrf_failure,
 )
 
@@ -2498,15 +2514,24 @@ async def update_status(request: Request):
                 "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
+                "gps_fix": bool(status_value("gps_fix", False)),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
                 "gps_lng": status_value("gps_lng", robot_status.get("gps_lng")),
                 "gps_alt": status_value("gps_alt", robot_status.get("gps_alt")),
+                "gps_satellites": status_value(
+                    "gps_satellites", robot_status.get("gps_satellites")
+                ),
+                "gps_hdop": status_value("gps_hdop", robot_status.get("gps_hdop")),
+                "gps_updated_at": status_value(
+                    "gps_updated_at", robot_status.get("gps_updated_at")
+                ),
                 "lidar_x": status_value("lidar_x", robot_status.get("lidar_x")),
                 "lidar_y": status_value("lidar_y", robot_status.get("lidar_y")),
                 "lidar_z": status_value("lidar_z", robot_status.get("lidar_z")),
                 "updated_at": time.time(),
             }
         )
+    location_security_api.note_robot_status(data)
     navigation_control_api.note_pi_status(data)
     return {"ok": True}
 
