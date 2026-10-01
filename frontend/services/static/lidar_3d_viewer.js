@@ -31,6 +31,17 @@ if (root && canvas) {
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
+    // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
+    // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
+    const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
+    const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
+    // Visual pose smoothing follows differential-drive motion: forward motion responds
+    // faster than lateral map/localization correction so the chassis does not appear
+    // to slide sideways across its fixed wheel direction.
+    const POSE_FORWARD_RESPONSE_PER_SEC = 7.0;
+    const POSE_LATERAL_RESPONSE_PER_SEC = 2.5;
+    const POSE_YAW_RESPONSE_PER_SEC = 9.0;
+    const MAX_VISUAL_TELEPORT_M = 1.5;
     const TRAJECTORY_DISTANCE_M = 0.08;
     const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
     const TRAJECTORY_FALLBACK_MS = 500;
@@ -160,6 +171,10 @@ if (root && canvas) {
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
     let robotModelReady = false;
     let robotVisual = null;
+    const wheelVisuals = { left: [], right: [] };
+    let wheelVisualRadiusM = 0;
+    let wheelVisualTrackM = 0;
+    const wheelRollRadians = { left: 0, right: 0 };
     let baseAxes = null;
     let viewMode = 'top';
     let expandedViewMode = 'free';
@@ -579,8 +594,11 @@ if (root && canvas) {
         return new THREE.Box3().setFromObject(object);
     }
 
-    function createWheel(radius, width) {
-        const wheel = new THREE.Mesh(
+    function createWheel(radius, width, sideSign) {
+        const wheel = new THREE.Group();
+        wheel.name = sideSign > 0 ? 'left-wheel' : 'right-wheel';
+
+        const tire = new THREE.Mesh(
             new THREE.CylinderGeometry(radius, radius, width, 20),
             new THREE.MeshStandardMaterial({
                 color: COLORS.wheel,
@@ -588,6 +606,25 @@ if (root && canvas) {
                 metalness: 0.02,
             }),
         );
+        wheel.add(tire);
+
+        // A small outer-face spoke makes actual wheel roll visible. The wheel group
+        // still rolls around local +Y, matching the RC car's left/right axle.
+        const spoke = new THREE.Mesh(
+            new THREE.BoxGeometry(
+                radius * 1.18,
+                Math.max(0.002, width * 0.07),
+                Math.max(0.002, radius * 0.10),
+            ),
+            new THREE.MeshStandardMaterial({
+                color: COLORS.robotFront,
+                roughness: 0.8,
+                metalness: 0.02,
+            }),
+        );
+        spoke.position.y = sideSign * width * 0.52;
+        wheel.add(spoke);
+
         return wheel;
     }
 
@@ -602,11 +639,15 @@ if (root && canvas) {
             x, halfWidth, z + halfHeight,
             x, -halfWidth, z + halfHeight,
         ]);
+        // ROS base_link uses +Y as vehicle-left. The camera plane vertices are
+        // ordered from -Y (right) to +Y (left), so U must run in the opposite
+        // direction to keep the 3D camera view's left/right physically correct.
+        // This mirrors only the WebGL camera plane; the main camera stream is unchanged.
         const uvs = new Float32Array([
-            0, 0,
             1, 0,
-            1, 1,
+            0, 0,
             0, 1,
+            1, 1,
         ]);
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
@@ -870,10 +911,23 @@ if (root && canvas) {
 
             const wheelX = chassisLength * 0.35;
             const wheelY = chassisWidth * 0.5 + wheelWidth * 0.18;
+            wheelVisuals.left.length = 0;
+            wheelVisuals.right.length = 0;
+            wheelVisualRadiusM = wheelRadius;
+            wheelVisualTrackM = wheelY * 2;
+            wheelRollRadians.left = 0;
+            wheelRollRadians.right = 0;
+
             for (const x of [-wheelX, wheelX]) {
                 for (const y of [-wheelY, wheelY]) {
-                    const wheel = createWheel(wheelRadius, wheelWidth);
+                    const side = y > 0 ? 'left' : 'right';
+                    const wheel = createWheel(
+                        wheelRadius,
+                        wheelWidth,
+                        y > 0 ? 1 : -1,
+                    );
                     wheel.position.set(x, y, wheelRadius);
+                    wheelVisuals[side].push(wheel);
                     model.add(wheel);
                 }
             }
@@ -916,6 +970,10 @@ if (root && canvas) {
             baseAxes.position.z = 0.01;
             tfPoseGroup.add(baseAxes);
 
+            if (targetPose) {
+                applyRenderedPose(renderedPose || targetPose);
+            }
+
             if (currentMap) {
                 currentMapKey = null;
                 rebuildMap(currentMap, window.dabomNavigationVisualizationState?.mapRevision);
@@ -956,21 +1014,78 @@ if (root && canvas) {
             return;
         }
 
-        const groups = [
+        const poseGroups = [
             robotPoseGroup,
             tfPoseGroup,
             cameraFrustumPoseGroup,
             cameraViewPoseGroup,
-            scanRoot,
-            pointsRoot,
         ];
-        for (const group of groups) {
+        for (const group of poseGroups) {
             group.position.set(pose.x, pose.y, pose.z);
             group.rotation.z = pose.yaw;
+        }
+
+        // Rotate both LiDAR layers in place around the current robot/LiDAR origin.
+        // This fixes the physical mount being reversed without altering ROS/map data.
+        for (const group of [scanRoot, pointsRoot]) {
+            group.position.set(pose.x, pose.y, pose.z);
+            group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
         }
         setPoseVisibility(true);
 
         followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
+    }
+
+    function normalizedYawDelta(fromYaw, toYaw) {
+        return Math.atan2(
+            Math.sin(toYaw - fromYaw),
+            Math.cos(toYaw - fromYaw),
+        );
+    }
+
+    function advanceWheelVisuals(previousPose, nextPose) {
+        if (
+            !previousPose
+            || !nextPose
+            || wheelVisualRadiusM <= 0
+            || wheelVisualTrackM <= 0
+        ) return;
+
+        const dx = nextPose.x - previousPose.x;
+        const dy = nextPose.y - previousPose.y;
+        const yawDelta = normalizedYawDelta(
+            previousPose.yaw,
+            nextPose.yaw,
+        );
+
+        // Project visual displacement onto the differential-drive forward axis.
+        // Lateral localization corrections should not make the tires "roll sideways".
+        const midpointYaw = previousPose.yaw + yawDelta * 0.5;
+        const centerDistance = (
+            dx * Math.cos(midpointYaw)
+            + dy * Math.sin(midpointYaw)
+        );
+
+        const leftDistance = (
+            centerDistance
+            - yawDelta * wheelVisualTrackM * 0.5
+        );
+        const rightDistance = (
+            centerDistance
+            + yawDelta * wheelVisualTrackM * 0.5
+        );
+
+        // With +X as vehicle forward and the wheel axle along +Y, positive
+        // rotation around local Y is forward wheel roll.
+        wheelRollRadians.left += leftDistance / wheelVisualRadiusM;
+        wheelRollRadians.right += rightDistance / wheelVisualRadiusM;
+
+        for (const wheel of wheelVisuals.left) {
+            wheel.rotation.y = wheelRollRadians.left;
+        }
+        for (const wheel of wheelVisuals.right) {
+            wheel.rotation.y = wheelRollRadians.right;
+        }
     }
 
     function updateRobotPose(pose) {
@@ -978,6 +1093,7 @@ if (root && canvas) {
         targetPose = next;
         if (!next) {
             renderedPose = null;
+            lastAnimationAt = 0;
             applyRenderedPose(null);
             return;
         }
@@ -994,25 +1110,61 @@ if (root && canvas) {
             ? Math.min(0.1, Math.max(0, (now - lastAnimationAt) / 1000))
             : 0;
         lastAnimationAt = now;
+        if (deltaSec <= 0) return;
 
-        const distance = Math.hypot(
-            targetPose.x - renderedPose.x,
-            targetPose.y - renderedPose.y,
+        const errorX = targetPose.x - renderedPose.x;
+        const errorY = targetPose.y - renderedPose.y;
+        const distance = Math.hypot(errorX, errorY);
+        const yawError = normalizedYawDelta(
+            renderedPose.yaw,
+            targetPose.yaw,
         );
-        if (distance > 1.5) {
+
+        // A localization jump is a correction, not physical wheel travel.
+        if (distance > MAX_VISUAL_TELEPORT_M) {
             renderedPose = { ...targetPose };
             applyRenderedPose(renderedPose);
             return;
         }
 
-        const alpha = 1 - Math.exp(-12 * deltaSec);
-        renderedPose.x += (targetPose.x - renderedPose.x) * alpha;
-        renderedPose.y += (targetPose.y - renderedPose.y) * alpha;
-        renderedPose.z += (targetPose.z - renderedPose.z) * alpha;
+        const previousPose = { ...renderedPose };
+        const forwardAlpha = 1 - Math.exp(
+            -POSE_FORWARD_RESPONSE_PER_SEC * deltaSec
+        );
+        const lateralAlpha = 1 - Math.exp(
+            -POSE_LATERAL_RESPONSE_PER_SEC * deltaSec
+        );
+        const yawAlpha = 1 - Math.exp(
+            -POSE_YAW_RESPONSE_PER_SEC * deltaSec
+        );
 
-        let yawDelta = targetPose.yaw - renderedPose.yaw;
-        yawDelta = Math.atan2(Math.sin(yawDelta), Math.cos(yawDelta));
-        renderedPose.yaw += yawDelta * alpha;
+        // For a differential-drive RC car, the displacement chord of a turn is
+        // aligned with the midpoint heading. Give that direction the normal
+        // response and absorb lateral AMCL/map corrections more gently.
+        const midpointYaw = renderedPose.yaw + yawError * 0.5;
+        const forwardX = Math.cos(midpointYaw);
+        const forwardY = Math.sin(midpointYaw);
+        const lateralX = -forwardY;
+        const lateralY = forwardX;
+        const forwardError = errorX * forwardX + errorY * forwardY;
+        const lateralError = errorX * lateralX + errorY * lateralY;
+
+        renderedPose.x += (
+            forwardX * forwardError * forwardAlpha
+            + lateralX * lateralError * lateralAlpha
+        );
+        renderedPose.y += (
+            forwardY * forwardError * forwardAlpha
+            + lateralY * lateralError * lateralAlpha
+        );
+        renderedPose.z += (
+            targetPose.z - renderedPose.z
+        ) * forwardAlpha;
+        renderedPose.yaw += yawError * yawAlpha;
+
+        // Wheel roll follows the exact pose shown on screen. Turning in place
+        // naturally drives left/right wheel visuals in opposite directions.
+        advanceWheelVisuals(previousPose, renderedPose);
         applyRenderedPose(renderedPose);
     }
 
@@ -1419,6 +1571,11 @@ if (root && canvas) {
                 resetTrajectory(null, false);
             }
             trajectoryRoot.visible = false;
+            if (currentVisualizationState) {
+                applyVisualizationState(currentVisualizationState);
+            } else {
+                updateRobotPose(MAPPING_PREVIEW_POSE);
+            }
         } else if (mode === 'DRIVING') {
             trajectoryRoot.visible = true;
             if (modeRestarted) {
@@ -1500,12 +1657,48 @@ if (root && canvas) {
         if (interactionMode === 'set-goal') canvas.focus({ preventScroll: true });
     }
 
+    function isMappingMode() {
+        return String(
+            currentControlState?.navigation_mode || ''
+        ).toUpperCase() === 'MAPPING';
+    }
+
+    function payloadMatchesMappingSession(payload) {
+        if (!payload) return false;
+        return String(
+            payload.navigation_mode || ''
+        ).toLowerCase() === 'mapping';
+    }
+
     function applyVisualizationState(state) {
         if (!state) return;
         currentVisualizationState = state;
-        rebuildMap(state.map || null, state.mapRevision);
-        updateRobotPose(state.pose || null);
-        rebuildScan(state.scan || null);
+
+        // A new Mapping session must not briefly render a stale saved/localization
+        // map from the previous Driving session. The mapping bridge tags each new
+        // map/pose/scan payload with navigation_mode=mapping.
+        const mappingMode = isMappingMode();
+        const liveMap = mappingMode
+            ? (payloadMatchesMappingSession(state.map) ? state.map : null)
+            : (state.map || null);
+        const livePose = mappingMode
+            ? (payloadMatchesMappingSession(state.pose) ? state.pose : null)
+            : (state.pose || null);
+        const liveScan = mappingMode
+            ? (payloadMatchesMappingSession(state.scan) ? state.scan : null)
+            : (state.scan || null);
+
+        rebuildMap(liveMap, liveMap ? state.mapRevision : null);
+
+        // Before slam_toolbox exposes map->base_link, keep the RC car visible at
+        // the mapping origin. As soon as the real TF pose arrives it replaces this
+        // preview pose and the existing interpolation takes over.
+        const visualizationPose = validPose(livePose)
+            ? livePose
+            : (mappingMode ? MAPPING_PREVIEW_POSE : null);
+        updateRobotPose(visualizationPose);
+        rebuildScan(liveScan);
+
         if (
             trajectorySessionActive
             && String(currentControlState?.navigation_mode || '').toUpperCase() === 'DRIVING'

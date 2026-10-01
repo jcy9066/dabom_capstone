@@ -46,6 +46,111 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("GLTFLoader", viewer)
         self.assertIn("robot_upper_chassis.glb", viewer)
 
+    def test_3d_viewer_rotates_lidar_visuals_180_degrees_in_place(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;", viewer)
+        self.assertIn("for (const group of [scanRoot, pointsRoot])", viewer)
+        self.assertIn(
+            "group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;",
+            viewer,
+        )
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
+            template,
+        )
+
+    def test_3d_camera_view_is_mirrored_horizontally_only(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const uvs = new Float32Array([\n            1, 0,\n            0, 0,\n            0, 1,\n            1, 1,",
+            viewer,
+        )
+        self.assertIn("cameraTextureContext.drawImage(", viewer)
+        self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
+            template,
+        )
+
+    def test_3d_viewer_uses_differential_drive_motion_and_wheel_roll(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("POSE_FORWARD_RESPONSE_PER_SEC = 7.0", viewer)
+        self.assertIn("POSE_LATERAL_RESPONSE_PER_SEC = 2.5", viewer)
+        self.assertIn("POSE_YAW_RESPONSE_PER_SEC = 9.0", viewer)
+        self.assertIn("function advanceWheelVisuals(previousPose, nextPose)", viewer)
+        self.assertIn("const centerDistance = (", viewer)
+        self.assertIn("centerDistance\n            - yawDelta * wheelVisualTrackM * 0.5", viewer)
+        self.assertIn("centerDistance\n            + yawDelta * wheelVisualTrackM * 0.5", viewer)
+        self.assertIn(
+            "wheelRollRadians.left += leftDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertIn(
+            "wheelRollRadians.right += rightDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertNotIn(
+            "wheelRollRadians.left -= leftDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertNotIn(
+            "wheelRollRadians.right -= rightDistance / wheelVisualRadiusM",
+            viewer,
+        )
+        self.assertIn("wheel.rotation.y = wheelRollRadians.left", viewer)
+        self.assertIn("wheel.rotation.y = wheelRollRadians.right", viewer)
+        self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
+        self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
+            template,
+        )
+
+    def test_mapping_viewer_stays_visible_before_first_slam_map_and_pose(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });",
+            viewer,
+        )
+        self.assertIn("function payloadMatchesMappingSession(payload)", viewer)
+        self.assertIn("payload.navigation_mode || ''", viewer)
+        self.assertIn(
+            "mappingMode ? MAPPING_PREVIEW_POSE : null",
+            viewer,
+        )
+        self.assertIn(
+            "applyVisualizationState(currentVisualizationState);",
+            viewer,
+        )
+        self.assertIn(
+            "updateRobotPose(MAPPING_PREVIEW_POSE);",
+            viewer,
+        )
+        self.assertIn(
+            "applyRenderedPose(renderedPose || targetPose);",
+            viewer,
+        )
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
+            template,
+        )
+
     def test_3d_viewer_reuses_existing_minimap_shell_and_local_assets(self):
         template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
         viewer = (

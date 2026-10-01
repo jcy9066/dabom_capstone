@@ -105,3 +105,15 @@ def test_navigation_launches_have_no_test_data_fallbacks():
     assert 'DeclareLaunchArgument(\n                "map",\n                description=' in navigation
     assert "No bundled test-map default is used." in localization
     assert "No bundled test-map default is used." in navigation
+
+
+def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
+    mapping = read("navigation/ros/patrol_navigation/launch/mapping.launch.py")
+
+    assert "TimerAction" not in mapping
+    assert '"map_publish_period_sec": 1.0' in mapping
+    assert '"pose_publish_period_sec": 0.2' in mapping
+    assert '"scan_publish_period_sec": 0.2' in mapping
+    assert '"send_map": True' in mapping
+    assert '"send_pose": True' in mapping
+    assert '"send_scan": True' in mapping
