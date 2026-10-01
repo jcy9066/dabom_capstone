@@ -99,16 +99,17 @@ def generate_launch_description():
             "pose_child_frame": "base_link",
 
             # 서버 전송 주기
-            # LiDAR/pose는 5 Hz로 즉시 갱신하고, SLAM map은 1 Hz로 갱신한다.
-            "map_publish_period_sec": 1.0,
-            "pose_publish_period_sec": 0.2,
-            "scan_publish_period_sec": 0.2,
+            # RViz2처럼 live LaserScan은 Pi WebSocket 최신값을 사용하고,
+            # pose는 10 Hz, SLAM OccupancyGrid는 2 Hz로 갱신한다.
+            "map_publish_period_sec": 0.5,
+            "pose_publish_period_sec": 0.1,
+            "scan_publish_period_sec": 0.0,
             "request_timeout_sec": 5.0,
 
             # 서버로 전송할 데이터
             "send_map": True,
             "send_pose": True,
-            "send_scan": True,
+            "send_scan": False,
         }],
     )
 
