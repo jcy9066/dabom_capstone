@@ -100,9 +100,9 @@ def generate_launch_description():
 
             # 서버 전송 주기
             # RViz2처럼 live LaserScan은 Pi WebSocket 최신값을 사용하고,
-            # pose는 10 Hz, SLAM OccupancyGrid는 2 Hz로 갱신한다.
-            "map_publish_period_sec": 0.5,
-            "pose_publish_period_sec": 0.1,
+            # TF pose는 20 Hz로 전달하고, /map은 ROS callback 수신 즉시 전달한다.
+            "map_publish_period_sec": 0.0,
+            "pose_publish_period_sec": 0.05,
             "scan_publish_period_sec": 0.0,
             "request_timeout_sec": 5.0,
 

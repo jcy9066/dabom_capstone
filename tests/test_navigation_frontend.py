@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
             template,
         )
 
@@ -135,6 +135,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn("const liveScan = state.scan || null;", viewer)
+        self.assertIn("function applyTfPose(pose)", viewer)
+        self.assertIn("applyTfPose(livePose);", viewer)
+        self.assertNotIn(
+            "robotPoseGroup,\n            tfPoseGroup,",
+            viewer,
+        )
         dashboard = (
             ROOT / "frontend/services/static/script.js"
         ).read_text(encoding="utf-8")
@@ -160,7 +166,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v24',
             template,
         )
 

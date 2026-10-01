@@ -135,6 +135,12 @@ if (root && canvas) {
     tfPoseGroup.visible = false;
     layerGroups.tf.add(tfPoseGroup);
 
+    // TF layer is independent from the robot model and follows the raw
+    // map->base_link transform without visual smoothing, like RViz2 TF.
+    let baseAxes = new THREE.AxesHelper(0.18);
+    baseAxes.position.z = 0.01;
+    tfPoseGroup.add(baseAxes);
+
     const scanRoot = new THREE.Group();
     scanRoot.name = 'laser-scan-rays';
     layerGroups.scan.add(scanRoot);
@@ -175,7 +181,6 @@ if (root && canvas) {
     let wheelVisualRadiusM = 0;
     let wheelVisualTrackM = 0;
     const wheelRollRadians = { left: 0, right: 0 };
-    let baseAxes = null;
     let viewMode = 'top';
     let expandedViewMode = 'free';
     let viewerExpanded = root.closest('.minimap-overlay')?.classList.contains('expanded') === true;
@@ -1000,11 +1005,21 @@ if (root && canvas) {
 
     function setPoseVisibility(visible) {
         robotPoseGroup.visible = Boolean(visible && robotModelReady);
-        tfPoseGroup.visible = Boolean(visible);
         cameraFrustumPoseGroup.visible = Boolean(visible && cameraVisualReady);
         cameraViewPoseGroup.visible = Boolean(visible && cameraVisualReady);
         scanRoot.visible = Boolean(visible && scanRayGeometry);
         pointsRoot.visible = Boolean(visible && scanPointGeometry);
+    }
+
+    function applyTfPose(pose) {
+        const tfPose = poseFromPayload(pose);
+        if (!tfPose) {
+            tfPoseGroup.visible = false;
+            return;
+        }
+        tfPoseGroup.position.set(tfPose.x, tfPose.y, tfPose.z);
+        tfPoseGroup.rotation.z = tfPose.yaw;
+        tfPoseGroup.visible = true;
     }
 
     function applyRenderedPose(pose) {
@@ -1016,7 +1031,6 @@ if (root && canvas) {
 
         const poseGroups = [
             robotPoseGroup,
-            tfPoseGroup,
             cameraFrustumPoseGroup,
             cameraViewPoseGroup,
         ];
@@ -1702,6 +1716,10 @@ if (root && canvas) {
         const visualizationPose = validPose(livePose)
             ? livePose
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
+
+        // TF shows only the actual raw map->base_link transform. The mapping
+        // preview keeps the RC car visible but must never fabricate a TF frame.
+        applyTfPose(livePose);
         updateRobotPose(visualizationPose);
         rebuildScan(liveScan);
 
