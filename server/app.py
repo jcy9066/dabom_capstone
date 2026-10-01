@@ -2728,7 +2728,7 @@ def occupancy_to_pgm_bytes(width, height, cells):
     return header + bytes(pixels)
 
 
-def save_navigation_map_files(map_payload, requested_name=None):
+def save_navigation_map_files(map_payload, requested_name=None, location_metadata=None):
     width, height, cells = decode_map_cells(map_payload)
     base_name = unique_map_name(sanitize_map_name(requested_name))
     saved_at = time.time()
@@ -2788,11 +2788,35 @@ def save_navigation_map_files(map_payload, requested_name=None):
             "raw": str(raw_path.relative_to(ROOT_DIR)),
         },
     }
+    if isinstance(location_metadata, dict) and location_metadata:
+        meta["location"] = dict(location_metadata)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return meta
+
+
+def current_navigation_map_location_metadata():
+    snapshot = location_security_service.snapshot()
+    gps = snapshot.get("gps")
+    if not isinstance(gps, dict) or gps.get("fix") is not True:
+        return None
+
+    location = {
+        "gps": {
+            "lat": gps.get("lat"),
+            "lng": gps.get("lng"),
+            "alt": gps.get("alt"),
+            "satellites": gps.get("satellites"),
+            "hdop": gps.get("hdop"),
+            "captured_at": gps.get("updated_at"),
+        }
+    }
+    if gps.get("matched_location_id"):
+        location["location_id"] = gps.get("matched_location_id")
+        location["name"] = gps.get("matched_location_name")
+    return location
 
 
 def list_saved_navigation_maps():
@@ -2997,6 +3021,7 @@ async def save_current_navigation_map(request: Request):
         meta = save_navigation_map_files(
             dict(current_map),
             requested_name=requested_name,
+            location_metadata=current_navigation_map_location_metadata(),
         )
     except Exception as exc:
         return JSONResponse(

@@ -50,6 +50,7 @@ class SavedNavigationMap:
     origin_y: float
     origin_yaw: float
     saved_at_iso: str | None
+    location: dict[str, Any] | None = None
 
     def public_dict(self, root_dir: Path) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class SavedNavigationMap:
                 "yaw": self.origin_yaw,
             },
             "yaml": str(self.yaml_path.relative_to(root_dir)),
+            "location": dict(self.location) if isinstance(self.location, dict) else None,
         }
 
 
@@ -383,6 +385,9 @@ class NavigationMapService:
             origin_y=origin_y,
             origin_yaw=origin_yaw,
             saved_at_iso=metadata.get("saved_at_iso") if isinstance(metadata.get("saved_at_iso"), str) else None,
+            # Location metadata is auxiliary by design. Invalid or absent location
+            # data must never make an otherwise valid navigation map unusable.
+            location=dict(metadata["location"]) if isinstance(metadata.get("location"), dict) else None,
         )
 
     def _resolve_registered_file(self, value: Any, suffix: str) -> Path:
