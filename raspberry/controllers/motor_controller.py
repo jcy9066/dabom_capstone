@@ -29,6 +29,7 @@ ALLOWED_DIRECTIONS = frozenset(
 )
 
 _REASON_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
+MIN_AUTO_DRIVE_PWM = 0.40
 
 
 class MotorControllerError(RuntimeError):
@@ -576,6 +577,26 @@ class MotorController:
         if peak > 1.0:
             left_normalized /= peak
             right_normalized /= peak
+
+        # Nav2의 작은 속도 명령이 실제 DC 모터의 정지 마찰보다
+        # 낮은 PWM으로 변환되지 않도록 자동 주행에만 최소 출력을 둔다.
+        if (
+            0.0 < abs(left_normalized)
+            < MIN_AUTO_DRIVE_PWM
+        ):
+            left_normalized = math.copysign(
+                MIN_AUTO_DRIVE_PWM,
+                left_normalized,
+            )
+
+        if (
+            0.0 < abs(right_normalized)
+            < MIN_AUTO_DRIVE_PWM
+        ):
+            right_normalized = math.copysign(
+                MIN_AUTO_DRIVE_PWM,
+                right_normalized,
+            )
 
         with self._command_lock:
             self._ensure_connected_locked()
