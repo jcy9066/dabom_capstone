@@ -67,6 +67,7 @@ from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
+from server.live_mapping_grid import LiveMappingGrid
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -454,6 +455,15 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+
+live_mapping_grid = LiveMappingGrid(
+    resolution=0.05,
+    refresh_sec=1.0,
+    max_clear_range_m=8.0,
+    sensor_x=env_float("LIDAR_X"),
+    sensor_y=env_float("LIDAR_Y"),
+    sensor_yaw=env_float("LIDAR_YAW"),
+)
 frame_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 decode_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 publish_stats = {"last_time": time.time(), "count": 0, "fps": 0, "last_publish_at": None}
@@ -791,6 +801,7 @@ def current_navigation_map_snapshot():
 
 
 def clear_navigation_visualization_state():
+    live_mapping_grid.reset()
     with state_lock:
         navigation_state["map"] = None
         navigation_state["pose"] = None
@@ -799,6 +810,23 @@ def clear_navigation_visualization_state():
         navigation_state["pose_updated_at"] = None
         navigation_state["map_revision"] = None
     navigation_visualization_hub.publish({"type": "reset"})
+
+
+def publish_live_mapping_map(map_payload, received_at):
+    map_revision = build_navigation_map_revision(map_payload)
+    stored_map = received_payload(map_payload, received_at)
+    with state_lock:
+        navigation_state["map"] = stored_map
+        navigation_state["map_updated_at"] = received_at
+        navigation_state["map_revision"] = map_revision
+    navigation_visualization_hub.publish(
+        {
+            "type": "map",
+            "map": stored_map,
+            "map_revision": map_revision,
+        }
+    )
+    return stored_map
 
 
 navigation_control_api = NavigationControlApi(
