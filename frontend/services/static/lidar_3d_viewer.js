@@ -34,6 +34,13 @@ if (root && canvas) {
     // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
     // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
     const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
+    // Visual pose smoothing follows differential-drive motion: forward motion responds
+    // faster than lateral map/localization correction so the chassis does not appear
+    // to slide sideways across its fixed wheel direction.
+    const POSE_FORWARD_RESPONSE_PER_SEC = 7.0;
+    const POSE_LATERAL_RESPONSE_PER_SEC = 2.5;
+    const POSE_YAW_RESPONSE_PER_SEC = 9.0;
+    const MAX_VISUAL_TELEPORT_M = 1.5;
     const TRAJECTORY_DISTANCE_M = 0.08;
     const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
     const TRAJECTORY_FALLBACK_MS = 500;
@@ -163,6 +170,10 @@ if (root && canvas) {
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
     let robotModelReady = false;
     let robotVisual = null;
+    const wheelVisuals = { left: [], right: [] };
+    let wheelVisualRadiusM = 0;
+    let wheelVisualTrackM = 0;
+    const wheelRollRadians = { left: 0, right: 0 };
     let baseAxes = null;
     let viewMode = 'top';
     let expandedViewMode = 'free';
@@ -582,8 +593,11 @@ if (root && canvas) {
         return new THREE.Box3().setFromObject(object);
     }
 
-    function createWheel(radius, width) {
-        const wheel = new THREE.Mesh(
+    function createWheel(radius, width, sideSign) {
+        const wheel = new THREE.Group();
+        wheel.name = sideSign > 0 ? 'left-wheel' : 'right-wheel';
+
+        const tire = new THREE.Mesh(
             new THREE.CylinderGeometry(radius, radius, width, 20),
             new THREE.MeshStandardMaterial({
                 color: COLORS.wheel,
@@ -591,6 +605,25 @@ if (root && canvas) {
                 metalness: 0.02,
             }),
         );
+        wheel.add(tire);
+
+        // A small outer-face spoke makes actual wheel roll visible. The wheel group
+        // still rolls around local +Y, matching the RC car's left/right axle.
+        const spoke = new THREE.Mesh(
+            new THREE.BoxGeometry(
+                radius * 1.18,
+                Math.max(0.002, width * 0.07),
+                Math.max(0.002, radius * 0.10),
+            ),
+            new THREE.MeshStandardMaterial({
+                color: COLORS.robotFront,
+                roughness: 0.8,
+                metalness: 0.02,
+            }),
+        );
+        spoke.position.y = sideSign * width * 0.52;
+        wheel.add(spoke);
+
         return wheel;
     }
 
@@ -873,10 +906,23 @@ if (root && canvas) {
 
             const wheelX = chassisLength * 0.35;
             const wheelY = chassisWidth * 0.5 + wheelWidth * 0.18;
+            wheelVisuals.left.length = 0;
+            wheelVisuals.right.length = 0;
+            wheelVisualRadiusM = wheelRadius;
+            wheelVisualTrackM = wheelY * 2;
+            wheelRollRadians.left = 0;
+            wheelRollRadians.right = 0;
+
             for (const x of [-wheelX, wheelX]) {
                 for (const y of [-wheelY, wheelY]) {
-                    const wheel = createWheel(wheelRadius, wheelWidth);
+                    const side = y > 0 ? 'left' : 'right';
+                    const wheel = createWheel(
+                        wheelRadius,
+                        wheelWidth,
+                        y > 0 ? 1 : -1,
+                    );
                     wheel.position.set(x, y, wheelRadius);
+                    wheelVisuals[side].push(wheel);
                     model.add(wheel);
                 }
             }
@@ -981,11 +1027,62 @@ if (root && canvas) {
         followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
     }
 
+    function normalizedYawDelta(fromYaw, toYaw) {
+        return Math.atan2(
+            Math.sin(toYaw - fromYaw),
+            Math.cos(toYaw - fromYaw),
+        );
+    }
+
+    function advanceWheelVisuals(previousPose, nextPose) {
+        if (
+            !previousPose
+            || !nextPose
+            || wheelVisualRadiusM <= 0
+            || wheelVisualTrackM <= 0
+        ) return;
+
+        const dx = nextPose.x - previousPose.x;
+        const dy = nextPose.y - previousPose.y;
+        const yawDelta = normalizedYawDelta(
+            previousPose.yaw,
+            nextPose.yaw,
+        );
+
+        // Project visual displacement onto the differential-drive forward axis.
+        // Lateral localization corrections should not make the tires "roll sideways".
+        const midpointYaw = previousPose.yaw + yawDelta * 0.5;
+        const centerDistance = (
+            dx * Math.cos(midpointYaw)
+            + dy * Math.sin(midpointYaw)
+        );
+
+        const leftDistance = (
+            centerDistance
+            - yawDelta * wheelVisualTrackM * 0.5
+        );
+        const rightDistance = (
+            centerDistance
+            + yawDelta * wheelVisualTrackM * 0.5
+        );
+
+        wheelRollRadians.left -= leftDistance / wheelVisualRadiusM;
+        wheelRollRadians.right -= rightDistance / wheelVisualRadiusM;
+
+        for (const wheel of wheelVisuals.left) {
+            wheel.rotation.y = wheelRollRadians.left;
+        }
+        for (const wheel of wheelVisuals.right) {
+            wheel.rotation.y = wheelRollRadians.right;
+        }
+    }
+
     function updateRobotPose(pose) {
         const next = poseFromPayload(pose);
         targetPose = next;
         if (!next) {
             renderedPose = null;
+            lastAnimationAt = 0;
             applyRenderedPose(null);
             return;
         }
@@ -1002,25 +1099,61 @@ if (root && canvas) {
             ? Math.min(0.1, Math.max(0, (now - lastAnimationAt) / 1000))
             : 0;
         lastAnimationAt = now;
+        if (deltaSec <= 0) return;
 
-        const distance = Math.hypot(
-            targetPose.x - renderedPose.x,
-            targetPose.y - renderedPose.y,
+        const errorX = targetPose.x - renderedPose.x;
+        const errorY = targetPose.y - renderedPose.y;
+        const distance = Math.hypot(errorX, errorY);
+        const yawError = normalizedYawDelta(
+            renderedPose.yaw,
+            targetPose.yaw,
         );
-        if (distance > 1.5) {
+
+        // A localization jump is a correction, not physical wheel travel.
+        if (distance > MAX_VISUAL_TELEPORT_M) {
             renderedPose = { ...targetPose };
             applyRenderedPose(renderedPose);
             return;
         }
 
-        const alpha = 1 - Math.exp(-12 * deltaSec);
-        renderedPose.x += (targetPose.x - renderedPose.x) * alpha;
-        renderedPose.y += (targetPose.y - renderedPose.y) * alpha;
-        renderedPose.z += (targetPose.z - renderedPose.z) * alpha;
+        const previousPose = { ...renderedPose };
+        const forwardAlpha = 1 - Math.exp(
+            -POSE_FORWARD_RESPONSE_PER_SEC * deltaSec
+        );
+        const lateralAlpha = 1 - Math.exp(
+            -POSE_LATERAL_RESPONSE_PER_SEC * deltaSec
+        );
+        const yawAlpha = 1 - Math.exp(
+            -POSE_YAW_RESPONSE_PER_SEC * deltaSec
+        );
 
-        let yawDelta = targetPose.yaw - renderedPose.yaw;
-        yawDelta = Math.atan2(Math.sin(yawDelta), Math.cos(yawDelta));
-        renderedPose.yaw += yawDelta * alpha;
+        // For a differential-drive RC car, the displacement chord of a turn is
+        // aligned with the midpoint heading. Give that direction the normal
+        // response and absorb lateral AMCL/map corrections more gently.
+        const midpointYaw = renderedPose.yaw + yawError * 0.5;
+        const forwardX = Math.cos(midpointYaw);
+        const forwardY = Math.sin(midpointYaw);
+        const lateralX = -forwardY;
+        const lateralY = forwardX;
+        const forwardError = errorX * forwardX + errorY * forwardY;
+        const lateralError = errorX * lateralX + errorY * lateralY;
+
+        renderedPose.x += (
+            forwardX * forwardError * forwardAlpha
+            + lateralX * lateralError * lateralAlpha
+        );
+        renderedPose.y += (
+            forwardY * forwardError * forwardAlpha
+            + lateralY * lateralError * lateralAlpha
+        );
+        renderedPose.z += (
+            targetPose.z - renderedPose.z
+        ) * forwardAlpha;
+        renderedPose.yaw += yawError * yawAlpha;
+
+        // Wheel roll follows the exact pose shown on screen. Turning in place
+        // naturally drives left/right wheel visuals in opposite directions.
+        advanceWheelVisuals(previousPose, renderedPose);
         applyRenderedPose(renderedPose);
     }
 

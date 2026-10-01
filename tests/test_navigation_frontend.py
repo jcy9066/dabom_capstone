@@ -63,6 +63,28 @@ class NavigationFrontendContractTests(unittest.TestCase):
             template,
         )
 
+    def test_3d_viewer_uses_differential_drive_motion_and_wheel_roll(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("POSE_FORWARD_RESPONSE_PER_SEC = 7.0", viewer)
+        self.assertIn("POSE_LATERAL_RESPONSE_PER_SEC = 2.5", viewer)
+        self.assertIn("POSE_YAW_RESPONSE_PER_SEC = 9.0", viewer)
+        self.assertIn("function advanceWheelVisuals(previousPose, nextPose)", viewer)
+        self.assertIn("const centerDistance = (", viewer)
+        self.assertIn("centerDistance\n            - yawDelta * wheelVisualTrackM * 0.5", viewer)
+        self.assertIn("centerDistance\n            + yawDelta * wheelVisualTrackM * 0.5", viewer)
+        self.assertIn("wheel.rotation.y = wheelRollRadians.left", viewer)
+        self.assertIn("wheel.rotation.y = wheelRollRadians.right", viewer)
+        self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
+        self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-robot-motion-v18',
+            template,
+        )
+
     def test_3d_viewer_reuses_existing_minimap_shell_and_local_assets(self):
         template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
         viewer = (
