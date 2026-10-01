@@ -134,6 +134,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "mappingMode ? MAPPING_PREVIEW_POSE : null",
             viewer,
         )
+        self.assertIn("const liveScan = state.scan || null;", viewer)
+        self.assertNotIn(
+            "payloadMatchesMappingSession(state.scan)",
+            viewer,
+        )
         self.assertIn(
             "applyVisualizationState(currentVisualizationState);",
             viewer,
