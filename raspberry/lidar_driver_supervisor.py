@@ -24,29 +24,67 @@ class ScanMonitor:
         self.scan_count += 1
 
 
-def terminate_group(process: subprocess.Popen, sig=signal.SIGINT) -> None:
-    if process.poll() is not None:
-        return
+def process_group_alive(pgid: int) -> bool:
     try:
-        os.killpg(process.pid, sig)
+        os.killpg(pgid, 0)
+        return True
     except ProcessLookupError:
-        return
-    deadline = time.monotonic() + 3.0
-    while process.poll() is None and time.monotonic() < deadline:
+        return False
+    except PermissionError:
+        # The group exists even if this process cannot signal it.
+        return True
+
+
+def wait_group_exit(pgid: int, timeout_sec: float) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if not process_group_alive(pgid):
+            return True
         time.sleep(0.1)
-    if process.poll() is None:
+    return not process_group_alive(pgid)
+
+
+def terminate_group(process: subprocess.Popen, sig=signal.SIGINT) -> None:
+    # start_new_session=True guarantees that the launch PID is also the PGID.
+    # The launch parent can exit before rplidar/static-TF children, so process.poll()
+    # is not a valid completion check for the owned process tree.
+    pgid = int(process.pid)
+
+    if process_group_alive(pgid):
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        deadline = time.monotonic() + 2.0
-        while process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.1)
-    if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(pgid, sig)
         except ProcessLookupError:
             pass
+
+    if wait_group_exit(pgid, 3.0):
+        try:
+            process.wait(timeout=0)
+        except (subprocess.TimeoutExpired, ChildProcessError):
+            pass
+        return
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    if wait_group_exit(pgid, 2.0):
+        try:
+            process.wait(timeout=0)
+        except (subprocess.TimeoutExpired, ChildProcessError):
+            pass
+        return
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    wait_group_exit(pgid, 1.0)
+
+    try:
+        process.wait(timeout=0)
+    except (subprocess.TimeoutExpired, ChildProcessError):
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:
