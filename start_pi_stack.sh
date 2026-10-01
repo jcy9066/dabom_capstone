@@ -403,6 +403,8 @@ stop_matching "raspberry/scripts/start_robot_command_client.sh" TERM
 stop_matching "raspberry/robot_command_client.py" INT
 stop_matching "raspberry/lidar_scan_sender.py" TERM
 stop_matching "ros2 launch patrol_navigation lidar.launch.py" TERM
+stop_matching "rplidar_composition" TERM
+stop_matching "static_transform_publisher" TERM
 stop_matching "rpicam-vid" TERM
 stop_matching "/stream/h264?robot_id=${ROBOT_ID}" TERM
 
