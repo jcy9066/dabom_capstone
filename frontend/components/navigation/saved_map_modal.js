@@ -26,12 +26,29 @@
         renaming: '\uc9c0\ub3c4 \uc774\ub984 \ubcc0\uacbd \uc911...',
         renameSuccess: '\uc9c0\ub3c4 \uc774\ub984\uc744 \ubcc0\uacbd\ud588\uc2b5\ub2c8\ub2e4.',
         selectRequired: '\uc800\uc7a5 \uc9c0\ub3c4\ub97c \uc9c1\uc811 \uc120\ud0dd\ud558\uc138\uc694.',
-        mapPrefix: 'MAP: '
+        mapPrefix: 'MAP: ',
+        locationTitle: '장소 / GPS',
+        currentLocation: '현재 장소',
+        gpsStatus: 'GPS',
+        securityStatus: '보안 구역',
+        noFix: 'NO FIX',
+        unknown: '확인 불가',
+        normal: '정상',
+        outside: '구역 이탈',
+        newLocation: '새 장소',
+        locationName: '장소 이름',
+        latitude: '위도',
+        longitude: '경도',
+        radius: '허용 반경 (m)',
+        useCurrentGps: '현재 위치 사용',
+        saveLocation: '장소 저장',
+        deleteLocation: '장소 삭제'
     };
     const state = {
         maps: [],
         active: null,
         activeApiAvailable: true,
+        locationStatus: null,
         busy: false,
         closeTimer: null,
         progressTimers: [],
@@ -46,6 +63,14 @@
         if (value !== undefined) element.textContent = value;
         return element;
     };
+
+    function createControlButton(value, variant = 'secondary', className = '') {
+        const button = create('button', className, value);
+        button.type = 'button';
+        button.dataset.controlButton = variant;
+        components.controls?.controlButton?.enhance?.(button);
+        return button;
+    }
 
     const formatSavedAt = value => {
         if (!value) return '--';
@@ -138,6 +163,172 @@
         return messages[error.code] || error.message || labels.unavailable;
     }
 
+    function locationFallback(error = '') {
+        return {
+            unavailable: true,
+            error,
+            gps: { fix: false },
+            security_state: 'UNKNOWN',
+            last_location_id: null,
+            last_location_name: null,
+            locations: [],
+        };
+    }
+
+    function coordinateText(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number.toFixed(6) : '--';
+    }
+
+    function renderLocationPanel(status = locationFallback()) {
+        const panel = create('section', 'saved-map-location-panel');
+        panel.append(create('div', 'saved-map-section-title', labels.locationTitle));
+
+        const gps = status?.gps || { fix: false };
+        const liveName = gps.matched_location_name;
+        const lastName = status?.last_location_name;
+        const placeText = liveName || (lastName ? `${lastName} (마지막 확인)` : labels.unknown);
+        const satelliteText = Number.isFinite(Number(gps.satellites)) ? ` · 위성 ${Number(gps.satellites)}` : '';
+        const gpsText = gps.fix ? `FIX${satelliteText}` : labels.noFix;
+        const securityText = status?.security_state === 'OUT_OF_AREA'
+            ? labels.outside
+            : status?.security_state === 'NORMAL'
+                ? labels.normal
+                : labels.unknown;
+
+        const statusGrid = create('div', 'saved-map-location-status');
+        for (const [name, value, extraClass] of [
+            [labels.currentLocation, placeText, ''],
+            [labels.gpsStatus, gpsText, gps.fix ? 'is-ok' : ''],
+            [labels.securityStatus, securityText, status?.security_state === 'OUT_OF_AREA' ? 'is-danger' : ''],
+        ]) {
+            const row = create('div', `saved-map-location-status-row ${extraClass}`.trim());
+            row.append(create('span', 'saved-map-location-status-label', name));
+            row.append(create('span', 'saved-map-location-status-value', value));
+            statusGrid.append(row);
+        }
+        panel.append(statusGrid);
+
+        if (status?.unavailable) {
+            panel.append(create('div', 'saved-map-location-note', `GPS/장소 상태 확인 불가: ${status.error || labels.unavailable}`));
+            return panel;
+        }
+
+        const locations = Array.isArray(status.locations) ? status.locations : [];
+        const selector = create('select', 'saved-map-location-select');
+        selector.id = 'saved-map-location-select';
+        const blank = create('option', '', labels.newLocation);
+        blank.value = '';
+        selector.append(blank);
+        for (const location of locations) {
+            const option = create('option', '', location.name || location.location_id);
+            option.value = location.location_id || '';
+            selector.append(option);
+        }
+        if (status.last_location_id && locations.some(item => item.location_id === status.last_location_id)) {
+            selector.value = status.last_location_id;
+        }
+
+        const fields = create('div', 'saved-map-location-fields');
+        const fieldSpecs = [
+            ['saved-map-location-name', labels.locationName, 'text'],
+            ['saved-map-location-lat', labels.latitude, 'number'],
+            ['saved-map-location-lng', labels.longitude, 'number'],
+            ['saved-map-location-radius', labels.radius, 'number'],
+        ];
+        const inputs = {};
+        for (const [id, label, type] of fieldSpecs) {
+            const field = create('label', '', label);
+            const input = create('input');
+            input.id = id;
+            input.type = type;
+            if (type === 'number') input.step = 'any';
+            field.append(input);
+            fields.append(field);
+            inputs[id] = input;
+        }
+        inputs['saved-map-location-radius'].value = '30';
+
+        const loadSelectedLocation = () => {
+            const location = locations.find(item => item.location_id === selector.value);
+            inputs['saved-map-location-name'].value = location?.name || '';
+            inputs['saved-map-location-lat'].value = location?.lat ?? '';
+            inputs['saved-map-location-lng'].value = location?.lng ?? '';
+            inputs['saved-map-location-radius'].value = location?.radius_m ?? '30';
+            deleteButton.disabled = !location;
+        };
+
+        const actions = create('div', 'saved-map-location-actions');
+        const useCurrent = createControlButton(labels.useCurrentGps, 'secondary');
+        useCurrent.dataset.requiresGps = 'true';
+        useCurrent.disabled = gps.fix !== true;
+        useCurrent.addEventListener('click', () => {
+            if (gps.fix !== true) return;
+            inputs['saved-map-location-lat'].value = gps.lat ?? '';
+            inputs['saved-map-location-lng'].value = gps.lng ?? '';
+            if (!inputs['saved-map-location-name'].value && gps.matched_location_name) {
+                inputs['saved-map-location-name'].value = gps.matched_location_name;
+            }
+        });
+
+        const saveLocation = createControlButton(labels.saveLocation, 'accent');
+        saveLocation.addEventListener('click', async () => {
+            const name = inputs['saved-map-location-name'].value.trim();
+            const lat = Number(inputs['saved-map-location-lat'].value);
+            const lng = Number(inputs['saved-map-location-lng'].value);
+            const radius = Number(inputs['saved-map-location-radius'].value);
+            if (!name || ![lat, lng, radius].every(Number.isFinite)) {
+                global.alert('장소 이름, 좌표, 허용 반경을 확인하세요.');
+                return;
+            }
+            try {
+                saveLocation.disabled = true;
+                const token = await csrfToken();
+                await requestJson('/api/navigation/locations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body: JSON.stringify({
+                        location_id: selector.value || null,
+                        name,
+                        lat,
+                        lng,
+                        radius_m: radius,
+                    })
+                });
+                await controller?.open?.();
+            } catch (error) {
+                global.alert(`장소 저장 실패: ${error.message || labels.unavailable}`);
+            } finally {
+                saveLocation.disabled = false;
+            }
+        });
+
+        const deleteButton = createControlButton(labels.deleteLocation, 'danger');
+        deleteButton.disabled = true;
+        deleteButton.addEventListener('click', async () => {
+            if (!selector.value) return;
+            const selected = locations.find(item => item.location_id === selector.value);
+            if (!global.confirm(`${selected?.name || selector.value} 장소를 삭제하시겠습니까?`)) return;
+            try {
+                deleteButton.disabled = true;
+                const token = await csrfToken();
+                await requestJson(`/api/navigation/locations/${encodeURIComponent(selector.value)}`, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRF-Token': token }
+                });
+                await controller?.open?.();
+            } catch (error) {
+                global.alert(`장소 삭제 실패: ${error.message || labels.unavailable}`);
+            }
+        });
+
+        selector.addEventListener('change', loadSelectedLocation);
+        actions.append(useCurrent, saveLocation, deleteButton);
+        panel.append(selector, fields, actions);
+        loadSelectedLocation();
+        return panel;
+    }
+
     function captureViewState(container = manager?.body) {
         const value = id => container?.querySelector?.(`#${id}`)?.value ?? '0';
         return {
@@ -152,10 +343,13 @@
 
     function setControlsDisabled(container, disabled, pending = false) {
         container?.classList?.toggle('is-pending', pending);
-        container?.querySelectorAll?.('button, input').forEach(element => { element.disabled = disabled; });
+        container?.querySelectorAll?.('button, input, select').forEach(element => { element.disabled = disabled; });
         if (!disabled) {
             const load = container?.querySelector?.('.saved-map-load');
             if (load) load.disabled = !selectedMapName(container);
+            container?.querySelectorAll?.('[data-requires-gps="true"]').forEach(element => {
+                element.disabled = state.locationStatus?.gps?.fix !== true;
+            });
         }
     }
 
@@ -280,7 +474,9 @@
         }
 
         const maps = context.maps || [];
+        const locationStatus = context.locationStatus || state.locationStatus || locationFallback();
         container.append(create('p', 'saved-map-description', `${labels.description} ${labels.selectRequired} ${labels.renameHint}`));
+        container.append(renderLocationPanel(locationStatus));
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name
@@ -303,6 +499,14 @@
             const resolutionText = Number.isFinite(resolution) ? resolution.toFixed(2) : '--';
             const mapDetails = `${formatSavedAt(map.saved_at)} | ${map.width} x ${map.height} | ${resolutionText}m`;
             details.append(heading, create('div', 'saved-map-details', mapDetails));
+            if (map.location && typeof map.location === 'object') {
+                const savedGps = map.location.gps && typeof map.location.gps === 'object' ? map.location.gps : {};
+                const savedPlace = map.location.name || '저장 위치';
+                const coords = Number.isFinite(Number(savedGps.lat)) && Number.isFinite(Number(savedGps.lng))
+                    ? ` · ${coordinateText(savedGps.lat)}, ${coordinateText(savedGps.lng)}`
+                    : '';
+                details.append(create('div', 'saved-map-location-meta', `장소: ${savedPlace}${coords}`));
+            }
             option.append(radio, details);
             option.addEventListener('contextmenu', event => {
                 event.preventDefault();
@@ -336,25 +540,16 @@
 
         const actions = create('div', 'saved-map-actions');
 
-        const save = create('button', 'saved-map-save-current', labels.saveCurrent);
-        save.type = 'button';
-        save.dataset.controlButton = 'accent';
-        components.controls?.controlButton?.enhance?.(save);
+        const save = createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current');
         save.addEventListener('click', async () => {
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });
 
-        const cancel = create('button', '', labels.cancel);
-        cancel.type = 'button';
-        cancel.dataset.controlButton = 'secondary';
-        components.controls?.controlButton?.enhance?.(cancel);
+        const cancel = createControlButton(labels.cancel, 'secondary');
         cancel.addEventListener('click', () => manager?.close());
 
-        const load = create('button', 'saved-map-load', labels.load);
-        load.type = 'button';
-        load.dataset.controlButton = 'accent';
-        components.controls?.controlButton?.enhance?.(load);
+        const load = createControlButton(labels.load, 'accent', 'saved-map-load');
         load.disabled = !selectedMapName(container);
         load.addEventListener('click', () => loadSelectedMap(container, progress));
 
@@ -391,13 +586,19 @@
             async open() {
                 if (state.busy) return null;
                 try {
-                    const [active, maps] = await Promise.all([
+                    const [active, maps, locationStatus] = await Promise.all([
                         refreshActiveMap(),
-                        requestJson('/api/navigation/maps')
+                        requestJson('/api/navigation/maps'),
+                        requestJson('/api/navigation/locations').catch(error => locationFallback(error.message))
                     ]);
                     state.maps = maps.maps || [];
+                    state.locationStatus = locationStatus;
                     manager.close();
-                    return manager.open(VIEW_NAME, { maps: state.maps, active }, { replace: true });
+                    return manager.open(
+                        VIEW_NAME,
+                        { maps: state.maps, active, locationStatus },
+                        { replace: true }
+                    );
                 } catch (error) {
                     manager.close();
                     return manager.open(VIEW_NAME, { error: error.message }, { replace: true });

@@ -204,6 +204,23 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("currentFullscreenElement", modal_source)
         self.assertIn("fullscreenElement.appendChild(this.root)", modal_source)
 
+    def test_saved_map_location_panel_is_optional_and_uses_shared_buttons(self):
+        for contract in (
+            "'/api/navigation/locations'",
+            "requestJson('/api/navigation/locations').catch",
+            "labels.useCurrentGps",
+            "labels.saveLocation",
+            "labels.deleteLocation",
+            "map.location",
+            "gps.matched_location_name",
+            "last_location_name",
+            "components.controls?.controlButton?.enhance?.(button)",
+        ):
+            self.assertIn(contract, self.map_control)
+        self.assertIn(".saved-map-location-panel", self.map_control_css)
+        self.assertIn("data-requires-gps", self.map_control)
+        self.assertNotIn("lidar-control-drawer", self.map_control)
+
     def test_saved_map_contracts_and_pending_cursor_remain_scoped(self):
         for contract in (
             "'/api/navigation/maps'",
