@@ -105,7 +105,7 @@ list_owned_pgids() {
 
     for proc in /proc/[0-9]*; do
         pid="${proc##*/}"
-        [[ "${pid}" == "$" ]] && continue
+        [[ "${pid}" == "$$" ]] && continue
 
         if tr '\0' '\n' < "${proc}/environ" 2>/dev/null \
             | grep -Fqx "DABOM_PROCESS_OWNER=${owner}"; then
