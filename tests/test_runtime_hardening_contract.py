@@ -155,3 +155,17 @@ def test_ros_lidar_mount_yaw_matches_viewer_orientation():
     assert "math.pi" in bridge
     assert 'DeclareLaunchArgument("laser_yaw", default_value="3.141592653589793")' in launch
     assert "LIDAR_YAW=3.141592653589793" in env
+
+def test_mapping_restart_recovers_stale_launch_parent():
+    process = read("server/navigation_process_control.py")
+    control = read("server/navigation_control_api.py")
+    frontend = read("frontend/services/static/navigation_control.js")
+
+    assert "restart: bool = False" in process
+    assert "and not self._mapping_children_healthy()" in process
+    assert "if restart or len(matches) > 1 or stale_mapping:" in process
+    assert '"async_slam_toolbox_node"' in process
+    assert '"map_bridge"' in process
+    assert 'bool(payload.get("restart"))' in control
+    assert "...(restart ? { restart: true } : {})" in frontend
+
