@@ -47,10 +47,10 @@ slam_toolbox:
     max_laser_range: 12.0
 
     # RViz2 Mapping처럼 LaserScan은 센서 주기에 가깝게 반영하고,
-    # OccupancyGrid는 LiDAR 주기와 맞춰 최대 10 Hz로 갱신해 벽 생성이 즉시 보이게 한다.
+    # slam_toolbox /map은 내부/진단용 1 Hz. Dashboard/save map은 live occupancy mapper가 1 Hz로 갱신한다.
     minimum_time_interval: 0.1
     transform_publish_period: 0.02
-    map_update_interval: 0.1
+    map_update_interval: 1.0
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
 
