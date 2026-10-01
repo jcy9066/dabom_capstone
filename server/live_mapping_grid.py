@@ -227,6 +227,8 @@ class LiveMappingGrid:
         range_min = scan["range_min"]
         range_max = scan["range_max"]
         clear_no_hit = min(range_max, self.max_clear_range_m)
+        free_updates: set[tuple[int, int]] = set()
+        occupied_updates: set[tuple[int, int]] = set()
 
         for raw_distance in scan["ranges"]:
             has_hit = (
@@ -244,14 +246,20 @@ class LiveMappingGrid:
             end_cell = self._world_to_cell(end_x, end_y)
             ray = list(self._bresenham(start_cell, end_cell))
 
-            free_cells = ray[:-1] if has_hit else ray
-            for cell in free_cells:
-                self._cells[cell] = self.FREE
-
             if has_hit:
-                self._cells[end_cell] = self.OCCUPIED
+                free_updates.update(ray[:-1])
+                occupied_updates.add(end_cell)
+            else:
+                free_updates.update(ray)
 
             angle += scan["angle_increment"]
+
+        # Apply free space first and hits last so adjacent rays cannot erase a
+        # wall endpoint in the same one-second scan update.
+        for cell in free_updates - occupied_updates:
+            self._cells[cell] = self.FREE
+        for cell in occupied_updates:
+            self._cells[cell] = self.OCCUPIED
 
     def _snapshot_locked(
         self,
