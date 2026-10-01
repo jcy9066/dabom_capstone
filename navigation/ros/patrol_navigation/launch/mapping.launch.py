@@ -100,14 +100,14 @@ def generate_launch_description():
 
             # 서버 전송 주기
             # RViz2처럼 live LaserScan은 Pi WebSocket 최신값을 사용하고,
-            # TF pose는 20 Hz로 전달한다. Dashboard/save map은 GPU live occupancy mapper가 1 Hz로 생성한다.
+            # TF pose는 20 Hz로 전달하고, slam_toolbox /map은 callback 즉시 GPU로 전달한다. GPU는 /map을 기본으로 유지하면서 최신 LiDAR를 1 Hz로 합성한다.
             "map_publish_period_sec": 0.0,
             "pose_publish_period_sec": 0.05,
             "scan_publish_period_sec": 0.0,
             "request_timeout_sec": 5.0,
 
             # 서버로 전송할 데이터
-            "send_map": False,
+            "send_map": True,
             "send_pose": True,
             "send_scan": False,
         }],
