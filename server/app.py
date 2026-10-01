@@ -2892,6 +2892,24 @@ async def update_navigation_map(request: Request):
         return denied
 
     received_at = time.time()
+
+    if navigation_mode == "mapping":
+        # During Mapping, the dashboard/savable map is the persistent live
+        # occupancy grid generated from the full LiDAR stream and map-frame pose.
+        # slam_toolbox still provides SLAM pose/TF, but its /map must not overwrite
+        # the 1-second live map.
+        with state_lock:
+            navigation_state["robot_id"] = data.get(
+                "robot_id",
+                navigation_state["robot_id"],
+            )
+            store_navigation_mode(navigation_mode, received_at)
+        return {
+            "ok": True,
+            "source": "slam_toolbox",
+            "used_for_live_map": False,
+        }
+
     map_revision = build_navigation_map_revision(data)
     stored_map = received_payload(data, received_at)
     with state_lock:
@@ -2942,6 +2960,8 @@ async def update_navigation_pose(request: Request):
         store_navigation_mode(navigation_mode, received_at)
         navigation_state["pose"] = stored_pose
         navigation_state["pose_updated_at"] = received_at
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_pose(data)
     navigation_control_api.note_navigation_sample("pose", received_at, data)
     navigation_visualization_hub.publish(
         {
@@ -2982,6 +3002,8 @@ async def update_navigation_scan(request: Request):
         navigation_state["scan_updated_at"] = received_at
         build_navigation_decision(received_at)
         status = build_navigation_status(received_at)
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_scan(data)
     navigation_control_api.note_navigation_sample("scan", received_at)
     navigation_visualization_hub.publish(
         {
