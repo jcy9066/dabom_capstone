@@ -317,6 +317,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const explicitTarget = event.target?.closest?.(", self.navigation_component)
         self.assertIn("if (next === current) return;", self.navigation_component)
         self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
+        self.assertIn("...(restart ? { restart: true } : {})", self.control)
         self.assertIn("setMappingMode(options)", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
