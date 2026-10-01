@@ -63,6 +63,14 @@ class LocationSecurityApiTests(unittest.TestCase):
         )
         self.assertEqual("NORMAL", result["snapshot"]["security_state"])
 
+    def test_robot_status_infers_fix_when_flag_is_absent(self):
+        self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
+        result = self.api.note_robot_status(
+            {"gps_lat": 37.0, "gps_lng": 127.0, "gps_alt": 10.0}
+        )
+        self.assertTrue(result["snapshot"]["gps"]["fix"])
+        self.assertEqual("NORMAL", result["snapshot"]["security_state"])
+
     def test_transition_listener_fires_once_for_departure_and_return(self):
         transitions = []
         self.api._transition_listener = lambda result: transitions.append(result["transition"])
