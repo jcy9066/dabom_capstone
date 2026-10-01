@@ -20,6 +20,10 @@ try:
 except ModuleNotFoundError:
     from encoder_ros_publisher import EncoderRosPublisher
 try:
+    from raspberry.gps_reader import GpsReader
+except ModuleNotFoundError:
+    from gps_reader import GpsReader
+try:
     from raspberry.env_config import env_float, env_int, env_text
 except ModuleNotFoundError:  # Direct script execution from raspberry/.
     from env_config import env_float, env_int, env_text
@@ -83,7 +87,13 @@ class RobotCommandClient:
             topic=env_text("WHEEL_TICKS_TOPIC")
         )
 
+        self.gps = GpsReader(
+            port="/dev/ttyAMA1",
+            baudrate=9600,
+        )
+
     def start(self) -> None:
+        self.gps.start()
         self.encoder_ros.start()
 
         threads = [
@@ -108,6 +118,7 @@ class RobotCommandClient:
 
         finally:
             self.running = False
+            self.gps.close()
             self.encoder_ros.close()
             self.motor.close()
 
@@ -178,6 +189,8 @@ class RobotCommandClient:
         return None
 
     def status_payload(self) -> dict:
+        gps = self.gps.snapshot()
+
         if self._server_reachable is True:
             internet = "ok"
         elif self._server_reachable is False:
@@ -190,6 +203,9 @@ class RobotCommandClient:
             "cpu_usage": self._cpu_usage_percent(),
             "cpu_temp": self._cpu_temp_c(),
             "ram_usage": self._ram_usage_percent(),
+            "gps_lat": gps["lat"],
+            "gps_lng": gps["lng"],
+            "gps_alt": gps["alt"],
             "internet": internet,
             "ping": self._last_status_latency_ms,
             "mode": self.current_mode,

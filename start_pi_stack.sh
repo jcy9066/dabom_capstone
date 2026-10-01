@@ -368,24 +368,59 @@ setsid ros2 launch patrol_navigation lidar.launch.py \
 LIDAR_DRIVER_PID=$!
 
 scan_ready=0
-for _ in {1..4}; do
-    if ! kill -0 "${LIDAR_DRIVER_PID}" 2>/dev/null; then
-        break
-    fi
 
-    if timeout 4 ros2 topic echo \
-        "${LIDAR_SCAN_TOPIC}" \
-        --once \
-        --qos-reliability best_effort \
-        >/dev/null 2>&1; then
-        scan_ready=1
-        break
-    fi
-done
+if timeout 15 python3 - "${LIDAR_SCAN_TOPIC}" <<'PYSCAN'
+import sys
+import time
+
+import rclpy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
+
+topic = sys.argv[1]
+
+rclpy.init()
+node = rclpy.create_node("dabom_lidar_preflight")
+
+received = False
+
+
+def on_scan(msg):
+    global received
+    received = True
+
+
+subscription = node.create_subscription(
+    LaserScan,
+    topic,
+    on_scan,
+    qos_profile_sensor_data,
+)
+
+deadline = time.monotonic() + 12.0
+
+try:
+    while time.monotonic() < deadline and not received:
+        rclpy.spin_once(
+            node,
+            timeout_sec=0.5,
+        )
+finally:
+    node.destroy_node()
+
+    if rclpy.ok():
+        rclpy.shutdown()
+
+raise SystemExit(0 if received else 1)
+PYSCAN
+then
+    scan_ready=1
+fi
 
 if (( scan_ready == 0 )); then
     fail "LiDAR driver started but no LaserScan was received on ${LIDAR_SCAN_TOPIC}"
 fi
+
 log "LiDAR scan READY"
 
 log "Starting LiDAR sender"

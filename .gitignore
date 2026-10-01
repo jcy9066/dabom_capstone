@@ -29,3 +29,12 @@ raspberry/pico_w_sdk/build/
 # playwright
 .playwright-mcp/
 
+
+# ROS2 / colcon generated files
+build/
+install/
+log/
+
+# colcon environment scripts
+local_setup.bash
+setup.bash
