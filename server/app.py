@@ -4001,10 +4001,19 @@ async def get_lidar_bridge_status():
             "error": "LiDAR ROS bridge is not running",
         }
 
+    stats = lidar_ros_bridge.stats()
+    last_received_at = stats.get("last_received_at")
+    age_sec = (
+        None
+        if last_received_at is None
+        else max(0.0, time.time() - float(last_received_at))
+    )
     return {
         "ok": True,
         "enabled": True,
-        "stats": lidar_ros_bridge.stats(),
+        "fresh": age_sec is not None and age_sec <= 3.0,
+        "age_sec": age_sec,
+        "stats": stats,
     }
 
 
