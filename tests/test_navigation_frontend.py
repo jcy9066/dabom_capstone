@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v22',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v22',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v22',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
             template,
         )
 
@@ -135,6 +135,10 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn("const liveScan = state.scan || null;", viewer)
+        dashboard = (
+            ROOT / "frontend/services/static/script.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("const NAVIGATION_SNAPSHOT_VISIBLE_MS = 100;", dashboard)
         self.assertNotIn(
             "payloadMatchesMappingSession(state.scan)",
             viewer,
@@ -152,7 +156,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v22',
+            'static/lidar_3d_viewer.js?v=20261001-rviz-live-mapping-v23',
             template,
         )
 
