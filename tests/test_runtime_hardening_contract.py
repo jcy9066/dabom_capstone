@@ -117,15 +117,13 @@ def test_mapping_bridge_streams_live_viewer_data_without_startup_blackout():
     assert '"map_publish_period_sec": 0.0' in mapping
     assert '"pose_publish_period_sec": 0.05' in mapping
     assert '"scan_publish_period_sec": 0.0' in mapping
-    assert '"send_map": True' in mapping
-    assert "if self.send_map:" in read("navigation/ros/patrol_navigation/patrol_navigation/map_bridge.py")
-    assert "self.publish_map(msg)" in read("navigation/ros/patrol_navigation/patrol_navigation/map_bridge.py")
+    assert '"send_map": False' in mapping
     assert '"send_pose": True' in mapping
     assert '"send_scan": False' in mapping
     assert "minimum_time_interval: 0.1" in slam
     assert "minimum_travel_distance: 0.02" in slam
     assert "minimum_travel_heading: 0.02" in slam
-    assert "map_update_interval: 0.1" in slam
+    assert "map_update_interval: 1.0" in slam
     assert "const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;" in dashboard
     assert '"/ws/navigation/visualization"' in app
     assert '"type": "map"' in app
