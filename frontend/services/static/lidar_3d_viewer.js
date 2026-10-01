@@ -1684,9 +1684,12 @@ if (root && canvas) {
         const livePose = mappingMode
             ? (payloadMatchesMappingSession(state.pose) ? state.pose : null)
             : (state.pose || null);
-        const liveScan = mappingMode
-            ? (payloadMatchesMappingSession(state.scan) ? state.scan : null)
-            : (state.scan || null);
+        // Raw LiDAR is a live robot-relative sensor stream. Do not gate it
+        // by the Mapping session tag: the high-rate Pi WebSocket path may update
+        // before the ROS map bridge has produced its first tagged Mapping sample.
+        // Map/pose still stay session-filtered so stale Driving localization is
+        // never reused as Mapping geometry.
+        const liveScan = state.scan || null;
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
 
