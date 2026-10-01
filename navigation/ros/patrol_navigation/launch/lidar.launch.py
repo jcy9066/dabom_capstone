@@ -56,7 +56,8 @@ def generate_launch_description():
         DeclareLaunchArgument("laser_z", default_value="0.12"),
         DeclareLaunchArgument("laser_roll", default_value="0.0"),
         DeclareLaunchArgument("laser_pitch", default_value="0.0"),
-        DeclareLaunchArgument("laser_yaw", default_value="0.0"),
+        # Physical RPLIDAR mount faces 180 degrees from base_link +X.
+        DeclareLaunchArgument("laser_yaw", default_value="3.141592653589793"),
 
         # 실제 LiDAR driver다. USB serial 데이터를 읽고 sensor_msgs/LaserScan을 /scan으로 publish한다.
         Node(

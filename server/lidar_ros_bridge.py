@@ -184,7 +184,15 @@ class LidarRosBridge:
         self.lidar_pitch = float(
             os.getenv("LIDAR_PITCH", "0") if lidar_pitch is None else lidar_pitch
         )
-        self.lidar_yaw = float(lidar_yaw)
+        configured_lidar_yaw = float(lidar_yaw)
+        # The project LiDAR is physically mounted 180 degrees around +Z.
+        # Historically only WebGL applied this correction, so slam_toolbox
+        # interpreted /scan 180 degrees away from the displayed scan.
+        self.lidar_yaw = (
+            math.pi
+            if abs(configured_lidar_yaw) < 1e-9
+            else configured_lidar_yaw
+        )
 
         self.dashboard_max_points = max(0, int(dashboard_max_points))
         self.use_source_timestamp = bool(use_source_timestamp)

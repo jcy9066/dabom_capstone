@@ -142,3 +142,12 @@ def test_lidar_websocket_tags_scans_with_active_navigation_mode():
     assert 'dashboard_scan["navigation_mode"] = sensor_navigation_mode' in app
     assert "store_navigation_mode(" in app
 
+def test_ros_lidar_mount_yaw_matches_viewer_orientation():
+    bridge = read("server/lidar_ros_bridge.py")
+    launch = read("navigation/ros/patrol_navigation/launch/lidar.launch.py")
+    env = read(".env.example")
+
+    assert "if abs(configured_lidar_yaw) < 1e-9" in bridge
+    assert "math.pi" in bridge
+    assert 'DeclareLaunchArgument("laser_yaw", default_value="3.141592653589793")' in launch
+    assert "LIDAR_YAW=3.141592653589793" in env

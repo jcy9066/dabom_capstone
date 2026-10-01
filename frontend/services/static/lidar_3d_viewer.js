@@ -121,6 +121,12 @@ if (root && canvas) {
     mapRoot.name = 'occupancy-map';
     layerGroups.map.add(mapRoot);
 
+    // Mapping-only live wall preview. This stays inside the Map layer and does
+    // not modify LaserScan or LiDAR Point rendering.
+    const liveMapRoot = new THREE.Group();
+    liveMapRoot.name = 'live-map-walls';
+    layerGroups.map.add(liveMapRoot);
+
     const gridRoot = new THREE.Group();
     gridRoot.name = 'map-grid';
     layerGroups.grid.add(gridRoot);
@@ -174,6 +180,9 @@ if (root && canvas) {
 
     let currentMapKey = null;
     let currentMap = null;
+    let liveMapPreviewMesh = null;
+    let liveMapPreviewCapacity = 0;
+    let liveMapPreviewKey = null;
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
     let robotModelReady = false;
     let robotVisual = null;
@@ -560,6 +569,133 @@ if (root && canvas) {
         mapRoot.rotation.z = transform.yaw;
         rebuildGrid(map);
         if (!viewerExpanded) applyCollapsedTopView();
+    }
+
+    function clearLiveMapPreview() {
+        liveMapPreviewKey = null;
+        if (liveMapPreviewMesh) {
+            liveMapPreviewMesh.count = 0;
+            liveMapPreviewMesh.visible = false;
+        }
+    }
+
+    function ensureLiveMapPreviewCapacity(required, cellSize) {
+        if (
+            liveMapPreviewMesh
+            && required <= liveMapPreviewCapacity
+            && Math.abs(
+                Number(liveMapPreviewMesh.userData.cellSize || 0) - cellSize
+            ) < 1e-9
+        ) return;
+
+        clearGroup(liveMapRoot);
+        liveMapPreviewCapacity = nextPowerOfTwo(Math.max(1, required));
+        const geometry = new THREE.BoxGeometry(
+            cellSize * 0.94,
+            cellSize * 0.94,
+            obstacleHeightM,
+        );
+        const material = new THREE.MeshStandardMaterial({
+            color: COLORS.occupiedWall,
+            roughness: 0.82,
+            metalness: 0.02,
+            transparent: true,
+            opacity: 0.88,
+        });
+        liveMapPreviewMesh = new THREE.InstancedMesh(
+            geometry,
+            material,
+            liveMapPreviewCapacity,
+        );
+        liveMapPreviewMesh.name = 'live-occupied-cells';
+        liveMapPreviewMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        liveMapPreviewMesh.frustumCulled = false;
+        liveMapPreviewMesh.userData.cellSize = cellSize;
+        liveMapPreviewMesh.count = 0;
+        liveMapRoot.add(liveMapPreviewMesh);
+    }
+
+    function liveMapPreviewStateKey(scan, pose, cellSize) {
+        if (!scan || !pose) return null;
+        return [
+            scanKey(scan) || '',
+            Number(pose.x || 0).toFixed(4),
+            Number(pose.y || 0).toFixed(4),
+            Number(pose.yaw || 0).toFixed(4),
+            cellSize.toFixed(4),
+            obstacleHeightM.toFixed(4),
+        ].join(':');
+    }
+
+    function rebuildLiveMapPreview(scan, pose, enabled) {
+        if (
+            !enabled
+            || !validPose(pose)
+            || !scan
+            || !Array.isArray(scan.ranges)
+            || !scan.ranges.length
+        ) {
+            clearLiveMapPreview();
+            return;
+        }
+
+        const cellSize = Math.max(
+            0.02,
+            Number(currentMap?.resolution) || 0.05,
+        );
+        const nextKey = liveMapPreviewStateKey(scan, pose, cellSize);
+        if (nextKey === liveMapPreviewKey) return;
+        liveMapPreviewKey = nextKey;
+
+        const angleMin = Number(scan.angle_min) || 0;
+        const angleIncrement = Number(scan.angle_increment) || 0;
+        const rangeMin = Math.max(0, Number(scan.range_min) || 0);
+        const rangeMax = Number.isFinite(Number(scan.range_max))
+            ? Number(scan.range_max)
+            : 12;
+        const robotYaw = Number(pose.yaw) || 0;
+        const sensorYaw = robotYaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
+        const robotX = Number(pose.x) || 0;
+        const robotY = Number(pose.y) || 0;
+
+        const cells = new Map();
+        for (let index = 0; index < scan.ranges.length; index += 1) {
+            const distance = Number(scan.ranges[index]);
+            if (
+                !Number.isFinite(distance)
+                || distance < rangeMin
+                || distance > rangeMax
+            ) continue;
+
+            const angle = sensorYaw + angleMin + angleIncrement * index;
+            const worldX = robotX + Math.cos(angle) * distance;
+            const worldY = robotY + Math.sin(angle) * distance;
+            const cellX = Math.round(worldX / cellSize);
+            const cellY = Math.round(worldY / cellSize);
+            cells.set(
+                `${cellX}:${cellY}`,
+                {
+                    x: cellX * cellSize,
+                    y: cellY * cellSize,
+                },
+            );
+        }
+
+        ensureLiveMapPreviewCapacity(cells.size, cellSize);
+        const matrix = new THREE.Matrix4();
+        let instance = 0;
+        for (const cell of cells.values()) {
+            matrix.makeTranslation(
+                cell.x,
+                cell.y,
+                obstacleHeightM / 2 + 0.002,
+            );
+            liveMapPreviewMesh.setMatrixAt(instance, matrix);
+            instance += 1;
+        }
+        liveMapPreviewMesh.count = instance;
+        liveMapPreviewMesh.instanceMatrix.needsUpdate = true;
+        liveMapPreviewMesh.visible = instance > 0;
     }
 
     function clamp(value, min, max) {
@@ -1718,6 +1854,7 @@ if (root && canvas) {
         // preview keeps the RC car visible but must never fabricate a TF frame.
         applyTfPose(livePose);
         updateRobotPose(visualizationPose);
+        rebuildLiveMapPreview(liveScan, visualizationPose, mappingMode);
         rebuildScan(liveScan);
 
         if (
