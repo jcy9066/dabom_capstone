@@ -3953,6 +3953,11 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     "status": status,
                 }
             )
+            if live_map_payload is not None:
+                publish_live_mapping_map(
+                    live_map_payload,
+                    received_at,
+                )
 
             stats = lidar_ros_bridge.stats()
             if stats["received"] % 100 == 0:
