@@ -2894,20 +2894,35 @@ async def update_navigation_map(request: Request):
     received_at = time.time()
 
     if navigation_mode == "mapping":
-        # During Mapping, the dashboard/savable map is the persistent live
-        # occupancy grid generated from the full LiDAR stream and map-frame pose.
-        # slam_toolbox still provides SLAM pose/TF, but its /map must not overwrite
-        # the 1-second live map.
+        # Mirror RViz2 Map behavior: every slam_toolbox /map refresh becomes the
+        # persistent base OccupancyGrid. Then re-apply the newest LiDAR sample so
+        # dynamic walls clear/appear on the same one-second cadence. The composed
+        # grid is both what the Viewer renders and what "현재 지도 저장" persists.
         with state_lock:
             navigation_state["robot_id"] = data.get(
                 "robot_id",
                 navigation_state["robot_id"],
             )
             store_navigation_mode(navigation_mode, received_at)
+
+        live_mapping_grid.update_base_map(data)
+        live_map_payload = live_mapping_grid.maybe_update(
+            robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+            monotonic_now=time.monotonic(),
+            wall_time=received_at,
+            force=True,
+        )
+        if live_map_payload is None:
+            live_map_payload = live_mapping_grid.snapshot(
+                robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+                wall_time=received_at,
+            )
+        if live_map_payload is not None:
+            publish_live_mapping_map(live_map_payload, received_at)
         return {
             "ok": True,
-            "source": "slam_toolbox",
-            "used_for_live_map": False,
+            "source": "slam_toolbox+live_scan",
+            "used_for_live_map": live_map_payload is not None,
         }
 
     map_revision = build_navigation_map_revision(data)
