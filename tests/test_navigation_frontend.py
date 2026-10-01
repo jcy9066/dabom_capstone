@@ -133,6 +133,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn('id="lidarMapSaveBtn"', template)
         self.assertIn("saved-map-save-current", self.map_control)
         self.assertIn("components.controls?.controlButton?.enhance?.(save)", self.map_control)
+        self.assertIn("saved-map-start-mapping", self.map_control)
+        self.assertIn("saved-map-clear-current", self.map_control)
+        self.assertIn("request('MAPPING')", self.map_control)
+        self.assertIn("global.navigationMapView?.clearMapDisplay?.()", self.map_control)
+        self.assertIn("components.controls?.controlButton?.enhance?.(startMapping)", self.map_control)
+        self.assertIn("components.controls?.controlButton?.enhance?.(clearCurrentMap)", self.map_control)
         self.assertIn("scanVisualHeightM = topZ + ORIGINAL_CAMERA_HEIGHT_OFFSET_M", viewer)
         self.assertIn("cameraMountLocal.set(", viewer)
         self.assertIn("LIDAR_HEIGHT_M,", viewer)
@@ -221,6 +227,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "global.navigationControl?.applyState?.(payload)",
             "INITIAL_POSE_OUT_OF_BOUNDS",
             "MAP_OPERATION_IN_PROGRESS",
+            "labels.startMapping",
+            "labels.clearCurrentMap",
         ):
             self.assertIn(contract, self.map_control)
         self.assertIn(".saved-map-actions button:disabled { cursor: not-allowed;", self.map_control_css)
