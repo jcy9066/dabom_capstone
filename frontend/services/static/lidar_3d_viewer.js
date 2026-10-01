@@ -34,6 +34,7 @@ if (root && canvas) {
     // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
     // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
     const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
+    const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
     // Visual pose smoothing follows differential-drive motion: forward motion responds
     // faster than lateral map/localization correction so the chassis does not appear
     // to slide sideways across its fixed wheel direction.
@@ -969,6 +970,10 @@ if (root && canvas) {
             baseAxes.position.z = 0.01;
             tfPoseGroup.add(baseAxes);
 
+            if (targetPose) {
+                applyRenderedPose(renderedPose || targetPose);
+            }
+
             if (currentMap) {
                 currentMapKey = null;
                 rebuildMap(currentMap, window.dabomNavigationVisualizationState?.mapRevision);
@@ -1566,6 +1571,11 @@ if (root && canvas) {
                 resetTrajectory(null, false);
             }
             trajectoryRoot.visible = false;
+            if (currentVisualizationState) {
+                applyVisualizationState(currentVisualizationState);
+            } else {
+                updateRobotPose(MAPPING_PREVIEW_POSE);
+            }
         } else if (mode === 'DRIVING') {
             trajectoryRoot.visible = true;
             if (modeRestarted) {
@@ -1647,12 +1657,48 @@ if (root && canvas) {
         if (interactionMode === 'set-goal') canvas.focus({ preventScroll: true });
     }
 
+    function isMappingMode() {
+        return String(
+            currentControlState?.navigation_mode || ''
+        ).toUpperCase() === 'MAPPING';
+    }
+
+    function payloadMatchesMappingSession(payload) {
+        if (!payload) return false;
+        return String(
+            payload.navigation_mode || ''
+        ).toLowerCase() === 'mapping';
+    }
+
     function applyVisualizationState(state) {
         if (!state) return;
         currentVisualizationState = state;
-        rebuildMap(state.map || null, state.mapRevision);
-        updateRobotPose(state.pose || null);
-        rebuildScan(state.scan || null);
+
+        // A new Mapping session must not briefly render a stale saved/localization
+        // map from the previous Driving session. The mapping bridge tags each new
+        // map/pose/scan payload with navigation_mode=mapping.
+        const mappingMode = isMappingMode();
+        const liveMap = mappingMode
+            ? (payloadMatchesMappingSession(state.map) ? state.map : null)
+            : (state.map || null);
+        const livePose = mappingMode
+            ? (payloadMatchesMappingSession(state.pose) ? state.pose : null)
+            : (state.pose || null);
+        const liveScan = mappingMode
+            ? (payloadMatchesMappingSession(state.scan) ? state.scan : null)
+            : (state.scan || null);
+
+        rebuildMap(liveMap, liveMap ? state.mapRevision : null);
+
+        // Before slam_toolbox exposes map->base_link, keep the RC car visible at
+        // the mapping origin. As soon as the real TF pose arrives it replaces this
+        // preview pose and the existing interpolation takes over.
+        const visualizationPose = validPose(livePose)
+            ? livePose
+            : (mappingMode ? MAPPING_PREVIEW_POSE : null);
+        updateRobotPose(visualizationPose);
+        rebuildScan(liveScan);
+
         if (
             trajectorySessionActive
             && String(currentControlState?.navigation_mode || '').toUpperCase() === 'DRIVING'

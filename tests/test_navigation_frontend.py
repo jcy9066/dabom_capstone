@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
             template,
         )
 
@@ -114,7 +114,40 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-camera-mirror-v20',
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
+            template,
+        )
+
+    def test_mapping_viewer_stays_visible_before_first_slam_map_and_pose(self):
+        template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });",
+            viewer,
+        )
+        self.assertIn("function payloadMatchesMappingSession(payload)", viewer)
+        self.assertIn("payload.navigation_mode || ''", viewer)
+        self.assertIn(
+            "mappingMode ? MAPPING_PREVIEW_POSE : null",
+            viewer,
+        )
+        self.assertIn(
+            "applyVisualizationState(currentVisualizationState);",
+            viewer,
+        )
+        self.assertIn(
+            "updateRobotPose(MAPPING_PREVIEW_POSE);",
+            viewer,
+        )
+        self.assertIn(
+            "applyRenderedPose(renderedPose || targetPose);",
+            viewer,
+        )
+        self.assertIn(
+            'static/lidar_3d_viewer.js?v=20261001-live-mapping-v21',
             template,
         )
 

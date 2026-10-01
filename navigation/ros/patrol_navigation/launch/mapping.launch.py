@@ -18,7 +18,6 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -78,42 +77,39 @@ def generate_launch_description():
     # 2. map_bridge
     # ---------------------------------------------------------
     #
-    # slam_toolbox가 활성화되고 /map 및 TF를 생성할 시간을 주기
-    # 위해 8초 뒤 실행한다.
-    map_bridge_node = TimerAction(
-        period=8.0,
-        actions=[
-            Node(
-                package="patrol_navigation",
-                executable="map_bridge",
-                name="map_bridge",
-                output="screen",
-                condition=IfCondition(start_bridge),
-                parameters=[{
-                    "robot_id": robot_id,
-                    "server_base_url": server_base_url,
+    # Start immediately. It can stream /scan before the first /map or
+    # map->base_link TF exists; missing map/TF is handled by map_bridge itself.
+    # This keeps the dashboard 3D Viewer live from the beginning of Mapping.
+    map_bridge_node = Node(
+        package="patrol_navigation",
+        executable="map_bridge",
+        name="map_bridge",
+        output="screen",
+        condition=IfCondition(start_bridge),
+        parameters=[{
+            "robot_id": robot_id,
+            "server_base_url": server_base_url,
 
-                    # ROS topic
-                    "map_topic": "/map",
-                    "scan_topic": "/scan",
+            # ROS topic
+            "map_topic": "/map",
+            "scan_topic": "/scan",
 
-                    # 로봇 위치를 읽을 TF
-                    "pose_parent_frame": "map",
-                    "pose_child_frame": "base_link",
+            # 로봇 위치를 읽을 TF
+            "pose_parent_frame": "map",
+            "pose_child_frame": "base_link",
 
-                    # 서버 전송 주기
-                    "map_publish_period_sec": 2.0,
-                    "pose_publish_period_sec": 0.5,
-                    "scan_publish_period_sec": 0.2,
-                    "request_timeout_sec": 5.0,
+            # 서버 전송 주기
+            # LiDAR/pose는 5 Hz로 즉시 갱신하고, SLAM map은 1 Hz로 갱신한다.
+            "map_publish_period_sec": 1.0,
+            "pose_publish_period_sec": 0.2,
+            "scan_publish_period_sec": 0.2,
+            "request_timeout_sec": 5.0,
 
-                    # 서버로 전송할 데이터
-                    "send_map": True,
-                    "send_pose": True,
-                    "send_scan": True,
-                }],
-            )
-        ],
+            # 서버로 전송할 데이터
+            "send_map": True,
+            "send_pose": True,
+            "send_scan": True,
+        }],
     )
 
     return LaunchDescription([
