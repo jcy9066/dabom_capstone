@@ -30,6 +30,7 @@ if (root && canvas) {
 
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
     const MAP_OCCUPIED_THRESHOLD = 50;
+    const MAPPING_DYNAMIC_MAP_REFRESH_MS = 1000;
     const LIDAR_HEIGHT_M = 0.12;
     // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
     // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
@@ -121,12 +122,6 @@ if (root && canvas) {
     mapRoot.name = 'occupancy-map';
     layerGroups.map.add(mapRoot);
 
-    // Mapping-only live wall preview. This stays inside the Map layer and does
-    // not modify LaserScan or LiDAR Point rendering.
-    const liveMapRoot = new THREE.Group();
-    liveMapRoot.name = 'live-map-walls';
-    layerGroups.map.add(liveMapRoot);
-
     const gridRoot = new THREE.Group();
     gridRoot.name = 'map-grid';
     layerGroups.grid.add(gridRoot);
@@ -179,10 +174,13 @@ if (root && canvas) {
     layerGroups['camera-view'].add(cameraViewPoseGroup);
 
     let currentMapKey = null;
+    let currentBaseMapKey = null;
     let currentMap = null;
-    let liveMapPreviewMesh = null;
-    let liveMapPreviewCapacity = 0;
-    let liveMapPreviewKey = null;
+    let currentMapRevision = null;
+    let currentBaseMapCells = null;
+    let mappingOverlayScan = null;
+    let mappingOverlayPose = null;
+    let mappingOverlayKey = null;
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
     let robotModelReady = false;
     let robotVisual = null;
@@ -472,15 +470,13 @@ if (root && canvas) {
         gridRoot.rotation.z = transform.yaw;
     }
 
-    function rebuildMap(map, revision) {
-        const nextKey = mapKey(map, revision);
-        if (nextKey && nextKey === currentMapKey) return;
+    function renderMapCells(map, cells, renderKey) {
+        if (renderKey && renderKey === currentMapKey) return;
 
         clearGroup(mapRoot);
-        currentMapKey = nextKey;
-        currentMap = map || null;
+        currentMapKey = renderKey;
 
-        if (!map) {
+        if (!map || !cells) {
             clearGroup(gridRoot);
             return;
         }
@@ -490,7 +486,6 @@ if (root && canvas) {
         const resolution = Number(map.resolution) || 0;
         if (width <= 0 || height <= 0 || resolution <= 0) return;
 
-        const cells = decodeRleMap(map.data, width * height);
         const rgba = new Uint8Array(width * height * 4);
         let occupiedCount = 0;
 
@@ -544,7 +539,7 @@ if (root && canvas) {
                 occupiedCount,
             );
             occupied.name = 'occupied-cells';
-            occupied.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+            occupied.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
             const matrix = new THREE.Matrix4();
             let instance = 0;
@@ -571,132 +566,234 @@ if (root && canvas) {
         if (!viewerExpanded) applyCollapsedTopView();
     }
 
-    function clearLiveMapPreview() {
-        liveMapPreviewKey = null;
-        if (liveMapPreviewMesh) {
-            liveMapPreviewMesh.count = 0;
-            liveMapPreviewMesh.visible = false;
+    function mapWorldToGrid(map, worldX, worldY) {
+        const resolution = Number(map?.resolution) || 0;
+        if (resolution <= 0) return null;
+
+        const transform = mapTransform(map);
+        const dx = worldX - transform.x;
+        const dy = worldY - transform.y;
+        const cosYaw = Math.cos(transform.yaw);
+        const sinYaw = Math.sin(transform.yaw);
+
+        // Inverse of map origin transform: world -> occupancy-grid local.
+        const localX = cosYaw * dx + sinYaw * dy;
+        const localY = -sinYaw * dx + cosYaw * dy;
+        return {
+            x: Math.floor(localX / resolution),
+            y: Math.floor(localY / resolution),
+        };
+    }
+
+    function setCompositeCell(cells, width, height, x, y, value) {
+        if (x < 0 || y < 0 || x >= width || y >= height) return;
+        cells[y * width + x] = value;
+    }
+
+    function raytraceComposite(
+        cells,
+        width,
+        height,
+        startCell,
+        endCell,
+        endpointOccupied,
+    ) {
+        if (!startCell || !endCell) return;
+
+        let x0 = startCell.x;
+        let y0 = startCell.y;
+        const x1 = endCell.x;
+        const y1 = endCell.y;
+        const dx = Math.abs(x1 - x0);
+        const dy = Math.abs(y1 - y0);
+        const sx = x0 < x1 ? 1 : -1;
+        const sy = y0 < y1 ? 1 : -1;
+        let error = dx - dy;
+        let steps = 0;
+        const maxSteps = Math.max(width, height) * 4;
+
+        while (steps < maxSteps) {
+            if (x0 === x1 && y0 === y1) break;
+            setCompositeCell(cells, width, height, x0, y0, 0);
+
+            const doubled = error * 2;
+            if (doubled > -dy) {
+                error -= dy;
+                x0 += sx;
+            }
+            if (doubled < dx) {
+                error += dx;
+                y0 += sy;
+            }
+            steps += 1;
+        }
+
+        if (endpointOccupied) {
+            setCompositeCell(cells, width, height, x1, y1, 100);
         }
     }
 
-    function ensureLiveMapPreviewCapacity(required, cellSize) {
+    function composeMappingCells(map, baseCells, scan, pose) {
         if (
-            liveMapPreviewMesh
-            && required <= liveMapPreviewCapacity
-            && Math.abs(
-                Number(liveMapPreviewMesh.userData.cellSize || 0) - cellSize
-            ) < 1e-9
-        ) return;
-
-        clearGroup(liveMapRoot);
-        liveMapPreviewCapacity = nextPowerOfTwo(Math.max(1, required));
-        const geometry = new THREE.BoxGeometry(
-            cellSize * 0.94,
-            cellSize * 0.94,
-            obstacleHeightM,
-        );
-        const material = new THREE.MeshStandardMaterial({
-            color: COLORS.occupiedWall,
-            roughness: 0.82,
-            metalness: 0.02,
-            transparent: true,
-            opacity: 0.88,
-        });
-        liveMapPreviewMesh = new THREE.InstancedMesh(
-            geometry,
-            material,
-            liveMapPreviewCapacity,
-        );
-        liveMapPreviewMesh.name = 'live-occupied-cells';
-        liveMapPreviewMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        liveMapPreviewMesh.frustumCulled = false;
-        liveMapPreviewMesh.userData.cellSize = cellSize;
-        liveMapPreviewMesh.count = 0;
-        liveMapRoot.add(liveMapPreviewMesh);
-    }
-
-    function liveMapPreviewStateKey(scan, pose, cellSize) {
-        if (!scan || !pose) return null;
-        return [
-            scanKey(scan) || '',
-            Number(pose.x || 0).toFixed(4),
-            Number(pose.y || 0).toFixed(4),
-            Number(pose.yaw || 0).toFixed(4),
-            cellSize.toFixed(4),
-            obstacleHeightM.toFixed(4),
-        ].join(':');
-    }
-
-    function rebuildLiveMapPreview(scan, pose, enabled) {
-        if (
-            !enabled
+            !map
+            || !baseCells
             || !validPose(pose)
             || !scan
             || !Array.isArray(scan.ranges)
             || !scan.ranges.length
-        ) {
-            clearLiveMapPreview();
-            return;
-        }
+        ) return null;
 
-        const cellSize = Math.max(
-            0.02,
-            Number(currentMap?.resolution) || 0.05,
-        );
-        const nextKey = liveMapPreviewStateKey(scan, pose, cellSize);
-        if (nextKey === liveMapPreviewKey) return;
-        liveMapPreviewKey = nextKey;
+        const width = Number(map.width) || 0;
+        const height = Number(map.height) || 0;
+        if (width <= 0 || height <= 0) return null;
 
+        // Start from the complete SLAM OccupancyGrid. Only cells observed by the
+        // latest 1-second Mapping sample are overridden; every other mapped cell
+        // remains exactly as slam_toolbox produced it.
+        const cells = new Int16Array(baseCells);
         const angleMin = Number(scan.angle_min) || 0;
         const angleIncrement = Number(scan.angle_increment) || 0;
         const rangeMin = Math.max(0, Number(scan.range_min) || 0);
         const rangeMax = Number.isFinite(Number(scan.range_max))
             ? Number(scan.range_max)
             : 12;
-        const robotYaw = Number(pose.yaw) || 0;
-        const sensorYaw = robotYaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
         const robotX = Number(pose.x) || 0;
         const robotY = Number(pose.y) || 0;
+        const sensorYaw = (Number(pose.yaw) || 0) + LIDAR_VISUAL_YAW_OFFSET_RAD;
+        const startCell = mapWorldToGrid(map, robotX, robotY);
+        if (!startCell) return cells;
 
-        const cells = new Map();
         for (let index = 0; index < scan.ranges.length; index += 1) {
-            const distance = Number(scan.ranges[index]);
-            if (
-                !Number.isFinite(distance)
-                || distance < rangeMin
-                || distance > rangeMax
-            ) continue;
+            const rawDistance = Number(scan.ranges[index]);
+            const hasHit = Number.isFinite(rawDistance)
+                && rawDistance >= rangeMin
+                && rawDistance <= rangeMax;
+            const distance = hasHit ? rawDistance : rangeMax;
+            if (!Number.isFinite(distance) || distance <= 0) continue;
 
             const angle = sensorYaw + angleMin + angleIncrement * index;
-            const worldX = robotX + Math.cos(angle) * distance;
-            const worldY = robotY + Math.sin(angle) * distance;
-            const cellX = Math.round(worldX / cellSize);
-            const cellY = Math.round(worldY / cellSize);
-            cells.set(
-                `${cellX}:${cellY}`,
-                {
-                    x: cellX * cellSize,
-                    y: cellY * cellSize,
-                },
+            const endX = robotX + Math.cos(angle) * distance;
+            const endY = robotY + Math.sin(angle) * distance;
+            const endCell = mapWorldToGrid(map, endX, endY);
+            raytraceComposite(
+                cells,
+                width,
+                height,
+                startCell,
+                endCell,
+                hasHit,
             );
         }
 
-        ensureLiveMapPreviewCapacity(cells.size, cellSize);
-        const matrix = new THREE.Matrix4();
-        let instance = 0;
-        for (const cell of cells.values()) {
-            matrix.makeTranslation(
-                cell.x,
-                cell.y,
-                obstacleHeightM / 2 + 0.002,
-            );
-            liveMapPreviewMesh.setMatrixAt(instance, matrix);
-            instance += 1;
-        }
-        liveMapPreviewMesh.count = instance;
-        liveMapPreviewMesh.instanceMatrix.needsUpdate = true;
-        liveMapPreviewMesh.visible = instance > 0;
+        return cells;
     }
+
+    function renderCurrentMappingComposite() {
+        if (
+            !isMappingMode()
+            || !currentMap
+            || !currentBaseMapCells
+            || !mappingOverlayScan
+            || !validPose(mappingOverlayPose)
+        ) return;
+
+        const cells = composeMappingCells(
+            currentMap,
+            currentBaseMapCells,
+            mappingOverlayScan,
+            mappingOverlayPose,
+        );
+        if (!cells) return;
+
+        renderMapCells(
+            currentMap,
+            cells,
+            `dynamic:${currentBaseMapKey || ''}:${mappingOverlayKey || ''}`,
+        );
+    }
+
+    function rebuildMap(map, revision) {
+        const nextBaseKey = mapKey(map, revision);
+        if (nextBaseKey && nextBaseKey === currentBaseMapKey) return;
+
+        currentBaseMapKey = nextBaseKey;
+        currentMapRevision = revision ?? null;
+        currentMap = map || null;
+
+        if (!map) {
+            currentBaseMapCells = null;
+            mappingOverlayScan = null;
+            mappingOverlayPose = null;
+            mappingOverlayKey = null;
+            renderMapCells(null, null, null);
+            return;
+        }
+
+        const width = Number(map.width) || 0;
+        const height = Number(map.height) || 0;
+        const resolution = Number(map.resolution) || 0;
+        if (width <= 0 || height <= 0 || resolution <= 0) return;
+
+        currentBaseMapCells = decodeRleMap(map.data, width * height);
+
+        // Base map updates remain immediate. During Mapping, re-apply the most
+        // recent 1-second dynamic sample so already mapped content stays intact.
+        if (
+            isMappingMode()
+            && mappingOverlayScan
+            && validPose(mappingOverlayPose)
+        ) {
+            renderCurrentMappingComposite();
+        } else {
+            renderMapCells(
+                currentMap,
+                currentBaseMapCells,
+                `base:${currentBaseMapKey || ''}`,
+            );
+        }
+    }
+
+    function refreshMappingDynamicMap() {
+        if (!isMappingMode()) {
+            mappingOverlayScan = null;
+            mappingOverlayPose = null;
+            mappingOverlayKey = null;
+            if (currentMap && currentBaseMapCells) {
+                renderMapCells(
+                    currentMap,
+                    currentBaseMapCells,
+                    `base:${currentBaseMapKey || ''}`,
+                );
+            }
+            return;
+        }
+
+        const scan = currentVisualizationState?.scan || null;
+        const pose = currentVisualizationState?.pose || null;
+        if (
+            !scan
+            || !Array.isArray(scan.ranges)
+            || !scan.ranges.length
+            || !validPose(pose)
+        ) return;
+
+        const nextKey = [
+            scanKey(scan) || '',
+            Number(pose.x || 0).toFixed(3),
+            Number(pose.y || 0).toFixed(3),
+            Number(pose.yaw || 0).toFixed(3),
+        ].join(':');
+
+        mappingOverlayScan = scan;
+        mappingOverlayPose = pose;
+        mappingOverlayKey = nextKey;
+        renderCurrentMappingComposite();
+    }
+
+    window.setInterval(
+        refreshMappingDynamicMap,
+        MAPPING_DYNAMIC_MAP_REFRESH_MS,
+    );
 
     function clamp(value, min, max) {
         return Math.min(max, Math.max(min, value));
@@ -1854,7 +1951,6 @@ if (root && canvas) {
         // preview keeps the RC car visible but must never fabricate a TF frame.
         applyTfPose(livePose);
         updateRobotPose(visualizationPose);
-        rebuildLiveMapPreview(liveScan, visualizationPose, mappingMode);
         rebuildScan(liveScan);
 
         if (

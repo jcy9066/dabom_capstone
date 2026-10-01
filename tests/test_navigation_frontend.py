@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-map-walls-v26',
+            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-map-walls-v26',
+            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-map-walls-v26',
+            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
             template,
         )
 
@@ -139,12 +139,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("applyTfPose(livePose);", viewer)
         self.assertIn("const liveMap = state.map || null;", viewer)
         self.assertIn("const livePose = state.pose || null;", viewer)
-        self.assertIn("liveMapRoot.name = 'live-map-walls'", viewer)
-        self.assertIn("function rebuildLiveMapPreview(scan, pose, enabled)", viewer)
-        self.assertIn(
-            "rebuildLiveMapPreview(liveScan, visualizationPose, mappingMode);",
-            viewer,
-        )
+        self.assertIn("const MAPPING_DYNAMIC_MAP_REFRESH_MS = 1000;", viewer)
+        self.assertIn("function composeMappingCells(map, baseCells, scan, pose)", viewer)
+        self.assertIn("const cells = new Int16Array(baseCells);", viewer)
+        self.assertIn("function refreshMappingDynamicMap()", viewer)
+        self.assertIn("raytraceComposite(", viewer)
+        self.assertNotIn("liveMapRoot.name = 'live-map-walls'", viewer)
+        self.assertNotIn("rebuildLiveMapPreview(liveScan", viewer)
         self.assertNotIn(
             "payloadMatchesMappingSession(state.map)",
             viewer,
@@ -178,7 +179,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-live-map-walls-v26',
+            'static/lidar_3d_viewer.js?v=20261001-composite-map-v27',
             template,
         )
 
