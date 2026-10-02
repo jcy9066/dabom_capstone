@@ -29,6 +29,7 @@ class BatterySafetyMonitor:
         self._latched = False
         self._pending: asyncio.Task | None = None
         self._last_percent: float | None = None
+        self._undervoltage: bool | None = None
         self._updated_at: float | None = None
 
     @staticmethod
@@ -48,7 +49,7 @@ class BatterySafetyMonitor:
             "battery_low": self._latched,
             "battery_low_samples": self._hits,
             "battery_updated_at": self._updated_at,
-            "power_undervoltage": self._last_percent is None and self._latched,
+            "power_undervoltage": self._undervoltage,
             "low_percent": self.low_percent,
             "clear_percent": self.clear_percent,
         }
@@ -58,7 +59,9 @@ class BatterySafetyMonitor:
         self._last_percent = percent
         self._updated_at = time.time()
 
-        undervoltage = payload.get("power_undervoltage") is True
+        raw_undervoltage = payload.get("power_undervoltage")
+        self._undervoltage = raw_undervoltage if isinstance(raw_undervoltage, bool) else None
+        undervoltage = self._undervoltage is True
         if undervoltage:
             self._hits = self.low_samples
             if not self._latched:
@@ -76,7 +79,7 @@ class BatterySafetyMonitor:
             self._hits = 0
             return self.snapshot()
 
-        if percent >= self.clear_percent:
+        if percent >= self.clear_percent and self._undervoltage is not True:
             self._hits = 0
             self._latched = False
             return self.snapshot()
