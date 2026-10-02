@@ -853,15 +853,15 @@ patrol_route_api = PatrolRouteApi(
     navigation_control=navigation_control_api,
     csrf_failure=csrf_failure,
     store_path=ROOT_DIR / "data" / "runtime" / "patrol_routes.json",
-    max_retries=env_int("PATROL_MAX_RETRIES", minimum=0),
-    poll_interval_sec=env_float("PATROL_POLL_INTERVAL_SEC", minimum=0.1),
+    max_retries=max(0, int(os.getenv("PATROL_MAX_RETRIES", "2"))),
+    poll_interval_sec=max(0.1, float(os.getenv("PATROL_POLL_INTERVAL_SEC", "0.25"))),
 )
 
 battery_safety_monitor = BatterySafetyMonitor(
     navigation_control_api.emergency_stop,
-    low_percent=env_float("BATTERY_LOW_PERCENT", minimum=0.0, maximum=100.0),
-    clear_percent=env_float("BATTERY_CLEAR_PERCENT", minimum=0.0, maximum=100.0),
-    low_samples=env_int("BATTERY_LOW_SAMPLES", minimum=1),
+    low_percent=float(os.getenv("BATTERY_LOW_PERCENT", "15")),
+    clear_percent=float(os.getenv("BATTERY_CLEAR_PERCENT", "20")),
+    low_samples=max(1, int(os.getenv("BATTERY_LOW_SAMPLES", "3"))),
 )
 
 lidar_ros_bridge = None
