@@ -342,6 +342,28 @@ import rclpy
 import uvicorn
 PY
 
+model_active=0
+case "${INFERENCE_ENABLED:-false},${VISUALIZATION_ENABLED:-false}" in
+    true,*|1,*|yes,*|on,*|*,true|*,1|*,yes|*,on) model_active=1 ;;
+esac
+
+if (( model_active == 1 )); then
+    python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
+import mmaction
+import mmcv
+import mmengine
+import torch
+import ultralytics
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available to PyTorch")
+PY
+
+    log "Ensuring model assets for pipeline ${PIPELINE:-unset}"
+    python3 -m perception.model_assets --pipeline "${PIPELINE}" \
+        || fail "Model asset preparation failed for pipeline ${PIPELINE}"
+fi
+
 exec 9>"${LOCK_FILE}"
 if ! flock -w 15 9; then
     fail "Could not acquire restart lock: ${LOCK_FILE}"
