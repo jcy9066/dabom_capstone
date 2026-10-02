@@ -77,6 +77,8 @@ class BatterySafetyMonitor:
 
         if percent is None:
             self._hits = 0
+            if self._undervoltage is False:
+                self._latched = False
             return self.snapshot()
 
         if percent >= self.clear_percent and self._undervoltage is not True:
