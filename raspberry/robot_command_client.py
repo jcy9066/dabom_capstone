@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -174,6 +175,27 @@ class RobotCommandClient:
             return None
 
     @staticmethod
+    def _power_status() -> dict:
+        try:
+            result = subprocess.run(
+                ["vcgencmd", "get_throttled"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+            raw = (result.stdout or "").strip()
+            if result.returncode != 0 or "=" not in raw:
+                return {"power_undervoltage": None, "power_throttled_flags": None}
+            flags = int(raw.split("=", 1)[1], 16)
+            return {
+                "power_undervoltage": bool(flags & 0x1),
+                "power_throttled_flags": flags,
+            }
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return {"power_undervoltage": None, "power_throttled_flags": None}
+
+    @staticmethod
     def _cpu_temp_c() -> float | None:
         for path in (
             Path("/sys/class/thermal/thermal_zone0/temp"),
@@ -190,6 +212,7 @@ class RobotCommandClient:
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
+        power = self._power_status()
 
         if self._server_reachable is True:
             internet = "ok"
@@ -203,6 +226,9 @@ class RobotCommandClient:
             "cpu_usage": self._cpu_usage_percent(),
             "cpu_temp": self._cpu_temp_c(),
             "ram_usage": self._ram_usage_percent(),
+            "power_undervoltage": power["power_undervoltage"],
+            "power_throttled_flags": power["power_throttled_flags"],
+            "battery_percent": None,
             "gps_lat": gps["lat"],
             "gps_lng": gps["lng"],
             "gps_alt": gps["alt"],
