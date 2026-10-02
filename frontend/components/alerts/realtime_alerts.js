@@ -3,7 +3,8 @@
 
     const POLL_MS = 750;
     let timer = null;
-    let lastSignature = '';
+    let lastDangerSignature = '';
+    let lastPowerSignature = '';
     let clearedAt = 0;
 
     function alertBox() { return document.getElementById('alertBox'); }
@@ -49,22 +50,22 @@
                 .sort()
                 .join('|');
 
-            if (result.danger === true && signature && signature !== lastSignature) {
+            if (result.danger === true && signature && signature !== lastDangerSignature) {
                 const labels = [...new Set(dangerous.map(item => item.label || 'DANGER'))].join(', ');
                 appendAlert(`AI 위험 감지: ${labels}`, true);
             }
-            lastSignature = signature;
+            lastDangerSignature = signature;
 
             if (status.battery_low === true) {
                 const lowSignature = `battery:${status.battery_percent ?? 'unknown'}:${status.power_undervoltage === true}`;
-                if (lowSignature !== lastSignature) {
+                if (lowSignature !== lastPowerSignature) {
                     appendAlert(
                         status.power_undervoltage === true
                             ? '전원 저전압 감지: 안전 정지가 요청되었습니다.'
                             : `배터리 부족 감지: ${status.battery_percent ?? '--'}%`,
                         true,
                     );
-                    lastSignature = lowSignature;
+                    lastPowerSignature = lowSignature;
                 }
             }
         } catch (_) {
@@ -76,7 +77,8 @@
 
     document.addEventListener('dabom:alerts-cleared', event => {
         clearedAt = Number(event.detail?.clearedAt || Date.now());
-        lastSignature = `cleared:${clearedAt}`;
+        lastDangerSignature = `cleared:${clearedAt}`;
+        lastPowerSignature = `cleared:${clearedAt}`;
     });
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', poll, { once: true });
