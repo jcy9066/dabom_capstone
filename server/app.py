@@ -65,6 +65,8 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
+from server.battery_safety import BatterySafetyMonitor
+from server.patrol_route_api import PatrolRouteApi
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
@@ -406,6 +408,10 @@ robot_status = {
     "internet": "unknown",
     "mode": "manual",
     "led_enabled": None,
+    "battery_percent": None,
+    "battery_low": False,
+    "power_undervoltage": None,
+    "power_throttled_flags": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -840,6 +846,22 @@ navigation_control_api = NavigationControlApi(
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
+)
+
+patrol_route_api = PatrolRouteApi(
+    app=app,
+    navigation_control=navigation_control_api,
+    csrf_failure=csrf_failure,
+    store_path=ROOT_DIR / "data" / "runtime" / "patrol_routes.json",
+    max_retries=env_int("PATROL_MAX_RETRIES", minimum=0),
+    poll_interval_sec=env_float("PATROL_POLL_INTERVAL_SEC", minimum=0.1),
+)
+
+battery_safety_monitor = BatterySafetyMonitor(
+    navigation_control_api.emergency_stop,
+    low_percent=env_float("BATTERY_LOW_PERCENT", minimum=0.0, maximum=100.0),
+    clear_percent=env_float("BATTERY_CLEAR_PERCENT", minimum=0.0, maximum=100.0),
+    low_samples=env_int("BATTERY_LOW_SAMPLES", minimum=1),
 )
 
 lidar_ros_bridge = None
@@ -1736,9 +1758,10 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
-    try :
+    try:
+        await patrol_route_api.stop_route()
         await navigation_control_api.close()
-    finally :
+    finally:
         await asyncio.to_thread(stop_persistence_workers)
     navigation_map_api.close()
     await asyncio.to_thread(navigation_process_control.stop)
@@ -2571,6 +2594,8 @@ async def update_status(request: Request):
     if denied:
         return denied
 
+    battery_state = battery_safety_monitor.note_status(data)
+
     with state_lock:
         def status_value(name, current=None):
             value = data.get(name, current)
@@ -2585,6 +2610,13 @@ async def update_status(request: Request):
                 "internet": status_value("internet", robot_status["internet"]),
                 "mode": status_value("mode", robot_status.get("mode", "manual")),
                 "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
+                "battery_percent": battery_state.get("battery_percent"),
+                "battery_low": battery_state.get("battery_low", False),
+                "power_undervoltage": battery_state.get("power_undervoltage"),
+                "power_throttled_flags": status_value(
+                    "power_throttled_flags",
+                    robot_status.get("power_throttled_flags"),
+                ),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
@@ -2603,7 +2635,9 @@ async def update_status(request: Request):
 @app.get("/get_status")
 async def get_status():
     with state_lock:
-        return dict(robot_status)
+        payload = dict(robot_status)
+    payload.update(battery_safety_monitor.snapshot())
+    return payload
 
 
 def parse_navigation_mode(payload):
@@ -4034,13 +4068,10 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                 status_data = message.get("data", {})
                 if not isinstance(status_data, dict):
                     continue
-                status_data = {
-                    key: value
-                    for key, value in status_data.items()
-                    if key not in {"battery", "battery_level"}
-                }
+                battery_state = battery_safety_monitor.note_status(status_data)
                 with state_lock:
                     robot_status.update(status_data)
+                    robot_status.update(battery_state)
                     robot_status["robot_id"] = robot_id
                     robot_status["updated_at"] = time.time()
                 if robot_id == SERVER_ROBOT_ID:
