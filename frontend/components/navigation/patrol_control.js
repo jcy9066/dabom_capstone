@@ -56,9 +56,10 @@
 
     function ensureLayer() {
         if (state.group || !viewer()?.THREE || !viewer()?.world) return state.group;
-        state.group = new viewer().THREE.Group();
+        const v = viewer();
+        state.group = new v.THREE.Group();
         state.group.name = 'patrol-waypoints';
-        viewer().world.add(state.group);
+        v.world.add(state.group);
         return state.group;
     }
 
@@ -196,6 +197,10 @@
 
     async function startPatrol() {
         const routeId = await chooseRoute();
+        if (String(global.dabomNavigationControlState?.robot_mode || '').toUpperCase() !== 'AUTO') {
+            const switched = await global.navigationControl?.requestDriveMode?.('AUTO', { announce: true });
+            if (!switched) throw new Error('AUTO 모드 전환 후 순찰을 시작할 수 있습니다.');
+        }
         state.routeId = routeId;
         state.patrol = await api('/api/navigation/patrol/start', {
             method: 'POST',
