@@ -343,11 +343,14 @@ import uvicorn
 PY
 
 model_active=0
-case "${INFERENCE_ENABLED:-false},${VISUALIZATION_ENABLED:-false}" in
+inference_enabled="${INFERENCE_ENABLED:-false}"
+visualization_enabled="${VISUALIZATION_ENABLED:-false}"
+case "${inference_enabled,,},${visualization_enabled,,}" in
     true,*|1,*|yes,*|on,*|*,true|*,1|*,yes|*,on) model_active=1 ;;
 esac
 
 if (( model_active == 1 )); then
+    [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
     python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
 import mmaction
 import mmcv

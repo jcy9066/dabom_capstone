@@ -1418,6 +1418,12 @@ def process_frame_for_dashboard(frame):
                 selected_action = dict(selected_action)
                 selected_action["updated_at"] = now
                 frame_processor.action_display_buffer[oid] = selected_action
+            elif getattr(
+                frame_processor.action_analyzer,
+                "manages_action_hysteresis",
+                False,
+            ):
+                frame_processor.action_display_buffer.pop(oid, None)
 
             current_action = frame_processor.action_display_buffer.get(oid)
             if (
