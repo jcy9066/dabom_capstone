@@ -67,6 +67,8 @@
                     );
                     lastPowerSignature = lowSignature;
                 }
+            } else {
+                lastPowerSignature = '';
             }
         } catch (_) {
             // Existing dashboard status indicators handle connectivity failures.
