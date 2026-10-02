@@ -25,6 +25,10 @@ try:
 except ModuleNotFoundError:
     from gps_reader import GpsReader
 try:
+    from raspberry.bno055_reader import Bno055Reader
+except ModuleNotFoundError:
+    from bno055_reader import Bno055Reader
+try:
     from raspberry.env_config import env_float, env_int, env_text
 except ModuleNotFoundError:  # Direct script execution from raspberry/.
     from env_config import env_float, env_int, env_text
@@ -92,6 +96,7 @@ class RobotCommandClient:
             port="/dev/ttyAMA1",
             baudrate=9600,
         )
+        self.bno055 = Bno055Reader()
 
     def start(self) -> None:
         self.gps.start()
@@ -120,6 +125,7 @@ class RobotCommandClient:
         finally:
             self.running = False
             self.gps.close()
+            self.bno055.close()
             self.encoder_ros.close()
             self.motor.close()
 
@@ -212,6 +218,7 @@ class RobotCommandClient:
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
+        bno = self.bno055.snapshot()
         power = self._power_status()
 
         if self._server_reachable is True:
@@ -232,6 +239,21 @@ class RobotCommandClient:
             "gps_lat": gps["lat"],
             "gps_lng": gps["lng"],
             "gps_alt": gps["alt"],
+            "bno_connected": bno["bno_connected"],
+            "bno_heading_deg": bno["bno_heading_deg"],
+            "bno_roll_deg": bno["bno_roll_deg"],
+            "bno_pitch_deg": bno["bno_pitch_deg"],
+            "bno_quaternion_w": bno["bno_quaternion_w"],
+            "bno_quaternion_x": bno["bno_quaternion_x"],
+            "bno_quaternion_y": bno["bno_quaternion_y"],
+            "bno_quaternion_z": bno["bno_quaternion_z"],
+            "bno_calib_sys": bno["bno_calib_sys"],
+            "bno_calib_gyro": bno["bno_calib_gyro"],
+            "bno_calib_accel": bno["bno_calib_accel"],
+            "bno_calib_mag": bno["bno_calib_mag"],
+            "bno_temp_c": bno["bno_temp_c"],
+            "bno_updated_at": bno["bno_updated_at"],
+            "bno_error": bno["bno_error"],
             "internet": internet,
             "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
