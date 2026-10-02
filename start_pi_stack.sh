@@ -319,6 +319,14 @@ case "${STREAM_INFER,,}" in
     *) fail "STREAM_INFER must be a boolean value" ;;
 esac
 
+case "${BNO055_ENABLED:-true}" in
+    true|TRUE|1|yes|YES|on|ON)
+        BNO055_I2C_BUS="${BNO055_I2C_BUS:-1}"
+        BNO055_I2C_ADDRESS="${BNO055_I2C_ADDRESS:-0x28}"
+        [[ -e "/dev/i2c-${BNO055_I2C_BUS}" ]]             || fail "BNO055 I2C bus not found: /dev/i2c-${BNO055_I2C_BUS}"
+        ;;
+esac
+
 [[ "${ROS_LOCALHOST_ONLY}" == "1" ]] \
     || fail "ROS_LOCALHOST_ONLY must be 1; Pi/GPU sensor transport uses WebSocket, not cross-host DDS"
 
@@ -375,6 +383,7 @@ import requests
 import serial
 import websockets
 import rclpy
+import smbus2
 PY
 
 exec 9>"${LOCK_FILE}"
@@ -467,6 +476,29 @@ then
     fail "Pico UART PING/STOP preflight failed on ${MOTOR_SERIAL_PORT}"
 fi
 log "Pico UART READY and motor STOP confirmed"
+
+case "${BNO055_ENABLED:-true}" in
+    true|TRUE|1|yes|YES|on|ON)
+        if ! python3 - "${BNO055_I2C_BUS:-1}" "${BNO055_I2C_ADDRESS:-0x28}" <<'PYBNO'
+import sys
+from smbus2 import SMBus
+
+bus_number = int(sys.argv[1], 0)
+address = int(sys.argv[2], 0)
+
+with SMBus(bus_number) as bus:
+    chip_id = bus.read_byte_data(address, 0x00)
+
+if chip_id != 0xA0:
+    print(f"BNO055 chip id mismatch: 0x{chip_id:02x}", file=sys.stderr)
+    raise SystemExit(1)
+PYBNO
+        then
+            fail "BNO055 preflight failed on /dev/i2c-${BNO055_I2C_BUS:-1} address ${BNO055_I2C_ADDRESS:-0x28}"
+        fi
+        log "BNO055 READY on I2C-${BNO055_I2C_BUS:-1}"
+        ;;
+esac
 
 camera_list="$(timeout 8 rpicam-vid --list-cameras 2>&1 || true)"
 if ! grep -Eq '^[[:space:]]*[0-9]+[[:space:]]*:' <<< "${camera_list}"; then
