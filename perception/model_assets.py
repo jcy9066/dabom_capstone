@@ -32,7 +32,7 @@ PIPELINE_8_ASSETS = (
         key="action_config",
         filename="stgcnpp_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d.py",
         url=(
-            "https://raw.githubusercontent.com/open-mmlab/mmaction2/main/"
+            "https://raw.githubusercontent.com/open-mmlab/mmaction2/v1.2.0/"
             "configs/skeleton/stgcnpp/"
             "stgcnpp_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d.py"
         ),
