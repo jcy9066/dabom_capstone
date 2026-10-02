@@ -53,7 +53,11 @@ def _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames):
 
     pad_kpts = cur_kpts + [cur_kpts[-1]] * pad_len if pad_len > 0 else cur_kpts
     pad_scores = cur_scores + [cur_scores[-1]] * pad_len if pad_len > 0 else cur_scores
-    action_res = analyzer._classify(pad_kpts, pad_scores, frame.shape)
+    object_classifier = getattr(analyzer, "_classify_with_object", None)
+    if callable(object_classifier):
+        action_res = object_classifier(obj_id, pad_kpts, pad_scores, frame.shape)
+    else:
+        action_res = analyzer._classify(pad_kpts, pad_scores, frame.shape)
 
     if len(analyzer.action_buffer[obj_id]["kpts"]) >= total_frames:
         analyzer.action_buffer[obj_id]["kpts"].pop(0)

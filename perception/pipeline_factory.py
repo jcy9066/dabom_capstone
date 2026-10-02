@@ -104,7 +104,7 @@ def create_pipeline(choice, device=None):
         return {
             "name": PIPELINE_OPTIONS[choice],
             "detector": YOLOPoseDetector(weight="weights/yolo26m-pose.pt", tracker="botsort", device=device),
-            "action_analyzer": ActionRecognizer(device=device),
+            "action_analyzer": ActionRecognizer(device=device, recall_mode=True),
         }
     if choice == "9":
         from .models.detector_yolo import YOLOPoseDetector

@@ -21,6 +21,12 @@ class FrameProcessor:
         display_frame = frame.copy()
         detections = []
         danger = False
+        analyze_all_persons = bool(
+            getattr(self.action_analyzer, "analyze_all_persons", False)
+        )
+        manages_action_hysteresis = bool(
+            getattr(self.action_analyzer, "manages_action_hysteresis", False)
+        )
 
         for obj in tracked_boxes:
             oid = obj["id"]
@@ -37,7 +43,8 @@ class FrameProcessor:
                 "danger": False,
             }
 
-            if state == 0:
+            should_analyze_person = cls_id == 0 and (state != 0 or analyze_all_persons)
+            if state == 0 and not should_analyze_person:
                 detections.append(detection)
                 continue
 
@@ -50,6 +57,8 @@ class FrameProcessor:
 
                 if action:
                     self.action_display_buffer[oid] = action
+                elif manages_action_hysteresis:
+                    self.action_display_buffer.pop(oid, None)
 
                 if oid in self.action_display_buffer:
                     current_action = self.action_display_buffer[oid]
@@ -78,7 +87,7 @@ class FrameProcessor:
             # Bounding box visualization disabled. Keep this line for easy rollback.
             # cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
 
-            if skeleton is not None:
+            if skeleton is not None and (state != 0 or oid in self.action_display_buffer):
                 self.action_analyzer.draw_skeleton(display_frame, skeleton, color)
 
             if label:
