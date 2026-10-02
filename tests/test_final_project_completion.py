@@ -107,6 +107,8 @@ def test_final_hardware_contracts_are_real_not_stubs():
     speaker = (root / "raspberry/controllers/speaker_controller.py").read_text(encoding="utf-8")
     pico = (root / "raspberry/pico_w_sdk/main.c").read_text(encoding="utf-8")
     motor = (root / "raspberry/controllers/motor_controller.py").read_text(encoding="utf-8")
+    bno = (root / "raspberry/bno055_reader.py").read_text(encoding="utf-8")
+    pi_stack = (root / "start_pi_stack.sh").read_text(encoding="utf-8")
 
     assert "espeak-ng" in speaker
     assert "aplay" in speaker
@@ -114,3 +116,8 @@ def test_final_hardware_contracts_are_real_not_stubs():
     assert "#define SPEAKER_PIN 16" in pico
     assert "#define MOSFET_PIN 20" in pico
     assert '"LED,{1 if enabled else 0}"' in motor
+    assert "BNO055_I2C_BUS" in bno
+    assert 'BNO055_I2C_ADDRESS", "0x28"' in bno
+    assert "GPIO2/SDA1" in bno
+    assert "GPIO3/SCL1" in bno
+    assert "chip_id != 0xA0" in pi_stack
