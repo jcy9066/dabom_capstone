@@ -334,6 +334,15 @@ require_cmd timeout
 require_cmd rpicam-vid
 require_cmd systemctl
 
+case "${SPEAKER_ENABLED:-true}" in
+    true|TRUE|1|yes|YES|on|ON)
+        require_cmd aplay
+        if ! command -v espeak-ng >/dev/null 2>&1 && ! command -v espeak >/dev/null 2>&1; then
+            fail "Grove Speaker Plus TTS requires espeak-ng or espeak"
+        fi
+        ;;
+esac
+
 [[ -f /opt/ros/humble/setup.bash ]] || fail "ROS 2 Humble setup not found"
 [[ -f "${ROOT_DIR}/navigation/ros/install/setup.bash" ]] \
     || fail "patrol_navigation is not built: navigation/ros/install/setup.bash is missing"
