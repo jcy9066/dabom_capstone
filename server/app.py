@@ -412,6 +412,21 @@ robot_status = {
     "battery_low": False,
     "power_undervoltage": None,
     "power_throttled_flags": None,
+    "bno_connected": None,
+    "bno_heading_deg": None,
+    "bno_roll_deg": None,
+    "bno_pitch_deg": None,
+    "bno_quaternion_w": None,
+    "bno_quaternion_x": None,
+    "bno_quaternion_y": None,
+    "bno_quaternion_z": None,
+    "bno_calib_sys": None,
+    "bno_calib_gyro": None,
+    "bno_calib_accel": None,
+    "bno_calib_mag": None,
+    "bno_temp_c": None,
+    "bno_updated_at": None,
+    "bno_error": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -2622,6 +2637,51 @@ async def update_status(request: Request):
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
                 "gps_lng": status_value("gps_lng", robot_status.get("gps_lng")),
                 "gps_alt": status_value("gps_alt", robot_status.get("gps_alt")),
+                "bno_connected": status_value(
+                    "bno_connected", robot_status.get("bno_connected")
+                ),
+                "bno_heading_deg": status_value(
+                    "bno_heading_deg", robot_status.get("bno_heading_deg")
+                ),
+                "bno_roll_deg": status_value(
+                    "bno_roll_deg", robot_status.get("bno_roll_deg")
+                ),
+                "bno_pitch_deg": status_value(
+                    "bno_pitch_deg", robot_status.get("bno_pitch_deg")
+                ),
+                "bno_quaternion_w": status_value(
+                    "bno_quaternion_w", robot_status.get("bno_quaternion_w")
+                ),
+                "bno_quaternion_x": status_value(
+                    "bno_quaternion_x", robot_status.get("bno_quaternion_x")
+                ),
+                "bno_quaternion_y": status_value(
+                    "bno_quaternion_y", robot_status.get("bno_quaternion_y")
+                ),
+                "bno_quaternion_z": status_value(
+                    "bno_quaternion_z", robot_status.get("bno_quaternion_z")
+                ),
+                "bno_calib_sys": status_value(
+                    "bno_calib_sys", robot_status.get("bno_calib_sys")
+                ),
+                "bno_calib_gyro": status_value(
+                    "bno_calib_gyro", robot_status.get("bno_calib_gyro")
+                ),
+                "bno_calib_accel": status_value(
+                    "bno_calib_accel", robot_status.get("bno_calib_accel")
+                ),
+                "bno_calib_mag": status_value(
+                    "bno_calib_mag", robot_status.get("bno_calib_mag")
+                ),
+                "bno_temp_c": status_value(
+                    "bno_temp_c", robot_status.get("bno_temp_c")
+                ),
+                "bno_updated_at": status_value(
+                    "bno_updated_at", robot_status.get("bno_updated_at")
+                ),
+                "bno_error": status_value(
+                    "bno_error", robot_status.get("bno_error")
+                ),
                 "lidar_x": status_value("lidar_x", robot_status.get("lidar_x")),
                 "lidar_y": status_value("lidar_y", robot_status.get("lidar_y")),
                 "lidar_z": status_value("lidar_z", robot_status.get("lidar_z")),
