@@ -415,7 +415,7 @@ class RobotCommandClient:
                 await asyncio.to_thread(
                     self.motor.move,
                     message.get("direction", ""),
-                    message.get("speed", 0.35),
+                    message.get("speed", 1.0),
                 )
 
             elif command_type == "auto_drive":
@@ -684,6 +684,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
+
+    if args.max_wheel_mps != env_float("MAX_WHEEL_MPS", minimum=0.01):
+        parser.error("--max-wheel-mps must match MAX_WHEEL_MPS on both hosts")
 
     if not args.server_base_url:
         parser.error(

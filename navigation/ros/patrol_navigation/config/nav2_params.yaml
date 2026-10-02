@@ -1,3 +1,5 @@
+# Provisional full-PWM speed: not measured. navigation.launch.py overrides
+# longitudinal limits from MAX_WHEEL_MPS, including custom params_file.
 # ROS 2 Humble Nav2 설정.
 #
 # 현재 단계:
@@ -40,16 +42,15 @@ controller_server:
       debug_trajectory_details: true
 
       # 차동 구동 로봇
-      # D-pad 35%보다 높은 자동주행 최소 PWM 50%를
-      # MAX_WHEEL_MPS=0.50 기준 0.25 m/s로 환산해 사용한다.
-      min_vel_x: 0.25
+      # Existing minimum PWM 50%; calibrated at provisional MAX_WHEEL_MPS=0.17.
+      min_vel_x: 0.085
       min_vel_y: 0.0
-      max_vel_x: 0.30
+      max_vel_x: 0.17
       max_vel_y: 0.0
       max_vel_theta: 0.60
 
-      min_speed_xy: 0.25
-      max_speed_xy: 0.30
+      min_speed_xy: 0.085
+      max_speed_xy: 0.17
       min_speed_theta: 0.0
 
       acc_lim_x: 0.50
@@ -365,8 +366,8 @@ velocity_smoother:
     # 엔코더 /odom이 없으므로 현재는 OPEN_LOOP
     feedback: "OPEN_LOOP"
 
-    max_velocity: [0.30, 0.0, 0.60]
-    min_velocity: [-0.30, 0.0, -0.60]
+    max_velocity: [0.17, 0.0, 0.60]
+    min_velocity: [-0.17, 0.0, -0.60]
 
     max_accel: [0.50, 0.0, 1.00]
     max_decel: [-0.50, 0.0, -1.00]

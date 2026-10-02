@@ -171,7 +171,7 @@ def check_pi_controller(root: Path, findings: list[Finding]) -> None:
             "baudrate: int = 115200",
             "command_timeout_sec: float = 0.45",
             "serial_timeout_sec: float = 0.25",
-            "max_wheel_mps: float = 0.50",
+            'env_float("MAX_WHEEL_MPS", minimum=0.01)',
             "_reader_loop",
             "_response_queue",
             "EVENT,ENC,",
