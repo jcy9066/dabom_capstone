@@ -5,7 +5,7 @@ Raspberry Pi 기반 이동 로봇과 GPU 서버를 연결한 자율주행 AI 방
 - **Raspberry Pi**: 카메라, LiDAR, Pico W UART, 바퀴 엔코더, 센서/영상 전송
 - **GPU Server**: FastAPI, 웹 대시보드, AI perception, wheel odometry, ROS 2 Mapping/Localization/Nav2
 - **ROS 2**: Humble
-- **Target Pi**: Raspberry Pi 3 Model B, Ubuntu Server 22.04 arm64
+- **Target Pi**: Raspberry Pi 4 Model B, Ubuntu Server 22.04 arm64
 
 ## Runtime entry points
 
@@ -42,7 +42,8 @@ Pi에는 다음 환경이 미리 준비되어 있어야 합니다.
 - Python dependencies from `raspberry/requirements.txt`
 - Pico W UART device
 - LiDAR serial device
-- `dialout`/camera device 접근 권한
+- BNO055 on Pi 4 I²C-1
+- `dialout`/camera/I²C device 접근 권한
 - `patrol_navigation` ROS package build
 
 ```bash
@@ -66,6 +67,31 @@ MOTOR_SERIAL_BAUDRATE=115200
 ```
 
 Pico와 LiDAR는 같은 serial device를 사용할 수 없습니다.
+
+BNO055는 Raspberry Pi 4의 I²C-1에 직접 연결합니다.
+
+```text
+BNO055                 Raspberry Pi 4
+VIN / 3V3          ->  3.3V / physical pin 1
+SDA                ->  GPIO2 / SDA1 / physical pin 3
+SCL                ->  GPIO3 / SCL1 / physical pin 5
+GND                ->  GND / physical pin 14
+
+BNO055_I2C_BUS=1
+BNO055_I2C_ADDRESS=0x28
+```
+
+LED는 Pico W GP20에서 DFRobot DFR0457 MOSFET 제어 입력을 구동합니다.
+
+```text
+DFRobot DFR0457 control     Pico W
+VCC / red               ->  3V3 OUT
+GND / black             ->  GND
+Signal / green          ->  GP20
+```
+
+실제 LED 부하는 INJORA 102 mm Bright LED Light Bar이며, Pico firmware의
+`MOSFET_PIN 20` 제어 경로를 사용합니다.
 
 ### GPU Server prerequisites
 
@@ -134,12 +160,13 @@ bash start_pi_stack.sh
    - Camera upload process
 5. 기존 `dabom-command.service`가 실행 중이면 정지
 6. Pico UART `PING -> OK,PONG` 확인
-7. Camera hardware 탐지 확인
-8. LiDAR driver 시작 후 실제 `LaserScan` 1회 수신 확인
-9. LiDAR WebSocket sender 시작
-10. Robot command client 시작
-11. H.264 Camera stream 시작
-12. GPU 연결 상태 출력
+7. BNO055 I²C bus 및 chip ID `0xA0` 확인
+8. Camera hardware 탐지 확인
+9. LiDAR driver 시작 후 실제 `LaserScan` 1회 수신 확인
+10. LiDAR WebSocket sender 시작
+11. Robot command client 시작
+12. H.264 Camera stream 시작
+13. GPU 연결 상태 출력
 
 Robot client 종료 시에는 Pico에 안전 정지 명령을 보낼 수 있도록 graceful shutdown을 우선합니다.
 
@@ -147,6 +174,7 @@ Robot client 종료 시에는 Pico에 안전 정지 명령을 보낼 수 있도�
 
 ```text
 [pi-stack] Pico UART READY
+[pi-stack] BNO055 READY on I2C-1
 [pi-stack] Camera hardware READY
 [pi-stack] LiDAR scan READY
 [pi-stack] READY: Pi local stack is running
@@ -190,7 +218,7 @@ Mapping과 Driving은 동시에 실행하지 않습니다.
 Raspberry Pi                            GPU Server
 ────────────────────                    ─────────────────────
 Pico W
-  │ encoder / control
+  │ encoder / motor / LED(MOSFET GP20) control
   ▼
 robot_command_client.py ──────────────► FastAPI / WebSocket
                                            │
@@ -200,6 +228,10 @@ robot_command_client.py ──────────────► FastAPI / 
                                            wheel_odometry
                                                 │
                                                 └─ /odom + TF
+
+BNO055 / I2C-1
+  │ heading / roll / pitch / quaternion / calibration
+  └────────────────────────────────────► FastAPI / status telemetry
 
 LiDAR driver
   │
@@ -246,6 +278,7 @@ ros2 run tf2_ros tf2_echo odom base_link
 Camera      Dashboard 실시간 영상 수신
 LiDAR       /scan 지속 발행
 Encoder     /wheel_ticks 지속 발행
+BNO055      I2C-1 연결 + heading/roll/pitch/calibration telemetry 갱신
 Odometry    /odom 및 odom -> base_link TF 발행
 Robot       /ws/robot/<ROBOT_ID> 연결
 Navigation  Mapping 또는 Driving mode 요청 시 해당 stack만 실행
