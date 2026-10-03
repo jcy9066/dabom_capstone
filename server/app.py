@@ -2635,7 +2635,20 @@ async def update_status(request: Request):
 @app.get("/get_status")
 async def get_status():
     with state_lock:
-        return dict(robot_status)
+        status = dict(robot_status)
+    live_gps = location_security_service.snapshot().get("gps") or {}
+    status.update(
+        {
+            "gps_fix": live_gps.get("fix") is True,
+            "gps_lat": live_gps.get("lat"),
+            "gps_lng": live_gps.get("lng"),
+            "gps_alt": live_gps.get("alt"),
+            "gps_satellites": live_gps.get("satellites"),
+            "gps_hdop": live_gps.get("hdop"),
+            "gps_updated_at": live_gps.get("updated_at"),
+        }
+    )
+    return status
 
 
 def parse_navigation_mode(payload):
