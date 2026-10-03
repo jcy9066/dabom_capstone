@@ -112,7 +112,8 @@ list_owned_pgids() {
         [[ "${pid}" == "$$" ]] && continue
 
         [[ -r "${proc}/environ" ]] || continue
-        if { tr '\0' '\n' < "${proc}/environ"; } 2>/dev/null \
+        if cat -- "${proc}/environ" 2>/dev/null \
+            | tr '\0' '\n' \
             | grep -Fqx "DABOM_PROCESS_OWNER=${owner}"; then
             pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
             [[ "${pgid}" =~ ^[0-9]+$ ]] || continue
@@ -137,7 +138,7 @@ stop_owned_groups() {
         kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..1,10}; do
+    for _ in {1..10}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -147,7 +148,7 @@ stop_owned_groups() {
         kill -TERM -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..2,5}; do
+    for _ in {1..5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -157,7 +158,7 @@ stop_owned_groups() {
         kill -KILL -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..3,5}; do
+    for _ in {1..5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
