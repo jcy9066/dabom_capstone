@@ -211,14 +211,10 @@ planner_server:
     planner_plugins: ["GridBased"]
 
     GridBased:
-      # Prefer Euclidean line-of-sight in open space. Turns are introduced only
-      # when the global costmap blocks the direct segment.
-      plugin: "nav2_theta_star_planner/ThetaStarPlanner"
-      how_many_corners: 8
-      w_euc_cost: 1.0
-      w_traversal_cost: 1.0
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.15
+      use_astar: true
       allow_unknown: true
-      use_final_approach_orientation: false
 
 
 smoother_server:

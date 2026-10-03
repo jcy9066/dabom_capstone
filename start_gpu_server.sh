@@ -358,9 +358,6 @@ source /opt/ros/humble/setup.bash
 source "${ROOT_DIR}/navigation/ros/install/setup.bash"
 set -u
 
-ros2 pkg prefix nav2_theta_star_planner >/dev/null 2>&1 \
-    || fail "nav2_theta_star_planner is missing. Install ros-humble-nav2-theta-star-planner and rebuild navigation/ros."
-
 export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV
 export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME
