@@ -6,9 +6,11 @@ import server.app as app
 class _FakeActionAnalyzer:
     def __init__(self):
         self.reset_calls = 0
+        self.generation_seen_at_reset = None
 
     def reset_tracking_state(self):
         self.reset_calls += 1
+        self.generation_seen_at_reset = app.active_stream_id
 
 
 class _FakeViolenceHeuristic:
@@ -91,6 +93,7 @@ def test_reconnect_rejects_old_frame_waiting_before_processing(monkeypatch):
     assert processed_frames == []
     assert app.inference_stats["dropped"] == 1
     assert processor.action_analyzer.reset_calls == 1
+    assert processor.action_analyzer.generation_seen_at_reset == new_generation
     assert processor.violence_heuristic.reset_calls == 1
     assert processor.action_display_buffer == {}
     assert app.inference_slot["frame"] is None

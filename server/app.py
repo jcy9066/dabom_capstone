@@ -1656,6 +1656,14 @@ def activate_stream_generation(robot_id, infer):
     global active_stream_id
 
     with processing_lock:
+        # Invalidate the previous generation before clearing tracking state.
+        # An inference that finished processing just before reconnect will now
+        # fail its post-processing generation check immediately.
+        with state_lock:
+            active_stream_id += 1
+            stream_id = active_stream_id
+            now = time.time()
+
         processor = frame_processor
         if processor is not None:
             reset_tracking_state = getattr(
@@ -1680,9 +1688,6 @@ def activate_stream_generation(robot_id, infer):
             )
 
         with state_lock:
-            active_stream_id += 1
-            stream_id = active_stream_id
-            now = time.time()
             frame_stats.update({"last_time": now, "count": 0, "fps": 0})
             decode_stats.update({"last_time": now, "count": 0, "fps": 0})
             publish_stats.update(
