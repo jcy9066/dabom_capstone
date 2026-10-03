@@ -62,6 +62,14 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in script
 
 
+def test_gpu_requires_rotation_shim_controller():
+    script = read("start_gpu_server.sh")
+    package = read("navigation/ros/patrol_navigation/package.xml")
+
+    assert "ros2 pkg prefix nav2_rotation_shim_controller" in script
+    assert "<exec_depend>nav2_rotation_shim_controller</exec_depend>" in package
+
+
 def test_navigation_launch_control_uses_live_rc_sensor_bridges():
     control = read("server/navigation_process_control.py")
 

@@ -130,6 +130,7 @@ def ros_stubs(monkeypatch):
 @pytest.mark.parametrize("calibration", [.17, .23])
 def test_launch_overrides_stale_limits_and_preserves_custom_dynamics(ros_stubs, monkeypatch, tmp_path, calibration):
     monkeypatch.setenv("MAX_WHEEL_MPS", str(calibration))
+    monkeypatch.setenv("WHEEL_TRACK_M", "0.4023")
     module = load_module(ROS / "launch/navigation.launch.py", "speed_launch")
     config = yaml.safe_load((ROS / "config/nav2_params.yaml").read_text())
     smoother = config["velocity_smoother"]["ros__parameters"]
@@ -139,16 +140,22 @@ def test_launch_overrides_stale_limits_and_preserves_custom_dynamics(ros_stubs, 
     custom.write_text(yaml.safe_dump(config))
     actions = module.generate_launch_description().args[0]
     controller = next(a for a in actions if a.kwargs.get("name") == "controller_server")
+    max_angular = 2.0 * calibration / 0.4023
     assert controller.kwargs["parameters"][-1] == {
-        "FollowPath.max_vel_x": calibration, "FollowPath.max_speed_xy": calibration,
-        "FollowPath.min_vel_x": calibration * .5, "FollowPath.min_speed_xy": calibration * .5,
+        "FollowPath.min_vel_x": 0.0,
+        "FollowPath.min_speed_xy": 0.0,
+        "FollowPath.max_vel_x": calibration,
+        "FollowPath.max_speed_xy": calibration,
+        "FollowPath.max_vel_theta": max_angular,
+        "FollowPath.rotate_to_heading_angular_vel": max_angular,
     }
     bridge = next(a for a in actions if a.kwargs.get("name") == "nav2_command_bridge")
     assert bridge.kwargs["parameters"][0]["max_wheel_mps"] == calibration
     opaque = next(a for a in actions if "function" in a.kwargs)
     node = opaque.kwargs["function"]({"params_file": str(custom)})[0]
     assert node.kwargs["parameters"][-1] == {
-        "max_velocity": [calibration, 0., .42], "min_velocity": [-calibration, 0., -.37],
+        "max_velocity": [calibration, 0., max_angular],
+        "min_velocity": [-calibration, 0., -max_angular],
     }
     # Original file remains first: accel/decel/feedback and all other config survive.
     assert node.kwargs["parameters"][0].perform({"params_file": str(custom)}) == str(custom)
@@ -182,6 +189,19 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
             half = bridge.wheel_track_m / 2
             assert right == 1.
             assert left / right == pytest.approx((linear-angular*half)/(linear+angular*half), abs=.001)
+    pure_spin_angular = (2.0 * bridge.max_wheel_mps) / bridge.wheel_track_m
+    bridge.on_twist(
+        SimpleNamespace(
+            linear=SimpleNamespace(x=0.0),
+            angular=SimpleNamespace(z=pure_spin_angular),
+        )
+    )
+    spin_payload = bridge._queue_command.call_args.args[0]
+    assert spin_payload["left_mps"] == pytest.approx(-bridge.max_wheel_mps)
+    assert spin_payload["right_mps"] == pytest.approx(bridge.max_wheel_mps)
+    motor.drive(spin_payload["left_mps"], spin_payload["right_mps"])
+    motor._exchange_locked.assert_called_with("DRIVE,-1.000,1.000")
+
     bridge.on_twist(SimpleNamespace(linear=SimpleNamespace(x=0.), angular=SimpleNamespace(z=0.)))
     bridge._queue_stop.assert_called_with("nav2_zero_twist")
     bridge.last_twist_at -= 1.
@@ -192,6 +212,17 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     ros_stubs.overrides = {"max_wheel_mps": .5}
     with pytest.raises(ValueError, match="MAX_WHEEL_MPS"):
         module.Nav2CommandBridge()
+
+
+def test_nav2_rotates_in_place_before_path_tracking():
+    config = yaml.safe_load((ROS / "config/nav2_params.yaml").read_text())
+    follow = config["controller_server"]["ros__parameters"]["FollowPath"]
+    assert follow["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
+    assert follow["primary_controller"] == "dwb_core::DWBLocalPlanner"
+    assert follow["min_vel_x"] == 0.0
+    assert follow["min_speed_xy"] == 0.0
+    assert follow["PathAlign.scale"] > follow["GoalAlign.scale"]
+    assert follow["PathDist.scale"] > follow["GoalDist.scale"]
 
 
 def test_pi_cli_cannot_override_shared_calibration(monkeypatch):

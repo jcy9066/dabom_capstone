@@ -358,6 +358,9 @@ source /opt/ros/humble/setup.bash
 source "${ROOT_DIR}/navigation/ros/install/setup.bash"
 set -u
 
+ros2 pkg prefix nav2_rotation_shim_controller >/dev/null 2>&1 \
+    || fail "nav2_rotation_shim_controller is missing from the ROS 2 Humble Nav2 installation"
+
 export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV
 export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME

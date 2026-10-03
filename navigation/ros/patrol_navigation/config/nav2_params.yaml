@@ -37,20 +37,31 @@ controller_server:
       yaw_goal_tolerance: 0.20
 
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      # DWB alone can spiral outward when a new Global Path points far away
+      # from the current heading. Rotate in place first, then track the path.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      angular_dist_threshold: 0.35
+      angular_disengage_threshold: 0.20
+      forward_sampling_distance: 0.20
+      rotate_to_heading_angular_vel: 1.05
+      max_angular_accel: 1.00
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
+      closed_loop: true
 
       debug_trajectory_details: true
 
-      # 차동 구동 로봇
-      # Existing minimum PWM 50%; calibrated at provisional MAX_WHEEL_MPS=0.17.
-      min_vel_x: 0.085
+      # Differential drive must be allowed to choose vx=0 for an in-place spin.
+      # Runtime launch overrides maxima from MAX_WHEEL_MPS / WHEEL_TRACK_M.
+      min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.17
+      max_vel_x: 0.212
       max_vel_y: 0.0
-      max_vel_theta: 0.60
+      max_vel_theta: 1.05
 
-      min_speed_xy: 0.085
-      max_speed_xy: 0.17
+      min_speed_xy: 0.0
+      max_speed_xy: 0.212
       min_speed_theta: 0.0
 
       acc_lim_x: 0.50
@@ -87,14 +98,15 @@ controller_server:
 
       BaseObstacle.scale: 0.02
 
-      PathAlign.scale: 32.0
+      # Stay close to the Global Path instead of cutting directly to the Goal.
+      PathAlign.scale: 64.0
       PathAlign.forward_point_distance: 0.10
 
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 16.0
       GoalAlign.forward_point_distance: 0.10
 
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
+      PathDist.scale: 64.0
+      GoalDist.scale: 16.0
 
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
@@ -245,7 +257,7 @@ behavior_server:
     transform_tolerance: 0.5
 
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.60
+    max_rotational_vel: 1.05
     min_rotational_vel: 0.20
     rotational_acc_lim: 1.00
 
@@ -366,8 +378,8 @@ velocity_smoother:
     # 엔코더 /odom이 없으므로 현재는 OPEN_LOOP
     feedback: "OPEN_LOOP"
 
-    max_velocity: [0.17, 0.0, 0.60]
-    min_velocity: [-0.17, 0.0, -0.60]
+    max_velocity: [0.212, 0.0, 1.05]
+    min_velocity: [-0.212, 0.0, -1.05]
 
     max_accel: [0.50, 0.0, 1.00]
     max_decel: [-0.50, 0.0, -1.00]

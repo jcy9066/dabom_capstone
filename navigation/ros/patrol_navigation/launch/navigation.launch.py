@@ -57,9 +57,13 @@ from launch_ros.substitutions import (
 from launch.conditions import IfCondition
 
 def generate_launch_description():
-    # One full-PWM speed calibration for controller, smoother, bridge and Pi.
+    # Full-PWM wheel-speed limit shared by controller, smoother, bridge and Pi.
     max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
-    # Keep the existing Pi minimum PWM floor in the same physical speed units.
+    wheel_track_m = env_float("WHEEL_TRACK_M", minimum=0.01)
+    # Differential-drive in-place rotation at left=-max, right=+max.
+    max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
+    # Physical motor breakaway floor. Apply only after a non-zero wheel command;
+    # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
     min_auto_drive_pwm = 0.50
     pkg_share = FindPackageShare(
         "patrol_navigation"
@@ -152,10 +156,12 @@ def generate_launch_description():
         parameters=[
             nav2_params,
             {
-                "FollowPath.min_vel_x": max_wheel_mps * min_auto_drive_pwm,
-                "FollowPath.min_speed_xy": max_wheel_mps * min_auto_drive_pwm,
+                "FollowPath.min_vel_x": 0.0,
+                "FollowPath.min_speed_xy": 0.0,
                 "FollowPath.max_vel_x": max_wheel_mps,
                 "FollowPath.max_speed_xy": max_wheel_mps,
+                "FollowPath.max_vel_theta": max_angular_rps,
+                "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
             },
         ],
         remappings=(
@@ -208,7 +214,8 @@ def generate_launch_description():
         name="behavior_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {"max_rotational_vel": max_angular_rps}
         ],
         remappings=(
             common_remappings
@@ -268,6 +275,8 @@ def generate_launch_description():
         min_velocity = list(parameters["min_velocity"])
         max_velocity[0] = max_wheel_mps
         min_velocity[0] = -max_wheel_mps
+        max_velocity[2] = max_angular_rps
+        min_velocity[2] = -max_angular_rps
         return [Node(
             package="nav2_velocity_smoother",
             executable="velocity_smoother",
@@ -313,7 +322,7 @@ def generate_launch_description():
                 "cmd_vel_topic": (
                     "/cmd_vel_nav_dry_run"
                 ),
-                "wheel_track_m": 0.4023,
+                "wheel_track_m": wheel_track_m,
                 "max_wheel_mps": max_wheel_mps,
                 "min_auto_drive_pwm": min_auto_drive_pwm,
                 "twist_timeout_sec": nav2_twist_timeout_sec,
