@@ -31,6 +31,31 @@
             this.root?.addEventListener?.('click', event => {
                 if (event.target === this.root) this.close();
             });
+            document.addEventListener?.(
+                'keydown',
+                event => this.handleEscape(event),
+                true,
+            );
+        }
+
+        isOpen() {
+            if (!this.root) return false;
+            return Boolean(
+                this.activeView
+                || this.root.dataset?.modalView
+                || this.root.style?.display === 'flex'
+                || this.root.classList?.contains?.('open')
+            );
+        }
+
+        handleEscape(event) {
+            if (event?.key !== 'Escape' || !this.isOpen()) return false;
+
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            event.stopImmediatePropagation?.();
+            this.close();
+            return true;
         }
 
         bindFullscreenEvents() {
