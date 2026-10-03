@@ -29,7 +29,9 @@ require_cmd() {
 
 proc_cmdline() {
     local pid="$1"
-    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true
+
+    # The process can disappear after /proc enumeration.
+    cat -- "/proc/${pid}/cmdline" 2>/dev/null | tr '\0' ' ' || true
 }
 
 list_matching_pids() {
@@ -133,7 +135,7 @@ stop_owned_groups() {
         kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..30}; do
+    for _ in {1..1,10}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -143,7 +145,7 @@ stop_owned_groups() {
         kill -TERM -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..20}; do
+    for _ in {1..2,5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -153,7 +155,7 @@ stop_owned_groups() {
         kill -KILL -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..10}; do
+    for _ in {1..3,5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -180,17 +182,17 @@ stop_pid() {
     fi
 
     signal_pid "${pid}" "${first_signal}"
-    if wait_pid_exit "${pid}" 30; then
+    if wait_pid_exit "${pid}" 10; then
         return 0
     fi
 
     signal_pid "${pid}" TERM
-    if wait_pid_exit "${pid}" 20; then
+    if wait_pid_exit "${pid}" 5; then
         return 0
     fi
 
     signal_pid "${pid}" KILL
-    wait_pid_exit "${pid}" 10 || true
+    wait_pid_exit "${pid}" 5 || true
 }
 
 stop_matching() {
@@ -217,17 +219,17 @@ stop_own_group() {
 
     if process_group_alive "${pgid}"; then
         kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
-        if wait_process_group_exit "${pgid}" 30; then
+        if wait_process_group_exit "${pgid}" 10; then
             return 0
         fi
 
         kill -TERM -- "-${pgid}" 2>/dev/null || true
-        if wait_process_group_exit "${pgid}" 20; then
+        if wait_process_group_exit "${pgid}" 5; then
             return 0
         fi
 
         kill -KILL -- "-${pgid}" 2>/dev/null || true
-        wait_process_group_exit "${pgid}" 10 || true
+        wait_process_group_exit "${pgid}" 5 || true
         return 0
     fi
 
@@ -241,30 +243,52 @@ remove_own_pid_file() {
     fi
 }
 
-cleanup() {
-    local exit_code=$?
+CLEANUP_STARTED=0
 
-    trap - EXIT INT TERM
+cleanup() {
+    local exit_code="${1:-$?}"
+    local job
+
+    if (( CLEANUP_STARTED )); then
+        return 0
+    fi
+    CLEANUP_STARTED=1
+
+    trap - EXIT
+    trap '' INT TERM
     log "Shutting down GPU stack"
 
-    stop_owned_groups "dabom-gpu-odom" TERM || true
-    stop_owned_groups "dabom-gpu-fastapi" TERM || true
+    # FastAPI, odometry and both navigation modes are independent process
+    # groups. Stop them concurrently so Ctrl+C has one short bounded wait.
+    local -a cleanup_jobs=()
+    stop_owned_groups "dabom-gpu-odom" TERM &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-gpu-fastapi" TERM &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM &
+    cleanup_jobs+=("$!")
 
-    # FastAPI normally stops navigation launches in its shutdown hook. These
-    # ownership sweeps are the fallback for forced/partial shutdowns.
-    stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM || true
-    stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM || true
+    stop_own_group "${ODOM_PID}" TERM &
+    cleanup_jobs+=("$!")
+    stop_own_group "${SERVER_PID}" TERM &
+    cleanup_jobs+=("$!")
 
-    stop_own_group "${ODOM_PID}" TERM
-    stop_own_group "${SERVER_PID}" TERM
+    set +e
+    for job in "${cleanup_jobs[@]}"; do
+        wait "${job}"
+    done
+    set -e
 
     remove_own_pid_file
+    log "STOPPED: GPU local stack"
     exit "${exit_code}"
 }
 
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup $?' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 [[ -f "${ENV_FILE}" ]] || fail ".env not found: ${ENV_FILE}"
 
@@ -410,7 +434,7 @@ esac
 health_url="http://${health_host}:${SERVER_PORT}/get_status"
 
 server_ready=0
-for _ in {1..30}; do
+for _ in {1..5}; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         break
     fi
@@ -432,7 +456,7 @@ start_odometry() {
 
     local publisher_ready=0
     local topic_info
-    for _ in {1..20}; do
+    for _ in {1..5}; do
         if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
             break
         fi

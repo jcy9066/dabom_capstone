@@ -137,7 +137,7 @@ stop_owned_groups() {
         kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..30}; do
+    for _ in {1..1,10}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -147,7 +147,7 @@ stop_owned_groups() {
         kill -TERM -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..20}; do
+    for _ in {1..2,5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -157,7 +157,7 @@ stop_owned_groups() {
         kill -KILL -- "-${pgid}" 2>/dev/null || true
     done
 
-    for _ in {1..10}; do
+    for _ in {1..3,5}; do
         mapfile -t groups < <(list_owned_pgids "${owner}")
         (("${#groups[@]}" == 0)) && return 0
         sleep 0.1
@@ -184,17 +184,17 @@ stop_pid() {
     fi
 
     signal_pid "${pid}" "${first_signal}"
-    if wait_pid_exit "${pid}" 30; then
+    if wait_pid_exit "${pid}" 10; then
         return 0
     fi
 
     signal_pid "${pid}" TERM
-    if wait_pid_exit "${pid}" 20; then
+    if wait_pid_exit "${pid}" 5; then
         return 0
     fi
 
     signal_pid "${pid}" KILL
-    wait_pid_exit "${pid}" 10 || true
+    wait_pid_exit "${pid}" 5 || true
 }
 
 stop_matching() {
@@ -217,17 +217,17 @@ stop_own_group() {
 
     if process_group_alive "${pgid}"; then
         kill "-${first_signal}" -- "-${pgid}" 2>/dev/null || true
-        if wait_process_group_exit "${pgid}" 30; then
+        if wait_process_group_exit "${pgid}" 10; then
             return 0
         fi
 
         kill -TERM -- "-${pgid}" 2>/dev/null || true
-        if wait_process_group_exit "${pgid}" 20; then
+        if wait_process_group_exit "${pgid}" 5; then
             return 0
         fi
 
         kill -KILL -- "-${pgid}" 2>/dev/null || true
-        wait_process_group_exit "${pgid}" 10 || true
+        wait_process_group_exit "${pgid}" 5 || true
         return 0
     fi
 
@@ -242,36 +242,59 @@ remove_own_pid_file() {
     fi
 }
 
-cleanup() {
-    local exit_code=$?
+CLEANUP_STARTED=0
 
-    # Disable EXIT recursion and ignore repeated Ctrl+C/SIGTERM while cleanup is
-    # in progress. Resetting INT/TERM to their defaults here allowed a second
-    # Ctrl+C to abort cleanup midway and leave reconnecting child groups alive.
+cleanup() {
+    local exit_code="${1:-$?}"
+    local job
+
+    if (( CLEANUP_STARTED )); then
+        return 0
+    fi
+    CLEANUP_STARTED=1
+
+    # Prevent EXIT recursion and make repeated Ctrl+C harmless while the bounded
+    # shutdown sequence finishes.
     trap - EXIT
     trap '' INT TERM
     log "Shutting down Pi stack"
 
-    # Stop logical roles by ownership tag, not only by leader PID. This also
-    # catches descendants after a launch/supervisor parent has already exited.
-    stop_owned_groups "dabom-pi-robot" INT || true
-    stop_owned_groups "dabom-pi-lidar-sender" TERM || true
-    stop_owned_groups "dabom-pi-lidar" TERM || true
-    stop_owned_groups "dabom-pi-camera" TERM || true
+    # Stop every independently-owned runtime role concurrently. Sequential
+    # role-by-role waits made one Ctrl+C appear to hang for tens of seconds.
+    local -a cleanup_jobs=()
+    stop_owned_groups "dabom-pi-robot" INT &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-pi-lidar-sender" TERM &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-pi-lidar" TERM &
+    cleanup_jobs+=("$!")
+    stop_owned_groups "dabom-pi-camera" TERM &
+    cleanup_jobs+=("$!")
 
-    # Compatibility fallback for children started before ownership tagging.
-    stop_own_group "${ROBOT_PID}" INT
-    stop_own_group "${LIDAR_SENDER_PID}" TERM
-    stop_own_group "${LIDAR_DRIVER_PID}" TERM
-    stop_own_group "${CAMERA_PID}" TERM
+    # Compatibility fallback for processes created before ownership tagging.
+    stop_own_group "${ROBOT_PID}" INT &
+    cleanup_jobs+=("$!")
+    stop_own_group "${LIDAR_SENDER_PID}" TERM &
+    cleanup_jobs+=("$!")
+    stop_own_group "${LIDAR_DRIVER_PID}" TERM &
+    cleanup_jobs+=("$!")
+    stop_own_group "${CAMERA_PID}" TERM &
+    cleanup_jobs+=("$!")
+
+    set +e
+    for job in "${cleanup_jobs[@]}"; do
+        wait "${job}"
+    done
+    set -e
 
     remove_own_pid_file
+    log "STOPPED: Pi local stack"
     exit "${exit_code}"
 }
 
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup $?' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 [[ -f "${ENV_FILE}" ]] || fail ".env not found: ${ENV_FILE}"
 
@@ -645,7 +668,7 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
     lidar_connected=0
     encoder_connected=0
 
-    for _ in {1..20}; do
+    for _ in {1..5}; do
         robot_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/get_status" 2>/dev/null || true)"
         camera_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/stream_status" 2>/dev/null || true)"
         lidar_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/lidar/bridge" 2>/dev/null || true)"

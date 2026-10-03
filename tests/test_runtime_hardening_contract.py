@@ -53,8 +53,12 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert "WHEEL_TICKS_TOPIC" in script
     assert "/api/encoder/bridge" in script
     assert "fresh encoder telemetry" in script
-    assert "trap - EXIT" in script
+    assert "CLEANUP_STARTED=0" in script
+    assert "trap 'cleanup 130' INT" in script
+    assert "trap 'cleanup 143' TERM" in script
     assert "trap '' INT TERM" in script
+    assert 'cleanup_jobs+=("$!")' in script
+    assert 'log "STOPPED: Pi local stack"' in script
     assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in script
 
 
@@ -198,6 +202,14 @@ def test_runtime_process_roles_use_owned_process_groups():
         assert "stop_owned_groups()" in script
         assert "wait_process_group_exit()" in script
         assert 'kill -KILL -- "-${pgid}"' in script
+        assert "CLEANUP_STARTED=0" in script
+        assert "trap 'cleanup 130' INT" in script
+        assert "trap 'cleanup 143' TERM" in script
+        assert "trap '' INT TERM" in script
+        assert 'cleanup_jobs+=("$!")' in script
+
+    assert 'log "STOPPED: GPU local stack"' in gpu
+    assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in gpu
 
     assert 'DABOM_PROCESS_OWNER="dabom-pi-robot"' in pi
     assert 'DABOM_PROCESS_OWNER="dabom-pi-lidar-sender"' in pi
