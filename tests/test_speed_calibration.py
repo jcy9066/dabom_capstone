@@ -246,6 +246,29 @@ def test_server_requires_matching_pi_calibration_before_auto_mode(monkeypatch):
     assert server.robot_status["max_wheel_mps"] == .23
 
     response = client.post(
+        "/status",
+        headers=headers,
+        json={"robot_id": "pi-01"},
+    )
+    assert response.status_code == 200
+    assert server.robot_status["max_wheel_mps"] is None
+    response = client.post(
+        "/api/robots/pi-01/command",
+        headers=headers,
+        json=mode_payload,
+    )
+    assert response.status_code == 409
+    assert "unavailable" in response.json()["error"]
+    send_command.assert_not_awaited()
+
+    response = client.post(
+        "/status",
+        headers=headers,
+        json={"robot_id": "pi-01", "max_wheel_mps": .23},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
         "/api/robots/pi-01/command",
         headers=headers,
         json=mode_payload,

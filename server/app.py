@@ -2586,10 +2586,9 @@ async def update_status(request: Request):
                 "internet": status_value("internet", robot_status["internet"]),
                 "mode": status_value("mode", robot_status.get("mode", "manual")),
                 "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
-                "max_wheel_mps": status_value(
-                    "max_wheel_mps",
-                    robot_status.get("max_wheel_mps"),
-                ),
+                # This value must be present in every Pi status update.
+                # Never carry a previous calibration across a client restart/downgrade.
+                "max_wheel_mps": status_value("max_wheel_mps"),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
