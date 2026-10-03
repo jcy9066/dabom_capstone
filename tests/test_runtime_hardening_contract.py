@@ -192,6 +192,16 @@ def test_pi_stack_recovers_runtime_lidar_scan_stall():
     assert '"fresh": age_sec is not None and age_sec <= 3.0' in app
     assert '"age_sec": age_sec' in app
 
+def test_stack_shutdown_tuning_does_not_shorten_startup_readiness():
+    pi = read("start_pi_stack.sh")
+    gpu = read("start_gpu_server.sh")
+
+    assert 'server_ready=0\nfor _ in {1..30}; do' in gpu
+    assert 'local publisher_ready=0\n    local topic_info\n    for _ in {1..20}; do' in gpu
+    assert 'robot_connected=0' in pi
+    assert 'for _ in {1..20}; do\n        robot_json=' in pi
+
+
 def test_runtime_process_roles_use_owned_process_groups():
     pi = read("start_pi_stack.sh")
     gpu = read("start_gpu_server.sh")

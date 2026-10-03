@@ -669,7 +669,7 @@ if curl --fail --silent --max-time 2 "${SERVER_BASE_URL%/}/get_status" >/dev/nul
     lidar_connected=0
     encoder_connected=0
 
-    for _ in {1..5}; do
+    for _ in {1..20}; do
         robot_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/get_status" 2>/dev/null || true)"
         camera_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/stream_status" 2>/dev/null || true)"
         lidar_json="$(curl --fail --silent --max-time 1 "${SERVER_BASE_URL%/}/api/lidar/bridge" 2>/dev/null || true)"

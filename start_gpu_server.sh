@@ -435,7 +435,7 @@ esac
 health_url="http://${health_host}:${SERVER_PORT}/get_status"
 
 server_ready=0
-for _ in {1..5}; do
+for _ in {1..30}; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         break
     fi
@@ -457,7 +457,7 @@ start_odometry() {
 
     local publisher_ready=0
     local topic_info
-    for _ in {1..5}; do
+    for _ in {1..20}; do
         if ! kill -0 "${ODOM_PID}" 2>/dev/null; then
             break
         fi
