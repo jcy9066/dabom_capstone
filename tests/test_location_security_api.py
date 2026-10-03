@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -30,6 +31,19 @@ class LocationSecurityApiTests(unittest.TestCase):
         self.service = LocationSecurityService(Path(self.tmp.name) / "locations.json")
         self.api = LocationSecurityApi(self.app, self.service, csrf_failure)
         self.client = TestClient(self.app)
+        self._gps_time = time.time() - 1.0
+
+    def gps_payload(self, *, lat=37.0, lng=127.0, fix=True):
+        self._gps_time += 0.1
+        return {
+            "gps_fix": fix,
+            "gps_lat": lat,
+            "gps_lng": lng,
+            "gps_alt": 10.0,
+            "gps_satellites": 8,
+            "gps_hdop": 1.0,
+            "gps_updated_at": self._gps_time,
+        }
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -58,29 +72,25 @@ class LocationSecurityApiTests(unittest.TestCase):
 
     def test_robot_status_updates_live_fix(self):
         self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
-        result = self.api.note_robot_status(
-            {"gps_fix": True, "gps_lat": 37.0, "gps_lng": 127.0, "gps_hdop": 1.0}
-        )
+        result = self.api.note_robot_status(self.gps_payload())
         self.assertEqual("NORMAL", result["snapshot"]["security_state"])
 
-    def test_robot_status_infers_fix_when_flag_is_absent(self):
+    def test_robot_status_without_fix_flag_is_not_live_fix(self):
         self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
-        result = self.api.note_robot_status(
-            {"gps_lat": 37.0, "gps_lng": 127.0, "gps_alt": 10.0}
-        )
-        self.assertTrue(result["snapshot"]["gps"]["fix"])
-        self.assertEqual("NORMAL", result["snapshot"]["security_state"])
+        payload = self.gps_payload()
+        payload.pop("gps_fix")
+        result = self.api.note_robot_status(payload)
+        self.assertFalse(result["snapshot"]["gps"]["fix"])
+        self.assertEqual("UNKNOWN", result["snapshot"]["security_state"])
 
     def test_transition_listener_fires_once_for_departure_and_return(self):
         transitions = []
         self.api._transition_listener = lambda result: transitions.append(result["transition"])
         self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
-        far = {"gps_fix": True, "gps_lat": 37.001, "gps_lng": 127.0, "gps_hdop": 1.0}
         for _ in range(3):
-            self.api.note_robot_status(far)
-        inside = {"gps_fix": True, "gps_lat": 37.0, "gps_lng": 127.0, "gps_hdop": 1.0}
+            self.api.note_robot_status(self.gps_payload(lat=37.001, lng=127.0))
         for _ in range(5):
-            self.api.note_robot_status(inside)
+            self.api.note_robot_status(self.gps_payload())
         self.assertEqual(["OUT_OF_AREA", "NORMAL"], transitions)
 
     def test_transition_listener_failure_does_not_break_status_ingest(self):
@@ -89,10 +99,11 @@ class LocationSecurityApiTests(unittest.TestCase):
 
         self.api._transition_listener = fail_listener
         self.service.upsert_location(name="CtrlCV Lab", lat=37.0, lng=127.0, radius_m=30)
-        far = {"gps_fix": True, "gps_lat": 37.001, "gps_lng": 127.0, "gps_hdop": 1.0}
         result = None
         for _ in range(3):
-            result = self.api.note_robot_status(far)
+            result = self.api.note_robot_status(
+                self.gps_payload(lat=37.001, lng=127.0)
+            )
         self.assertEqual("OUT_OF_AREA", result["snapshot"]["security_state"])
 
 

@@ -46,11 +46,7 @@ def haversine_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> 
 
 
 class LocationSecurityService:
-    """Manage saved places independently from live GPS availability.
-
-    Live GPS is optional. Stored places remain readable/editable without a GPS fix,
-    and this service never participates in Mapping/Driving readiness decisions.
-    """
+    """Manage saved places independently from live GPS availability."""
 
     def __init__(
         self,
@@ -60,17 +56,22 @@ class LocationSecurityService:
         inside_confirm_count: int = 5,
         recovery_margin_m: float = 5.0,
         max_hdop: float = 50.0,
+        max_sample_age_sec: float = 5.0,
+        max_future_skew_sec: float = 5.0,
     ) -> None:
         self.state_path = Path(state_path)
         self.outside_confirm_count = max(1, int(outside_confirm_count))
         self.inside_confirm_count = max(1, int(inside_confirm_count))
         self.recovery_margin_m = max(0.0, float(recovery_margin_m))
         self.max_hdop = max(0.0, float(max_hdop))
+        self.max_sample_age_sec = max(0.1, float(max_sample_age_sec))
+        self.max_future_skew_sec = max(0.0, float(max_future_skew_sec))
         self._lock = threading.RLock()
         self._outside_count = 0
         self._inside_count = 0
         self._live = self._empty_live()
         self._confirmed_state = "UNKNOWN"
+        self._last_sample_updated_at: float | None = None
 
     @staticmethod
     def _empty_live() -> dict[str, Any]:
@@ -159,6 +160,7 @@ class LocationSecurityService:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            self._expire_stale_live_locked(time.time())
             state = self._read_state()
             live = dict(self._live)
             public_state = self._confirmed_state if live.get("fix") else "UNKNOWN"
@@ -174,23 +176,46 @@ class LocationSecurityService:
             }
 
     def update_live_gps(self, sample: dict[str, Any] | None) -> dict[str, Any]:
-        """Consume one optional GPS sample and return a state transition, if any."""
+        """Consume one fresh GPS measurement; duplicate/out-of-order samples do not count."""
         with self._lock:
-            normalized = self._normalize_sample(sample)
+            now = time.time()
+            self._expire_stale_live_locked(now)
+
+            sample_updated_at = self._sample_updated_at(sample)
+            if sample_updated_at is None:
+                self._invalidate_live_locked()
+                return {"transition": None, "snapshot": self.snapshot()}
+
+            if (
+                self._last_sample_updated_at is not None
+                and sample_updated_at <= self._last_sample_updated_at
+            ):
+                return {"transition": None, "snapshot": self.snapshot()}
+
+            self._last_sample_updated_at = sample_updated_at
+            age_sec = now - sample_updated_at
+            if age_sec > self.max_sample_age_sec or age_sec < -self.max_future_skew_sec:
+                self._invalidate_live_locked()
+                return {"transition": None, "snapshot": self.snapshot()}
+
+            normalized = self._normalize_sample(sample, sample_updated_at)
             if normalized is None:
-                self._live = self._empty_live()
-                self._outside_count = 0
-                self._inside_count = 0
+                self._invalidate_live_locked()
                 return {"transition": None, "snapshot": self.snapshot()}
 
             locations = self._read_state().get("locations", [])
-            nearest, distance = self._nearest_location(normalized["lat"], normalized["lng"], locations)
-            matched = nearest if nearest is not None and distance <= float(nearest["radius_m"]) else None
+            matched, matched_distance = self._containing_location(
+                normalized["lat"], normalized["lng"], locations
+            )
+            nearest, nearest_distance = self._nearest_location(
+                normalized["lat"], normalized["lng"], locations
+            )
+            display_distance = matched_distance if matched is not None else nearest_distance
             normalized.update(
                 {
                     "matched_location_id": matched.get("location_id") if matched else None,
                     "matched_location_name": matched.get("name") if matched else None,
-                    "distance_m": round(distance, 2) if distance is not None else None,
+                    "distance_m": round(display_distance, 2) if display_distance is not None else None,
                 }
             )
             self._live = normalized
@@ -203,15 +228,13 @@ class LocationSecurityService:
 
             transition = None
             if self._confirmed_state == "OUT_OF_AREA":
-                recovery_location, recovery_distance = self._nearest_location(
-                    normalized["lat"], normalized["lng"], locations
+                recovery_location, _ = self._containing_location(
+                    normalized["lat"],
+                    normalized["lng"],
+                    locations,
+                    recovery=True,
                 )
-                recovery_inside = bool(
-                    recovery_location
-                    and recovery_distance
-                    <= max(0.0, float(recovery_location["radius_m"]) - self.recovery_margin_m)
-                )
-                if recovery_inside:
+                if recovery_location is not None:
                     self._inside_count += 1
                     self._outside_count = 0
                     if self._inside_count >= self.inside_confirm_count:
@@ -240,13 +263,28 @@ class LocationSecurityService:
 
     def current_fix(self) -> dict[str, Any] | None:
         with self._lock:
+            self._expire_stale_live_locked(time.time())
             return dict(self._live) if self._live.get("fix") else None
 
-    def _normalize_sample(self, sample: dict[str, Any] | None) -> dict[str, Any] | None:
+    @staticmethod
+    def _sample_updated_at(sample: dict[str, Any] | None) -> float | None:
         if not isinstance(sample, dict):
             return None
-        explicit_fix = sample.get("fix")
-        if explicit_fix is False:
+        value = sample.get("updated_at")
+        if isinstance(value, bool):
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return result if math.isfinite(result) else None
+
+    def _normalize_sample(
+        self,
+        sample: dict[str, Any] | None,
+        sample_updated_at: float,
+    ) -> dict[str, Any] | None:
+        if not isinstance(sample, dict) or sample.get("fix") is not True:
             return None
         try:
             lat = float(sample.get("lat"))
@@ -286,8 +324,48 @@ class LocationSecurityService:
             "alt": optional_float(sample.get("alt")),
             "satellites": satellites,
             "hdop": hdop,
-            "updated_at": optional_float(sample.get("updated_at")) or time.time(),
+            "updated_at": sample_updated_at,
         }
+
+    def _expire_stale_live_locked(self, now: float) -> None:
+        if not self._live.get("fix"):
+            return
+        updated_at = self._sample_updated_at(self._live)
+        if updated_at is None or now - updated_at > self.max_sample_age_sec:
+            self._invalidate_live_locked()
+
+    def _invalidate_live_locked(self) -> None:
+        self._live = self._empty_live()
+        self._outside_count = 0
+        self._inside_count = 0
+
+    def _containing_location(
+        self,
+        lat: float,
+        lng: float,
+        locations: list[dict[str, Any]],
+        *,
+        recovery: bool = False,
+    ):
+        candidates: list[tuple[float, dict[str, Any]]] = []
+        for location in locations:
+            try:
+                distance = haversine_distance_m(
+                    lat,
+                    lng,
+                    float(location["lat"]),
+                    float(location["lng"]),
+                )
+                radius = float(location["radius_m"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            threshold = max(0.0, radius - self.recovery_margin_m) if recovery else radius
+            if distance <= threshold:
+                candidates.append((distance, location))
+        if not candidates:
+            return None, None
+        distance, location = min(candidates, key=lambda item: item[0])
+        return location, distance
 
     @staticmethod
     def _nearest_location(lat: float, lng: float, locations: list[dict[str, Any]]):

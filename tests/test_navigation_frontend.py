@@ -266,7 +266,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn("<summary>DISPLAY</summary>", template)
         self.assertNotIn('id="lidarMapSaveBtn"', template)
         self.assertIn("saved-map-save-current", self.map_control)
-        self.assertIn("components.controls?.controlButton?.enhance?.(save)", self.map_control)
+        self.assertIn("createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current')", self.map_control)
+        self.assertIn("components.controls?.controlButton?.enhance?.(button)", self.map_control)
         self.assertIn("saved-map-start-mapping", self.map_control)
         self.assertIn("saved-map-clear-current", self.map_control)
         self.assertIn("request('MAPPING', { restart: true })", self.map_control)
@@ -368,6 +369,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
             self.assertIn(contract, self.map_control)
         self.assertIn(".saved-map-location-panel", self.map_control_css)
         self.assertIn("data-requires-gps", self.map_control)
+        self.assertIn("const latText = inputs['saved-map-location-lat'].value.trim()", self.map_control)
+        self.assertIn("const lngText = inputs['saved-map-location-lng'].value.trim()", self.map_control)
+        self.assertIn("if (!name || !latText || !lngText || !radiusText)", self.map_control)
         self.assertNotIn("lidar-control-drawer", self.map_control)
 
     def test_saved_map_contracts_and_pending_cursor_remain_scoped(self):

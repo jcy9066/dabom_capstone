@@ -279,10 +279,17 @@
         const saveLocation = createControlButton(labels.saveLocation, 'accent');
         saveLocation.addEventListener('click', async () => {
             const name = inputs['saved-map-location-name'].value.trim();
-            const lat = Number(inputs['saved-map-location-lat'].value);
-            const lng = Number(inputs['saved-map-location-lng'].value);
-            const radius = Number(inputs['saved-map-location-radius'].value);
-            if (!name || ![lat, lng, radius].every(Number.isFinite)) {
+            const latText = inputs['saved-map-location-lat'].value.trim();
+            const lngText = inputs['saved-map-location-lng'].value.trim();
+            const radiusText = inputs['saved-map-location-radius'].value.trim();
+            if (!name || !latText || !lngText || !radiusText) {
+                global.alert('장소 이름, 좌표, 허용 반경을 확인하세요.');
+                return;
+            }
+            const lat = Number(latText);
+            const lng = Number(lngText);
+            const radius = Number(radiusText);
+            if (![lat, lng, radius].every(Number.isFinite)) {
                 global.alert('장소 이름, 좌표, 허용 반경을 확인하세요.');
                 return;
             }
