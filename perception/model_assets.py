@@ -16,21 +16,37 @@ DEFAULT_WEIGHTS_DIR = PROJECT_ROOT / "weights"
 @dataclass(frozen=True)
 class ModelAsset:
     key: str
-    filename: str
+    relative_path: str
     url: str
     min_bytes: int
+
+    @property
+    def filename(self) -> str:
+        return Path(self.relative_path).name
 
 
 PIPELINE_8_ASSETS = (
     ModelAsset(
         key="yolo_pose",
-        filename="yolo26m-pose.pt",
+        relative_path="yolo26m-pose.pt",
         url="https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m-pose.pt",
         min_bytes=1_000_000,
     ),
     ModelAsset(
+        key="action_base_config",
+        relative_path="mmaction2/configs/_base_/default_runtime.py",
+        url=(
+            "https://raw.githubusercontent.com/open-mmlab/mmaction2/v1.2.0/"
+            "configs/_base_/default_runtime.py"
+        ),
+        min_bytes=100,
+    ),
+    ModelAsset(
         key="action_config",
-        filename="stgcnpp_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d.py",
+        relative_path=(
+            "mmaction2/configs/skeleton/stgcnpp/"
+            "stgcnpp_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d.py"
+        ),
         url=(
             "https://raw.githubusercontent.com/open-mmlab/mmaction2/v1.2.0/"
             "configs/skeleton/stgcnpp/"
@@ -40,7 +56,7 @@ PIPELINE_8_ASSETS = (
     ),
     ModelAsset(
         key="action_checkpoint",
-        filename=(
+        relative_path=(
             "stgcnpp_8xb16-joint-u100-80e_ntu60-xsub-keypoint-2d_"
             "20221228-86e1e77a.pth"
         ),
@@ -77,7 +93,7 @@ def _download_atomic(asset: ModelAsset, target: Path) -> None:
                 os.fsync(output.fileno())
         if not _is_valid_existing_file(temporary, asset.min_bytes):
             raise RuntimeError(
-                f"Downloaded model asset is incomplete: {asset.filename}"
+                f"Downloaded model asset is incomplete: {asset.relative_path}"
             )
         os.replace(temporary, target)
     except Exception:
@@ -93,9 +109,9 @@ def ensure_pipeline_assets(pipeline, *, weights_dir: str | Path | None = None):
     directory = Path(weights_dir) if weights_dir is not None else DEFAULT_WEIGHTS_DIR
     resolved = {}
     for asset in PIPELINE_8_ASSETS:
-        target = directory / asset.filename
+        target = directory / asset.relative_path
         if not _is_valid_existing_file(target, asset.min_bytes):
-            print(f"[model-assets] downloading {asset.filename}")
+            print(f"[model-assets] downloading {asset.relative_path}")
             _download_atomic(asset, target)
         resolved[asset.key] = target
     return resolved
