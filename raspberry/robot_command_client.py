@@ -219,6 +219,7 @@ class RobotCommandClient:
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
             "motor_motion": self.motor.current_motion,
+            "max_wheel_mps": self.motor.max_wheel_mps,
         }
 
     def status_loop(self) -> None:

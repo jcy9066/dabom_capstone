@@ -406,6 +406,7 @@ robot_status = {
     "internet": "unknown",
     "mode": "manual",
     "led_enabled": None,
+    "max_wheel_mps": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -2585,6 +2586,10 @@ async def update_status(request: Request):
                 "internet": status_value("internet", robot_status["internet"]),
                 "mode": status_value("mode", robot_status.get("mode", "manual")),
                 "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
+                "max_wheel_mps": status_value(
+                    "max_wheel_mps",
+                    robot_status.get("max_wheel_mps"),
+                ),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
@@ -2604,6 +2609,53 @@ async def update_status(request: Request):
 async def get_status():
     with state_lock:
         return dict(robot_status)
+
+
+def robot_speed_calibration_error(robot_id: str):
+    with state_lock:
+        status_robot_id = str(
+            robot_status.get("robot_id") or ""
+        ).strip()
+        raw_robot_max = robot_status.get(
+            "max_wheel_mps"
+        )
+
+    if (
+        status_robot_id != robot_id
+        or raw_robot_max is None
+    ):
+        return (
+            "Pi MAX_WHEEL_MPS is unavailable; "
+            "wait for matching robot status"
+        )
+
+    if isinstance(raw_robot_max, bool):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    try:
+        robot_max = float(raw_robot_max)
+    except (TypeError, ValueError):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if (
+        not np.isfinite(robot_max)
+        or robot_max <= 0.0
+    ):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if not np.isclose(
+        robot_max,
+        MAX_WHEEL_MPS,
+        rtol=1e-9,
+        atol=1e-12,
+    ):
+        return (
+            "MAX_WHEEL_MPS mismatch: "
+            f"server={MAX_WHEEL_MPS:.6f} m/s, "
+            f"Pi={robot_max:.6f} m/s"
+        )
+
+    return None
 
 
 def parse_navigation_mode(payload):
@@ -4178,6 +4230,36 @@ async def send_robot_command(
             "stop",
         }
     )
+
+    target_mode = str(
+        command.get("mode", "")
+    ).strip().lower()
+    calibration_required = (
+        command_type == "mode"
+        and target_mode == "auto"
+    ) or (
+        command_type == "auto_drive"
+        and MOTOR_OUTPUT_ENABLED
+        and not nav2_dry_run
+    )
+
+    if calibration_required:
+        calibration_error = (
+            robot_speed_calibration_error(robot_id)
+        )
+        if calibration_error:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "accepted": False,
+                    "delivered": False,
+                    "blocked": True,
+                    "robot_id": robot_id,
+                    "command": command,
+                    "error": calibration_error,
+                },
+                status_code=409,
+            )
 
     if command_type == "auto_drive":
         try:

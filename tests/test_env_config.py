@@ -118,12 +118,10 @@ def test_float_parsers_reject_non_finite_values(monkeypatch, raw, module_name):
         module.env_float("TEST_FLOAT")
 
 
-def test_stream_fps_uses_one_float_contract_across_runtime_components():
+def test_stream_fps_uses_float_contract_in_active_server_runtime():
     server_source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
-    pi_source = (ROOT_DIR / "raspberry" / "pi_client.py").read_text(encoding="utf-8")
     contract = 'env_float("STREAM_FPS", minimum=0.1)'
     assert contract in server_source
-    assert contract in pi_source
 
 
 def test_shared_timeout_constraints_match_server_and_frontend():

@@ -4,7 +4,7 @@ import math
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
@@ -203,6 +203,71 @@ def test_pi_cli_cannot_override_shared_calibration(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["robot_command_client.py", "--max-wheel-mps", "0.5"])
     with pytest.raises(SystemExit):
         module.parse_args()
+
+
+def test_server_requires_matching_pi_calibration_before_auto_mode(monkeypatch):
+    # Pi must advertise the same full-PWM calibration before auto mode starts.
+    pi_source = (ROOT / "raspberry/robot_command_client.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"max_wheel_mps": self.motor.max_wheel_mps' in pi_source
+
+    monkeypatch.setenv("DASHBOARD_ESTOP_COOLDOWN_SEC", "1")
+    monkeypatch.setenv("DASHBOARD_GOAL_REACHED_TOLERANCE_M", "0.15")
+    from fastapi.testclient import TestClient
+    import server.app as server
+
+    monkeypatch.setattr(server, "MAX_WHEEL_MPS", .17)
+    monkeypatch.setitem(server.robot_status, "robot_id", "pi-01")
+    monkeypatch.setitem(server.robot_status, "max_wheel_mps", None)
+    send_command = AsyncMock(return_value=True)
+    monkeypatch.setattr(server.connections, "send_command", send_command)
+
+    client = TestClient(server.app)
+    headers = {"X-Robot-Control-Token": "test-robot-token"}
+    mode_payload = {"type": "mode", "mode": "auto"}
+
+    response = client.post(
+        "/api/robots/pi-01/command",
+        headers=headers,
+        json=mode_payload,
+    )
+    assert response.status_code == 409
+    assert "unavailable" in response.json()["error"]
+    send_command.assert_not_awaited()
+
+    response = client.post(
+        "/status",
+        headers=headers,
+        json={"robot_id": "pi-01", "max_wheel_mps": .23},
+    )
+    assert response.status_code == 200
+    assert server.robot_status["max_wheel_mps"] == .23
+
+    response = client.post(
+        "/api/robots/pi-01/command",
+        headers=headers,
+        json=mode_payload,
+    )
+    assert response.status_code == 409
+    assert "MAX_WHEEL_MPS mismatch" in response.json()["error"]
+    send_command.assert_not_awaited()
+
+    response = client.post(
+        "/status",
+        headers=headers,
+        json={"robot_id": "pi-01", "max_wheel_mps": .17},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        "/api/robots/pi-01/command",
+        headers=headers,
+        json=mode_payload,
+    )
+    assert response.status_code == 200
+    assert response.json()["delivered"] is True
+    send_command.assert_awaited_once()
 
 
 @pytest.mark.parametrize("limit", [.17, .23])
