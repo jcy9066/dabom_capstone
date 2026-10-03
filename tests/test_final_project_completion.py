@@ -121,3 +121,17 @@ def test_final_hardware_contracts_are_real_not_stubs():
     assert "GPIO2/SDA1" in bno
     assert "GPIO3/SCL1" in bno
     assert "chip_id != 0xA0" in pi_stack
+
+
+
+def test_dashboard_modals_close_on_escape():
+    root = Path(__file__).resolve().parents[1]
+    modal = (root / "frontend/components/modal/modal_manager.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "handleEscape(event)" in modal
+    assert "event?.key !== 'Escape'" in modal
+    assert "this.close();" in modal
+    assert "stopImmediatePropagation" in modal
+    assert "document.addEventListener" in modal
