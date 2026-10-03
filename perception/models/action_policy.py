@@ -124,7 +124,6 @@ class TemporalActionPolicy:
             normal_clear_hits=env_int("ACTION_NORMAL_CLEAR_HITS", minimum=1),
             state_ttl_sec=env_float(
                 "ACTION_TRACK_STATE_TTL_SEC",
-                default=10.0,
                 minimum=0.1,
             ),
         )

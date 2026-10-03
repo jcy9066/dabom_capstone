@@ -104,9 +104,7 @@ class ActionRecognizer:
     def _mark_observed(self, object_id):
         if self.temporal_policy is None:
             return
-        expired = self.temporal_policy.mark_observed(object_id)
-        for expired_id in expired:
-            self.action_buffer.pop(expired_id, None)
+        self.temporal_policy.mark_observed(object_id)
 
     def observation_unavailable(self, object_id, reason):
         self._mark_observed(object_id)
