@@ -35,6 +35,7 @@ if (root && canvas) {
     // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
     const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
     const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
+    const MAPPING_PREVIEW_GRID_SIZE_M = 10;
     // Visual pose smoothing follows differential-drive motion: forward motion responds
     // faster than lateral map/localization correction so the chassis does not appear
     // to slide sideways across its fixed wheel direction.
@@ -42,9 +43,11 @@ if (root && canvas) {
     const POSE_LATERAL_RESPONSE_PER_SEC = 2.5;
     const POSE_YAW_RESPONSE_PER_SEC = 9.0;
     const MAX_VISUAL_TELEPORT_M = 1.5;
-    const TRAJECTORY_DISTANCE_M = 0.08;
-    const TRAJECTORY_FALLBACK_DISTANCE_M = 0.02;
-    const TRAJECTORY_FALLBACK_MS = 500;
+    const TRAJECTORY_DISTANCE_M = 0.10;
+    const TRAJECTORY_FALLBACK_DISTANCE_M = 0.06;
+    const TRAJECTORY_FALLBACK_MS = 1000;
+    const TRAJECTORY_FILTER_ALPHA = 0.45;
+    const TRAJECTORY_MAX_JUMP_M = 0.75;
     const MAX_TRAJECTORY_POINTS = 4000;
     // Visualization-only camera geometry. The stream aspect ratio stays native.
     const CAMERA_VIEW_DISTANCE_M = 0.75;
@@ -193,6 +196,7 @@ if (root && canvas) {
     let previousNavigationState = null;
     let trajectorySessionActive = false;
     let trajectorySamples = [];
+    let trajectoryFilteredPose = null;
     let lastTrajectorySampleAt = 0;
     let cameraVisualReady = false;
     let cameraMountLocal = new THREE.Vector3(0.12, 0, LIDAR_HEIGHT_M);
@@ -439,15 +443,14 @@ if (root && canvas) {
 
     function rebuildGrid(map) {
         clearGroup(gridRoot);
-        if (!map) return;
 
-        const width = Number(map.width) || 0;
-        const height = Number(map.height) || 0;
-        const resolution = Number(map.resolution) || 0;
-        if (width <= 0 || height <= 0 || resolution <= 0) return;
+        const width = Number(map?.width) || 0;
+        const height = Number(map?.height) || 0;
+        const resolution = Number(map?.resolution) || 0;
+        const hasMapExtent = width > 0 && height > 0 && resolution > 0;
 
-        const widthM = width * resolution;
-        const heightM = height * resolution;
+        const widthM = hasMapExtent ? width * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
+        const heightM = hasMapExtent ? height * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
         const size = Math.max(1, Math.ceil(Math.max(widthM, heightM)));
         const divisions = Math.min(100, Math.max(4, size * 2));
         const helper = new THREE.GridHelper(size, divisions, 0x64748b, 0x334155);
@@ -455,10 +458,14 @@ if (root && canvas) {
         helper.material.opacity = 0.3;
         helper.material.depthWrite = false;
         helper.rotation.x = Math.PI / 2;
-        helper.position.set(widthM / 2, heightM / 2, 0.001);
+        helper.position.set(
+            hasMapExtent ? widthM / 2 : 0,
+            hasMapExtent ? heightM / 2 : 0,
+            0.001,
+        );
         gridRoot.add(helper);
 
-        const transform = mapTransform(map);
+        const transform = hasMapExtent ? mapTransform(map) : { x: 0, y: 0, z: 0, yaw: 0 };
         gridRoot.position.set(transform.x, transform.y, transform.z);
         gridRoot.rotation.z = transform.yaw;
     }
@@ -472,7 +479,7 @@ if (root && canvas) {
         currentMap = map || null;
 
         if (!map) {
-            clearGroup(gridRoot);
+            rebuildGrid(null);
             return;
         }
 
@@ -1339,14 +1346,17 @@ if (root && canvas) {
         currentPathKey = nextKey;
 
         clearGroup(pathRoot);
-        if (!Array.isArray(path) || path.length < 2) return;
+        pathRoot.visible = Array.isArray(path) && path.length >= 2;
+        if (!pathRoot.visible) return;
 
         const positions = [];
         for (const point of path) {
             const x = Number(point?.x);
             const y = Number(point?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            positions.push(x, y, 0.035);
+            // Draw above the occupancy wall height and disable depth testing so
+            // the planned Global Path stays readable over Map/LiDAR layers.
+            positions.push(x, y, 0.16);
         }
         if (positions.length < 6) return;
 
@@ -1360,11 +1370,29 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.globalPath,
                 transparent: true,
-                opacity: 0.92,
+                opacity: 1.0,
+                depthTest: false,
+                depthWrite: false,
             }),
         );
         line.frustumCulled = false;
-        pathRoot.add(line);
+        line.renderOrder = 100;
+
+        const points = new THREE.Points(
+            geometry,
+            new THREE.PointsMaterial({
+                color: COLORS.globalPath,
+                size: 0.055,
+                sizeAttenuation: true,
+                transparent: true,
+                opacity: 0.95,
+                depthTest: false,
+                depthWrite: false,
+            }),
+        );
+        points.frustumCulled = false;
+        points.renderOrder = 101;
+        pathRoot.add(line, points);
     }
 
     function createGoalMarker(goal, color) {
@@ -1492,13 +1520,15 @@ if (root && canvas) {
 
     function resetTrajectory(seedPose = null, active = false) {
         trajectorySamples = [];
+        trajectoryFilteredPose = null;
         lastTrajectorySampleAt = 0;
         trajectorySessionActive = active;
         if (active && validPose(seedPose)) {
-            trajectorySamples.push({
+            trajectoryFilteredPose = {
                 x: Number(seedPose.x),
                 y: Number(seedPose.y),
-            });
+            };
+            trajectorySamples.push({ ...trajectoryFilteredPose });
             lastTrajectorySampleAt = performance.now();
         }
         renderTrajectory();
@@ -1506,7 +1536,29 @@ if (root && canvas) {
 
     function sampleTrajectory(pose) {
         if (!trajectorySessionActive || !validPose(pose)) return;
-        const next = { x: Number(pose.x), y: Number(pose.y) };
+
+        const raw = { x: Number(pose.x), y: Number(pose.y) };
+        if (!trajectoryFilteredPose) {
+            trajectoryFilteredPose = { ...raw };
+        } else {
+            const rawJump = Math.hypot(
+                raw.x - trajectoryFilteredPose.x,
+                raw.y - trajectoryFilteredPose.y,
+            );
+            if (rawJump > TRAJECTORY_MAX_JUMP_M) {
+                // A localization reset must not draw a fake diagonal segment.
+                resetTrajectory(pose, true);
+                return;
+            }
+            trajectoryFilteredPose = {
+                x: trajectoryFilteredPose.x
+                    + (raw.x - trajectoryFilteredPose.x) * TRAJECTORY_FILTER_ALPHA,
+                y: trajectoryFilteredPose.y
+                    + (raw.y - trajectoryFilteredPose.y) * TRAJECTORY_FILTER_ALPHA,
+            };
+        }
+
+        const next = { ...trajectoryFilteredPose };
         const last = trajectorySamples[trajectorySamples.length - 1];
         if (!last) {
             trajectorySamples.push(next);
@@ -1714,9 +1766,13 @@ if (root && canvas) {
             ? livePose
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
 
-        // TF shows only the actual raw map->base_link transform. The mapping
-        // preview keeps the RC car visible but must never fabricate a TF frame.
-        applyTfPose(livePose);
+        // Keep the TF axes visible at the mapping origin until the real
+        // map->base_link transform is available. The first real pose replaces
+        // this preview immediately.
+        const tfVisualizationPose = validPose(livePose)
+            ? livePose
+            : (mappingMode ? MAPPING_PREVIEW_POSE : null);
+        applyTfPose(tfVisualizationPose);
         updateRobotPose(visualizationPose);
         rebuildScan(liveScan);
 
@@ -1936,6 +1992,7 @@ if (root && canvas) {
         },
     };
 
+    rebuildGrid(null);
     buildRobotModel();
     applyVisualizationState(window.dabomNavigationVisualizationState);
     applyControlState(window.dabomNavigationControlState);

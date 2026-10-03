@@ -53,6 +53,21 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert "WHEEL_TICKS_TOPIC" in script
     assert "/api/encoder/bridge" in script
     assert "fresh encoder telemetry" in script
+    assert "CLEANUP_STARTED=0" in script
+    assert "trap 'cleanup 130' INT" in script
+    assert "trap 'cleanup 143' TERM" in script
+    assert "trap '' INT TERM" in script
+    assert 'cleanup_jobs+=("$!")' in script
+    assert 'log "STOPPED: Pi local stack"' in script
+    assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in script
+
+
+def test_gpu_requires_rotation_shim_controller():
+    script = read("start_gpu_server.sh")
+    package = read("navigation/ros/patrol_navigation/package.xml")
+
+    assert "ros2 pkg prefix nav2_rotation_shim_controller" in script
+    assert "<exec_depend>nav2_rotation_shim_controller</exec_depend>" in package
 
 
 def test_navigation_launch_control_uses_live_rc_sensor_bridges():
@@ -185,6 +200,16 @@ def test_pi_stack_recovers_runtime_lidar_scan_stall():
     assert '"fresh": age_sec is not None and age_sec <= 3.0' in app
     assert '"age_sec": age_sec' in app
 
+def test_stack_shutdown_tuning_does_not_shorten_startup_readiness():
+    pi = read("start_pi_stack.sh")
+    gpu = read("start_gpu_server.sh")
+
+    assert 'server_ready=0\nfor _ in {1..30}; do' in gpu
+    assert 'local publisher_ready=0\n    local topic_info\n    for _ in {1..20}; do' in gpu
+    assert 'robot_connected=0' in pi
+    assert 'for _ in {1..20}; do\n        robot_json=' in pi
+
+
 def test_runtime_process_roles_use_owned_process_groups():
     pi = read("start_pi_stack.sh")
     gpu = read("start_gpu_server.sh")
@@ -195,6 +220,14 @@ def test_runtime_process_roles_use_owned_process_groups():
         assert "stop_owned_groups()" in script
         assert "wait_process_group_exit()" in script
         assert 'kill -KILL -- "-${pgid}"' in script
+        assert "CLEANUP_STARTED=0" in script
+        assert "trap 'cleanup 130' INT" in script
+        assert "trap 'cleanup 143' TERM" in script
+        assert "trap '' INT TERM" in script
+        assert 'cleanup_jobs+=("$!")' in script
+
+    assert 'log "STOPPED: GPU local stack"' in gpu
+    assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in gpu
 
     assert 'DABOM_PROCESS_OWNER="dabom-pi-robot"' in pi
     assert 'DABOM_PROCESS_OWNER="dabom-pi-lidar-sender"' in pi

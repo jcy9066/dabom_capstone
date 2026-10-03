@@ -50,6 +50,7 @@ class SavedNavigationMap:
     origin_y: float
     origin_yaw: float
     saved_at_iso: str | None
+    location: dict[str, Any] | None = None
 
     def public_dict(self, root_dir: Path) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class SavedNavigationMap:
                 "yaw": self.origin_yaw,
             },
             "yaml": str(self.yaml_path.relative_to(root_dir)),
+            "location": dict(self.location) if isinstance(self.location, dict) else None,
         }
 
 
@@ -98,13 +100,24 @@ class NavigationMapService:
         selected_map: SavedNavigationMap,
         payload: Any,
     ) -> dict[str, float]:
-        value = payload or {}
+        if payload is None:
+            raise NavigationMapError(
+                "INITIAL_POSE_REQUIRED",
+                "Initial pose is required for localization.",
+            )
+        value = payload
         if not isinstance(value, dict):
             raise NavigationMapError("INVALID_INITIAL_POSE", "Initial pose must be an object.")
 
-        x = _finite_number(value.get("x", 0.0), "initial_pose.x")
-        y = _finite_number(value.get("y", 0.0), "initial_pose.y")
-        yaw_degrees = _finite_number(value.get("yaw_degrees", 0.0), "initial_pose.yaw_degrees")
+        if any(field not in value for field in ("x", "y", "yaw_degrees")):
+            raise NavigationMapError(
+                "INITIAL_POSE_REQUIRED",
+                "Initial pose x, y, and yaw_degrees are required.",
+            )
+
+        x = _finite_number(value.get("x"), "initial_pose.x")
+        y = _finite_number(value.get("y"), "initial_pose.y")
+        yaw_degrees = _finite_number(value.get("yaw_degrees"), "initial_pose.yaw_degrees")
         if not -180.0 <= yaw_degrees <= 180.0:
             raise NavigationMapError("INVALID_INITIAL_POSE", "Initial heading must be between -180 and 180 degrees.")
 
@@ -383,6 +396,7 @@ class NavigationMapService:
             origin_y=origin_y,
             origin_yaw=origin_yaw,
             saved_at_iso=metadata.get("saved_at_iso") if isinstance(metadata.get("saved_at_iso"), str) else None,
+            location=dict(metadata["location"]) if isinstance(metadata.get("location"), dict) else None,
         )
 
     def _resolve_registered_file(self, value: Any, suffix: str) -> Path:

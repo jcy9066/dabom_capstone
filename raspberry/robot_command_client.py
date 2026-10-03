@@ -203,9 +203,13 @@ class RobotCommandClient:
             "cpu_usage": self._cpu_usage_percent(),
             "cpu_temp": self._cpu_temp_c(),
             "ram_usage": self._ram_usage_percent(),
+            "gps_fix": gps["fix"],
             "gps_lat": gps["lat"],
             "gps_lng": gps["lng"],
             "gps_alt": gps["alt"],
+            "gps_satellites": gps["satellites"],
+            "gps_hdop": gps["hdop"],
+            "gps_updated_at": gps["updated_at"],
             "internet": internet,
             "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
@@ -219,6 +223,7 @@ class RobotCommandClient:
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
             "motor_motion": self.motor.current_motion,
+            "max_wheel_mps": self.motor.max_wheel_mps,
         }
 
     def status_loop(self) -> None:
@@ -415,7 +420,7 @@ class RobotCommandClient:
                 await asyncio.to_thread(
                     self.motor.move,
                     message.get("direction", ""),
-                    message.get("speed", 0.35),
+                    message.get("speed", 1.0),
                 )
 
             elif command_type == "auto_drive":
@@ -684,6 +689,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
+
+    if args.max_wheel_mps != env_float("MAX_WHEEL_MPS", minimum=0.01):
+        parser.error("--max-wheel-mps must match MAX_WHEEL_MPS on both hosts")
 
     if not args.server_base_url:
         parser.error(

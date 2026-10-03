@@ -8,6 +8,11 @@ from collections import deque
 from typing import Optional
 
 try:
+    from raspberry.env_config import env_float
+except ModuleNotFoundError:  # Direct robot_command_client.py execution.
+    from env_config import env_float
+
+try:
     import serial
 except ImportError:
     serial = None
@@ -64,7 +69,7 @@ class MotorController:
         baudrate: int = 115200,
         command_timeout_sec: float = 0.45,
         serial_timeout_sec: float = 0.25,
-        max_wheel_mps: float = 0.50,
+        max_wheel_mps: Optional[float] = None,
     ) -> None:
         self.serial_port = serial_port
         self.baudrate = int(baudrate)
@@ -76,10 +81,15 @@ class MotorController:
             0.1,
             float(serial_timeout_sec),
         )
-        self.max_wheel_mps = max(
-            0.01,
-            float(max_wheel_mps),
-        )
+        # Full-PWM wheel speed calibration, shared with server and Nav2.
+        self.max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
+        if max_wheel_mps is not None and (
+            not math.isfinite(float(max_wheel_mps))
+            or not math.isclose(float(max_wheel_mps), self.max_wheel_mps)
+        ):
+            raise MotorControllerError(
+                "max_wheel_mps must match MAX_WHEEL_MPS; update the shared calibration"
+            )
 
         self.last_command_at = 0.0
         self.current_motion = "stop"
@@ -496,7 +506,7 @@ class MotorController:
     def move(
         self,
         direction: str,
-        speed: float = 0.35,
+        speed: float = 1.0,
     ) -> None:
         direction = str(direction).strip().lower()
 

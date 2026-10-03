@@ -584,9 +584,46 @@
     async function requestNavigationMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
         if (target === 'MAPPING') return setMappingMode(options);
-        if (target !== 'DRIVING' || state.drivePending || state.navigationPending || state.control?.navigation_mode === 'DRIVING') return;
-        if (!window.navigationMapView?.snapshot()?.expanded) window.toggleMinimapExpand?.();
-        setFeedback('Driving 준비를 위해 저장 지도와 Initial Pose를 지정해주세요.');
+        if (
+            target !== 'DRIVING'
+            || state.drivePending
+            || state.navigationPending
+            || state.control?.navigation_mode === 'DRIVING'
+        ) return;
+
+        const view = window.navigationMapView?.snapshot?.() || {};
+        if (!view.expanded) window.toggleMinimapExpand?.();
+
+        // The current Mapping result is already a valid navigation map. Use it
+        // directly and let the server snapshot it for Nav2; do not force the
+        // operator through Saved Map -> Load before a Goal can be set.
+        if (
+            String(state.control?.navigation_mode || '').toUpperCase() === 'MAPPING'
+            && view.map
+        ) {
+            state.busy = true;
+            state.navigationPending = true;
+            syncControlComponents();
+            setFeedback('현재 Mapping 결과로 Driving 모드 전환 중...');
+            try {
+                const response = await mutate('/api/navigation/control/mode', {
+                    mode: 'DRIVING',
+                    source: 'current',
+                });
+                applyControlState(response);
+                setFeedback('Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
+                return true;
+            } catch (error) {
+                setFeedback(`Driving 모드 전환 실패: ${error.message}`, true);
+                return false;
+            } finally {
+                state.busy = false;
+                state.navigationPending = false;
+                syncControlComponents();
+            }
+        }
+
+        setFeedback('저장 지도와 실제 Initial Pose를 지정해주세요.');
         return window.openSavedMapModal?.();
     }
 

@@ -32,9 +32,13 @@
 # 따라서 현재 파일만 실행해서는 Pico W, MDD10A, 모터에
 # 어떤 명령도 전달되지 않는다.
 
+import yaml
+
+from patrol_navigation.env_config import env_float
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    OpaqueFunction,
     IncludeLaunchDescription,
     TimerAction,
 )
@@ -53,6 +57,14 @@ from launch_ros.substitutions import (
 from launch.conditions import IfCondition
 
 def generate_launch_description():
+    # Full-PWM wheel-speed limit shared by controller, smoother, bridge and Pi.
+    max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
+    wheel_track_m = env_float("WHEEL_TRACK_M", minimum=0.01)
+    # Differential-drive in-place rotation at left=-max, right=+max.
+    max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
+    # Physical motor breakaway floor. Apply only after a non-zero wheel command;
+    # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
+    min_auto_drive_pwm = 0.50
     pkg_share = FindPackageShare(
         "patrol_navigation"
     )
@@ -142,7 +154,15 @@ def generate_launch_description():
         name="controller_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "FollowPath.min_vel_x": 0.0,
+                "FollowPath.min_speed_xy": 0.0,
+                "FollowPath.max_vel_x": max_wheel_mps,
+                "FollowPath.max_speed_xy": max_wheel_mps,
+                "FollowPath.max_vel_theta": max_angular_rps,
+                "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
+            },
         ],
         remappings=(
             common_remappings
@@ -194,7 +214,8 @@ def generate_launch_description():
         name="behavior_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {"max_rotational_vel": max_angular_rps}
         ],
         remappings=(
             common_remappings
@@ -245,28 +266,42 @@ def generate_launch_description():
     #   /cmd_vel_nav_dry_run
     #
     # 실제 /cmd_vel에는 publish하지 않는다.
-    velocity_smoother = Node(
-        package="nav2_velocity_smoother",
-        executable="velocity_smoother",
-        name="velocity_smoother",
-        output="screen",
-        parameters=[
-            nav2_params
-        ],
-        remappings=(
-            common_remappings
-            + [
-                (
-                    "cmd_vel",
-                    "cmd_vel_nav",
-                ),
-                (
-                    "cmd_vel_smoothed",
-                    "/cmd_vel_nav_dry_run",
-                ),
-            ]
-        ),
-    )
+    def launch_velocity_smoother(context):
+        # Resolve custom params_file before overriding ONLY longitudinal limits.
+        with open(nav2_params.perform(context), encoding="utf-8") as stream:
+            config = yaml.safe_load(stream)
+        parameters = config["velocity_smoother"]["ros__parameters"]
+        max_velocity = list(parameters["max_velocity"])
+        min_velocity = list(parameters["min_velocity"])
+        max_velocity[0] = max_wheel_mps
+        min_velocity[0] = -max_wheel_mps
+        max_velocity[2] = max_angular_rps
+        min_velocity[2] = -max_angular_rps
+        return [Node(
+            package="nav2_velocity_smoother",
+            executable="velocity_smoother",
+            name="velocity_smoother",
+            output="screen",
+            parameters=[
+                nav2_params,
+                {"max_velocity": max_velocity, "min_velocity": min_velocity},
+            ],
+            remappings=(
+                common_remappings
+                + [
+                    (
+                        "cmd_vel",
+                        "cmd_vel_nav",
+                    ),
+                    (
+                        "cmd_vel_smoothed",
+                        "/cmd_vel_nav_dry_run",
+                    ),
+                ]
+            ),
+        )]
+
+    velocity_smoother = OpaqueFunction(function=launch_velocity_smoother)
     # ---------------------------------------------------------
     # Nav2 command bridge
     # ---------------------------------------------------------
@@ -287,8 +322,9 @@ def generate_launch_description():
                 "cmd_vel_topic": (
                     "/cmd_vel_nav_dry_run"
                 ),
-                "wheel_track_m": 0.4023,
-                "max_wheel_mps": 0.50,
+                "wheel_track_m": wheel_track_m,
+                "max_wheel_mps": max_wheel_mps,
+                "min_auto_drive_pwm": min_auto_drive_pwm,
                 "twist_timeout_sec": nav2_twist_timeout_sec,
                 "server_base_url": (
                     server_base_url

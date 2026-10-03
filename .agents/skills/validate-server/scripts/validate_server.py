@@ -397,7 +397,18 @@ def collect_used_env_vars(root: Path) -> set[str]:
             used.update(ENV_HELPER_RE.findall(source))
 
     for path in root.rglob("*.sh"):
-        used.update(SHELL_REQUIRED_ENV_RE.findall(read_text(path)))
+        source = read_text(path)
+        used.update(SHELL_REQUIRED_ENV_RE.findall(source))
+        used.update(
+            set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
+            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+        )
+        # Runtime launchers also validate indirectly via required_env arrays.
+        for block in re.findall(r"required_env\s*=\s*\((.*?)\)", source, re.DOTALL):
+            used.update(
+                token.strip("\"'") for token in block.split()
+                if re.fullmatch(r"[A-Z][A-Z0-9_]*", token.strip("\"'"))
+            )
 
     return used
 
@@ -461,7 +472,13 @@ def check_env_example(root: Path, findings: list[Finding]) -> None:
             add(findings, "ERROR", "env-example", f"잘못된 항목 형식: {line}")
             continue
         entries.append(name)
-        if value:
+        # Documented non-secret defaults; credentials must remain empty.
+        defaults = {
+            "MAX_WHEEL_MPS": "0.17",
+            "LIDAR_YAW": "3.141592653589793",
+            "LIDAR_SCAN_STALE_SEC": "3.0",
+        }
+        if value and defaults.get(name) != value:
             nonempty.append(name)
 
     duplicates = sorted({name for name in entries if entries.count(name) > 1})
