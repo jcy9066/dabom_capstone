@@ -154,9 +154,7 @@ class TemporalActionPolicy:
 
     def mark_observed(self, object_id, now=None):
         now = time.monotonic() if now is None else float(now)
-        expired = self.expire_stale(now)
         self.last_seen_at[object_id] = now
-        return expired
 
     def update(self, object_id, candidate, now=None):
         self.mark_observed(object_id, now=now)

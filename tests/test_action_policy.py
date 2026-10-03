@@ -63,3 +63,40 @@ def test_temporal_policy_requires_consecutive_normal_hits_to_clear():
     assert policy.update(11, danger_candidate)["confidence_level"] == "danger"
     assert policy.update(11, None)["confidence_level"] == "danger"
     assert policy.update(11, None) is None
+
+
+def test_observation_issue_is_not_a_normal_action():
+    from perception.models.action_policy import (
+        OBSERVATION_INFERENCE_ERROR,
+        is_observation_issue,
+        observation_issue,
+    )
+
+    issue = observation_issue(OBSERVATION_INFERENCE_ERROR, "boom")
+    assert is_observation_issue(issue)
+    assert issue["observation_status"] == OBSERVATION_INFERENCE_ERROR
+
+
+def test_stale_tracking_state_is_fully_expired():
+    policy = TemporalActionPolicy(
+        window=5,
+        suspicious_min_hits=1,
+        danger_min_hits=1,
+        normal_clear_hits=2,
+        state_ttl_sec=1.0,
+    )
+
+    for object_id in range(1000):
+        policy.update(object_id, None, now=0.0)
+
+    assert len(policy.history) == 1000
+    assert len(policy.normal_streak) == 1000
+    assert len(policy.last_seen_at) == 1000
+
+    expired = policy.expire_stale(now=2.0)
+
+    assert len(expired) == 1000
+    assert policy.history == {}
+    assert policy.current == {}
+    assert policy.normal_streak == {}
+    assert policy.last_seen_at == {}

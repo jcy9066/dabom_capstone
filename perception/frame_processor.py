@@ -20,6 +20,8 @@ class FrameProcessor:
         self.action_display_updated_at = {}
         self.action_display_ttl_sec = env_float("ACTION_DISPLAY_TTL_SEC", minimum=0.1)
         self.violence_heuristic = ViolenceHeuristic()
+        if getattr(self.action_analyzer, "restrict_to_target_actions", False):
+            self.violence_heuristic.enabled = False
 
     def process(self, frame):
         tracked_boxes = self.detector.track(frame)
