@@ -1636,6 +1636,100 @@ def update_latest_result(result, frame_seq=None, input_captured_at=None, elapsed
         stream_stats["frames_inferred"] = stream_stats.get("frames_inferred", 0) + 1
 
 
+def process_stream_frame_if_current(frame, stream_id):
+    """Process only if the frame still belongs to the active stream generation."""
+    with processing_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return None
+
+        if frame_processor is None:
+            return None
+
+        return process_frame_for_dashboard(frame)
+
+
+def activate_stream_generation(robot_id, infer):
+    """Atomically reset tracking state and publish a new stream generation."""
+    global active_stream_id
+
+    with processing_lock:
+        processor = frame_processor
+        if processor is not None:
+            reset_tracking_state = getattr(
+                processor.action_analyzer,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_tracking_state):
+                reset_tracking_state()
+            processor.action_display_buffer.clear()
+            processor.violence_heuristic.reset()
+
+        with inference_condition:
+            inference_slot.update(
+                {
+                    "frame": None,
+                    "robot_id": None,
+                    "frame_seq": None,
+                    "captured_at": None,
+                    "stream_id": None,
+                }
+            )
+
+        with state_lock:
+            active_stream_id += 1
+            stream_id = active_stream_id
+            now = time.time()
+            frame_stats.update({"last_time": now, "count": 0, "fps": 0})
+            decode_stats.update({"last_time": now, "count": 0, "fps": 0})
+            publish_stats.update(
+                {
+                    "last_time": now,
+                    "count": 0,
+                    "fps": 0,
+                    "last_publish_at": None,
+                }
+            )
+            inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
+            inference_stats.update(
+                {
+                    "requested": 0,
+                    "completed": 0,
+                    "dropped": 0,
+                    "last_ms": None,
+                    "last_result_at": None,
+                    "last_input_seq": None,
+                    "last_started_at": None,
+                    "device": DEVICE,
+                }
+            )
+            stream_stats.update(
+                {
+                    "connected": True,
+                    "robot_id": robot_id,
+                    "connected_at": now,
+                    "disconnected_at": None,
+                    "bytes_received": 0,
+                    "frames_received": 0,
+                    "last_byte_at": None,
+                    "frames_decoded": 0,
+                    "frames_inferred": 0,
+                    "last_frame_at": None,
+                    "last_error": None,
+                    "ffmpeg_returncode": None,
+                    "ffmpeg_stderr_tail": [],
+                    "infer": infer,
+                    "inference_available": frame_processor is not None,
+                    "stream_id": stream_id,
+                }
+            )
+
+    return stream_id
+
+
 def inference_worker():
     while True:
         min_interval = 1.0 / INFERENCE_MAX_FPS
@@ -1689,13 +1783,12 @@ def inference_worker():
             inference_stats["dropped"] += 1
             continue
 
-        if frame_processor is None:
-            continue
-
         started = time.time()
         try:
-            with processing_lock:
-                processed = process_frame_for_dashboard(frame)
+            processed = process_stream_frame_if_current(frame, stream_id)
+            if processed is None:
+                continue
+
             if stream_id is not None:
                 with state_lock:
                     is_stale_stream = stream_id != active_stream_id
@@ -3606,7 +3699,6 @@ def ffmpeg_stderr_loop(proc):
 
 @app.api_route("/stream/h264", methods=["POST", "PUT"])
 async def receive_h264_stream(request: Request):
-    global active_stream_id
 
     ensure_runtime_model_config(reason="stream_connect")
     robot_id = request.query_params.get("robot_id", SERVER_ROBOT_ID)
@@ -3657,76 +3749,7 @@ async def receive_h264_stream(request: Request):
             status_code=500,
         )
 
-    with processing_lock:
-        processor = frame_processor
-        if processor is not None:
-            reset_tracking_state = getattr(
-                processor.action_analyzer,
-                "reset_tracking_state",
-                None,
-            )
-            if callable(reset_tracking_state):
-                reset_tracking_state()
-            processor.action_display_buffer.clear()
-            processor.violence_heuristic.reset()
-
-    with inference_condition:
-        inference_slot.update(
-            {
-                "frame": None,
-                "robot_id": None,
-                "frame_seq": None,
-                "captured_at": None,
-                "stream_id": None,
-            }
-        )
-    with state_lock:
-        active_stream_id += 1
-        stream_id = active_stream_id
-        now = time.time()
-        frame_stats.update({"last_time": now, "count": 0, "fps": 0})
-        decode_stats.update({"last_time": now, "count": 0, "fps": 0})
-        publish_stats.update(
-            {
-                "last_time": now,
-                "count": 0,
-                "fps": 0,
-                "last_publish_at": None,
-            }
-        )
-        inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
-        inference_stats.update(
-            {
-                "requested": 0,
-                "completed": 0,
-                "dropped": 0,
-                "last_ms": None,
-                "last_result_at": None,
-                "last_input_seq": None,
-                "last_started_at": None,
-                "device": DEVICE,
-            }
-        )
-        stream_stats.update(
-            {
-                "connected": True,
-                "robot_id": robot_id,
-                "connected_at": now,
-                "disconnected_at": None,
-                "bytes_received": 0,
-                "frames_received": 0,
-                "last_byte_at": None,
-                "frames_decoded": 0,
-                "frames_inferred": 0,
-                "last_frame_at": None,
-                "last_error": None,
-                "ffmpeg_returncode": None,
-                "ffmpeg_stderr_tail": [],
-                "infer": infer,
-                "inference_available": frame_processor is not None,
-                "stream_id": stream_id,
-            }
-        )
+    stream_id = activate_stream_generation(robot_id, infer)
     reader = threading.Thread(
         target=h264_decode_loop,
         args=(proc, robot_id, infer_override, stream_id),
