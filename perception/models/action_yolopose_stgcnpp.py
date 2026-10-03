@@ -1,6 +1,5 @@
 import glob
 import logging
-import os
 
 import cv2
 import numpy as np
@@ -11,11 +10,17 @@ from mmengine.registry import DefaultScope
 from perception.device import resolve_cuda_device
 from perception.models.action_batch import process_keypoint_many
 from perception.models.action_policy import (
+    OBSERVATION_INFERENCE_ERROR,
+    OBSERVATION_UNAVAILABLE,
     RECALL_TARGET_ACTIONS,
     TemporalActionPolicy,
     classify_target_action,
     classify_target_scores,
+    observation_issue,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def find_weight(pattern):
@@ -67,6 +72,7 @@ class ActionRecognizer:
         self.recall_mode = bool(recall_mode)
         self.analyze_all_persons = self.recall_mode
         self.manages_action_hysteresis = self.recall_mode
+        self.restrict_to_target_actions = self.recall_mode
         self.target_actions = (
             RECALL_TARGET_ACTIONS
             if self.recall_mode
@@ -79,17 +85,49 @@ class ActionRecognizer:
         )
         self.temporal_policy = TemporalActionPolicy.from_env() if self.recall_mode else None
 
+    def expire_tracking_state(self, now=None):
+        if self.temporal_policy is None:
+            return []
+        expired = self.temporal_policy.expire_stale(now=now)
+        for object_id in expired:
+            self.action_buffer.pop(object_id, None)
+        return expired
+
+    def reset_tracking_state(self):
+        self.action_buffer.clear()
+        if self.temporal_policy is not None:
+            self.temporal_policy.reset()
+
+    def _mark_observed(self, object_id):
+        if self.temporal_policy is None:
+            return
+        expired = self.temporal_policy.mark_observed(object_id)
+        for expired_id in expired:
+            self.action_buffer.pop(expired_id, None)
+
+    def observation_unavailable(self, object_id, reason):
+        self._mark_observed(object_id)
+        return observation_issue(OBSERVATION_UNAVAILABLE, reason)
+
     def process_many(self, frame, objs):
+        self.expire_tracking_state()
+        for obj in objs:
+            self._mark_observed(obj["id"])
         return process_keypoint_many(self, frame, objs, total_frames=100)
 
     def process(self, frame, obj):
+        obj_id = obj["id"]
+        self.expire_tracking_state()
+        self._mark_observed(obj_id)
+
         kpts = obj.get("keypoints")
         scores = obj.get("keypoints_scores")
-
         if kpts is None or len(kpts) == 0:
-            return None, None
+            return None, self.observation_unavailable(
+                obj_id,
+                "YOLO pose keypoints unavailable",
+            )
 
-        obj_id = obj["id"]
         if obj_id not in self.action_buffer:
             self.action_buffer[obj_id] = {"kpts": [], "scores": []}
 
@@ -134,7 +172,11 @@ class ActionRecognizer:
             max_score = pred_scores[max_idx].item()
             return classify_target_action(max_idx, max_score, self.target_actions)
         except Exception:
-            return None
+            LOGGER.exception("Action inference failed")
+            return observation_issue(
+                OBSERVATION_INFERENCE_ERROR,
+                "action inference failed",
+            )
 
     def _classify_with_object(self, obj_id, kpts, scores, shape):
         if not self.recall_mode:
@@ -144,8 +186,13 @@ class ActionRecognizer:
             pred_scores = self._predict_scores(kpts, scores, shape)
             candidate = classify_target_scores(pred_scores, self.target_actions)
             return self.temporal_policy.update(obj_id, candidate)
-        except Exception:
-            return None
+        except Exception as exc:
+            LOGGER.exception("Action inference failed for track_id=%s", obj_id)
+            self._mark_observed(obj_id)
+            return observation_issue(
+                OBSERVATION_INFERENCE_ERROR,
+                str(exc) or "action inference failed",
+            )
 
     def draw_skeleton(self, frame, kpts, color):
         if kpts is None:
