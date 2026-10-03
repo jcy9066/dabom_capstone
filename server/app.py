@@ -2619,14 +2619,35 @@ def robot_speed_calibration_error(robot_id: str):
         raw_robot_max = robot_status.get(
             "max_wheel_mps"
         )
+        status_updated_at = robot_status.get(
+            "updated_at"
+        )
 
     if (
         status_robot_id != robot_id
         or raw_robot_max is None
+        or status_updated_at is None
     ):
         return (
             "Pi MAX_WHEEL_MPS is unavailable; "
             "wait for matching robot status"
+        )
+
+    try:
+        status_age = max(
+            0.0,
+            time.time() - float(status_updated_at),
+        )
+    except (TypeError, ValueError):
+        return "Pi robot status timestamp is invalid"
+
+    if (
+        not np.isfinite(status_age)
+        or status_age > ROBOT_STATUS_TIMEOUT_SEC
+    ):
+        return (
+            "Pi robot status is stale; "
+            "wait for a fresh status update"
         )
 
     if isinstance(raw_robot_max, bool):

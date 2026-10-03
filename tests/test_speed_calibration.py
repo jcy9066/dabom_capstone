@@ -220,6 +220,7 @@ def test_server_requires_matching_pi_calibration_before_auto_mode(monkeypatch):
     monkeypatch.setattr(server, "MAX_WHEEL_MPS", .17)
     monkeypatch.setitem(server.robot_status, "robot_id", "pi-01")
     monkeypatch.setitem(server.robot_status, "max_wheel_mps", None)
+    monkeypatch.setitem(server.robot_status, "updated_at", None)
     send_command = AsyncMock(return_value=True)
     monkeypatch.setattr(server.connections, "send_command", send_command)
 
@@ -251,6 +252,20 @@ def test_server_requires_matching_pi_calibration_before_auto_mode(monkeypatch):
     )
     assert response.status_code == 409
     assert "MAX_WHEEL_MPS mismatch" in response.json()["error"]
+    send_command.assert_not_awaited()
+
+    monkeypatch.setitem(
+        server.robot_status,
+        "updated_at",
+        server.time.time() - server.ROBOT_STATUS_TIMEOUT_SEC - 1.0,
+    )
+    response = client.post(
+        "/api/robots/pi-01/command",
+        headers=headers,
+        json=mode_payload,
+    )
+    assert response.status_code == 409
+    assert "status is stale" in response.json()["error"]
     send_command.assert_not_awaited()
 
     response = client.post(

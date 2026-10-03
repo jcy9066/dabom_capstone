@@ -16,7 +16,7 @@ Goal 자율주행에서는 Nav2가 속도를 선택하고 기존 가속도·감�
 
 `MAX_WHEEL_MPS`는 최대 PWM에서의 바퀴 선속도(m/s)이다. **0.17은 실측값이 아닌 임시 추정값**이며, 60 RPM 모터·약 65~67.5 mm 바퀴의 부하 상태를 가정한다. Nav2 YAML의 0.17도 같은 임시 예시다. 실제 launch는 `MAX_WHEEL_MPS`로 controller/smoother의 종방향 상한을 덮어쓴다. 커스텀 `params_file`에서도 회전·가속도·감속도 설정은 유지한다.
 
-Pi의 `--max-wheel-mps` 또는 ROS bridge의 `max_wheel_mps`만 환경변수와 다르게 override하면 시작을 거부한다. Pi는 상태 전송에 현재 적용 중인 `max_wheel_mps`를 포함하며, 서버는 자신의 `MAX_WHEEL_MPS`와 대조한다. Pi 상태에 값이 없거나 두 값이 다르면 자동 모드 진입과 실제 모터 출력 자율주행 명령을 거부한다. **값을 자동 동기화하지는 않으므로 양쪽 `.env`는 함께 변경해야 한다.**
+Pi의 `--max-wheel-mps` 또는 ROS bridge의 `max_wheel_mps`만 환경변수와 다르게 override하면 시작을 거부한다. Pi는 상태 전송에 현재 적용 중인 `max_wheel_mps`를 포함하며, 서버는 자신의 `MAX_WHEEL_MPS`와 대조한다. Pi 상태가 없거나 오래되었거나 두 값이 다르면 자동 모드 진입과 실제 모터 출력 자율주행 명령을 거부한다. **값을 자동 동기화하지는 않으므로 양쪽 `.env`는 함께 변경해야 한다.**
 
 ## 실측 및 재보정
 
