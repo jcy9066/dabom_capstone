@@ -71,6 +71,31 @@ class LocationSecurityServiceTests(unittest.TestCase):
             self.assertEqual("UNKNOWN", result["snapshot"]["security_state"])
             self.assertEqual(0, result["snapshot"]["outside_samples"])
 
+    def test_rejected_future_timestamp_does_not_block_normal_samples(self):
+        service = LocationSecurityService(self.path, max_sample_age_sec=5.0, max_future_skew_sec=5.0)
+        with patch("server.location_security.time.time", return_value=1000.0):
+            rejected = service.update_live_gps(
+                {"fix": True, "lat": 37.001, "lng": 127.0, "hdop": 1.0,
+                 "satellites": 8, "updated_at": 4600.0}
+            )
+            self.assertEqual("UNKNOWN", rejected["snapshot"]["security_state"])
+            self.assertEqual(0, rejected["snapshot"]["outside_samples"])
+
+            for updated_at in (1001.0, 1002.0):
+                result = service.update_live_gps(
+                    {"fix": True, "lat": 37.001, "lng": 127.0, "hdop": 1.0,
+                     "satellites": 8, "updated_at": updated_at}
+                )
+                self.assertIsNone(result["transition"])
+
+            recovered = service.update_live_gps(
+                {"fix": True, "lat": 37.001, "lng": 127.0, "hdop": 1.0,
+                 "satellites": 8, "updated_at": 1003.0}
+            )
+
+        self.assertEqual("OUT_OF_AREA", recovered["transition"])
+        self.assertEqual("OUT_OF_AREA", recovered["snapshot"]["security_state"])
+
     def test_live_fix_expires_to_unknown_without_deleting_saved_locations(self):
         now = 1000.0
         service = LocationSecurityService(self.path, max_sample_age_sec=5.0)

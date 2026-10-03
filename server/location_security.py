@@ -192,11 +192,14 @@ class LocationSecurityService:
             ):
                 return {"transition": None, "snapshot": self.snapshot()}
 
-            self._last_sample_updated_at = sample_updated_at
             age_sec = now - sample_updated_at
             if age_sec > self.max_sample_age_sec or age_sec < -self.max_future_skew_sec:
                 self._invalidate_live_locked()
                 return {"transition": None, "snapshot": self.snapshot()}
+
+            # Only an in-range measurement may advance the ordering watermark.
+            # A bad far-future timestamp must not poison later normal samples.
+            self._last_sample_updated_at = sample_updated_at
 
             normalized = self._normalize_sample(sample, sample_updated_at)
             if normalized is None:
