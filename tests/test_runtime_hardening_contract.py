@@ -53,6 +53,9 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert "WHEEL_TICKS_TOPIC" in script
     assert "/api/encoder/bridge" in script
     assert "fresh encoder telemetry" in script
+    assert "trap - EXIT" in script
+    assert "trap '' INT TERM" in script
+    assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in script
 
 
 def test_navigation_launch_control_uses_live_rc_sensor_bridges():

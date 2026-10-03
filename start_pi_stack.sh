@@ -30,7 +30,10 @@ require_cmd() {
 
 proc_cmdline() {
     local pid="$1"
-    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true
+
+    # /proc entries can disappear between directory enumeration and read.
+    # Avoid shell input-redirection errors leaking to the terminal on that race.
+    cat -- "/proc/${pid}/cmdline" 2>/dev/null | tr '\0' ' ' || true
 }
 
 list_matching_pids() {
@@ -242,7 +245,11 @@ remove_own_pid_file() {
 cleanup() {
     local exit_code=$?
 
-    trap - EXIT INT TERM
+    # Disable EXIT recursion and ignore repeated Ctrl+C/SIGTERM while cleanup is
+    # in progress. Resetting INT/TERM to their defaults here allowed a second
+    # Ctrl+C to abort cleanup midway and leave reconnecting child groups alive.
+    trap - EXIT
+    trap '' INT TERM
     log "Shutting down Pi stack"
 
     # Stop logical roles by ownership tag, not only by leader PID. This also
