@@ -62,6 +62,22 @@ def test_pi_launcher_requires_isolated_ros_and_fresh_encoder_feedback():
     assert 'cat -- "/proc/${pid}/cmdline" 2>/dev/null' in script
 
 
+def test_global_planner_prefers_line_of_sight_in_free_space():
+    params = read("navigation/ros/patrol_navigation/config/nav2_params.yaml")
+    package = read("navigation/ros/patrol_navigation/package.xml")
+    gpu = read("start_gpu_server.sh")
+
+    assert 'plugin: "nav2_theta_star_planner/ThetaStarPlanner"' in params
+    assert "how_many_corners: 8" in params
+    assert "w_euc_cost: 1.0" in params
+    assert "w_traversal_cost: 1.0" in params
+    assert "use_astar: true" not in params
+    assert "<exec_depend>nav2_theta_star_planner</exec_depend>" in package
+    assert "ros2 pkg prefix nav2_theta_star_planner" in gpu
+    assert "- obstacle_layer" in params
+    assert "- inflation_layer" in params
+
+
 def test_navigation_launch_control_uses_live_rc_sensor_bridges():
     control = read("server/navigation_process_control.py")
 
