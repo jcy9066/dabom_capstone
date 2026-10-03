@@ -36,6 +36,7 @@ if str(PERCEPTION_DIR) not in sys.path:
 
 from perception.device import resolve_cuda_device
 from perception.frame_processor import FrameProcessor
+from perception.models.action_policy import is_observation_issue
 from perception.pipeline_factory import PIPELINE_OPTIONS, create_pipeline
 from perception.utils.event_taxonomy import vision_alert_type, vision_event_type
 from perception.utils.telegram_notifier import TelegramNotifier
@@ -1318,10 +1319,15 @@ def build_preview_frame(frame, infer, now=None):
 
 def collect_action_results(frame, tracked_boxes):
     persons = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
+    analyzer = frame_processor.action_analyzer
+
+    expire_tracking_state = getattr(analyzer, "expire_tracking_state", None)
+    if callable(expire_tracking_state):
+        expire_tracking_state()
+
     if not persons:
         return {}
 
-    analyzer = frame_processor.action_analyzer
     if hasattr(analyzer, "process_many"):
         return analyzer.process_many(frame, persons)
 
@@ -1371,9 +1377,16 @@ def process_frame_for_dashboard(frame):
         for oid, result in action_results.items()
         if result and result[0] is not None
     }
-    violence_results = frame_processor.violence_heuristic.update(
-        tracked_boxes,
-        skeletons_by_id,
+    restrict_to_target_actions = bool(
+        getattr(frame_processor.action_analyzer, "restrict_to_target_actions", False)
+    )
+    violence_results = (
+        {}
+        if restrict_to_target_actions
+        else frame_processor.violence_heuristic.update(
+            tracked_boxes,
+            skeletons_by_id,
+        )
     )
     action_ms = (time.time() - action_started) * 1000
 
@@ -1404,6 +1417,8 @@ def process_frame_for_dashboard(frame):
             "skeleton": None,
             "confidence_level": None,
             "visual_state": "normal",
+            "inference_status": None,
+            "inference_error": None,
         }
 
         if cls_id == 0:
@@ -1412,16 +1427,30 @@ def process_frame_for_dashboard(frame):
             detection["skeleton"] = skeleton_to_list(skeleton)
 
             now = time.time()
-            heuristic_action = violence_results.get(oid)
-            selected_action = select_action_result(action, heuristic_action)
+            observation_issue = is_observation_issue(action)
+            if observation_issue:
+                detection["inference_status"] = action.get("observation_status")
+                detection["inference_error"] = action.get("error")
+            else:
+                detection["inference_status"] = "ok"
+
+            heuristic_action = None if restrict_to_target_actions else violence_results.get(oid)
+            selected_action = (
+                None
+                if observation_issue
+                else select_action_result(action, heuristic_action)
+            )
             if selected_action:
                 selected_action = dict(selected_action)
                 selected_action["updated_at"] = now
                 frame_processor.action_display_buffer[oid] = selected_action
-            elif getattr(
-                frame_processor.action_analyzer,
-                "manages_action_hysteresis",
-                False,
+            elif (
+                not observation_issue
+                and getattr(
+                    frame_processor.action_analyzer,
+                    "manages_action_hysteresis",
+                    False,
+                )
             ):
                 frame_processor.action_display_buffer.pop(oid, None)
 
@@ -1471,7 +1500,11 @@ def process_frame_for_dashboard(frame):
                         f"[{current_action['label']}] "
                         f"{current_action['score'] * 100:.0f}%"
                     )
-            elif TRIGGER_SUSPICIOUS_VISUAL_ENABLED and state == 1:
+            elif (
+                not restrict_to_target_actions
+                and TRIGGER_SUSPICIOUS_VISUAL_ENABLED
+                and state == 1
+            ):
                 color = (0, 165, 255)
                 detection["confidence_level"] = "trigger_suspicious"
                 detection["visual_state"] = "suspicious"
@@ -3610,6 +3643,19 @@ async def receive_h264_stream(request: Request):
             {"ok": False, "error": "ffmpeg not found"},
             status_code=500,
         )
+
+    with processing_lock:
+        processor = frame_processor
+        if processor is not None:
+            reset_tracking_state = getattr(
+                processor.action_analyzer,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_tracking_state):
+                reset_tracking_state()
+            processor.action_display_buffer.clear()
+            processor.violence_heuristic.reset()
 
     with inference_condition:
         inference_slot.update(

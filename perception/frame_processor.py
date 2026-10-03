@@ -1,8 +1,12 @@
+import time
+
 import cv2
 
 from .core.trigger import CascadingTrigger
+from .env_config import env_float
 from .utils.telegram_notifier import TelegramNotifier
 from .utils.event_taxonomy import vision_alert_type
+from .models.action_policy import is_observation_issue
 from .models.violence_heuristic import ViolenceHeuristic
 
 
@@ -13,6 +17,8 @@ class FrameProcessor:
         self.trigger = CascadingTrigger()
         self.notifier = notifier if notifier is not None else TelegramNotifier()
         self.action_display_buffer = {}
+        self.action_display_updated_at = {}
+        self.action_display_ttl_sec = env_float("ACTION_DISPLAY_TTL_SEC", minimum=0.1)
         self.violence_heuristic = ViolenceHeuristic()
 
     def process(self, frame):
@@ -54,11 +60,24 @@ class FrameProcessor:
 
             if cls_id == 0:
                 skeleton, action = self.action_analyzer.process(frame, obj)
+                observation_issue = is_observation_issue(action)
+                now = time.monotonic()
 
-                if action:
+                if action and not observation_issue:
                     self.action_display_buffer[oid] = action
-                elif manages_action_hysteresis:
+                    self.action_display_updated_at[oid] = now
+                elif manages_action_hysteresis and not observation_issue:
                     self.action_display_buffer.pop(oid, None)
+                    self.action_display_updated_at.pop(oid, None)
+
+                updated_at = self.action_display_updated_at.get(oid)
+                if (
+                    observation_issue
+                    and updated_at is not None
+                    and now - updated_at > self.action_display_ttl_sec
+                ):
+                    self.action_display_buffer.pop(oid, None)
+                    self.action_display_updated_at.pop(oid, None)
 
                 if oid in self.action_display_buffer:
                     current_action = self.action_display_buffer[oid]

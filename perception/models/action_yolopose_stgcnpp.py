@@ -4,8 +4,6 @@ import logging
 import cv2
 import numpy as np
 import torch
-from mmaction.apis import inference_recognizer, init_recognizer
-from mmengine.registry import DefaultScope
 
 from perception.device import resolve_cuda_device
 from perception.models.action_batch import process_keypoint_many
@@ -46,7 +44,12 @@ class ActionRecognizer:
         action_config = action_config or find_weight("weights/stgcnpp_8xb16-joint-u100*.py")
         action_checkpoint = action_checkpoint or find_weight("weights/stgcnpp_8xb16-joint-u100*.pth")
 
-        with DefaultScope.overwrite_default_scope("mmaction"):
+        from mmaction.apis import inference_recognizer, init_recognizer
+        from mmengine.registry import DefaultScope
+
+        self._inference_recognizer = inference_recognizer
+        self._default_scope_cls = DefaultScope
+        with self._default_scope_cls.overwrite_default_scope("mmaction"):
             self.action_model = init_recognizer(action_config, action_checkpoint, device=device)
 
         self.action_buffer = {}
@@ -161,8 +164,8 @@ class ActionRecognizer:
             keypoint=np.expand_dims(np.array(kpts), axis=0),
             keypoint_score=np.expand_dims(np.array(scores), axis=0),
         )
-        with DefaultScope.overwrite_default_scope("mmaction"):
-            result = inference_recognizer(self.action_model, anno)
+        with self._default_scope_cls.overwrite_default_scope("mmaction"):
+            result = self._inference_recognizer(self.action_model, anno)
         return result.pred_score
 
     def _classify(self, kpts, scores, shape):
