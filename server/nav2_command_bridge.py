@@ -13,9 +13,9 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 
 try:
-    from server.env_config import env_bool, env_text
+    from server.env_config import env_bool, env_float, env_text
 except ModuleNotFoundError:  # Direct script execution from server/.
-    from env_config import env_bool, env_text
+    from env_config import env_bool, env_float, env_text
 
 
 class Nav2CommandBridge(Node):
@@ -32,7 +32,7 @@ class Nav2CommandBridge(Node):
         )
         self.declare_parameter(
             "max_wheel_mps",
-            0.50,
+            env_float("MAX_WHEEL_MPS", minimum=0.01),
         )
         self.declare_parameter(
             "twist_timeout_sec",
@@ -103,9 +103,14 @@ class Nav2CommandBridge(Node):
                 "wheel_track_m must be positive"
             )
 
-        if self.max_wheel_mps <= 0.0:
+        if (
+            not math.isfinite(self.max_wheel_mps)
+            or not math.isclose(
+                self.max_wheel_mps, env_float("MAX_WHEEL_MPS", minimum=0.01)
+            )
+        ):
             raise ValueError(
-                "max_wheel_mps must be positive"
+                "max_wheel_mps must match MAX_WHEEL_MPS on both hosts"
             )
 
         if self.twist_timeout_sec <= 0.0:
