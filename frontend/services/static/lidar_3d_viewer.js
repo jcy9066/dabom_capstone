@@ -35,6 +35,7 @@ if (root && canvas) {
     // Keep map/pose/navigation coordinates unchanged and rotate only scan visuals.
     const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;
     const MAPPING_PREVIEW_POSE = Object.freeze({ x: 0, y: 0, yaw: 0 });
+    const MAPPING_PREVIEW_GRID_SIZE_M = 10;
     // Visual pose smoothing follows differential-drive motion: forward motion responds
     // faster than lateral map/localization correction so the chassis does not appear
     // to slide sideways across its fixed wheel direction.
@@ -439,15 +440,14 @@ if (root && canvas) {
 
     function rebuildGrid(map) {
         clearGroup(gridRoot);
-        if (!map) return;
 
-        const width = Number(map.width) || 0;
-        const height = Number(map.height) || 0;
-        const resolution = Number(map.resolution) || 0;
-        if (width <= 0 || height <= 0 || resolution <= 0) return;
+        const width = Number(map?.width) || 0;
+        const height = Number(map?.height) || 0;
+        const resolution = Number(map?.resolution) || 0;
+        const hasMapExtent = width > 0 && height > 0 && resolution > 0;
 
-        const widthM = width * resolution;
-        const heightM = height * resolution;
+        const widthM = hasMapExtent ? width * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
+        const heightM = hasMapExtent ? height * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
         const size = Math.max(1, Math.ceil(Math.max(widthM, heightM)));
         const divisions = Math.min(100, Math.max(4, size * 2));
         const helper = new THREE.GridHelper(size, divisions, 0x64748b, 0x334155);
@@ -455,10 +455,14 @@ if (root && canvas) {
         helper.material.opacity = 0.3;
         helper.material.depthWrite = false;
         helper.rotation.x = Math.PI / 2;
-        helper.position.set(widthM / 2, heightM / 2, 0.001);
+        helper.position.set(
+            hasMapExtent ? widthM / 2 : 0,
+            hasMapExtent ? heightM / 2 : 0,
+            0.001,
+        );
         gridRoot.add(helper);
 
-        const transform = mapTransform(map);
+        const transform = hasMapExtent ? mapTransform(map) : { x: 0, y: 0, z: 0, yaw: 0 };
         gridRoot.position.set(transform.x, transform.y, transform.z);
         gridRoot.rotation.z = transform.yaw;
     }
@@ -472,7 +476,7 @@ if (root && canvas) {
         currentMap = map || null;
 
         if (!map) {
-            clearGroup(gridRoot);
+            rebuildGrid(null);
             return;
         }
 
@@ -1714,9 +1718,13 @@ if (root && canvas) {
             ? livePose
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
 
-        // TF shows only the actual raw map->base_link transform. The mapping
-        // preview keeps the RC car visible but must never fabricate a TF frame.
-        applyTfPose(livePose);
+        // Keep the TF axes visible at the mapping origin until the real
+        // map->base_link transform is available. The first real pose replaces
+        // this preview immediately.
+        const tfVisualizationPose = validPose(livePose)
+            ? livePose
+            : (mappingMode ? MAPPING_PREVIEW_POSE : null);
+        applyTfPose(tfVisualizationPose);
         updateRobotPose(visualizationPose);
         rebuildScan(liveScan);
 
@@ -1936,6 +1944,7 @@ if (root && canvas) {
         },
     };
 
+    rebuildGrid(null);
     buildRobotModel();
     applyVisualizationState(window.dabomNavigationVisualizationState);
     applyControlState(window.dabomNavigationControlState);

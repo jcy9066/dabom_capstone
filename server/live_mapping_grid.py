@@ -99,6 +99,7 @@ class LiveMappingGrid:
         self._anchor_y = 0.0
         self._anchor_yaw = 0.0
         self._base_map_seen = False
+        self._preview_pose_active = False
 
     def reset(self) -> None:
         with self._lock:
@@ -111,6 +112,7 @@ class LiveMappingGrid:
             self._anchor_y = 0.0
             self._anchor_yaw = 0.0
             self._base_map_seen = False
+            self._preview_pose_active = False
 
     def update_pose(self, pose: dict[str, Any]) -> bool:
         try:
@@ -122,7 +124,14 @@ class LiveMappingGrid:
         if not all(math.isfinite(value) for value in (x, y, yaw)):
             return False
         with self._lock:
+            # A scan-only preview is anchored at the mapping origin. Once the
+            # real map->base_link pose arrives, discard those provisional cells
+            # so they cannot leave ghost obstacles in the real map frame.
+            if self._preview_pose_active and not self._base_map_seen:
+                self._cells.clear()
+                self._last_update_monotonic = None
             self._pose = {"x": x, "y": y, "yaw": yaw}
+            self._preview_pose_active = False
         return True
 
     def update_scan(self, scan: dict[str, Any]) -> bool:
@@ -213,6 +222,13 @@ class LiveMappingGrid:
 
         with self._lock:
             if not self._base_map_seen:
+                # Replace scan-only preview geometry with slam_toolbox's first
+                # authoritative OccupancyGrid instead of reprojecting preview
+                # cells into the real map frame.
+                if self._preview_pose_active:
+                    self._cells.clear()
+                    self._last_update_monotonic = None
+                    self._preview_pose_active = False
                 self._reanchor_locked(
                     origin_x,
                     origin_y,
@@ -276,8 +292,20 @@ class LiveMappingGrid:
         force: bool = False,
     ) -> dict[str, Any] | None:
         with self._lock:
-            if self._pose is None or self._scan is None:
+            if self._scan is None:
                 return None
+
+            pose = self._pose
+            if pose is None:
+                # Mapping must be visible immediately, before slam_toolbox has
+                # produced map->base_link. Use the mapping origin only as a
+                # temporary visualization pose. Once a real pose or base map
+                # arrives, provisional cells are discarded.
+                if self._base_map_seen:
+                    return None
+                pose = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+                self._preview_pose_active = True
+
             if (
                 not force
                 and self._last_update_monotonic is not None
@@ -285,7 +313,7 @@ class LiveMappingGrid:
             ):
                 return None
 
-            self._integrate_locked(self._pose, self._scan)
+            self._integrate_locked(pose, self._scan)
             self._last_update_monotonic = float(monotonic_now)
             self._sequence += 1
             return self._snapshot_locked(robot_id, wall_time)

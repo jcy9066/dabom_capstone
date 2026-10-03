@@ -30,6 +30,59 @@ def make_scan(ranges):
     }
 
 
+def test_scan_only_preview_map_exists_before_first_pose():
+    grid = LiveMappingGrid(
+        resolution=0.1,
+        refresh_sec=1.0,
+        max_clear_range_m=2.0,
+        padding_cells=0,
+        sensor_yaw=3.141592653589793,
+    )
+    assert grid.update_scan(make_scan([1.0]))
+
+    payload = grid.maybe_update(
+        robot_id="pi-01",
+        monotonic_now=1.0,
+        wall_time=1.0,
+        force=True,
+    )
+
+    assert payload is not None
+    assert payload["navigation_mode"] == "mapping"
+    assert cell_value(payload, -1.0, 0.0) == 100
+
+
+def test_real_pose_replaces_scan_only_preview_cells():
+    grid = LiveMappingGrid(
+        resolution=0.1,
+        refresh_sec=1.0,
+        max_clear_range_m=2.0,
+        padding_cells=0,
+        sensor_yaw=3.141592653589793,
+    )
+    grid.update_scan(make_scan([1.0]))
+    preview = grid.maybe_update(
+        robot_id="pi-01",
+        monotonic_now=1.0,
+        wall_time=1.0,
+        force=True,
+    )
+    assert cell_value(preview, -1.0, 0.0) == 100
+
+    assert grid.update_pose({"x": 2.0, "y": 0.0, "yaw": 0.0})
+    grid.update_scan(make_scan([1.0]))
+    real = grid.maybe_update(
+        robot_id="pi-01",
+        monotonic_now=2.0,
+        wall_time=2.0,
+        force=True,
+    )
+
+    assert real is not None
+    assert cell_value(real, 1.0, 0.0) == 100
+    assert cell_value(real, -1.0, 0.0) is None
+
+
 def test_live_grid_builds_free_and_occupied_cells():
     grid = LiveMappingGrid(
         resolution=0.1,

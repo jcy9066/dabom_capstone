@@ -59,7 +59,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
             template,
         )
 
@@ -76,7 +76,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
             template,
         )
 
@@ -114,7 +114,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
             template,
         )
 
@@ -136,7 +136,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
         )
         self.assertIn("const liveScan = state.scan || null;", viewer)
         self.assertIn("function applyTfPose(pose)", viewer)
-        self.assertIn("applyTfPose(livePose);", viewer)
+        self.assertIn("const tfVisualizationPose = validPose(livePose)", viewer)
+        self.assertIn("mappingMode ? MAPPING_PREVIEW_POSE : null", viewer)
+        self.assertIn("applyTfPose(tfVisualizationPose);", viewer)
+        self.assertIn("const MAPPING_PREVIEW_GRID_SIZE_M = 10;", viewer)
+        self.assertIn("rebuildGrid(null);", viewer)
         self.assertIn("const liveMap = state.map || null;", viewer)
         self.assertIn("const livePose = state.pose || null;", viewer)
         self.assertIn("function rebuildMap(map, revision)", viewer)
@@ -176,7 +180,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
             template,
         )
 
