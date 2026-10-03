@@ -20,6 +20,9 @@ def process_topdown_many(analyzer, frame, objs, total_frames, pose_scope="mmpose
     for obj, pose_result in zip(valid_objs, pose_results):
         pred = getattr(pose_result, "pred_instances", None)
         if pred is None or len(pred.keypoints) == 0:
+            unavailable = getattr(analyzer, "observation_unavailable", None)
+            issue = unavailable(obj["id"], "pose keypoints unavailable") if callable(unavailable) else None
+            results[obj["id"]] = (None, issue)
             continue
         kpts = pred.keypoints[0]
         scores = pred.keypoint_scores[0]
@@ -33,7 +36,9 @@ def process_keypoint_many(analyzer, frame, objs, total_frames):
         kpts = obj.get("keypoints")
         scores = obj.get("keypoints_scores")
         if kpts is None or len(kpts) == 0:
-            results[obj["id"]] = (None, None)
+            unavailable = getattr(analyzer, "observation_unavailable", None)
+            issue = unavailable(obj["id"], "YOLO pose keypoints unavailable") if callable(unavailable) else None
+            results[obj["id"]] = (None, issue)
             continue
         results[obj["id"]] = _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames)
     return results
@@ -53,7 +58,11 @@ def _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames):
 
     pad_kpts = cur_kpts + [cur_kpts[-1]] * pad_len if pad_len > 0 else cur_kpts
     pad_scores = cur_scores + [cur_scores[-1]] * pad_len if pad_len > 0 else cur_scores
-    action_res = analyzer._classify(pad_kpts, pad_scores, frame.shape)
+    object_classifier = getattr(analyzer, "_classify_with_object", None)
+    if callable(object_classifier):
+        action_res = object_classifier(obj_id, pad_kpts, pad_scores, frame.shape)
+    else:
+        action_res = analyzer._classify(pad_kpts, pad_scores, frame.shape)
 
     if len(analyzer.action_buffer[obj_id]["kpts"]) >= total_frames:
         analyzer.action_buffer[obj_id]["kpts"].pop(0)

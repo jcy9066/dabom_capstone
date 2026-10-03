@@ -36,6 +36,7 @@ if str(PERCEPTION_DIR) not in sys.path:
 
 from perception.device import resolve_cuda_device
 from perception.frame_processor import FrameProcessor
+from perception.models.action_policy import is_observation_issue
 from perception.pipeline_factory import PIPELINE_OPTIONS, create_pipeline
 from perception.utils.event_taxonomy import vision_alert_type, vision_event_type
 from perception.utils.telegram_notifier import TelegramNotifier
@@ -1318,10 +1319,15 @@ def build_preview_frame(frame, infer, now=None):
 
 def collect_action_results(frame, tracked_boxes):
     persons = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
+    analyzer = frame_processor.action_analyzer
+
+    expire_tracking_state = getattr(analyzer, "expire_tracking_state", None)
+    if callable(expire_tracking_state):
+        expire_tracking_state()
+
     if not persons:
         return {}
 
-    analyzer = frame_processor.action_analyzer
     if hasattr(analyzer, "process_many"):
         return analyzer.process_many(frame, persons)
 
@@ -1371,9 +1377,16 @@ def process_frame_for_dashboard(frame):
         for oid, result in action_results.items()
         if result and result[0] is not None
     }
-    violence_results = frame_processor.violence_heuristic.update(
-        tracked_boxes,
-        skeletons_by_id,
+    restrict_to_target_actions = bool(
+        getattr(frame_processor.action_analyzer, "restrict_to_target_actions", False)
+    )
+    violence_results = (
+        {}
+        if restrict_to_target_actions
+        else frame_processor.violence_heuristic.update(
+            tracked_boxes,
+            skeletons_by_id,
+        )
     )
     action_ms = (time.time() - action_started) * 1000
 
@@ -1382,6 +1395,18 @@ def process_frame_for_dashboard(frame):
     detections = []
     danger = False
     height, width = display_frame.shape[:2]
+
+    active_track_ids = {obj["id"] for obj in tracked_boxes}
+    cleanup_now = time.time()
+    for buffered_id, buffered_action in list(
+        frame_processor.action_display_buffer.items()
+    ):
+        if (
+            buffered_id not in active_track_ids
+            and cleanup_now - buffered_action.get("updated_at", 0.0)
+            > ACTION_DISPLAY_TTL_SEC
+        ):
+            frame_processor.action_display_buffer.pop(buffered_id, None)
 
     for obj in tracked_boxes:
         oid = obj["id"]
@@ -1404,6 +1429,8 @@ def process_frame_for_dashboard(frame):
             "skeleton": None,
             "confidence_level": None,
             "visual_state": "normal",
+            "inference_status": None,
+            "inference_error": None,
         }
 
         if cls_id == 0:
@@ -1412,12 +1439,32 @@ def process_frame_for_dashboard(frame):
             detection["skeleton"] = skeleton_to_list(skeleton)
 
             now = time.time()
-            heuristic_action = violence_results.get(oid)
-            selected_action = select_action_result(action, heuristic_action)
+            observation_issue = is_observation_issue(action)
+            if observation_issue:
+                detection["inference_status"] = action.get("observation_status")
+                detection["inference_error"] = action.get("error")
+            else:
+                detection["inference_status"] = "ok"
+
+            heuristic_action = None if restrict_to_target_actions else violence_results.get(oid)
+            selected_action = (
+                None
+                if observation_issue
+                else select_action_result(action, heuristic_action)
+            )
             if selected_action:
                 selected_action = dict(selected_action)
                 selected_action["updated_at"] = now
                 frame_processor.action_display_buffer[oid] = selected_action
+            elif (
+                not observation_issue
+                and getattr(
+                    frame_processor.action_analyzer,
+                    "manages_action_hysteresis",
+                    False,
+                )
+            ):
+                frame_processor.action_display_buffer.pop(oid, None)
 
             current_action = frame_processor.action_display_buffer.get(oid)
             if (
@@ -1443,21 +1490,22 @@ def process_frame_for_dashboard(frame):
                         f"!!! {current_action['label']} !!! "
                         f"{current_action['score'] * 100:.0f}%"
                     )
-                    event_type = vision_event_type(current_action["label"])
-                    if event_type:
-                        submit_automatic_event(
-                            "VISION_AI",
-                            event_type,
-                            confidence=detection["score"],
-                            message=f"위험 행동 감지: {current_action['label']}",
-                            frame=frame,
-                        )
-                    else:
-                        automatic_notifier.send_event_alert_async(
-                            f"위험 행동 감지: {current_action['label']}",
-                            robot_id=SERVER_ROBOT_ID,
-                            event_type=vision_alert_type(current_action["label"]),
-                        )
+                    if not observation_issue:
+                        event_type = vision_event_type(current_action["label"])
+                        if event_type:
+                            submit_automatic_event(
+                                "VISION_AI",
+                                event_type,
+                                confidence=detection["score"],
+                                message=f"위험 행동 감지: {current_action['label']}",
+                                frame=frame,
+                            )
+                        else:
+                            automatic_notifier.send_event_alert_async(
+                                f"위험 행동 감지: {current_action['label']}",
+                                robot_id=SERVER_ROBOT_ID,
+                                event_type=vision_alert_type(current_action["label"]),
+                            )
                 else:
                     color = (0, 165, 255)
                     detection["visual_state"] = "suspicious"
@@ -1465,7 +1513,11 @@ def process_frame_for_dashboard(frame):
                         f"[{current_action['label']}] "
                         f"{current_action['score'] * 100:.0f}%"
                     )
-            elif TRIGGER_SUSPICIOUS_VISUAL_ENABLED and state == 1:
+            elif (
+                not restrict_to_target_actions
+                and TRIGGER_SUSPICIOUS_VISUAL_ENABLED
+                and state == 1
+            ):
                 color = (0, 165, 255)
                 detection["confidence_level"] = "trigger_suspicious"
                 detection["visual_state"] = "suspicious"
@@ -1584,6 +1636,105 @@ def update_latest_result(result, frame_seq=None, input_captured_at=None, elapsed
         stream_stats["frames_inferred"] = stream_stats.get("frames_inferred", 0) + 1
 
 
+def process_stream_frame_if_current(frame, stream_id):
+    """Process only if the frame still belongs to the active stream generation."""
+    with processing_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return None
+
+        if frame_processor is None:
+            return None
+
+        return process_frame_for_dashboard(frame)
+
+
+def activate_stream_generation(robot_id, infer):
+    """Atomically reset tracking state and publish a new stream generation."""
+    global active_stream_id
+
+    with processing_lock:
+        # Invalidate the previous generation before clearing tracking state.
+        # An inference that finished processing just before reconnect will now
+        # fail its post-processing generation check immediately.
+        with state_lock:
+            active_stream_id += 1
+            stream_id = active_stream_id
+            now = time.time()
+
+        processor = frame_processor
+        if processor is not None:
+            reset_tracking_state = getattr(
+                processor.action_analyzer,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_tracking_state):
+                reset_tracking_state()
+            processor.action_display_buffer.clear()
+            processor.violence_heuristic.reset()
+
+        with inference_condition:
+            inference_slot.update(
+                {
+                    "frame": None,
+                    "robot_id": None,
+                    "frame_seq": None,
+                    "captured_at": None,
+                    "stream_id": None,
+                }
+            )
+
+        with state_lock:
+            frame_stats.update({"last_time": now, "count": 0, "fps": 0})
+            decode_stats.update({"last_time": now, "count": 0, "fps": 0})
+            publish_stats.update(
+                {
+                    "last_time": now,
+                    "count": 0,
+                    "fps": 0,
+                    "last_publish_at": None,
+                }
+            )
+            inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
+            inference_stats.update(
+                {
+                    "requested": 0,
+                    "completed": 0,
+                    "dropped": 0,
+                    "last_ms": None,
+                    "last_result_at": None,
+                    "last_input_seq": None,
+                    "last_started_at": None,
+                    "device": DEVICE,
+                }
+            )
+            stream_stats.update(
+                {
+                    "connected": True,
+                    "robot_id": robot_id,
+                    "connected_at": now,
+                    "disconnected_at": None,
+                    "bytes_received": 0,
+                    "frames_received": 0,
+                    "last_byte_at": None,
+                    "frames_decoded": 0,
+                    "frames_inferred": 0,
+                    "last_frame_at": None,
+                    "last_error": None,
+                    "ffmpeg_returncode": None,
+                    "ffmpeg_stderr_tail": [],
+                    "infer": infer,
+                    "inference_available": frame_processor is not None,
+                    "stream_id": stream_id,
+                }
+            )
+
+    return stream_id
+
+
 def inference_worker():
     while True:
         min_interval = 1.0 / INFERENCE_MAX_FPS
@@ -1637,13 +1788,12 @@ def inference_worker():
             inference_stats["dropped"] += 1
             continue
 
-        if frame_processor is None:
-            continue
-
         started = time.time()
         try:
-            with processing_lock:
-                processed = process_frame_for_dashboard(frame)
+            processed = process_stream_frame_if_current(frame, stream_id)
+            if processed is None:
+                continue
+
             if stream_id is not None:
                 with state_lock:
                     is_stale_stream = stream_id != active_stream_id
@@ -3554,7 +3704,6 @@ def ffmpeg_stderr_loop(proc):
 
 @app.api_route("/stream/h264", methods=["POST", "PUT"])
 async def receive_h264_stream(request: Request):
-    global active_stream_id
 
     ensure_runtime_model_config(reason="stream_connect")
     robot_id = request.query_params.get("robot_id", SERVER_ROBOT_ID)
@@ -3605,63 +3754,7 @@ async def receive_h264_stream(request: Request):
             status_code=500,
         )
 
-    with inference_condition:
-        inference_slot.update(
-            {
-                "frame": None,
-                "robot_id": None,
-                "frame_seq": None,
-                "captured_at": None,
-                "stream_id": None,
-            }
-        )
-    with state_lock:
-        active_stream_id += 1
-        stream_id = active_stream_id
-        now = time.time()
-        frame_stats.update({"last_time": now, "count": 0, "fps": 0})
-        decode_stats.update({"last_time": now, "count": 0, "fps": 0})
-        publish_stats.update(
-            {
-                "last_time": now,
-                "count": 0,
-                "fps": 0,
-                "last_publish_at": None,
-            }
-        )
-        inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
-        inference_stats.update(
-            {
-                "requested": 0,
-                "completed": 0,
-                "dropped": 0,
-                "last_ms": None,
-                "last_result_at": None,
-                "last_input_seq": None,
-                "last_started_at": None,
-                "device": DEVICE,
-            }
-        )
-        stream_stats.update(
-            {
-                "connected": True,
-                "robot_id": robot_id,
-                "connected_at": now,
-                "disconnected_at": None,
-                "bytes_received": 0,
-                "frames_received": 0,
-                "last_byte_at": None,
-                "frames_decoded": 0,
-                "frames_inferred": 0,
-                "last_frame_at": None,
-                "last_error": None,
-                "ffmpeg_returncode": None,
-                "ffmpeg_stderr_tail": [],
-                "infer": infer,
-                "inference_available": frame_processor is not None,
-                "stream_id": stream_id,
-            }
-        )
+    stream_id = activate_stream_generation(robot_id, infer)
     reader = threading.Thread(
         target=h264_decode_loop,
         args=(proc, robot_id, infer_override, stream_id),

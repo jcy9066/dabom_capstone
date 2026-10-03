@@ -8,6 +8,14 @@ python-dotenv==1.2.2
 numpy==1.26.4
 Jinja2==3.1.6
 
+# GPU perception runtime (pipeline 8)
+torch>=2.7.0,<3.0.0
+torchvision>=0.22.0,<1.0.0
+ultralytics>=8.4.0,<9.0.0
+mmengine==0.10.7
+mmcv>=2.0.0,<2.2.0
+mmaction2==1.2.0
+
 PyMySQL==1.1.2
 bcrypt==4.3.0
 itsdangerous==2.2.0

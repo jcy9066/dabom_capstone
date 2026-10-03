@@ -98,13 +98,24 @@ def create_pipeline(choice, device=None):
             "action_analyzer": ActionRecognizer(device=device),
         }
     if choice == "8":
+        from .model_assets import ensure_pipeline_assets
         from .models.detector_yolo import YOLOPoseDetector
         from .models.action_yolopose_stgcnpp import ActionRecognizer
 
+        assets = ensure_pipeline_assets(choice)
         return {
             "name": PIPELINE_OPTIONS[choice],
-            "detector": YOLOPoseDetector(weight="weights/yolo26m-pose.pt", tracker="botsort", device=device),
-            "action_analyzer": ActionRecognizer(device=device),
+            "detector": YOLOPoseDetector(
+                weight=str(assets["yolo_pose"]),
+                tracker="botsort",
+                device=device,
+            ),
+            "action_analyzer": ActionRecognizer(
+                device=device,
+                recall_mode=True,
+                action_config=str(assets["action_config"]),
+                action_checkpoint=str(assets["action_checkpoint"]),
+            ),
         }
     if choice == "9":
         from .models.detector_yolo import YOLOPoseDetector
