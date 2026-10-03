@@ -91,11 +91,12 @@ class FrameProcessor:
                         danger = True
                         color = (0, 0, 255)
                         label = f"!!! {current_action['label']} !!! {current_action['score'] * 100:.0f}%"
-                        self.notifier.send_event_alert_async(
-                            f"위험 행동 감지: {current_action['label']}",
-                            robot_id="local-video",
-                            event_type=vision_alert_type(current_action["label"]),
-                        )
+                        if not observation_issue:
+                            self.notifier.send_event_alert_async(
+                                f"위험 행동 감지: {current_action['label']}",
+                                robot_id="local-video",
+                                event_type=vision_alert_type(current_action["label"]),
+                            )
                     else:
                         label = f"[{current_action['label']}] {current_action['score'] * 100:.0f}%"
             else:
@@ -123,6 +124,16 @@ class FrameProcessor:
                 )
 
             detections.append(detection)
+
+        active_track_ids = {obj["id"] for obj in tracked_boxes}
+        cleanup_now = time.monotonic()
+        for buffered_id, updated_at in list(self.action_display_updated_at.items()):
+            if (
+                buffered_id not in active_track_ids
+                and cleanup_now - updated_at > self.action_display_ttl_sec
+            ):
+                self.action_display_buffer.pop(buffered_id, None)
+                self.action_display_updated_at.pop(buffered_id, None)
 
         return {
             "frame": display_frame,

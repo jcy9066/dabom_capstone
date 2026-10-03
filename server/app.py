@@ -1396,6 +1396,18 @@ def process_frame_for_dashboard(frame):
     danger = False
     height, width = display_frame.shape[:2]
 
+    active_track_ids = {obj["id"] for obj in tracked_boxes}
+    cleanup_now = time.time()
+    for buffered_id, buffered_action in list(
+        frame_processor.action_display_buffer.items()
+    ):
+        if (
+            buffered_id not in active_track_ids
+            and cleanup_now - buffered_action.get("updated_at", 0.0)
+            > ACTION_DISPLAY_TTL_SEC
+        ):
+            frame_processor.action_display_buffer.pop(buffered_id, None)
+
     for obj in tracked_boxes:
         oid = obj["id"]
         cls_id = obj.get("cls", 0)
@@ -1478,21 +1490,22 @@ def process_frame_for_dashboard(frame):
                         f"!!! {current_action['label']} !!! "
                         f"{current_action['score'] * 100:.0f}%"
                     )
-                    event_type = vision_event_type(current_action["label"])
-                    if event_type:
-                        submit_automatic_event(
-                            "VISION_AI",
-                            event_type,
-                            confidence=detection["score"],
-                            message=f"위험 행동 감지: {current_action['label']}",
-                            frame=frame,
-                        )
-                    else:
-                        automatic_notifier.send_event_alert_async(
-                            f"위험 행동 감지: {current_action['label']}",
-                            robot_id=SERVER_ROBOT_ID,
-                            event_type=vision_alert_type(current_action["label"]),
-                        )
+                    if not observation_issue:
+                        event_type = vision_event_type(current_action["label"])
+                        if event_type:
+                            submit_automatic_event(
+                                "VISION_AI",
+                                event_type,
+                                confidence=detection["score"],
+                                message=f"위험 행동 감지: {current_action['label']}",
+                                frame=frame,
+                            )
+                        else:
+                            automatic_notifier.send_event_alert_async(
+                                f"위험 행동 감지: {current_action['label']}",
+                                robot_id=SERVER_ROBOT_ID,
+                                event_type=vision_alert_type(current_action["label"]),
+                            )
                 else:
                     color = (0, 165, 255)
                     detection["visual_state"] = "suspicious"
