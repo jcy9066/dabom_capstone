@@ -9,6 +9,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.control = (ROOT / "frontend/services/static/navigation_control.js").read_text(encoding="utf-8")
+        cls.viewer = (ROOT / "frontend/services/static/lidar_3d_viewer.js").read_text(encoding="utf-8")
         cls.map_control = (ROOT / "frontend/components/navigation/saved_map_modal.js").read_text(encoding="utf-8")
         cls.map_compatibility = (ROOT / "frontend/services/static/navigation_map_control.js").read_text(encoding="utf-8")
         cls.map_control_css = (ROOT / "frontend/services/static/navigation_map_control.css").read_text(encoding="utf-8")
