@@ -324,6 +324,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
         self.assertIn("...(restart ? { restart: true } : {})", self.control)
         self.assertIn("setMappingMode(options)", self.control)
+        self.assertIn("source: 'current'", self.control)
+        self.assertIn("현재 Mapping 결과로 Driving 모드 전환 중...", self.control)
+        self.assertIn("view.map", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)
@@ -442,6 +445,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertLess(stop_delivery, mode_command)
         self.assertIn("MANUAL 전환을 중단했습니다", request)
         self.assertIn("state.drivePending", request)
+
+
+    def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
+        viewer = self.viewer
+        self.assertIn("positions.push(x, y, 0.16)", viewer)
+        self.assertIn("depthTest: false", viewer)
+        self.assertIn("line.renderOrder = 100", viewer)
+        self.assertIn("points.renderOrder = 101", viewer)
+        self.assertIn("TRAJECTORY_FILTER_ALPHA = 0.45", viewer)
+        self.assertIn("TRAJECTORY_FALLBACK_DISTANCE_M = 0.06", viewer)
+        self.assertIn("TRAJECTORY_MAX_JUMP_M = 0.75", viewer)
+        self.assertIn("resetTrajectory(pose, true)", viewer)
 
 
 if __name__ == "__main__":

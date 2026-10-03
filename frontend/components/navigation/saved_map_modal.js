@@ -342,7 +342,7 @@
     }
 
     function captureViewState(container = manager?.body) {
-        const value = id => container?.querySelector?.(`#${id}`)?.value ?? '0';
+        const value = id => container?.querySelector?.(`#${id}`)?.value ?? '';
         return {
             selectedName: selectedMapName(container),
             pose: {
@@ -432,9 +432,16 @@
         }
         if (!global.confirm(`${mapName}${labels.confirmSuffix}`)) return;
 
-        const x = Number(container.querySelector('#saved-map-pose-x').value);
-        const y = Number(container.querySelector('#saved-map-pose-y').value);
-        const yawDegrees = Number(container.querySelector('#saved-map-pose-yaw').value);
+        const xText = container.querySelector('#saved-map-pose-x').value.trim();
+        const yText = container.querySelector('#saved-map-pose-y').value.trim();
+        const yawText = container.querySelector('#saved-map-pose-yaw').value.trim();
+        if (!xText || !yText || !yawText) {
+            showMessage(progress, '저장 지도를 불러올 때는 실제 Initial Pose를 입력해야 합니다.', true);
+            return;
+        }
+        const x = Number(xText);
+        const y = Number(yText);
+        const yawDegrees = Number(yawText);
         if (![x, y, yawDegrees].every(Number.isFinite)) {
             showMessage(progress, '\ucd08\uae30 \uc704\uce58\uc5d0\ub294 \uc720\ud55c \uc22b\uc790\ub9cc \uc785\ub825\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.', true);
             return;
@@ -571,7 +578,7 @@
         container.append(list);
 
         const pose = create('div', 'saved-map-pose');
-        const poseValues = snapshot?.pose || { x: '0', y: '0', yaw: '0' };
+        const poseValues = snapshot?.pose || { x: '', y: '', yaw: '' };
         for (const [id, label, value] of [
             ['saved-map-pose-x', labels.positionX, poseValues.x],
             ['saved-map-pose-y', labels.positionY, poseValues.y],

@@ -827,6 +827,12 @@ def current_navigation_map_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def current_navigation_pose_snapshot():
+    with state_lock:
+        current = navigation_state.get("pose")
+        return dict(current) if isinstance(current, dict) else None
+
+
 def clear_navigation_visualization_state():
     live_mapping_grid.reset()
     with state_lock:
@@ -863,7 +869,12 @@ navigation_control_api = NavigationControlApi(
     csrf_failure=csrf_failure,
     robot_id=SERVER_ROBOT_ID,
     get_live_map=current_navigation_map_snapshot,
-    save_map=lambda payload, name: save_navigation_map_files(payload, name),
+    get_live_pose=current_navigation_pose_snapshot,
+    save_map=lambda payload, name: save_navigation_map_files(
+        payload,
+        name,
+        current_navigation_map_location_metadata(),
+    ),
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,

@@ -100,13 +100,24 @@ class NavigationMapService:
         selected_map: SavedNavigationMap,
         payload: Any,
     ) -> dict[str, float]:
-        value = payload or {}
+        if payload is None:
+            raise NavigationMapError(
+                "INITIAL_POSE_REQUIRED",
+                "Initial pose is required for localization.",
+            )
+        value = payload
         if not isinstance(value, dict):
             raise NavigationMapError("INVALID_INITIAL_POSE", "Initial pose must be an object.")
 
-        x = _finite_number(value.get("x", 0.0), "initial_pose.x")
-        y = _finite_number(value.get("y", 0.0), "initial_pose.y")
-        yaw_degrees = _finite_number(value.get("yaw_degrees", 0.0), "initial_pose.yaw_degrees")
+        if any(field not in value for field in ("x", "y", "yaw_degrees")):
+            raise NavigationMapError(
+                "INITIAL_POSE_REQUIRED",
+                "Initial pose x, y, and yaw_degrees are required.",
+            )
+
+        x = _finite_number(value.get("x"), "initial_pose.x")
+        y = _finite_number(value.get("y"), "initial_pose.y")
+        yaw_degrees = _finite_number(value.get("yaw_degrees"), "initial_pose.yaw_degrees")
         if not -180.0 <= yaw_degrees <= 180.0:
             raise NavigationMapError("INVALID_INITIAL_POSE", "Initial heading must be between -180 and 180 degrees.")
 
