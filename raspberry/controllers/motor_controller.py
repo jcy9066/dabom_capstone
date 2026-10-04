@@ -34,7 +34,7 @@ ALLOWED_DIRECTIONS = frozenset(
 )
 
 _REASON_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
-MIN_AUTO_DRIVE_PWM = 0.50
+MIN_AUTO_DRIVE_PWM = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0)
 
 
 class MotorControllerError(RuntimeError):

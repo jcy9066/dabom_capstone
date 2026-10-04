@@ -64,7 +64,7 @@ def generate_launch_description():
     max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
     # Physical motor breakaway floor. Apply only after a non-zero wheel command;
     # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
-    min_auto_drive_pwm = 0.50
+    min_auto_drive_pwm = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0)
     pkg_share = FindPackageShare(
         "patrol_navigation"
     )
