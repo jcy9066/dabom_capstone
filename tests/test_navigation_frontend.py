@@ -60,7 +60,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -77,7 +77,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -115,7 +115,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -181,7 +181,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261003-live-mapping-v29',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 

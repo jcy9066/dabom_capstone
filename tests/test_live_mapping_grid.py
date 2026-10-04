@@ -1,3 +1,5 @@
+import math
+
 from server.live_mapping_grid import LiveMappingGrid
 
 
@@ -12,8 +14,10 @@ def decode_rle(payload):
 def cell_value(payload, world_x, world_y):
     resolution = payload["resolution"]
     origin = payload["origin"]
-    x = int((world_x - origin["x"]) // resolution)
-    y = int((world_y - origin["y"]) // resolution)
+    # Floating-point values exactly on a cell boundary such as
+    # 1.0 / 0.1 can become 9.999999..., so apply a tiny epsilon before floor.
+    x = math.floor(((world_x - origin["x"]) / resolution) + 1e-9)
+    y = math.floor(((world_y - origin["y"]) / resolution) + 1e-9)
     if x < 0 or y < 0 or x >= payload["width"] or y >= payload["height"]:
         return None
     return decode_rle(payload)[y * payload["width"] + x]

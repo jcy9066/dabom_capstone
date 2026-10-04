@@ -474,7 +474,8 @@ def check_env_example(root: Path, findings: list[Finding]) -> None:
         entries.append(name)
         # Documented non-secret defaults; credentials must remain empty.
         defaults = {
-            "MAX_WHEEL_MPS": "0.17",
+            "MAX_WHEEL_MPS": "0.212",
+            "MIN_AUTO_DRIVE_PWM": "0.30",
             "LIDAR_YAW": "3.141592653589793",
             "LIDAR_SCAN_STALE_SEC": "3.0",
         }

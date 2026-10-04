@@ -231,9 +231,12 @@ assert.deepStrictEqual(diagonal.stops, ['key_release']);
         self.assertIn("현재 Navigation 상태와 요청이 충돌했습니다.", self.navigation)
         self.assertIn("Pi가 연결되지 않아 명령을 전달하지 못했습니다.", self.script)
 
-    def test_goal_uses_red_flag_and_alert_clear_has_a_cutoff(self):
-        self.assertIn("ctx.fillText('🚩'", self.navigation)
-        self.assertNotIn("ctx.strokeStyle = '#a855f7';\n        ctx.fillStyle = '#a855f7';", self.navigation)
+    def test_goal_uses_3d_marker_and_alert_clear_has_a_cutoff(self):
+        viewer = (
+            ROOT / "frontend/services/static/lidar_3d_viewer.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("createGoalMarker", viewer)
+        self.assertIn("dabom:navigation-goal-draft", self.navigation)
         self.assertIn("dabom:alerts-cleared", self.script)
         self.assertIn("alertClearCutoffMs", self.state)
         self.assertIn("parsed.getTime() > alertClearCutoffMs", self.state)

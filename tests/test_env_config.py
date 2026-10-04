@@ -77,9 +77,10 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     keys = [key for key, _ in entries]
 
     assert len(keys) == len(set(keys))
-    assert dict(entries)["MAX_WHEEL_MPS"] == "0.17"
+    assert dict(entries)["MAX_WHEEL_MPS"] == "0.212"
     defaults = {
-        "MAX_WHEEL_MPS": "0.17",
+        "MAX_WHEEL_MPS": "0.212",
+        "MIN_AUTO_DRIVE_PWM": "0.30",
         "LIDAR_YAW": "3.141592653589793",
         "LIDAR_SCAN_STALE_SEC": "3.0",
     }
@@ -156,11 +157,11 @@ def test_env_validator_accepts_only_provisional_speed_default(tmp_path):
         "required_env=(MAX_WHEEL_MPS ROBOT_CONTROL_TOKEN)\n"
     )
     example = tmp_path / ".env.example"
-    example.write_text("MAX_WHEEL_MPS=0.17\nROBOT_CONTROL_TOKEN=\n")
+    example.write_text("MAX_WHEEL_MPS=0.212\nROBOT_CONTROL_TOKEN=\n")
     findings = []
     validator["check_env_example"](tmp_path, findings)
     assert findings == []
 
-    example.write_text("MAX_WHEEL_MPS=0.17\nROBOT_CONTROL_TOKEN=example-secret\n")
+    example.write_text("MAX_WHEEL_MPS=0.212\nROBOT_CONTROL_TOKEN=example-secret\n")
     validator["check_env_example"](tmp_path, findings)
     assert any("ROBOT_CONTROL_TOKEN" in finding.message for finding in findings)
