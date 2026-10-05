@@ -63,6 +63,19 @@
 #define BEEP_MIN_DURATION_MS 50U
 #define BEEP_MAX_DURATION_MS 2000U
 #define CURVE_INNER_RATIO 0.35f
+
+/*
+ * MDD10A / motor protection.
+ *
+ * MOTOR_MAX_PWM is a firmware safety ceiling, not a current limiter.
+ * Start conservatively and raise only after current/thermal validation.
+ */
+#define MOTOR_MAX_PWM 0.30f
+#define MOTOR_RAMP_STEP 0.05f
+#define MOTOR_RAMP_INTERVAL_MS 20U
+#define MOTOR_REVERSE_DEADTIME_MS 120U
+#define MOTOR_ZERO_EPSILON 0.0001f
+
 #define RX_BUFFER_SIZE 128U
 
 /*
@@ -78,6 +91,19 @@ typedef struct {
     uint slice;
     uint channel;
     bool forward_dir_level;
+
+    /*
+     * current_speed is the PWM magnitude/direction actually being applied.
+     * target_speed is the latest requested signed PWM.
+     */
+    float current_speed;
+    float target_speed;
+
+    bool direction_forward;
+    bool reverse_waiting;
+
+    uint64_t reverse_deadline_ms;
+    uint64_t last_ramp_ms;
 } motor_channel_t;
 
 
@@ -488,22 +514,63 @@ static void motor_channel_init(
         motor->channel,
         0
     );
+
+    motor->current_speed = 0.0f;
+    motor->target_speed = 0.0f;
+
+    motor->direction_forward = true;
+    motor->reverse_waiting = false;
+
+    motor->reverse_deadline_ms = 0;
+    motor->last_ramp_ms = 0;
 }
 
 
-static void motor_set_signed_speed(
-    motor_channel_t *motor,
-    float signed_speed
+static float abs_float(float value) {
+    return value >= 0.0f ? value : -value;
+}
+
+
+static int speed_sign(float value) {
+    if (value > MOTOR_ZERO_EPSILON) {
+        return 1;
+    }
+
+    if (value < -MOTOR_ZERO_EPSILON) {
+        return -1;
+    }
+
+    return 0;
+}
+
+
+static float ramp_toward(
+    float current,
+    float target
 ) {
-    signed_speed = clamp_float(
-        signed_speed,
-        -1.0f,
-        1.0f
-    );
+    if (current < target) {
+        current += MOTOR_RAMP_STEP;
 
-    const bool forward =
-        signed_speed >= 0.0f;
+        if (current > target) {
+            current = target;
+        }
 
+    } else if (current > target) {
+        current -= MOTOR_RAMP_STEP;
+
+        if (current < target) {
+            current = target;
+        }
+    }
+
+    return current;
+}
+
+
+static void motor_write_direction(
+    motor_channel_t *motor,
+    bool forward
+) {
     gpio_put(
         motor->dir_pin,
         forward
@@ -511,11 +578,19 @@ static void motor_set_signed_speed(
             : !motor->forward_dir_level
     );
 
-    float magnitude = signed_speed;
+    motor->direction_forward = forward;
+}
 
-    if (magnitude < 0.0f) {
-        magnitude = -magnitude;
-    }
+
+static void motor_write_pwm(
+    motor_channel_t *motor,
+    float magnitude
+) {
+    magnitude = clamp_float(
+        magnitude,
+        0.0f,
+        MOTOR_MAX_PWM
+    );
 
     const uint16_t level = (uint16_t)(
         magnitude * (float)PWM_WRAP
@@ -529,17 +604,234 @@ static void motor_set_signed_speed(
 }
 
 
-static void stop_motors(void) {
-    pwm_set_chan_level(
-        left_motor.slice,
-        left_motor.channel,
-        0
+static void motor_force_stop(
+    motor_channel_t *motor
+) {
+    motor->target_speed = 0.0f;
+    motor->current_speed = 0.0f;
+
+    motor->reverse_waiting = false;
+    motor->reverse_deadline_ms = 0;
+
+    motor_write_pwm(
+        motor,
+        0.0f
+    );
+}
+
+
+static void motor_request_signed_speed(
+    motor_channel_t *motor,
+    float signed_speed
+) {
+    /*
+     * Even if the host requests +/-1.0,
+     * the Pico firmware enforces its own safety ceiling.
+     */
+    signed_speed = clamp_float(
+        signed_speed,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
     );
 
-    pwm_set_chan_level(
-        right_motor.slice,
-        right_motor.channel,
-        0
+    motor->target_speed = signed_speed;
+}
+
+
+static void motor_tick(
+    motor_channel_t *motor,
+    uint64_t now_ms
+) {
+    if (
+        now_ms - motor->last_ramp_ms <
+        MOTOR_RAMP_INTERVAL_MS
+    ) {
+        return;
+    }
+
+    motor->last_ramp_ms = now_ms;
+
+    const float target = motor->target_speed;
+    const float current = motor->current_speed;
+
+    const int target_sign = speed_sign(target);
+    const int current_sign = speed_sign(current);
+
+    /*
+     * Reverse dead-time:
+     * PWM must stay at zero until the deadline.
+     */
+    if (motor->reverse_waiting) {
+        motor_write_pwm(
+            motor,
+            0.0f
+        );
+
+        motor->current_speed = 0.0f;
+
+        if (now_ms < motor->reverse_deadline_ms) {
+            return;
+        }
+
+        /*
+         * The requested direction may have changed
+         * while we were waiting. Use the latest target.
+         */
+        const int latest_target_sign =
+            speed_sign(
+                motor->target_speed
+            );
+
+        if (latest_target_sign != 0) {
+            motor_write_direction(
+                motor,
+                latest_target_sign > 0
+            );
+        }
+
+        motor->reverse_waiting = false;
+        return;
+    }
+
+    /*
+     * Active forward/reverse transition:
+     *
+     * Keep the old DIR level and ramp PWM all the way
+     * to zero before allowing the direction pin to change.
+     */
+    if (
+        current_sign != 0 &&
+        target_sign != 0 &&
+        current_sign != target_sign
+    ) {
+        float magnitude =
+            abs_float(current);
+
+        magnitude = ramp_toward(
+            magnitude,
+            0.0f
+        );
+
+        motor_write_pwm(
+            motor,
+            magnitude
+        );
+
+        if (
+            magnitude <=
+            MOTOR_ZERO_EPSILON
+        ) {
+            motor->current_speed = 0.0f;
+
+            motor_write_pwm(
+                motor,
+                0.0f
+            );
+
+            motor->reverse_waiting = true;
+
+            motor->reverse_deadline_ms =
+                now_ms +
+                MOTOR_REVERSE_DEADTIME_MS;
+
+        } else {
+            motor->current_speed =
+                current_sign > 0
+                    ? magnitude
+                    : -magnitude;
+        }
+
+        return;
+    }
+
+    /*
+     * Starting from zero in the opposite direction:
+     * keep PWM at zero, wait, then change DIR.
+     */
+    if (
+        current_sign == 0 &&
+        target_sign != 0
+    ) {
+        const bool desired_forward =
+            target_sign > 0;
+
+        if (
+            motor->direction_forward !=
+            desired_forward
+        ) {
+            motor_write_pwm(
+                motor,
+                0.0f
+            );
+
+            motor->reverse_waiting = true;
+
+            motor->reverse_deadline_ms =
+                now_ms +
+                MOTOR_REVERSE_DEADTIME_MS;
+
+            return;
+        }
+    }
+
+    /*
+     * Normal acceleration/deceleration in the
+     * currently selected direction.
+     */
+    const float current_magnitude =
+        abs_float(current);
+
+    const float target_magnitude =
+        abs_float(target);
+
+    const float next_magnitude =
+        ramp_toward(
+            current_magnitude,
+            target_magnitude
+        );
+
+    if (
+        next_magnitude <=
+        MOTOR_ZERO_EPSILON
+    ) {
+        motor->current_speed = 0.0f;
+
+        motor_write_pwm(
+            motor,
+            0.0f
+        );
+
+        return;
+    }
+
+    const int output_sign =
+        target_sign != 0
+            ? target_sign
+            : current_sign;
+
+    motor->current_speed =
+        output_sign > 0
+            ? next_magnitude
+            : -next_magnitude;
+
+    motor_write_pwm(
+        motor,
+        next_magnitude
+    );
+}
+
+
+static void stop_motors(void) {
+    /*
+     * STOP / failsafe is intentionally immediate.
+     * Do not ramp an emergency stop.
+     */
+    motor_force_stop(
+        &left_motor
+    );
+
+    motor_force_stop(
+        &right_motor
     );
 
     is_moving = false;
@@ -641,12 +933,12 @@ static void move_motors(
         return;
     }
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &left_motor,
         left_speed
     );
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &right_motor,
         right_speed
     );
@@ -668,15 +960,28 @@ static void drive_motors(
     float right_speed
 ) {
     /*
+     * Explicit zero command is an immediate stop.
+     * This also resets any pending reverse transition.
+     */
+    if (
+        abs_float(left_speed) <= MOTOR_ZERO_EPSILON &&
+        abs_float(right_speed) <= MOTOR_ZERO_EPSILON
+    ) {
+        stop_motors();
+        uart_reply("OK,DRIVE");
+        return;
+    }
+
+    /*
      * DRIVE 입력은 -1.0 ~ 1.0 범위의 정규화된 PWM 명령이다.
      * 범위 검증은 command parser에서 먼저 수행한다.
      */
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &left_motor,
         left_speed
     );
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &right_motor,
         right_speed
     );
@@ -741,6 +1046,11 @@ static void handle_command(char *line) {
 
     if (strcmp(command, "PING") == 0) {
         uart_reply("OK,PONG");
+        return;
+    }
+
+    if (strcmp(command, "FW_INFO") == 0) {
+        uart_reply("OK,FW,MOTOR_SAFE_V1");
         return;
     }
 
@@ -1129,6 +1439,21 @@ int main(void) {
             to_ms_since_boot(
                 get_absolute_time()
             );
+
+        /*
+         * Non-blocking motor protection state machines.
+         * UART, encoder, failsafe, LED and speaker handling
+         * continue to run while the PWM ramps.
+         */
+        motor_tick(
+            &left_motor,
+            now_ms
+        );
+
+        motor_tick(
+            &right_motor,
+            now_ms
+        );
 
         speaker_tick(now_ms);
 
