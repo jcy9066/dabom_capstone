@@ -11,7 +11,7 @@ class YOLODetector:
         if not os.path.exists(weight):
             raise FileNotFoundError(f"가중치 파일 없음: {weight}")
         self.model = YOLO(weight)
-        self.tracker = f"{tracker}.yaml"
+        self.tracker = str(tracker) if str(tracker).endswith(".yaml") else f"{tracker}.yaml"
         self.target_classes = [PERSON_CLASS_ID]
         self.device = resolve_cuda_device(device)
 
