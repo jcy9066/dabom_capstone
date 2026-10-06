@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261006-model-pipeline-toggle-v1">
 </head>
 <body>
 
@@ -109,8 +109,14 @@
         <div class="card" id="camera-card">
             <div class="card-header">
                 <h2 class="card-title">
-                    실시간 카메라 (YOLO11x-pose)
+                    실시간 카메라 (YOLO26m-Pose + BotSORT + ST-GCN++)
                 </h2>
+                <div
+                    id="model-pipeline-toggle-mount"
+                    class="dashboard-model-control-mount"
+                    data-dashboard-mount="model-pipeline-toggle"
+                    aria-label="Model pipeline control"
+                ></div>
             </div>
 
             <div class="screen-content" id="video-wrapper">
@@ -671,6 +677,7 @@
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/model_pipeline_toggle.js?v=20261006-model-pipeline-toggle-v1"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20261001-nav-mode-map-reset"></script>
@@ -685,7 +692,7 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30"></script>
-    <script src="static/script.js?v=20261004-rc-max-speed-v2"></script>
+    <script src="static/script.js?v=20261006-model-pipeline-toggle-v1"></script>
     <script src="static/system_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>

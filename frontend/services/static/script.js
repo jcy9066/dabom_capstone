@@ -197,7 +197,81 @@ function showCameraDisconnected(message, hideStream = false) {
     setLiveBadge(false);
 }
 
+function modelPipelineToggleController() {
+    return window.DabomDashboardComponents?.controls?.modelPipelineToggle || null;
+}
+
+function syncModelPipelineToggle(data = null, error = null) {
+    const controller = modelPipelineToggleController();
+    if (!controller) return;
+
+    if (error) {
+        controller.sync({
+            connected: false,
+            pending: false,
+            error,
+        });
+        return;
+    }
+
+    controller.sync({
+        enabled: Boolean(data?.model_active && data?.inference_available),
+        connected: true,
+        pending: false,
+        error: data?.model_error || null,
+    });
+}
+
+async function setModelPipelineEnabled(enabled) {
+    const controller = modelPipelineToggleController();
+    if (!controller || controller.pending) return false;
+
+    controller.sync({ pending: true, error: null });
+    try {
+        const csrfResponse = await fetch('/api/auth/csrf', {
+            credentials: 'same-origin',
+        });
+        const csrfData = await csrfResponse.json();
+        if (!csrfResponse.ok || !csrfData.csrf_token) {
+            throw new Error('보안 토큰을 준비하지 못했습니다.');
+        }
+
+        const response = await fetch('/api/model-pipeline', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfData.csrf_token,
+            },
+            body: JSON.stringify({ enabled: Boolean(enabled) }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.detail || data.error || 'Model pipeline 제어에 실패했습니다.');
+        }
+
+        controller.sync({
+            enabled: Boolean(data.enabled),
+            connected: true,
+            pending: false,
+            error: data.model_error || null,
+        });
+        refreshCameraStatusPolling();
+        return true;
+    } catch (error) {
+        console.error('Model pipeline toggle failed:', error);
+        controller.sync({
+            connected: true,
+            pending: false,
+            error: error.message || 'Model pipeline 제어에 실패했습니다.',
+        });
+        return false;
+    }
+}
+
 function updateCameraStatus(data) {
+    syncModelPipelineToggle(data);
+
     if (data.camera_state === 'live') {
         showCameraLive();
         return;
@@ -220,7 +294,11 @@ function fetchCameraStatus() {
     const request = fetch('/api/stream_status')
         .then(response => response.json())
         .then(updateCameraStatus)
-        .catch(() => showCameraDisconnected('서버와 연결이 끊겼습니다', true));
+        .catch(error => {
+            syncModelPipelineToggle(null, 'GPU 서버 상태를 확인할 수 없습니다.');
+            showCameraDisconnected('서버와 연결이 끊겼습니다', true);
+            console.error('카메라 상태 조회 오류:', error);
+        });
 
     cameraStatusRequest = request.finally(() => {
         cameraStatusRequest = null;
@@ -1759,6 +1837,7 @@ function initializeDashboardComponentFoundation() {
     components.mounts.dashboardModeControls = document.getElementById('dashboard-mode-controls-mount');
     components.mounts.dpadCenterAction = document.getElementById('dpad-center-action-mount');
     components.mounts.currentSituation = document.getElementById('current-situation-mount');
+    components.mounts.modelPipelineToggle = document.getElementById('model-pipeline-toggle-mount');
 
     components.modal?.mount({
         root: '#commonModal',
@@ -1767,6 +1846,10 @@ function initializeDashboardComponentFoundation() {
     });
     components.records?.mount(components.mounts.recordsToolbar);
     components.controls?.mountDriveMode(components.mounts.dashboardModeControls);
+    components.controls?.mountModelPipelineToggle?.(
+        components.mounts.modelPipelineToggle,
+        { request: setModelPipelineEnabled },
+    );
     components.controls?.mountNavigationMode(document.getElementById('navigation-viewer-mode-controls-mount'));
     components.controls?.mountViewerStatus?.({
         messageElement: document.getElementById('lidar-control-message'),

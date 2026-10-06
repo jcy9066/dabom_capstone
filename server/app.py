@@ -1152,6 +1152,53 @@ def ensure_runtime_model_config(force=False, reason="env"):
             env_reload_state["last_error"] = None
 
 
+def set_model_pipeline_enabled(enabled):
+    """Toggle the single in-process model pipeline without touching privacy processing."""
+    enabled = bool(enabled)
+
+    with model_reload_lock:
+        config = read_runtime_model_config()
+        config["inference_enabled"] = enabled
+        config["visualization_enabled"] = enabled
+        config["model_active"] = enabled
+
+        if not enabled:
+            with inference_condition:
+                inference_slot.update(
+                    {
+                        "frame": None,
+                        "robot_id": None,
+                        "frame_seq": None,
+                        "captured_at": None,
+                        "stream_id": None,
+                    }
+                )
+
+        apply_runtime_model_config(config)
+        env_reload_state["signature"] = runtime_model_signature(config)
+        success = reload_model_pipeline(
+            config,
+            reason="dashboard_toggle",
+            initial=False,
+        )
+
+        if enabled and not success:
+            config["inference_enabled"] = False
+            config["visualization_enabled"] = False
+            config["model_active"] = False
+            apply_runtime_model_config(config)
+            env_reload_state["signature"] = runtime_model_signature(config)
+
+        env_reload_state["last_error"] = None if success else model_error
+
+        if not enabled and success:
+            with state_lock:
+                latest_result["detections"] = []
+                latest_result["danger"] = False
+
+        return success
+
+
 def encode_jpeg(frame):
     ok, buffer = cv2.imencode(
         ".jpg",
@@ -4094,6 +4141,51 @@ async def get_stream_status():
         status["gpu_memory_used_mb"] = gpu["gpu_memory_used_mb"]
         status["gpu_error"] = gpu["error"]
         return status
+
+
+@app.post("/api/model-pipeline")
+async def set_model_pipeline_state(request: Request):
+    if not request.session.get("user"):
+        return JSONResponse(
+            {"ok": False, "detail": "Authentication required."},
+            status_code=401,
+        )
+
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "detail": "enabled must be a boolean."},
+            status_code=400,
+        )
+
+    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
+
+    if not success:
+        return JSONResponse(
+            {
+                "ok": False,
+                "enabled": actual_enabled,
+                "model_error": model_error,
+                "detail": model_error or "Model pipeline state change failed.",
+            },
+            status_code=500,
+        )
+
+    return {
+        "ok": True,
+        "enabled": actual_enabled,
+        "pipeline": latest_result.get("pipeline"),
+        "model_error": model_error,
+    }
 
 
 @app.websocket("/ws/sensors/{robot_id}/lidar")
