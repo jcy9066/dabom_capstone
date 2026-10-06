@@ -382,9 +382,14 @@ esac
 if (( model_active == 1 )); then
     [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
     python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
+import decord
+import einops
+import lap
 import mmaction
+import mmaction.models.localizers.drn
 import mmcv
 import mmengine
+import scipy
 import torch
 import ultralytics
 
