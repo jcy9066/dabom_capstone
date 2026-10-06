@@ -17,7 +17,7 @@ try:
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import ComputePathToPose, NavigateToPose
     from nav2_msgs.srv import LoadMap
-    from nav_msgs.msg import OccupancyGrid, Odometry
+    from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
@@ -44,6 +44,7 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     LoadMap = None
     OccupancyGrid = None
     Odometry = None
+    Path = None
     LaserScan = None
     ActionClient = None
     Duration = None
@@ -74,6 +75,8 @@ class _MapObservation:
     resolution: float | None = None
     origin_x: float | None = None
     origin_y: float | None = None
+    origin_yaw: float | None = None
+    data: tuple[int, ...] | None = None
     received_at: float | None = None
 
 
@@ -93,6 +96,8 @@ class NavigationRosControl:
     INITIAL_POSE_TOPIC = "/initialpose"
     MAP_TOPIC = "/map"
     AMCL_POSE_TOPIC = "/amcl_pose"
+    GLOBAL_PATH_TOPIC = "/plan"
+    GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -120,6 +125,7 @@ class NavigationRosControl:
         self._map = _MapObservation()
         self._amcl = _AmclObservation()
         self._last_lifecycle = {"map_server": "unavailable", "amcl": "unavailable"}
+        self._visualization_listener: Callable[[dict[str, Any]], None] | None = None
 
     def start(self) -> bool:
         with self._lock:
@@ -156,6 +162,18 @@ class NavigationRosControl:
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(Odometry, "/odom", self._on_odom, 10)
+            self._node.create_subscription(
+                Path,
+                self.GLOBAL_PATH_TOPIC,
+                self._on_global_path,
+                10,
+            )
+            self._node.create_subscription(
+                OccupancyGrid,
+                self.GLOBAL_COSTMAP_TOPIC,
+                self._on_global_costmap,
+                map_qos,
+            )
             self._compute_path_client = ActionClient(
                 self._node,
                 ComputePathToPose,
@@ -210,6 +228,30 @@ class NavigationRosControl:
                 rclpy.shutdown()
             except Exception:
                 pass
+
+    def set_visualization_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        with self._lock:
+            self._visualization_listener = listener
+
+    def _publish_visualization(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            listener = self._visualization_listener
+        if listener is None:
+            return
+        try:
+            listener(dict(event))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _yaw_from_orientation(orientation: Any) -> float:
+        return math.atan2(
+            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
 
     def load_map_and_reset_pose(
         self,
@@ -638,15 +680,88 @@ class NavigationRosControl:
             self._map.resolution = float(message.info.resolution)
             self._map.origin_x = float(message.info.origin.position.x)
             self._map.origin_y = float(message.info.origin.position.y)
+            self._map.origin_yaw = self._yaw_from_orientation(message.info.origin.orientation)
+            self._map.data = tuple(int(value) for value in message.data)
             self._map.received_at = time.monotonic()
             self._condition.notify_all()
 
+    def _on_global_path(self, message: Any) -> None:
+        path: list[dict[str, float]] = []
+        for item in list(message.poses)[:5000]:
+            x = float(item.pose.position.x)
+            y = float(item.pose.position.y)
+            if math.isfinite(x) and math.isfinite(y):
+                path.append({"x": x, "y": y})
+        self._publish_visualization(
+            {"type": "global_path", "path": path, "received_at": time.time()}
+        )
+
+    def _on_global_costmap(self, message: Any) -> None:
+        width = int(message.info.width)
+        height = int(message.info.height)
+        resolution = float(message.info.resolution)
+        total = width * height
+        if width <= 0 or height <= 0 or resolution <= 0 or len(message.data) < total:
+            return
+
+        origin_x = float(message.info.origin.position.x)
+        origin_y = float(message.info.origin.position.y)
+        origin_yaw = self._yaw_from_orientation(message.info.origin.orientation)
+        with self._lock:
+            sw, sh = self._map.width, self._map.height
+            sr = self._map.resolution
+            sox, soy, soyaw = self._map.origin_x, self._map.origin_y, self._map.origin_yaw
+            sdata = self._map.data
+
+        static_ready = bool(
+            sw and sh and sr and sr > 0 and sox is not None and soy is not None
+            and soyaw is not None and sdata is not None
+            and len(sdata) >= int(sw) * int(sh)
+        )
+        cc, cs = math.cos(origin_yaw), math.sin(origin_yaw)
+        sc, ss = math.cos(soyaw or 0.0), math.sin(soyaw or 0.0)
+        dynamic_obstacles: list[int] = []
+        inflation: list[int] = []
+
+        for index in range(total):
+            value = int(message.data[index])
+            if 0 < value < 100:
+                inflation.append(index)
+                continue
+            if value != 100 or not static_ready:
+                continue
+
+            col, row = index % width, index // width
+            lx, ly = (col + 0.5) * resolution, (row + 0.5) * resolution
+            wx = origin_x + cc * lx - cs * ly
+            wy = origin_y + cs * lx + cc * ly
+            dx, dy = wx - float(sox), wy - float(soy)
+            sx, sy = sc * dx + ss * dy, -ss * dx + sc * dy
+            scol, srow = math.floor(sx / float(sr)), math.floor(sy / float(sr))
+            static_occupied = False
+            if 0 <= scol < int(sw) and 0 <= srow < int(sh):
+                static_occupied = int(sdata[srow * int(sw) + scol]) >= 50
+            if not static_occupied:
+                dynamic_obstacles.append(index)
+
+        self._publish_visualization(
+            {
+                "type": "costmap",
+                "costmap": {
+                    "width": width,
+                    "height": height,
+                    "resolution": resolution,
+                    "origin": {"x": origin_x, "y": origin_y, "yaw": origin_yaw},
+                    "dynamic_obstacles": dynamic_obstacles,
+                    "inflation": inflation,
+                    "received_at": time.time(),
+                },
+            }
+        )
+
     def _on_amcl_pose(self, message: Any) -> None:
         orientation = message.pose.pose.orientation
-        yaw = math.atan2(
-            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
-            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
-        )
+        yaw = self._yaw_from_orientation(orientation)
         with self._condition:
             self._amcl.sequence += 1
             self._amcl.x = float(message.pose.pose.position.x)

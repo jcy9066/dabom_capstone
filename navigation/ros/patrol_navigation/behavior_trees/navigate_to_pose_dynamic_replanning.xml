@@ -1,0 +1,19 @@
+<!--
+  Replan at 1 Hz while following the goal.
+  On planning/control failure, stop and wait one second before retrying.
+  Five retries provide a five-second blocked-path grace period.
+  Spin/BackUp recovery is intentionally excluded.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="5" name="NavigateWithFiveSecondGrace">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+      <Wait wait_duration="1"/>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

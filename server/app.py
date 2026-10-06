@@ -464,6 +464,8 @@ navigation_state = {
     "map": None,
     "pose": None,
     "scan": None,
+    "global_path": [],
+    "costmap": None,
     "decision": None,
     "map_updated_at": None,
     "map_revision": None,
@@ -853,6 +855,8 @@ def clear_navigation_visualization_state():
     with state_lock:
         navigation_state["map"] = None
         navigation_state["pose"] = None
+        navigation_state["global_path"] = []
+        navigation_state["costmap"] = None
         navigation_state["decision"] = None
         navigation_state["map_updated_at"] = None
         navigation_state["pose_updated_at"] = None
@@ -894,6 +898,26 @@ navigation_control_api = NavigationControlApi(
     clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+
+def publish_navigation_ros_visualization(event):
+    if not isinstance(event, dict):
+        return
+    payload = dict(event)
+    event_type = str(payload.get("type") or "")
+    if event_type == "global_path":
+        path = payload.get("path")
+        normalized = [dict(point) for point in path] if isinstance(path, list) else []
+        with state_lock:
+            navigation_state["global_path"] = normalized
+        navigation_control_api.note_replanned_path(normalized)
+    elif event_type == "costmap":
+        costmap = payload.get("costmap")
+        with state_lock:
+            navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
+    navigation_visualization_hub.publish(payload)
+
+
+navigation_map_api.set_visualization_listener(publish_navigation_ros_visualization)
 
 lidar_ros_bridge = None
 encoder_ros_bridge = None
@@ -4190,6 +4214,8 @@ def build_navigation_snapshot_payload(map_revision=None):
         current_revision = navigation_state.get("map_revision")
         pose = navigation_state.get("pose")
         scan = navigation_state.get("scan")
+        global_path = navigation_state.get("global_path") or []
+        costmap = navigation_state.get("costmap")
 
         if current_map is None:
             map_changed = map_revision is not None
@@ -4209,6 +4235,8 @@ def build_navigation_snapshot_payload(map_revision=None):
             "pose": pose,
             "scan_available": scan is not None,
             "scan": scan,
+            "global_path": [dict(point) for point in global_path],
+            "costmap": dict(costmap) if isinstance(costmap, dict) else None,
         }
         if map_changed:
             snapshot["map"] = current_map

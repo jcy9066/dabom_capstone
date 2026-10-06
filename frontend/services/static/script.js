@@ -354,6 +354,8 @@ const lidarState = {
     map: null,
     pose: null,
     scan: null,
+    globalPath: [],
+    costmap: null,
     lastScanKey: null,
     lastScanSeenAtMs: 0,
     scanIntervalsMs: [],
@@ -576,6 +578,8 @@ function emitNavigationVisualizationState(mapChanged = false) {
         map: lidarState.map,
         pose: lidarState.pose,
         scan: lidarState.scan,
+        globalPath: lidarState.globalPath,
+        costmap: lidarState.costmap,
         mapRevision: navigationMapRevision,
         mapChanged: Boolean(mapChanged),
     };
@@ -613,6 +617,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
+    lidarState.globalPath = Array.isArray(data.global_path) ? data.global_path : [];
+    lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
         lidarState.scan = data.scan;
         noteScanUpdate(data.scan);
@@ -670,6 +676,20 @@ function applyNavigationStreamMessage(message) {
         return;
     }
 
+    if (message.type === 'global_path') {
+        lidarState.globalPath = Array.isArray(message.path) ? message.path : [];
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'costmap') {
+        lidarState.costmap = message.costmap && typeof message.costmap === 'object'
+            ? message.costmap
+            : null;
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
     if (message.type === 'map') {
         applyNavigationMapPayload(
             message.map || null,
@@ -685,6 +705,8 @@ function applyNavigationStreamMessage(message) {
         navigationMapSuppressedRevision = null;
         lidarState.map = null;
         lidarState.pose = null;
+        lidarState.globalPath = [];
+        lidarState.costmap = null;
         emitNavigationVisualizationState(true);
     }
 }
@@ -976,6 +998,8 @@ window.navigationMapView = {
             map: null,
             pose: lidarState.pose,
             scan: lidarState.scan,
+            globalPath: lidarState.globalPath,
+            costmap: lidarState.costmap,
             mapRevision: navigationMapRevision,
             mapChanged: true,
         };

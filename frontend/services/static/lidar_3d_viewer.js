@@ -18,6 +18,8 @@ if (root && canvas) {
         robotFront: 0x5b9bd5,
         scanRay: 0x7dd3fc,
         scanPoint: 0x2dd4bf,
+        dynamicObstacle: 0xf97316,
+        inflation: 0xfb923c,
         globalPath: 0x8b5cf6,
         trajectory: 0xf59e0b,
         goal: 0xfb7185,
@@ -29,6 +31,8 @@ if (root && canvas) {
     };
 
     const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
+    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.06;
+    const INFLATION_HEIGHT_M = 0.006;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
     // The physical LiDAR is mounted 180° relative to the 3D viewer's +X heading.
@@ -101,6 +105,8 @@ if (root && canvas) {
         'tf',
         'scan',
         'points',
+        'obstacles',
+        'inflation',
         'path',
         'trajectory',
         'goal',
@@ -152,6 +158,14 @@ if (root && canvas) {
     pointsRoot.name = 'lidar-points';
     layerGroups.points.add(pointsRoot);
 
+    const dynamicObstacleRoot = new THREE.Group();
+    dynamicObstacleRoot.name = 'dynamic-obstacles';
+    layerGroups.obstacles.add(dynamicObstacleRoot);
+
+    const inflationRoot = new THREE.Group();
+    inflationRoot.name = 'inflation-area';
+    layerGroups.inflation.add(inflationRoot);
+
     const pathRoot = new THREE.Group();
     pathRoot.name = 'global-path';
     layerGroups.path.add(pathRoot);
@@ -177,6 +191,9 @@ if (root && canvas) {
 
     let currentMapKey = null;
     let currentMap = null;
+    let currentCostmap = null;
+    let currentObstacleCostmapKey = null;
+    let currentInflationCostmapKey = null;
     let obstacleHeightM = DEFAULT_OCCUPIED_HEIGHT_M;
     let robotModelReady = false;
     let robotVisual = null;
@@ -567,6 +584,105 @@ if (root && canvas) {
         mapRoot.rotation.z = transform.yaw;
         rebuildGrid(map);
         if (!viewerExpanded) applyCollapsedTopView();
+    }
+
+    function costmapKey(costmap) {
+        if (!costmap || typeof costmap !== 'object') return 'empty';
+        const origin = costmap.origin || {};
+        return [
+            costmap.received_at || '',
+            Number(costmap.width) || 0,
+            Number(costmap.height) || 0,
+            Number(costmap.resolution) || 0,
+            Number(origin.x) || 0,
+            Number(origin.y) || 0,
+            Number(origin.yaw) || 0,
+            Array.isArray(costmap.dynamic_obstacles) ? costmap.dynamic_obstacles.length : 0,
+            Array.isArray(costmap.inflation) ? costmap.inflation.length : 0,
+        ].join(':');
+    }
+
+    function rebuildCostmapCells(rootGroup, costmap, indices, options) {
+        clearGroup(rootGroup);
+        if (!costmap || !Array.isArray(indices) || !indices.length) return;
+        const width = Number(costmap.width) || 0;
+        const height = Number(costmap.height) || 0;
+        const resolution = Number(costmap.resolution) || 0;
+        const total = width * height;
+        if (width <= 0 || height <= 0 || resolution <= 0 || total <= 0) return;
+        const valid = indices.filter(index => Number.isInteger(index) && index >= 0 && index < total);
+        if (!valid.length) return;
+
+        const geometry = new THREE.BoxGeometry(
+            resolution * options.cellScale,
+            resolution * options.cellScale,
+            options.height,
+        );
+        const material = new THREE.MeshStandardMaterial({
+            color: options.color,
+            transparent: options.opacity < 1,
+            opacity: options.opacity,
+            roughness: 0.9,
+            metalness: 0.01,
+            depthWrite: options.depthWrite,
+        });
+        const mesh = new THREE.InstancedMesh(geometry, material, valid.length);
+        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = options.renderOrder;
+        const matrix = new THREE.Matrix4();
+        valid.forEach((index, instance) => {
+            const x = index % width;
+            const y = Math.floor(index / width);
+            matrix.makeTranslation(
+                (x + 0.5) * resolution,
+                (y + 0.5) * resolution,
+                options.height / 2,
+            );
+            mesh.setMatrixAt(instance, matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        rootGroup.add(mesh);
+        const origin = costmap.origin || {};
+        rootGroup.position.set(Number(origin.x) || 0, Number(origin.y) || 0, 0);
+        rootGroup.rotation.z = Number(origin.yaw) || 0;
+    }
+
+    function rebuildCostmap(costmap, forceInflation = false) {
+        currentCostmap = costmap || null;
+        const nextKey = costmapKey(currentCostmap);
+        if (nextKey !== currentObstacleCostmapKey) {
+            currentObstacleCostmapKey = nextKey;
+            rebuildCostmapCells(
+                dynamicObstacleRoot,
+                currentCostmap,
+                currentCostmap?.dynamic_obstacles || [],
+                {
+                    height: DYNAMIC_OBSTACLE_HEIGHT_M,
+                    color: COLORS.dynamicObstacle,
+                    opacity: 0.92,
+                    cellScale: 0.92,
+                    depthWrite: true,
+                    renderOrder: 25,
+                },
+            );
+        }
+        if (!layerGroups.inflation.visible) return;
+        if (!forceInflation && nextKey === currentInflationCostmapKey) return;
+        currentInflationCostmapKey = nextKey;
+        rebuildCostmapCells(
+            inflationRoot,
+            currentCostmap,
+            currentCostmap?.inflation || [],
+            {
+                height: INFLATION_HEIGHT_M,
+                color: COLORS.inflation,
+                opacity: 0.22,
+                cellScale: 0.98,
+                depthWrite: false,
+                renderOrder: 10,
+            },
+        );
     }
 
     function clamp(value, min, max) {
@@ -1632,7 +1748,15 @@ if (root && canvas) {
 
         currentControlState = control;
         syncGoalInteractionAvailability(control);
-        rebuildPath(control.planned_path || []);
+        const livePath = currentVisualizationState?.globalPath;
+        const displayPath = control.active_goal
+            ? (
+                Array.isArray(livePath) && livePath.length >= 2
+                    ? livePath
+                    : (control.planned_path || [])
+            )
+            : [];
+        rebuildPath(displayPath);
         rebuildGoals();
 
         if (mode === 'MAPPING') {
@@ -1756,8 +1880,20 @@ if (root && canvas) {
         // Map/pose still stay session-filtered so stale Driving localization is
         // never reused as Mapping geometry.
         const liveScan = state.scan || null;
+        const livePath = Array.isArray(state.globalPath) ? state.globalPath : null;
+        const liveCostmap = state.costmap || null;
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
+        rebuildCostmap(liveCostmap);
+        rebuildPath(
+            currentControlState?.active_goal
+                ? (
+                    livePath && livePath.length >= 2
+                        ? livePath
+                        : (currentControlState?.planned_path || [])
+                )
+                : [],
+        );
 
         // Before slam_toolbox exposes map->base_link, keep the RC car visible at
         // the mapping origin. As soon as the real TF pose arrives it replaces this
@@ -1861,6 +1997,14 @@ if (root && canvas) {
         group.visible = input.checked;
         input.addEventListener('change', () => {
             group.visible = input.checked;
+            if (input.dataset.lidarDisplay === 'inflation') {
+                if (input.checked) {
+                    rebuildCostmap(currentCostmap, true);
+                } else {
+                    clearGroup(inflationRoot);
+                    currentInflationCostmapKey = null;
+                }
+            }
         });
     });
 
@@ -1959,6 +2103,8 @@ if (root && canvas) {
         clearGroup(tfPoseGroup);
         clearGroup(scanRoot);
         clearGroup(pointsRoot);
+        clearGroup(dynamicObstacleRoot);
+        clearGroup(inflationRoot);
         clearGroup(pathRoot);
         clearGroup(trajectoryRoot);
         clearGroup(goalRoot);

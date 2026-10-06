@@ -197,6 +197,19 @@ class NavigationControlApi:
                 self._last_pose_at = received_at
                 self._complete_manual_goal_locked(payload)
 
+    def note_replanned_path(self, path: Any) -> None:
+        normalized = self._normalized_path(path)
+        if len(normalized) < 2:
+            return
+        with self._lock:
+            if (
+                self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
+                or not self._state["active_goal"]
+            ):
+                return
+            self._state["planned_path"] = normalized
+            self._touch_locked()
+
     def note_active_map(self, active_map: dict[str, Any]) -> None:
         if not isinstance(active_map, dict):
             return
@@ -235,7 +248,7 @@ class NavigationControlApi:
                 terminal = str(ros_nav.get("state", "")).upper()
                 if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
                     self._state["navigation_state"] = terminal
-                    if terminal in {"SUCCEEDED", "CANCELED"}:
+                    if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
                         self._state["active_goal"] = None
                         self._state["planned_path"] = []
                     self._touch_locked(current)
