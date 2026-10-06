@@ -516,6 +516,7 @@ stream_stats = {
 status_frame_cache = {"key": None, "frame": None}
 frame_processor = None
 model_error = None
+model_generation = 0
 model_reload_lock = threading.Lock()
 database = Database()
 automatic_notifier = TelegramNotifier()
@@ -1004,10 +1005,11 @@ def runtime_model_signature(config):
 
 
 def detach_frame_processor():
-    global frame_processor
+    global frame_processor, model_generation
     with processing_lock:
         processor = frame_processor
         frame_processor = None
+        model_generation += 1
     return processor
 
 
@@ -1728,7 +1730,7 @@ def update_latest_result(result, frame_seq=None, input_captured_at=None, elapsed
 
 
 def process_stream_frame_if_current(frame, stream_id):
-    """Process only if the frame still belongs to the active stream generation."""
+    """Process only if the frame still belongs to the active stream/model generation."""
     with processing_lock:
         if stream_id is not None:
             with state_lock:
@@ -1736,10 +1738,57 @@ def process_stream_frame_if_current(frame, stream_id):
                     inference_stats["dropped"] += 1
                     return None
 
-        if frame_processor is None:
+        if frame_processor is None or not MODEL_ACTIVE:
             return None
 
-        return process_frame_for_dashboard(frame)
+        processed = process_frame_for_dashboard(frame)
+        processed["_model_generation"] = model_generation
+        return processed
+
+
+def publish_processed_inference_if_current(
+    processed,
+    *,
+    robot_id,
+    stream_id,
+    processed_model_generation,
+    captured_at,
+    adaptive_wait_ms,
+    started_at,
+):
+    """Publish an inference result only while its stream/model generation is current."""
+    with processing_lock:
+        if (
+            processed_model_generation != model_generation
+            or frame_processor is None
+            or not MODEL_ACTIVE
+        ):
+            inference_stats["dropped"] += 1
+            return False
+
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return False
+
+        display_frame_seq = publish_preview_frame(
+            processed["frame"],
+            robot_id=robot_id,
+        )
+        result = build_empty_result(robot_id)
+        result["detections"] = processed["detections"]
+        result["danger"] = processed["danger"]
+        result["timings"] = dict(processed.get("timings") or {})
+        result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
+        elapsed_ms = (time.time() - started_at) * 1000
+        update_latest_result(
+            result,
+            frame_seq=display_frame_seq,
+            input_captured_at=captured_at,
+            elapsed_ms=elapsed_ms,
+        )
+        return True
 
 
 def activate_stream_generation(robot_id, infer):
@@ -1885,29 +1934,20 @@ def inference_worker():
             if processed is None:
                 continue
 
-            if stream_id is not None:
-                with state_lock:
-                    is_stale_stream = stream_id != active_stream_id
-                if is_stale_stream:
-                    inference_stats["dropped"] += 1
-                    continue
-
-            display_frame_seq = publish_preview_frame(
-                processed["frame"],
+            processed_model_generation = processed.pop(
+                "_model_generation",
+                None,
+            )
+            if not publish_processed_inference_if_current(
+                processed,
                 robot_id=robot_id,
-            )
-            result = build_empty_result(robot_id)
-            result["detections"] = processed["detections"]
-            result["danger"] = processed["danger"]
-            result["timings"] = dict(processed.get("timings") or {})
-            result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
-            elapsed_ms = (time.time() - started) * 1000
-            update_latest_result(
-                result,
-                frame_seq=display_frame_seq,
-                input_captured_at=captured_at,
-                elapsed_ms=elapsed_ms,
-            )
+                stream_id=stream_id,
+                processed_model_generation=processed_model_generation,
+                captured_at=captured_at,
+                adaptive_wait_ms=adaptive_wait_ms,
+                started_at=started,
+            ):
+                continue
         except Exception as exc:
             with state_lock:
                 stream_stats["last_error"] = str(exc)
