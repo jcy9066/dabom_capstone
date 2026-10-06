@@ -1157,8 +1157,9 @@ def set_model_pipeline_enabled(enabled):
     enabled = bool(enabled)
 
     with model_reload_lock:
-        currently_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
-        if enabled == currently_enabled:
+        if enabled and MODEL_ACTIVE and frame_processor is not None:
+            return True
+        if not enabled and not MODEL_ACTIVE and frame_processor is None:
             return True
 
         config = read_runtime_model_config()
