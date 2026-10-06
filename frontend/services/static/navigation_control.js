@@ -747,8 +747,8 @@
         state.warningPending = true;
         syncControlComponents();
         try {
-            await mutate('/api/navigation/control/warning', { led_duration_ms: 3000 });
-            setFeedback('경고 방송과 LED 명령을 전송했습니다.');
+            await mutate('/api/navigation/control/warning', { led_duration_ms: 10000 });
+            setFeedback('10초 경고 패턴(LED + 스피커)을 시작했습니다.');
             return true;
         } catch (error) {
             setFeedback(`경고 명령 실패: ${error.message}`, true);

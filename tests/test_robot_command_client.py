@@ -3,7 +3,7 @@ import sys
 import unittest
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 
 RASPBERRY_DIR = Path(__file__).resolve().parents[1] / "raspberry"
@@ -52,7 +52,9 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         client.navigation_mode = "mapping"
         client.emergency_stop_latched = False
         client.led_enabled = False
+        client._manual_led_enabled = False
         client._led_task = None
+        client._warning_task = None
         client.motor = Mock()
         client.motor.current_motion = "stop"
         client.motor.connected = True
@@ -100,7 +102,7 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.messages[-1]["ok"])
         self.assertIn("unknown command type", socket.messages[-1]["error"])
 
-    async def test_beep_led_and_warning_use_pico_contract_and_existing_speaker(self):
+    async def test_beep_led_and_warning_use_pico_contract(self):
         client = self.make_client()
         socket = FakeWebSocket()
 
@@ -117,14 +119,51 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         )
         client.motor.set_led.assert_called_with(True)
         self.assertTrue(client.led_enabled)
+        self.assertTrue(client._manual_led_enabled)
+
+        client._start_warning_pattern = AsyncMock()
 
         await client.handle_command(
             socket,
-            {"type": "warning", "text": "warning", "led_duration_ms": 0, "command_id": "warning"},
+            {
+                "type": "warning",
+                "led_duration_ms": 3000,
+                "command_id": "warning",
+            },
         )
-        client.motor.set_led.assert_called_with(True)
-        client.speaker.speak.assert_called_with("warning")
+
+        client._start_warning_pattern.assert_awaited_once_with(10000)
+        client.speaker.speak.assert_not_called()
         self.assertTrue(socket.messages[-1]["ok"])
+
+    async def test_warning_pattern_toggles_led_and_beep(self):
+        client = self.make_client()
+
+        with patch.object(
+            client_module.asyncio,
+            "sleep",
+            new=AsyncMock(),
+        ):
+            await client._run_warning_pattern(2000)
+
+        self.assertEqual(
+            client.motor.set_led.call_args_list,
+            [
+                call(True),
+                call(False),
+                call(True),
+                call(False),
+                call(False),
+            ],
+        )
+        self.assertEqual(
+            client.motor.beep.call_args_list,
+            [
+                call(500),
+                call(500),
+            ],
+        )
+        self.assertFalse(client.led_enabled)
 
     def test_duration_rejects_fractional_values(self):
         with self.assertRaisesRegex(RuntimeError, "integer"):

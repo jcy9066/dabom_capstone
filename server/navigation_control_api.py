@@ -712,7 +712,7 @@ class NavigationControlApi:
 
     async def warning(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "경고합니다. 즉시 물러나십시오.").strip()[:240]
-        duration_ms = self._bounded_int(payload.get("led_duration_ms", 3000), 0, 10000, "led_duration_ms")
+        duration_ms = self._bounded_int(payload.get("led_duration_ms", 10000), 0, 10000, "led_duration_ms")
         delivered = await self._send_robot_command(
             self._robot_id,
             {"type": "warning", "text": text, "led_duration_ms": duration_ms},
