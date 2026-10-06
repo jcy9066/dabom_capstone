@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from perception.device import resolve_cuda_device
+from perception.env_config import env_float
 from perception.models.action_batch import process_keypoint_many
 from perception.models.action_policy import (
     OBSERVATION_INFERENCE_ERROR,
@@ -14,6 +15,7 @@ from perception.models.action_policy import (
     TemporalActionPolicy,
     classify_target_action,
     classify_target_scores,
+    is_observation_issue,
     observation_issue,
 )
 
@@ -87,6 +89,19 @@ class ActionRecognizer:
             }
         )
         self.temporal_policy = TemporalActionPolicy.from_env() if self.recall_mode else None
+        self.single_person_actions = {
+            idx: info for idx, info in self.target_actions.items() if idx in {41, 42}
+        }
+        self.interaction_actions = {
+            idx: info for idx, info in self.target_actions.items() if idx in {49, 50, 51}
+        }
+        self.pair_action_buffer = {}
+        self.pair_temporal_policy = TemporalActionPolicy.from_env() if self.recall_mode else None
+        self.interaction_pair_distance_ratio = (
+            env_float("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", default=1.5, minimum=0.1)
+            if self.recall_mode
+            else 1.5
+        )
 
     def expire_tracking_state(self, now=None):
         if self.temporal_policy is None:
@@ -94,12 +109,20 @@ class ActionRecognizer:
         expired = self.temporal_policy.expire_stale(now=now)
         for object_id in expired:
             self.action_buffer.pop(object_id, None)
+
+        if self.pair_temporal_policy is not None:
+            expired_pairs = self.pair_temporal_policy.expire_stale(now=now)
+            for pair_id in expired_pairs:
+                self.pair_action_buffer.pop(pair_id, None)
         return expired
 
     def reset_tracking_state(self):
         self.action_buffer.clear()
+        self.pair_action_buffer.clear()
         if self.temporal_policy is not None:
             self.temporal_policy.reset()
+        if self.pair_temporal_policy is not None:
+            self.pair_temporal_policy.reset()
 
     def _mark_observed(self, object_id):
         if self.temporal_policy is None:
@@ -114,7 +137,80 @@ class ActionRecognizer:
         self.expire_tracking_state()
         for obj in objs:
             self._mark_observed(obj["id"])
-        return process_keypoint_many(self, frame, objs, total_frames=100)
+
+        results = process_keypoint_many(self, frame, objs, total_frames=100)
+        if not self.recall_mode or len(objs) < 2:
+            return results
+
+        for first_index, first in enumerate(objs):
+            for second in objs[first_index + 1 :]:
+                if not self._is_interaction_pair(first, second):
+                    continue
+                pair_action = self._process_interaction_pair(frame, first, second)
+                if not pair_action or is_observation_issue(pair_action):
+                    continue
+                for obj in (first, second):
+                    skeleton, current = results.get(obj["id"], (obj.get("keypoints"), None))
+                    if (
+                        current is None
+                        or is_observation_issue(current)
+                        or pair_action["score"] >= current.get("score", 0.0)
+                    ):
+                        results[obj["id"]] = (skeleton, pair_action)
+        return results
+
+    def _is_interaction_pair(self, first, second):
+        first_box = first.get("box")
+        second_box = second.get("box")
+        if first_box is None or second_box is None:
+            return False
+
+        first_center = first.get("center") or (
+            (first_box[0] + first_box[2]) / 2.0,
+            (first_box[1] + first_box[3]) / 2.0,
+        )
+        second_center = second.get("center") or (
+            (second_box[0] + second_box[2]) / 2.0,
+            (second_box[1] + second_box[3]) / 2.0,
+        )
+        distance = float(np.linalg.norm(np.asarray(first_center) - np.asarray(second_center)))
+        first_height = max(float(first_box[3] - first_box[1]), 1.0)
+        second_height = max(float(second_box[3] - second_box[1]), 1.0)
+        return distance <= self.interaction_pair_distance_ratio * max(first_height, second_height)
+
+    def _process_interaction_pair(self, frame, first, second):
+        ordered = sorted((first, second), key=lambda obj: obj["id"])
+        pair_id = tuple(obj["id"] for obj in ordered)
+        keypoints = [obj.get("keypoints") for obj in ordered]
+        scores = [obj.get("keypoints_scores") for obj in ordered]
+        if any(value is None or len(value) == 0 for value in keypoints):
+            return None
+
+        buffer = self.pair_action_buffer.setdefault(pair_id, {"kpts": [], "scores": []})
+        buffer["kpts"].append(np.stack(keypoints, axis=0))
+        buffer["scores"].append(np.stack(scores, axis=0))
+        if len(buffer["kpts"]) > 100:
+            buffer["kpts"].pop(0)
+            buffer["scores"].pop(0)
+
+        pad_len = 100 - len(buffer["kpts"])
+        padded_kpts = buffer["kpts"] + [buffer["kpts"][-1]] * pad_len
+        padded_scores = buffer["scores"] + [buffer["scores"][-1]] * pad_len
+
+        # MMAction2 skeleton annotations use (M, T, V, C) and (M, T, V).
+        pair_kpts = np.transpose(np.asarray(padded_kpts), (1, 0, 2, 3))
+        pair_scores = np.transpose(np.asarray(padded_scores), (1, 0, 2))
+        self.pair_temporal_policy.mark_observed(pair_id)
+        try:
+            pred_scores = self._predict_scores_array(pair_kpts, pair_scores, frame.shape)
+            candidate = classify_target_scores(pred_scores, self.interaction_actions)
+            return self.pair_temporal_policy.update(pair_id, candidate)
+        except Exception as exc:
+            LOGGER.exception("Interaction inference failed for pair=%s", pair_id)
+            return observation_issue(
+                OBSERVATION_INFERENCE_ERROR,
+                str(exc) or "interaction inference failed",
+            )
 
     def process(self, frame, obj):
         obj_id = obj["id"]
@@ -151,6 +247,13 @@ class ActionRecognizer:
         return kpts, action_res
 
     def _predict_scores(self, kpts, scores, shape):
+        return self._predict_scores_array(
+            np.expand_dims(np.asarray(kpts), axis=0),
+            np.expand_dims(np.asarray(scores), axis=0),
+            shape,
+        )
+
+    def _predict_scores_array(self, keypoints, keypoint_scores, shape):
         anno = dict(
             frame_dir="",
             label=-1,
@@ -159,8 +262,8 @@ class ActionRecognizer:
             start_index=0,
             modality="Pose",
             total_frames=100,
-            keypoint=np.expand_dims(np.array(kpts), axis=0),
-            keypoint_score=np.expand_dims(np.array(scores), axis=0),
+            keypoint=keypoints,
+            keypoint_score=keypoint_scores,
         )
         with self._default_scope_cls.overwrite_default_scope("mmaction"):
             result = self._inference_recognizer(self.action_model, anno)
@@ -185,7 +288,8 @@ class ActionRecognizer:
 
         try:
             pred_scores = self._predict_scores(kpts, scores, shape)
-            candidate = classify_target_scores(pred_scores, self.target_actions)
+            target_actions = self.single_person_actions or self.target_actions
+            candidate = classify_target_scores(pred_scores, target_actions)
             return self.temporal_policy.update(obj_id, candidate)
         except Exception as exc:
             LOGGER.exception("Action inference failed for track_id=%s", obj_id)
