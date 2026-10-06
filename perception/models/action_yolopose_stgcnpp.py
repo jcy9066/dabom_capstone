@@ -1,5 +1,6 @@
 import glob
 import logging
+import os
 
 import cv2
 import numpy as np
@@ -98,8 +99,9 @@ class ActionRecognizer:
         self.pair_action_buffer = {}
         self.pair_temporal_policy = TemporalActionPolicy.from_env() if self.recall_mode else None
         self.interaction_pair_distance_ratio = (
-            env_float("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", default=1.5, minimum=0.1)
+            env_float("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", minimum=0.1)
             if self.recall_mode
+            and os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip()
             else 1.5
         )
 
