@@ -57,7 +57,6 @@
 #define PWM_WRAP 999U
 
 #define COMMAND_TIMEOUT_MS 350U
-#define WARNING_LED_FAILSAFE_TIMEOUT_MS 12000U
 #define BEEP_FREQUENCY_HZ 440.0f
 #define BEEP_PWM_WRAP 4095U
 #define BEEP_VOLUME_PERCENT 20U
@@ -131,7 +130,6 @@ static volatile uint8_t right_rear_encoder_state = 0;
 static bool encoder_stream_enabled = false;
 static uint64_t last_encoder_report_ms = 0;
 static bool warning_led_enabled = false;
-static uint64_t last_warning_led_command_ms = 0;
 static uint speaker_pwm_slice = 0;
 static uint speaker_pwm_channel = 0;
 static bool speaker_beep_active = false;
@@ -182,7 +180,6 @@ static void uart_reply(const char *message) {
 static void set_warning_led(bool enabled) {
     gpio_put(WARNING_LED_PIN, enabled ? 1 : 0);
     warning_led_enabled = enabled;
-    last_warning_led_command_ms = to_ms_since_boot(get_absolute_time());
 }
 
 
@@ -1467,15 +1464,6 @@ int main(void) {
 
                 uart_reply("EVENT,FAILSAFE_STOP");
             }
-        }
-
-        if (
-            warning_led_enabled &&
-            now_ms - last_warning_led_command_ms >
-                WARNING_LED_FAILSAFE_TIMEOUT_MS
-        ) {
-            set_warning_led(false);
-            uart_reply("EVENT,LED_FAILSAFE_OFF");
         }
 
         if (
