@@ -1,3 +1,4 @@
+import math
 import os
 
 
@@ -24,3 +25,13 @@ def env_bool(name: str, *, default: bool | None = None) -> bool:
     if raw in _FALSE_VALUES:
         return False
     raise RuntimeError(f"Environment variable {name} must be a boolean value")
+
+
+def env_float(name: str, *, minimum: float | None = None) -> float:
+    try:
+        value = float(env_text(name))
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be a number") from exc
+    if not math.isfinite(value) or (minimum is not None and value < minimum):
+        raise RuntimeError(f"Environment variable {name} must be finite and >= {minimum}")
+    return value

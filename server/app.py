@@ -65,6 +65,9 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
+from server.location_security import LocationSecurityService
+from server.location_security_api import LocationSecurityApi
+from server.location_security_notifications import build_location_transition_message
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
@@ -380,6 +383,7 @@ ROBOT_STATUS_TIMEOUT_SEC = env_float("ROBOT_STATUS_TIMEOUT_SEC", minimum=0.1)
 SAVE_DIR = ROOT_DIR / "received_frames"
 NAVIGATION_MAP_DIR = ROOT_DIR / "navigation" / "maps"
 NAVIGATION_MAP_DIR.mkdir(parents=True, exist_ok=True)
+LOCATION_SECURITY_STATE_PATH = ROOT_DIR / "data" / "runtime" / "gps_locations.json"
 
 TELEGRAM_TOKEN = env_text("TELEGRAM_TOKEN", allow_empty=True)
 TELEGRAM_CHAT_ID = env_text("TELEGRAM_CHAT_ID", allow_empty=True)
@@ -406,6 +410,14 @@ robot_status = {
     "internet": "unknown",
     "mode": "manual",
     "led_enabled": None,
+    "max_wheel_mps": None,
+    "gps_fix": None,
+    "gps_lat": None,
+    "gps_lng": None,
+    "gps_alt": None,
+    "gps_satellites": None,
+    "gps_hdop": None,
+    "gps_updated_at": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -794,9 +806,31 @@ navigation_map_api = NavigationMapApi(
 )
 
 
+def handle_location_security_transition(result):
+    message = build_location_transition_message(result)
+    if not message:
+        return
+    automatic_notifier.send_alert_async(message)
+
+
+location_security_service = LocationSecurityService(LOCATION_SECURITY_STATE_PATH)
+location_security_api = LocationSecurityApi(
+    app=app,
+    service=location_security_service,
+    csrf_failure=csrf_failure,
+    transition_listener=handle_location_security_transition,
+)
+
+
 def current_navigation_map_snapshot():
     with state_lock:
         current = navigation_state.get("map")
+        return dict(current) if isinstance(current, dict) else None
+
+
+def current_navigation_pose_snapshot():
+    with state_lock:
+        current = navigation_state.get("pose")
         return dict(current) if isinstance(current, dict) else None
 
 
@@ -836,7 +870,12 @@ navigation_control_api = NavigationControlApi(
     csrf_failure=csrf_failure,
     robot_id=SERVER_ROBOT_ID,
     get_live_map=current_navigation_map_snapshot,
-    save_map=lambda payload, name: save_navigation_map_files(payload, name),
+    get_live_pose=current_navigation_pose_snapshot,
+    save_map=lambda payload, name: save_navigation_map_files(
+        payload,
+        name,
+        current_navigation_map_location_metadata(),
+    ),
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
@@ -2585,17 +2624,23 @@ async def update_status(request: Request):
                 "internet": status_value("internet", robot_status["internet"]),
                 "mode": status_value("mode", robot_status.get("mode", "manual")),
                 "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
+                "max_wheel_mps": status_value("max_wheel_mps"),
                 "ping": status_value("ping", robot_status.get("ping")),
                 "speed": status_value("speed", robot_status.get("speed")),
+                "gps_fix": status_value("gps_fix", robot_status.get("gps_fix")),
                 "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
                 "gps_lng": status_value("gps_lng", robot_status.get("gps_lng")),
                 "gps_alt": status_value("gps_alt", robot_status.get("gps_alt")),
+                "gps_satellites": status_value("gps_satellites", robot_status.get("gps_satellites")),
+                "gps_hdop": status_value("gps_hdop", robot_status.get("gps_hdop")),
+                "gps_updated_at": status_value("gps_updated_at", robot_status.get("gps_updated_at")),
                 "lidar_x": status_value("lidar_x", robot_status.get("lidar_x")),
                 "lidar_y": status_value("lidar_y", robot_status.get("lidar_y")),
                 "lidar_z": status_value("lidar_z", robot_status.get("lidar_z")),
                 "updated_at": time.time(),
             }
         )
+    location_security_api.note_robot_status(data)
     navigation_control_api.note_pi_status(data)
     return {"ok": True}
 
@@ -2603,7 +2648,88 @@ async def update_status(request: Request):
 @app.get("/get_status")
 async def get_status():
     with state_lock:
-        return dict(robot_status)
+        status = dict(robot_status)
+    live_gps = location_security_service.snapshot().get("gps") or {}
+    status.update(
+        {
+            "gps_fix": live_gps.get("fix") is True,
+            "gps_lat": live_gps.get("lat"),
+            "gps_lng": live_gps.get("lng"),
+            "gps_alt": live_gps.get("alt"),
+            "gps_satellites": live_gps.get("satellites"),
+            "gps_hdop": live_gps.get("hdop"),
+            "gps_updated_at": live_gps.get("updated_at"),
+        }
+    )
+    return status
+
+
+def robot_speed_calibration_error(robot_id: str):
+    with state_lock:
+        status_robot_id = str(
+            robot_status.get("robot_id") or ""
+        ).strip()
+        raw_robot_max = robot_status.get(
+            "max_wheel_mps"
+        )
+        status_updated_at = robot_status.get(
+            "updated_at"
+        )
+
+    if (
+        status_robot_id != robot_id
+        or raw_robot_max is None
+        or status_updated_at is None
+    ):
+        return (
+            "Pi MAX_WHEEL_MPS is unavailable; "
+            "wait for matching robot status"
+        )
+
+    try:
+        status_age = max(
+            0.0,
+            time.time() - float(status_updated_at),
+        )
+    except (TypeError, ValueError):
+        return "Pi robot status timestamp is invalid"
+
+    if (
+        not np.isfinite(status_age)
+        or status_age > ROBOT_STATUS_TIMEOUT_SEC
+    ):
+        return (
+            "Pi robot status is stale; "
+            "wait for a fresh status update"
+        )
+
+    if isinstance(raw_robot_max, bool):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    try:
+        robot_max = float(raw_robot_max)
+    except (TypeError, ValueError):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if (
+        not np.isfinite(robot_max)
+        or robot_max <= 0.0
+    ):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if not np.isclose(
+        robot_max,
+        MAX_WHEEL_MPS,
+        rtol=1e-9,
+        atol=1e-12,
+    ):
+        return (
+            "MAX_WHEEL_MPS mismatch: "
+            f"server={MAX_WHEEL_MPS:.6f} m/s, "
+            f"Pi={robot_max:.6f} m/s"
+        )
+
+    return None
 
 
 def parse_navigation_mode(payload):
@@ -2792,7 +2918,7 @@ def occupancy_to_pgm_bytes(width, height, cells):
     return header + bytes(pixels)
 
 
-def save_navigation_map_files(map_payload, requested_name=None):
+def save_navigation_map_files(map_payload, requested_name=None, location_metadata=None):
     width, height, cells = decode_map_cells(map_payload)
     base_name = unique_map_name(sanitize_map_name(requested_name))
     saved_at = time.time()
@@ -2852,11 +2978,29 @@ def save_navigation_map_files(map_payload, requested_name=None):
             "raw": str(raw_path.relative_to(ROOT_DIR)),
         },
     }
+    if isinstance(location_metadata, dict) and location_metadata:
+        meta["location"] = dict(location_metadata)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return meta
+
+
+def current_navigation_map_location_metadata():
+    snapshot = location_security_service.snapshot()
+    gps = snapshot.get("gps")
+    if not isinstance(gps, dict) or gps.get("fix") is not True:
+        return None
+    location = {"gps": {
+        "lat": gps.get("lat"), "lng": gps.get("lng"), "alt": gps.get("alt"),
+        "satellites": gps.get("satellites"), "hdop": gps.get("hdop"),
+        "captured_at": gps.get("updated_at"),
+    }}
+    if gps.get("matched_location_id"):
+        location["location_id"] = gps.get("matched_location_id")
+        location["name"] = gps.get("matched_location_name")
+    return location
 
 
 def list_saved_navigation_maps():
@@ -3152,6 +3296,7 @@ async def save_current_navigation_map(request: Request):
         meta = save_navigation_map_files(
             dict(current_map),
             requested_name=requested_name,
+            location_metadata=current_navigation_map_location_metadata(),
         )
     except Exception as exc:
         return JSONResponse(
@@ -4178,6 +4323,36 @@ async def send_robot_command(
             "stop",
         }
     )
+
+    target_mode = str(
+        command.get("mode", "")
+    ).strip().lower()
+    calibration_required = (
+        command_type == "mode"
+        and target_mode == "auto"
+    ) or (
+        command_type == "auto_drive"
+        and MOTOR_OUTPUT_ENABLED
+        and not nav2_dry_run
+    )
+
+    if calibration_required:
+        calibration_error = (
+            robot_speed_calibration_error(robot_id)
+        )
+        if calibration_error:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "accepted": False,
+                    "delivered": False,
+                    "blocked": True,
+                    "robot_id": robot_id,
+                    "command": command,
+                    "error": calibration_error,
+                },
+                status_code=409,
+            )
 
     if command_type == "auto_drive":
         try:

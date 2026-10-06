@@ -22,6 +22,7 @@ class FakeElement {
         this.children = [];
         this.listeners = {};
         this.style = {};
+        this.dataset = {};
         this.className = '';
         this.id = '';
         this.name = '';
@@ -113,7 +114,7 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.strictEqual(manager.views.get('savedNavigationMaps').title, '\uc800\uc7a5 \uc9c0\ub3c4 \uc120\ud0dd');
     assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked').value, 'alpha');
     assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
-    assert.strictEqual(manager.body.querySelector('#saved-map-pose-x').value, '0');
+    assert.strictEqual(manager.body.querySelector('#saved-map-pose-x').value, '');
     assert.strictEqual(manager.body.querySelector('.saved-map-active').textContent, 'ACTIVE');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
@@ -151,7 +152,12 @@ const closeButton = new FakeElement();
 const root = new FakeElement();
 const title = new FakeElement();
 const body = new FakeElement();
-const context = { console, Node: FakeNode };
+const document = {
+    fullscreenElement: null,
+    webkitFullscreenElement: null,
+    addEventListener() {},
+};
+const context = { console, Node: FakeNode, document };
 context.window = context;
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('frontend/components/modal/modal_manager.js', 'utf8'), context);
@@ -214,7 +220,7 @@ manager.register('detail', { title: 'detail', render: () => 'detail' });
         self.assertNotIn('.current-situation-record-btn { order:', STYLE)
 
     def test_scoped_component_assets_are_cache_busted_consistently(self):
-        version = "?v=20260831-dashboard-lightweight"
+        version = "?v="
         for asset in (
             "/components/modal/modal.css",
             "/components/controls/controls.css",

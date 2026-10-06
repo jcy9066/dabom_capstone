@@ -201,7 +201,7 @@ class NavigationPollingEfficiencyContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
     def test_visual_polling_uses_one_non_overlapping_snapshot_loop(self):
-        self.assertIn("const NAVIGATION_SNAPSHOT_VISIBLE_MS = 500", self.dashboard)
+        self.assertIn("const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000", self.dashboard)
         self.assertIn("const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000", self.dashboard)
         self.assertIn("const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000", self.dashboard)
         self.assertIn("/api/navigation/snapshot?map_revision=", self.dashboard)
@@ -229,9 +229,9 @@ class NavigationPollingEfficiencyContractTests(unittest.TestCase):
 
     def test_visible_and_hidden_request_rates_match_contract(self):
         control_rate = 1000 / 750
-        visible_rate = control_rate + 1000 / 500
+        visible_rate = control_rate + 1000 / 1000
         hidden_rate = 1000 / 2000 + 1000 / 2000
-        self.assertAlmostEqual(3.333, visible_rate, places=3)
+        self.assertAlmostEqual(2.333, visible_rate, places=3)
         self.assertAlmostEqual(1.000, hidden_rate, places=3)
 
     def test_lidar_live_state_requires_an_actual_fresh_scan(self):
@@ -244,7 +244,7 @@ const assert = require('assert');
 const source = fs.readFileSync('frontend/services/static/script.js', 'utf8');
 const liveStateLogic = source.slice(
     source.indexOf('function formatAgeSeconds'),
-    source.indexOf('function decodeRleMap'),
+    source.indexOf('function updateLidarLabels'),
 );
 const context = {
     performance,
@@ -297,7 +297,7 @@ const assert = require('assert');
 const source = fs.readFileSync('frontend/services/static/script.js', 'utf8');
 const snapshotLogic = source.slice(
     source.indexOf('let navigationSnapshotTimer'),
-    source.indexOf("window.addEventListener('resize'"),
+    source.indexOf('function currentFullscreenElement()'),
 );
 
 async function verifyForegroundResume() {
@@ -315,6 +315,13 @@ async function verifyForegroundResume() {
         lidarState: {},
         noteScanUpdate: () => {},
         requestLidarRender: () => {},
+        WebSocket: class FakeWebSocket {
+            static OPEN = 1;
+            static CONNECTING = 0;
+            constructor() { this.readyState = 0; }
+            addEventListener() {}
+            close() {}
+        },
         fetchOptionalJson: () => new Promise(resolve => {
             requests += 1;
             activeRequests += 1;
@@ -338,6 +345,7 @@ async function verifyForegroundResume() {
             return id;
         },
         clearTimeout: id => timers.delete(id),
+        location: { protocol: 'http:', host: 'localhost' },
     };
     vm.createContext(context);
     vm.runInContext(
@@ -438,7 +446,7 @@ const dashboardSource = fs.readFileSync(
 );
 const snapshotLogic = dashboardSource.slice(
     dashboardSource.indexOf('let navigationSnapshotTimer'),
-    dashboardSource.indexOf("window.addEventListener('resize'"),
+    dashboardSource.indexOf('function currentFullscreenElement()'),
 );
 
 async function verifySnapshotRecovery() {
@@ -452,6 +460,13 @@ async function verifySnapshotRecovery() {
         lidarState: {},
         noteScanUpdate: () => {},
         requestLidarRender: () => { renders += 1; },
+        WebSocket: class FakeWebSocket {
+            static OPEN = 1;
+            static CONNECTING = 0;
+            constructor() { this.readyState = 0; }
+            addEventListener() {}
+            close() {}
+        },
         fetchOptionalJson: (_url, { signal }) => new Promise(resolve => {
             signal.addEventListener('abort', () => {
                 aborts += 1;
@@ -470,6 +485,7 @@ async function verifySnapshotRecovery() {
             return schedules;
         },
         clearTimeout,
+        location: { protocol: 'http:', host: 'localhost' },
     };
     vm.createContext(context);
     vm.runInContext(
@@ -481,11 +497,11 @@ async function verifySnapshotRecovery() {
     );
     await new Promise(resolve => setTimeout(resolve, 15));
     assert.strictEqual(aborts, 1);
-    assert.strictEqual(renders, 1);
+    assert.strictEqual(renders, 2);
     assert.strictEqual(schedules, 1);
     await context.fetchNavigationSnapshot();
     assert.strictEqual(aborts, 2);
-    assert.strictEqual(renders, 2);
+    assert.strictEqual(renders, 3);
 }
 
 (async () => {

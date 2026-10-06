@@ -148,6 +148,27 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("battery", payload)
         self.assertNotIn("battery_level", payload)
 
+    def test_status_payload_includes_fresh_gps_measurement_metadata(self):
+        client = self.configured_client()
+        client.gps = Mock()
+        client.gps.snapshot.return_value = {
+            "fix": True,
+            "lat": 37.1,
+            "lng": 127.2,
+            "alt": 15.0,
+            "satellites": 9,
+            "hdop": 0.8,
+            "updated_at": 1234.5,
+        }
+        payload = client.status_payload()
+        self.assertTrue(payload["gps_fix"])
+        self.assertEqual(37.1, payload["gps_lat"])
+        self.assertEqual(127.2, payload["gps_lng"])
+        self.assertEqual(15.0, payload["gps_alt"])
+        self.assertEqual(9, payload["gps_satellites"])
+        self.assertEqual(0.8, payload["gps_hdop"])
+        self.assertEqual(1234.5, payload["gps_updated_at"])
+
     def test_status_payload_uses_measured_system_metrics(self):
         client = self.configured_client()
         client._server_reachable = True
