@@ -41,8 +41,14 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("scheduleNavigationGlobalPathStale", dashboard)
         self.assertIn("rebuildCostmap(liveCostmap)", viewer)
         self.assertIn("function displayedGlobalPath", viewer)
+        self.assertIn("if (!['NAVIGATING', 'RESUMING'].includes(navState))", viewer)
+        self.assertIn("return control.planned_path || []", viewer)
         self.assertIn("if (livePathStatus === 'stale') return []", viewer)
         self.assertIn("if (navState === 'FAILED') return []", viewer)
+        self.assertIn(
+            'static/script.js?v=20261007-dynamic-obstacle-v32',
+            template,
+        )
 
 if __name__ == "__main__":
     unittest.main()

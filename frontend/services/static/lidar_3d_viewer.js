@@ -1450,6 +1450,10 @@ if (root && canvas) {
         const navState = String(control.navigation_state || '').toUpperCase();
         if (navState === 'FAILED') return [];
 
+        if (!['NAVIGATING', 'RESUMING'].includes(navState)) {
+            return control.planned_path || [];
+        }
+
         const livePathStatus = String(state?.globalPathStatus || 'none');
         const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
         if (livePathStatus === 'fresh') {
