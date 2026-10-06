@@ -35,6 +35,11 @@ class FrameProcessor:
         manages_action_hysteresis = bool(
             getattr(self.action_analyzer, "manages_action_hysteresis", False)
         )
+        batch_action_results = {}
+        batch_processor = getattr(self.action_analyzer, "process_many", None)
+        if analyze_all_persons and callable(batch_processor):
+            person_objs = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
+            batch_action_results = batch_processor(frame, person_objs)
 
         for obj in tracked_boxes:
             oid = obj["id"]
@@ -61,7 +66,10 @@ class FrameProcessor:
             skeleton = None
 
             if cls_id == 0:
-                skeleton, action = self.action_analyzer.process(frame, obj)
+                if oid in batch_action_results:
+                    skeleton, action = batch_action_results[oid]
+                else:
+                    skeleton, action = self.action_analyzer.process(frame, obj)
                 observation_issue = is_observation_issue(action)
                 now = time.monotonic()
 
