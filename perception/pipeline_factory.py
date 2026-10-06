@@ -107,7 +107,7 @@ def create_pipeline(choice, device=None):
             "name": PIPELINE_OPTIONS[choice],
             "detector": YOLOPoseDetector(
                 weight=str(assets["yolo_pose"]),
-                tracker="botsort",
+                tracker="perception/config/botsort_recall.yaml",
                 device=device,
             ),
             "action_analyzer": ActionRecognizer(
