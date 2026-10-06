@@ -465,6 +465,7 @@ navigation_state = {
     "pose": None,
     "scan": None,
     "global_path": [],
+    "global_path_updated_at": None,
     "costmap": None,
     "decision": None,
     "map_updated_at": None,
@@ -856,6 +857,7 @@ def clear_navigation_visualization_state():
         navigation_state["map"] = None
         navigation_state["pose"] = None
         navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
         navigation_state["decision"] = None
         navigation_state["map_updated_at"] = None
@@ -907,8 +909,14 @@ def publish_navigation_ros_visualization(event):
     if event_type == "global_path":
         path = payload.get("path")
         normalized = [dict(point) for point in path] if isinstance(path, list) else []
+        received_at = payload.get("received_at")
+        try:
+            received_at = float(received_at)
+        except (TypeError, ValueError):
+            received_at = time.time()
         with state_lock:
             navigation_state["global_path"] = normalized
+            navigation_state["global_path_updated_at"] = received_at
         navigation_control_api.note_replanned_path(normalized)
     elif event_type == "costmap":
         costmap = payload.get("costmap")
@@ -4215,6 +4223,7 @@ def build_navigation_snapshot_payload(map_revision=None):
         pose = navigation_state.get("pose")
         scan = navigation_state.get("scan")
         global_path = navigation_state.get("global_path") or []
+        global_path_updated_at = navigation_state.get("global_path_updated_at")
         costmap = navigation_state.get("costmap")
 
         if current_map is None:
@@ -4236,6 +4245,7 @@ def build_navigation_snapshot_payload(map_revision=None):
             "scan_available": scan is not None,
             "scan": scan,
             "global_path": [dict(point) for point in global_path],
+            "global_path_updated_at": global_path_updated_at,
             "costmap": dict(costmap) if isinstance(costmap, dict) else None,
         }
         if map_changed:

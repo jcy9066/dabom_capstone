@@ -248,7 +248,7 @@ class NavigationControlApi:
                 terminal = str(ros_nav.get("state", "")).upper()
                 if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
                     self._state["navigation_state"] = terminal
-                    if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                    if terminal in {"SUCCEEDED", "CANCELED"}:
                         self._state["active_goal"] = None
                         self._state["planned_path"] = []
                     self._touch_locked(current)

@@ -1442,6 +1442,23 @@ if (root && canvas) {
         pointsRoot.visible = Boolean(validCount && targetPose);
     }
 
+    function displayedGlobalPath(
+        control = currentControlState,
+        state = currentVisualizationState,
+    ) {
+        if (!control?.active_goal) return [];
+        const navState = String(control.navigation_state || '').toUpperCase();
+        if (navState === 'FAILED') return [];
+
+        const livePathStatus = String(state?.globalPathStatus || 'none');
+        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
+        if (livePathStatus === 'fresh') {
+            return livePath.length >= 2 ? livePath : [];
+        }
+        if (livePathStatus === 'stale') return [];
+        return control.planned_path || [];
+    }
+
     function pathKey(path) {
         if (!Array.isArray(path) || !path.length) return 'empty';
         let hash = 2166136261;
@@ -1748,15 +1765,7 @@ if (root && canvas) {
 
         currentControlState = control;
         syncGoalInteractionAvailability(control);
-        const livePath = currentVisualizationState?.globalPath;
-        const displayPath = control.active_goal
-            ? (
-                Array.isArray(livePath) && livePath.length >= 2
-                    ? livePath
-                    : (control.planned_path || [])
-            )
-            : [];
-        rebuildPath(displayPath);
+        rebuildPath(displayedGlobalPath(control, currentVisualizationState));
         rebuildGoals();
 
         if (mode === 'MAPPING') {
@@ -1880,20 +1889,11 @@ if (root && canvas) {
         // Map/pose still stay session-filtered so stale Driving localization is
         // never reused as Mapping geometry.
         const liveScan = state.scan || null;
-        const livePath = Array.isArray(state.globalPath) ? state.globalPath : null;
         const liveCostmap = state.costmap || null;
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
         rebuildCostmap(liveCostmap);
-        rebuildPath(
-            currentControlState?.active_goal
-                ? (
-                    livePath && livePath.length >= 2
-                        ? livePath
-                        : (currentControlState?.planned_path || [])
-                )
-                : [],
-        );
+        rebuildPath(displayedGlobalPath(currentControlState, state));
 
         // Before slam_toolbox exposes map->base_link, keep the RC car visible at
         // the mapping origin. As soon as the real TF pose arrives it replaces this
