@@ -625,6 +625,8 @@ camera_stream_loop() {
             --http1.1 \
             --no-buffer \
             --connect-timeout "${CURL_CONNECT_TIMEOUT_SEC}" \
+            --speed-limit "${CAMERA_UPLOAD_MIN_BPS:-1024}" \
+            --speed-time "${CAMERA_UPLOAD_STALL_SEC:-15}" \
             --request POST \
             --upload-file "${fifo_path}" \
             --header "Content-Type: video/H264" \
