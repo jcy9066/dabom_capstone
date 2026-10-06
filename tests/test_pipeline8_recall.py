@@ -1,5 +1,7 @@
 import time
 
+import numpy as np
+
 from perception.models.action_policy import (
     OBSERVATION_INFERENCE_ERROR,
     RECALL_TARGET_ACTIONS,
@@ -16,7 +18,22 @@ def build_recall_analyzer():
     analyzer.restrict_to_target_actions = True
     analyzer.target_actions = RECALL_TARGET_ACTIONS
     analyzer.action_buffer = {}
+    analyzer.single_person_actions = {
+        idx: info for idx, info in RECALL_TARGET_ACTIONS.items() if idx in {41, 42}
+    }
+    analyzer.interaction_actions = {
+        idx: info for idx, info in RECALL_TARGET_ACTIONS.items() if idx in {49, 50, 51}
+    }
+    analyzer.pair_action_buffer = {}
+    analyzer.interaction_pair_distance_ratio = 1.5
     analyzer.temporal_policy = TemporalActionPolicy(
+        window=5,
+        suspicious_min_hits=1,
+        danger_min_hits=1,
+        normal_clear_hits=2,
+        state_ttl_sec=1.0,
+    )
+    analyzer.pair_temporal_policy = TemporalActionPolicy(
         window=5,
         suspicious_min_hits=1,
         danger_min_hits=1,
@@ -93,3 +110,49 @@ def test_tracker_reset_clears_all_action_state():
     assert analyzer.temporal_policy.current == {}
     assert analyzer.temporal_policy.normal_streak == {}
     assert analyzer.temporal_policy.last_seen_at == {}
+
+
+def test_interaction_pair_uses_two_person_skeleton_tensor(monkeypatch):
+    analyzer = build_recall_analyzer()
+    captured = {}
+
+    def fake_predict(keypoints, scores, _shape):
+        captured["keypoints_shape"] = keypoints.shape
+        captured["scores_shape"] = scores.shape
+        prediction = np.zeros(60, dtype=np.float32)
+        prediction[49] = 0.8
+        return prediction
+
+    monkeypatch.setattr(analyzer, "_predict_scores_array", fake_predict)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    keypoints_a = np.ones((17, 2), dtype=np.float32)
+    keypoints_b = np.ones((17, 2), dtype=np.float32) * 2
+    scores = np.ones(17, dtype=np.float32)
+    first = {
+        "id": 10,
+        "box": np.array([100, 100, 200, 300], dtype=np.float32),
+        "center": (150.0, 200.0),
+        "keypoints": keypoints_a,
+        "keypoints_scores": scores,
+    }
+    second = {
+        "id": 11,
+        "box": np.array([180, 100, 280, 300], dtype=np.float32),
+        "center": (230.0, 200.0),
+        "keypoints": keypoints_b,
+        "keypoints_scores": scores,
+    }
+
+    action = analyzer._process_interaction_pair(frame, first, second)
+
+    assert captured["keypoints_shape"] == (2, 100, 17, 2)
+    assert captured["scores_shape"] == (2, 100, 17)
+    assert action["label"] == "PUNCHING"
+
+
+def test_interaction_pair_distance_gate_rejects_far_people():
+    analyzer = build_recall_analyzer()
+    first = {"id": 1, "box": [0, 0, 100, 200], "center": (50.0, 100.0)}
+    second = {"id": 2, "box": [1000, 0, 1100, 200], "center": (1050.0, 100.0)}
+
+    assert analyzer._is_interaction_pair(first, second) is False
