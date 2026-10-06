@@ -1157,6 +1157,10 @@ def set_model_pipeline_enabled(enabled):
     enabled = bool(enabled)
 
     with model_reload_lock:
+        currently_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
+        if enabled == currently_enabled:
+            return True
+
         config = read_runtime_model_config()
         config["inference_enabled"] = enabled
         config["visualization_enabled"] = enabled
@@ -4087,6 +4091,8 @@ async def get_stream_status():
         status["visualization_enabled"] = VISUALIZATION_ENABLED
         status["model_active"] = MODEL_ACTIVE
         status["inference_available"] = frame_processor is not None
+        status["model_error"] = model_error
+        status["pipeline"] = latest_result.get("pipeline")
         status["stream_infer_every_n"] = STREAM_INFER_EVERY_N
         status["inference_max_fps"] = INFERENCE_MAX_FPS
         status["adaptive_batching_enabled"] = ADAPTIVE_BATCHING_ENABLED
