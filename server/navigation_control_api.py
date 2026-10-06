@@ -64,6 +64,7 @@ class NavigationControlApi:
         get_live_map: Callable[[], dict[str, Any] | None],
         save_map: Callable[[dict[str, Any], str | None], dict[str, Any]],
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool]],
+        get_live_pose: Callable[[], dict[str, Any] | None] | None = None,
         clear_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
         motor_output_enabled: bool = False,
@@ -77,6 +78,7 @@ class NavigationControlApi:
         self._csrf_failure = csrf_failure
         self._robot_id = robot_id
         self._get_live_map = get_live_map
+        self._get_live_pose = get_live_pose or (lambda: None)
         self._save_map = save_map
         self._send_robot_command = send_robot_command
         self._clear_visualization = clear_visualization
@@ -320,20 +322,59 @@ class NavigationControlApi:
 
         source = str(payload.get("source", "existing")).strip().lower()
         map_name = payload.get("map_name")
-        if source == "save_current":
+        initial_pose_payload = payload.get("initial_pose")
+
+        if source in {"current", "save_current"}:
             live_map = self._get_live_map()
             if not live_map:
-                raise NavigationControlError("MAP_UNAVAILABLE", "The current mapping result is unavailable.", 404)
+                raise NavigationControlError(
+                    "MAP_UNAVAILABLE",
+                    "The current mapping result is unavailable.",
+                    404,
+                )
+
+            if source == "current":
+                live_mode = str(live_map.get("navigation_mode") or "").strip().lower()
+                if live_mode not in {"", "mapping"}:
+                    raise NavigationControlError(
+                        "CURRENT_MAPPING_REQUIRED",
+                        "Direct Driving transition requires the current Mapping result.",
+                        409,
+                    )
+
+            if initial_pose_payload is None:
+                initial_pose_payload = self._current_mapping_initial_pose()
+            if initial_pose_payload is None:
+                raise NavigationControlError(
+                    "INITIAL_POSE_REQUIRED",
+                    "A current Mapping pose is required before switching directly to Driving.",
+                    409,
+                )
+
+            # Nav2 map_server needs a map file. Snapshot the current in-memory
+            # Mapping result automatically so the operator does not have to
+            # manually save and reload it before setting a Goal.
             saved = await asyncio.to_thread(self._save_map, dict(live_map), map_name)
             map_name = saved.get("map_name")
-        elif source != "existing":
-            raise NavigationControlError("INVALID_SOURCE", "source must be existing or save_current.", 400)
+        elif source == "existing":
+            if initial_pose_payload is None:
+                raise NavigationControlError(
+                    "INITIAL_POSE_REQUIRED",
+                    "Initial pose is required when loading a saved map.",
+                    400,
+                )
+        else:
+            raise NavigationControlError(
+                "INVALID_SOURCE",
+                "source must be existing, current, or save_current.",
+                400,
+            )
 
         selected = self._map_api.resolve_map(map_name)
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
             loaded = await self._activate_map_when_ready(
-                {"map_name": selected.map_name, "initial_pose": payload.get("initial_pose")},
+                {"map_name": selected.map_name, "initial_pose": initial_pose_payload},
                 user,
             )
             await self._wait_for_nav2_ready()
@@ -372,6 +413,25 @@ class NavigationControlApi:
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
             self._touch_locked()
         return self.state_response()
+
+    def _current_mapping_initial_pose(self) -> dict[str, float] | None:
+        pose = self._get_live_pose()
+        if not isinstance(pose, dict):
+            return None
+        try:
+            x = float(pose["x"])
+            y = float(pose["y"])
+            yaw = float(pose.get("yaw", 0.0))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not all(math.isfinite(value) for value in (x, y, yaw)):
+            return None
+        normalized_yaw = math.atan2(math.sin(yaw), math.cos(yaw))
+        return {
+            "x": x,
+            "y": y,
+            "yaw_degrees": math.degrees(normalized_yaw),
+        }
 
     async def load_existing_map(
         self,
@@ -652,7 +712,7 @@ class NavigationControlApi:
 
     async def warning(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "경고합니다. 즉시 물러나십시오.").strip()[:240]
-        duration_ms = self._bounded_int(payload.get("led_duration_ms", 3000), 0, 10000, "led_duration_ms")
+        duration_ms = self._bounded_int(payload.get("led_duration_ms", 10000), 0, 10000, "led_duration_ms")
         delivered = await self._send_robot_command(
             self._robot_id,
             {"type": "warning", "text": text, "led_duration_ms": duration_ms},

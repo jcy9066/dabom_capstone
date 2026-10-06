@@ -9,6 +9,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.control = (ROOT / "frontend/services/static/navigation_control.js").read_text(encoding="utf-8")
+        cls.viewer = (ROOT / "frontend/services/static/lidar_3d_viewer.js").read_text(encoding="utf-8")
         cls.map_control = (ROOT / "frontend/components/navigation/saved_map_modal.js").read_text(encoding="utf-8")
         cls.map_compatibility = (ROOT / "frontend/services/static/navigation_map_control.js").read_text(encoding="utf-8")
         cls.map_control_css = (ROOT / "frontend/services/static/navigation_map_control.css").read_text(encoding="utf-8")
@@ -59,7 +60,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -76,7 +77,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -114,7 +115,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -136,7 +137,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
         )
         self.assertIn("const liveScan = state.scan || null;", viewer)
         self.assertIn("function applyTfPose(pose)", viewer)
-        self.assertIn("applyTfPose(livePose);", viewer)
+        self.assertIn("const tfVisualizationPose = validPose(livePose)", viewer)
+        self.assertIn("mappingMode ? MAPPING_PREVIEW_POSE : null", viewer)
+        self.assertIn("applyTfPose(tfVisualizationPose);", viewer)
+        self.assertIn("const MAPPING_PREVIEW_GRID_SIZE_M = 10;", viewer)
+        self.assertIn("rebuildGrid(null);", viewer)
         self.assertIn("const liveMap = state.map || null;", viewer)
         self.assertIn("const livePose = state.pose || null;", viewer)
         self.assertIn("function rebuildMap(map, revision)", viewer)
@@ -176,7 +181,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261001-persistent-map-v28',
+            'static/lidar_3d_viewer.js?v=20261003-current-driving-path-v30',
             template,
         )
 
@@ -266,7 +271,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn("<summary>DISPLAY</summary>", template)
         self.assertNotIn('id="lidarMapSaveBtn"', template)
         self.assertIn("saved-map-save-current", self.map_control)
-        self.assertIn("components.controls?.controlButton?.enhance?.(save)", self.map_control)
+        self.assertIn("createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current')", self.map_control)
+        self.assertIn("components.controls?.controlButton?.enhance?.(button)", self.map_control)
         self.assertIn("saved-map-start-mapping", self.map_control)
         self.assertIn("saved-map-clear-current", self.map_control)
         self.assertIn("request('MAPPING', { restart: true })", self.map_control)
@@ -319,6 +325,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
         self.assertIn("...(restart ? { restart: true } : {})", self.control)
         self.assertIn("setMappingMode(options)", self.control)
+        self.assertIn("source: 'current'", self.control)
+        self.assertIn("현재 Mapping 결과로 Driving 모드 전환 중...", self.control)
+        self.assertIn("view.map", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
         self.assertIn("controls.syncNavigationMode", self.navigation_component)
@@ -352,6 +361,26 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("syncFullscreenHost", modal_source)
         self.assertIn("currentFullscreenElement", modal_source)
         self.assertIn("fullscreenElement.appendChild(this.root)", modal_source)
+
+    def test_saved_map_location_panel_is_optional_and_uses_shared_buttons(self):
+        for contract in (
+            "'/api/navigation/locations'",
+            "requestJson('/api/navigation/locations').catch",
+            "labels.useCurrentGps",
+            "labels.saveLocation",
+            "labels.deleteLocation",
+            "map.location",
+            "gps.matched_location_name",
+            "last_location_name",
+            "components.controls?.controlButton?.enhance?.(button)",
+        ):
+            self.assertIn(contract, self.map_control)
+        self.assertIn(".saved-map-location-panel", self.map_control_css)
+        self.assertIn("data-requires-gps", self.map_control)
+        self.assertIn("const latText = inputs['saved-map-location-lat'].value.trim()", self.map_control)
+        self.assertIn("const lngText = inputs['saved-map-location-lng'].value.trim()", self.map_control)
+        self.assertIn("if (!name || !latText || !lngText || !radiusText)", self.map_control)
+        self.assertNotIn("lidar-control-drawer", self.map_control)
 
     def test_saved_map_contracts_and_pending_cursor_remain_scoped(self):
         for contract in (
@@ -417,6 +446,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertLess(stop_delivery, mode_command)
         self.assertIn("MANUAL 전환을 중단했습니다", request)
         self.assertIn("state.drivePending", request)
+
+
+    def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
+        viewer = self.viewer
+        self.assertIn("positions.push(x, y, 0.16)", viewer)
+        self.assertIn("depthTest: false", viewer)
+        self.assertIn("line.renderOrder = 100", viewer)
+        self.assertIn("points.renderOrder = 101", viewer)
+        self.assertIn("TRAJECTORY_FILTER_ALPHA = 0.45", viewer)
+        self.assertIn("TRAJECTORY_FALLBACK_DISTANCE_M = 0.06", viewer)
+        self.assertIn("TRAJECTORY_MAX_JUMP_M = 0.75", viewer)
+        self.assertIn("resetTrajectory(pose, true)", viewer)
 
 
 if __name__ == "__main__":

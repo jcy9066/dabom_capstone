@@ -69,7 +69,9 @@ class RobotCommandClient:
         self.navigation_mode = "mapping"
         self.emergency_stop_latched = False
         self.led_enabled = False
+        self._manual_led_enabled = False
         self._led_task = None
+        self._warning_task = None
         self._cpu_sample = None
         self._last_status_latency_ms = None
         self._server_reachable = None
@@ -203,9 +205,13 @@ class RobotCommandClient:
             "cpu_usage": self._cpu_usage_percent(),
             "cpu_temp": self._cpu_temp_c(),
             "ram_usage": self._ram_usage_percent(),
+            "gps_fix": gps["fix"],
             "gps_lat": gps["lat"],
             "gps_lng": gps["lng"],
             "gps_alt": gps["alt"],
+            "gps_satellites": gps["satellites"],
+            "gps_hdop": gps["hdop"],
+            "gps_updated_at": gps["updated_at"],
             "internet": internet,
             "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
@@ -219,6 +225,7 @@ class RobotCommandClient:
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
             "motor_motion": self.motor.current_motion,
+            "max_wheel_mps": self.motor.max_wheel_mps,
         }
 
     def status_loop(self) -> None:
@@ -415,7 +422,7 @@ class RobotCommandClient:
                 await asyncio.to_thread(
                     self.motor.move,
                     message.get("direction", ""),
-                    message.get("speed", 0.35),
+                    message.get("speed", 1.0),
                 )
 
             elif command_type == "auto_drive":
@@ -521,21 +528,28 @@ class RobotCommandClient:
                 duration_ms = self._duration_ms(
                     message.get("duration_ms", 0)
                 )
+
+                # 수동 LED 명령이 들어오면 진행 중인 경고 패턴을 중단한다.
+                await self._cancel_warning_pattern()
+
+                # duration=0인 Dashboard LED 제어만 persistent manual state다.
+                self._manual_led_enabled = (
+                    enabled if duration_ms == 0 else False
+                )
+
                 await asyncio.to_thread(self.motor.set_led, enabled)
                 self.led_enabled = enabled
-                self._schedule_led_off(duration_ms if enabled else 0)
+                self._schedule_led_off(
+                    duration_ms if enabled else 0
+                )
 
             elif command_type == "warning":
-                duration_ms = self._duration_ms(
-                    message.get("led_duration_ms", 3000)
-                )
-                await asyncio.to_thread(self.motor.set_led, True)
-                self.led_enabled = True
-                self._schedule_led_off(duration_ms)
-                await asyncio.to_thread(
-                    self.speaker.speak,
-                    str(message.get("text", "")),
-                )
+                # Dashboard warning contract:
+                # always run LED + Pico speaker for exactly 10 seconds.
+                duration_ms = 10000
+
+                # ACK를 10초 동안 막지 않고 background task로 실행한다.
+                await self._start_warning_pattern(duration_ms)
 
             else:
                 raise RuntimeError(
@@ -590,6 +604,115 @@ class RobotCommandClient:
         if duration < 0 or duration > 10000:
             raise RuntimeError("duration must be between 0 and 10000 ms")
         return duration
+
+    async def _cancel_warning_pattern(self) -> None:
+        task = self._warning_task
+
+        if task is None:
+            return
+
+        if not task.done():
+            task.cancel()
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        if self._warning_task is task:
+            self._warning_task = None
+
+    async def _start_warning_pattern(
+        self,
+        duration_ms: int,
+    ) -> None:
+        await self._cancel_warning_pattern()
+
+        # 다른 LED 테스트 타이머가 경고 도중 LED를 끄지 못하게 한다.
+        self._schedule_led_off(0)
+
+        self._warning_task = asyncio.create_task(
+            self._run_warning_pattern(duration_ms),
+            name="warning-led-speaker-pattern",
+        )
+
+    async def _run_warning_pattern(
+        self,
+        duration_ms: int,
+    ) -> None:
+        phase_ms = 500
+        remaining_ms = duration_ms
+        current_task = asyncio.current_task()
+
+        print(
+            f"[warning] LED + speaker pattern start: "
+            f"{duration_ms} ms"
+        )
+
+        try:
+            while remaining_ms > 0:
+                # ON phase
+                on_ms = min(phase_ms, remaining_ms)
+
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    True,
+                )
+                self.led_enabled = True
+
+                if on_ms >= 50:
+                    await asyncio.to_thread(
+                        self.motor.beep,
+                        on_ms,
+                    )
+
+                await asyncio.sleep(on_ms / 1000.0)
+                remaining_ms -= on_ms
+
+                if remaining_ms <= 0:
+                    break
+
+                # OFF phase
+                off_ms = min(phase_ms, remaining_ms)
+
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    False,
+                )
+                self.led_enabled = False
+
+                await asyncio.sleep(off_ms / 1000.0)
+                remaining_ms -= off_ms
+
+        except asyncio.CancelledError:
+            print("[warning] pattern cancelled")
+            raise
+
+        except Exception as exc:
+            print(f"[warning] pattern error: {exc}")
+
+        finally:
+            # 경고 전 수동 LED 상태를 보존한다.
+            restore_led = bool(self._manual_led_enabled)
+
+            try:
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    restore_led,
+                )
+                self.led_enabled = restore_led
+            except Exception as exc:
+                print(
+                    f"[warning] LED restore failed: {exc}"
+                )
+
+            if self._warning_task is current_task:
+                self._warning_task = None
+
+            print(
+                f"[warning] pattern finished; "
+                f"manual_led={restore_led}"
+            )
 
     def _schedule_led_off(self, duration_ms: int) -> None:
         if self._led_task is not None:
@@ -684,6 +807,9 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
+
+    if args.max_wheel_mps != env_float("MAX_WHEEL_MPS", minimum=0.01):
+        parser.error("--max-wheel-mps must match MAX_WHEEL_MPS on both hosts")
 
     if not args.server_base_url:
         parser.error(
