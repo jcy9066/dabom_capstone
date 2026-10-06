@@ -347,7 +347,7 @@ const LIDAR_OFFLINE_SECONDS = 8;
 const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;
 const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000;
 const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000;
-// Replanning runs at 1 Hz; allow one delayed cycle before the path is stale.
+// Replanning runs at 2 Hz; keep a conservative stale window for planner jitter.
 const GLOBAL_PATH_STALE_MS = 2200;
 
 const lidarState = {

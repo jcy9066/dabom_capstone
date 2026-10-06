@@ -9,13 +9,14 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("BaseObstacle.scale: 0.05", params)
         self.assertIn("update_frequency: 10.0", params)
         self.assertIn("update_frequency: 2.0", params)
+        self.assertIn("expected_planner_frequency: 2.0", params)
         self.assertEqual(params.count("inflation_radius: 0.35"), 2)
         self.assertEqual(params.count("clearing: true"), 2)
 
     def test_five_second_replanning_bt(self):
         bt = (ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_to_pose_dynamic_replanning.xml").read_text(encoding="utf-8")
         self.assertIn('number_of_retries="5"', bt)
-        self.assertIn('<RateController hz="1.0">', bt)
+        self.assertIn('<RateController hz="2.0">', bt)
         self.assertIn('<Wait wait_duration="1"/>', bt)
         self.assertNotIn("<Spin", bt)
         self.assertNotIn("<BackUp", bt)
