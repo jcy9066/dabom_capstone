@@ -60,6 +60,7 @@
 #define WARNING_LED_FAILSAFE_TIMEOUT_MS 12000U
 #define BEEP_FREQUENCY_HZ 440.0f
 #define BEEP_PWM_WRAP 4095U
+#define BEEP_VOLUME_PERCENT 20U
 #define BEEP_MIN_DURATION_MS 50U
 #define BEEP_MAX_DURATION_MS 2000U
 #define CURVE_INNER_RATIO 0.35f
@@ -213,7 +214,7 @@ static void speaker_start_beep(uint32_t duration_ms) {
     pwm_set_chan_level(
         speaker_pwm_slice,
         speaker_pwm_channel,
-        BEEP_PWM_WRAP / 2U
+        ((uint32_t)BEEP_PWM_WRAP * BEEP_VOLUME_PERCENT) / 200U
     );
     speaker_beep_active = true;
     speaker_beep_until_ms =
