@@ -464,7 +464,9 @@ esac
 health_url="http://${health_host}:${SERVER_PORT}/get_status"
 
 server_ready=0
-for _ in {1..30}; do
+# Pipeline 8 loads YOLO26m-Pose + ST-GCN++ on CUDA during FastAPI startup.
+# Allow enough time for model initialization before declaring startup failure.
+for _ in {1..120}; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         break
     fi
