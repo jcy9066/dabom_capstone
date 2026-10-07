@@ -8,6 +8,7 @@ from perception.models.action_policy import (
     TemporalActionPolicy,
     is_observation_issue,
 )
+import perception.models.action_yolopose_stgcnpp as action_module
 from perception.models.action_yolopose_stgcnpp import ActionRecognizer
 
 
@@ -262,3 +263,55 @@ def test_interaction_pose_gap_is_reported_as_unavailable():
 
     assert is_observation_issue(result)
     assert result["observation_status"] == "unavailable"
+
+
+def test_cached_pair_result_is_marked_stale(monkeypatch):
+    analyzer = build_recall_analyzer()
+    analyzer.interaction_infer_every_n = 2
+    pair_id = (1, 2)
+    cached = {
+        "label": "PUNCHING",
+        "score": 0.8,
+        "is_danger": True,
+        "confidence_level": "danger",
+    }
+    analyzer.pair_temporal_policy.current[pair_id] = cached
+    analyzer.pair_temporal_policy.mark_observed(pair_id)
+
+    keypoints = np.ones((17, 2), dtype=np.float32)
+    scores = np.ones(17, dtype=np.float32)
+    objs = [
+        {
+            "id": 1,
+            "cls": 0,
+            "box": [0, 0, 100, 200],
+            "center": (50.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+        {
+            "id": 2,
+            "cls": 0,
+            "box": [80, 0, 180, 200],
+            "center": (130.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+    ]
+
+    monkeypatch.setattr(
+        action_module,
+        "process_keypoint_many",
+        lambda _analyzer, _frame, people, total_frames: {
+            obj["id"]: (obj["keypoints"], None) for obj in people
+        },
+    )
+
+    results = analyzer.process_many(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        objs,
+    )
+
+    assert results[1][1]["observation_stale"] is True
+    assert results[2][1]["observation_stale"] is True
+    assert results[1][1]["source"] == "pair"
