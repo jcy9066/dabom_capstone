@@ -50,7 +50,7 @@ def test_pair_overlay_uses_shared_source_metadata_and_one_badge():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
     assert "candidate_by_pair" in source
-    assert "used_track_ids" in source
+    assert "_maximum_weight_pair_matching" in source
     assert 'label = source.get("label") or "INTERACTION"' in source
     assert 'score = source.get("score")' in source
     assert "draw_interaction_badge(" in source
@@ -281,3 +281,10 @@ def test_distinct_same_frame_interactions_get_distinct_incident_ids():
         server_app.interaction_incident_state["next_id"] = original_next_id
         server_app.interaction_incident_state["incidents"].clear()
         server_app.interaction_incident_state["incidents"].update(original_incidents)
+
+
+def test_empty_scene_clears_preserved_pair_actions():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert 'latest_pairs = getattr(analyzer, "latest_pair_actions", None)' in source
+    assert "latest_pairs.clear()" in source
