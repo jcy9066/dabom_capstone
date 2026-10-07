@@ -1439,7 +1439,8 @@ def _box_center_distance(first_box, second_box):
 
 
 def reset_interaction_incidents():
-    interaction_incident_state["next_id"] = 1
+    # Keep next_id monotonic so an EventLogWorker cooldown key from the
+    # previous stream generation cannot suppress a new incident.
     interaction_incident_state["incidents"].clear()
 
 
@@ -1463,7 +1464,11 @@ def interaction_incident_key(
     current_width = max(1.0, current_box[2] - current_box[0])
     current_height = max(1.0, current_box[3] - current_box[1])
     current_scale = max(current_width, current_height)
-    normalized_label = str(label or "").strip().upper()
+    normalized_label = (
+        vision_event_type(label)
+        or str(label or "").strip().upper()
+        or "INTERACTION"
+    )
     assigned_ids = {
         incident_id
         for incident_id, incident in incidents.items()
