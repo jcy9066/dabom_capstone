@@ -330,6 +330,60 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(mapped["emergency_stop"])
         self.assertIsNone(mapped["active_goal"])
 
+    async def test_blocked_navigation_fails_after_five_seconds_without_estop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 5.1,
+        )
+        self.api.note_navigation_sample("scan", now=base + 5.1)
+
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
+
+        self.assertEqual("BLOCKED_TIMEOUT", issue)
+        current = self.api.state_response(now=base + 5.1)
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("BLOCKED_TIMEOUT", current["last_error"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertEqual("stop", self.commands[-1][1]["type"])
+        self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
+        self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
+
+    async def test_rotation_counts_as_navigation_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.api.note_navigation_sample(
+            "pose",
+            now=base + 4.0,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.25},
+        )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 8.0,
+        )
+        self.api.note_navigation_sample("scan", now=base + 8.0)
+
+        issue = await self.api.evaluate_watchdog(now=base + 8.0)
+
+        self.assertIsNone(issue)
+        self.assertEqual("NAVIGATING", self.api.state_response(now=base + 8.0)["navigation_state"])
+
     async def test_pi_loss_while_navigating_triggers_automatic_estop(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})

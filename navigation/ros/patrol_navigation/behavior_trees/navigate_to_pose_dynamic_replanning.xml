@@ -1,19 +1,23 @@
 <!--
-  Replan at 2 Hz while following the goal.
-  On planning/control failure, stop and wait one second before retrying.
-  Five retries provide a five-second blocked-path grace period.
+  Normal global replanning runs at 2 Hz while following the goal.
+  If planning/control fails, FollowPath is halted and recovery waits 500 ms
+  before retrying. Ten retries bound planner-side blockage to about five seconds.
+  A server-side pose-progress watchdog applies the same five-second deadline
+  when a path still exists but the RC car cannot make physical progress.
   Spin/BackUp recovery is intentionally excluded.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="5" name="NavigateWithFiveSecondGrace">
+    <RecoveryNode number_of_retries="10" name="NavigateWithFiveSecondGrace">
       <PipelineSequence name="NavigateWithReplanning">
         <RateController hz="2.0">
           <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
-      <Wait wait_duration="1"/>
+      <Delay delay_msec="500">
+        <AlwaysSuccess/>
+      </Delay>
     </RecoveryNode>
   </BehaviorTree>
 </root>
