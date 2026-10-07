@@ -358,7 +358,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
 
-    async def test_rotation_counts_as_navigation_progress(self):
+    async def test_rotation_does_not_mask_blocked_translation(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
@@ -371,18 +371,38 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.api.note_navigation_sample(
             "pose",
             now=base + 4.0,
-            payload={"x": 0.0, "y": 0.0, "yaw": 0.25},
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.40},
         )
         self.api.note_pi_status(
             {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
-            now=base + 8.0,
+            now=base + 5.1,
         )
-        self.api.note_navigation_sample("scan", now=base + 8.0)
+        self.api.note_navigation_sample("scan", now=base + 5.1)
 
-        issue = await self.api.evaluate_watchdog(now=base + 8.0)
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
+
+        self.assertEqual("BLOCKED_TIMEOUT", issue)
+        self.assertEqual("FAILED", self.api.state_response(now=base + 5.1)["navigation_state"])
+
+    async def test_watchdog_syncs_ros_success_without_state_polling(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.map_api.ros_control.state = "SUCCEEDED"
+
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
 
         self.assertIsNone(issue)
-        self.assertEqual("NAVIGATING", self.api.state_response(now=base + 8.0)["navigation_state"])
+        self.map_api.ros_control.state = "NAVIGATING"
+        current = self.api.state_response(now=base + 5.1)
+        self.assertEqual("SUCCEEDED", current["navigation_state"])
+        self.assertIsNone(current["active_goal"])
 
     async def test_pi_loss_while_navigating_triggers_automatic_estop(self):
         await self.driving_ready()

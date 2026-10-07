@@ -39,7 +39,7 @@ class NavigationWatchdogConfig:
     @classmethod
     def from_env(cls) -> "NavigationWatchdogConfig":
         return cls(
-            interval_sec=env_float("NAV_WATCHDOG_INTERVAL_SEC", minimum=0.05),
+            interval_sec=env_float("NAV_WATCHDOG_INTERVAL_SEC", minimum=0.05, maximum=0.5),
             lidar_timeout_sec=env_float("NAV_WATCHDOG_LIDAR_TIMEOUT_SEC", minimum=0.1),
             odometry_timeout_sec=env_float("NAV_WATCHDOG_ODOM_TIMEOUT_SEC", minimum=0.1),
             tf_timeout_sec=env_float("NAV_WATCHDOG_TF_TIMEOUT_SEC", minimum=0.1),
@@ -55,7 +55,6 @@ class NavigationControlApi:
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
     BLOCKED_TIMEOUT_SEC = 5.0
     PROGRESS_DISTANCE_M = 0.10
-    PROGRESS_YAW_RAD = 0.20
 
     def __init__(
         self,
@@ -117,8 +116,9 @@ class NavigationControlApi:
         self._led_enabled: bool | None = None
         self._last_scan_at: float | None = None
         self._last_pose_at: float | None = None
-        self._navigation_progress_pose: tuple[float, float, float | None] | None = None
+        self._navigation_progress_pose: tuple[float, float] | None = None
         self._navigation_progress_at: float | None = None
+        self._blocked_failure_in_progress = False
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_commanded_at: float | None = None
@@ -243,6 +243,28 @@ class NavigationControlApi:
             ):
                 self._encoder_stop_violation = True
 
+    def _sync_ros_navigation_terminal_locked(
+        self,
+        ros_nav: dict[str, Any],
+        current: float,
+        *,
+        allow_during_blocked_failure: bool = False,
+    ) -> str | None:
+        if self._state["navigation_state"] != "NAVIGATING":
+            return None
+        if self._blocked_failure_in_progress and not allow_during_blocked_failure:
+            return None
+        terminal = str(ros_nav.get("state", "")).upper()
+        if terminal not in {"SUCCEEDED", "FAILED", "CANCELED"}:
+            return None
+        self._state["navigation_state"] = terminal
+        if terminal in {"SUCCEEDED", "CANCELED"}:
+            self._state["active_goal"] = None
+            self._state["planned_path"] = []
+        self._reset_navigation_progress_locked()
+        self._touch_locked(current)
+        return terminal
+
     def state_response(self, now: float | None = None) -> dict[str, Any]:
         current = now or time.time()
         try:
@@ -250,14 +272,7 @@ class NavigationControlApi:
         except Exception:
             ros_nav = {"state": "UNAVAILABLE"}
         with self._lock:
-            if self._state["navigation_state"] == "NAVIGATING":
-                terminal = str(ros_nav.get("state", "")).upper()
-                if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
-                    self._state["navigation_state"] = terminal
-                    if terminal in {"SUCCEEDED", "CANCELED"}:
-                        self._state["active_goal"] = None
-                        self._state["planned_path"] = []
-                    self._touch_locked(current)
+            self._sync_ros_navigation_terminal_locked(ros_nav, current)
             payload = {
                 "ok": True,
                 "robot_id": self._robot_id,
@@ -744,8 +759,16 @@ class NavigationControlApi:
 
     async def evaluate_watchdog(self, now: float | None = None) -> str | None:
         current = now or time.time()
+        try:
+            ros_nav = self._ros.navigation_status()
+        except Exception:
+            ros_nav = {"state": "UNAVAILABLE"}
+
         blocked = False
         with self._lock:
+            terminal = self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            if terminal is not None:
+                return None
             if self._encoder_stop_violation:
                 issue = "ENCODER_MOVEMENT_AFTER_STOP"
             elif self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
@@ -753,41 +776,69 @@ class NavigationControlApi:
             else:
                 issue = self._watchdog_issue_locked(current)
                 blocked = issue is None and self._navigation_progress_timed_out_locked(current)
+                if blocked:
+                    self._blocked_failure_in_progress = True
         if issue:
             await self.emergency_stop(issue, automatic=True)
             return issue
         if blocked:
-            await self._fail_blocked_navigation()
-            return "BLOCKED_TIMEOUT"
+            failed = await self._fail_blocked_navigation()
+            return "BLOCKED_TIMEOUT" if failed else None
         return None
 
-    async def _fail_blocked_navigation(self) -> None:
-        cancel_error = None
+    async def _fail_blocked_navigation(self) -> bool:
         try:
-            await asyncio.to_thread(self._ros.cancel_navigation)
-        except Exception as exc:
-            cancel_error = exc
+            try:
+                ros_nav = self._ros.navigation_status()
+            except Exception:
+                ros_nav = {"state": "UNAVAILABLE"}
+            with self._lock:
+                terminal = self._sync_ros_navigation_terminal_locked(
+                    ros_nav,
+                    time.time(),
+                    allow_during_blocked_failure=True,
+                )
+                if terminal is not None:
+                    return False
+                if self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
+                    return False
 
-        delivered = await self._send_robot_command(
-            self._robot_id,
-            {"type": "stop", "reason": "navigation_blocked_timeout"},
-        )
-        with self._lock:
-            self._stop_commanded_at = time.time()
-            self._stop_encoder_ticks = self._encoder_ticks
-            if cancel_error is None:
-                self._state["navigation_state"] = "FAILED"
-                self._state["last_error"] = "BLOCKED_TIMEOUT"
-                self._reset_navigation_progress_locked()
-                self._touch_locked()
+            cancel_error = None
+            try:
+                await asyncio.to_thread(self._ros.cancel_navigation)
+            except Exception as exc:
+                cancel_error = exc
 
-        if cancel_error is not None:
-            await self.emergency_stop("BLOCKED_TIMEOUT", automatic=True)
-            return
-        if not delivered:
-            # Nav2 is canceled, so the route is no longer producing commands.
-            # Keep the blocked outcome as FAILED rather than converting it to E-stop.
-            return
+            delivered = await self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": "navigation_blocked_timeout"},
+            )
+            failed = False
+            with self._lock:
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                if (
+                    cancel_error is None
+                    and self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+                    and not self._state["emergency_stop"]
+                ):
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "BLOCKED_TIMEOUT"
+                    self._reset_navigation_progress_locked()
+                    self._touch_locked()
+                    failed = True
+
+            if cancel_error is not None:
+                await self.emergency_stop("BLOCKED_TIMEOUT", automatic=True)
+                return True
+            if not delivered:
+                # Nav2 is canceled, so the route is no longer producing commands.
+                # Keep the blocked outcome as FAILED rather than converting it to E-stop.
+                return failed
+            return failed
+        finally:
+            with self._lock:
+                self._blocked_failure_in_progress = False
 
     async def _activate_map_when_ready(self, payload: dict[str, Any], user: str) -> dict[str, Any]:
         deadline = time.monotonic() + self._driving_ready_timeout_sec
@@ -841,28 +892,20 @@ class NavigationControlApi:
         try:
             x = float(payload["x"])
             y = float(payload["y"])
-            yaw_value = payload.get("yaw")
-            yaw = float(yaw_value) if yaw_value is not None else None
         except (KeyError, TypeError, ValueError, OverflowError):
             return
         if not math.isfinite(x) or not math.isfinite(y):
             return
-        if yaw is not None and not math.isfinite(yaw):
-            yaw = None
 
         previous = self._navigation_progress_pose
         if previous is None or self._navigation_progress_at is None:
-            self._navigation_progress_pose = (x, y, yaw)
+            self._navigation_progress_pose = (x, y)
             self._navigation_progress_at = received_at
             return
 
         moved = math.hypot(x - previous[0], y - previous[1]) >= self.PROGRESS_DISTANCE_M
-        rotated = False
-        if yaw is not None and previous[2] is not None:
-            yaw_delta = math.atan2(math.sin(yaw - previous[2]), math.cos(yaw - previous[2]))
-            rotated = abs(yaw_delta) >= self.PROGRESS_YAW_RAD
-        if moved or rotated:
-            self._navigation_progress_pose = (x, y, yaw)
+        if moved:
+            self._navigation_progress_pose = (x, y)
             self._navigation_progress_at = received_at
 
     def _navigation_progress_timed_out_locked(self, now: float) -> bool:
