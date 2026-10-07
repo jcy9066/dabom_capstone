@@ -142,6 +142,7 @@ class ActionRecognizer:
             else 1.5
         )
         self.last_valid_pose_at = {}
+        self.latest_pair_actions = {}
         self._interaction_frame_counter = 0
 
     def expire_tracking_state(self, now=None):
@@ -162,6 +163,7 @@ class ActionRecognizer:
         self.action_buffer.clear()
         self.pair_action_buffer.clear()
         self.last_valid_pose_at.clear()
+        self.latest_pair_actions.clear()
         self._interaction_frame_counter = 0
         if self.temporal_policy is not None:
             self.temporal_policy.reset()
@@ -213,6 +215,7 @@ class ActionRecognizer:
 
     def process_many(self, frame, objs):
         self.expire_tracking_state()
+        self.latest_pair_actions = {}
         for obj in objs:
             self._mark_observed(obj["id"])
 
@@ -262,13 +265,7 @@ class ActionRecognizer:
             annotated_action["interaction_pair_ids"] = list(pair_id)
             annotated_action["interaction_role"] = "participant"
             annotated_action["source"] = "pair"
-            for obj in (first, second):
-                skeleton, current = results.get(
-                    obj["id"],
-                    (obj.get("keypoints"), None),
-                )
-                if self._should_replace_with_pair(current, annotated_action):
-                    results[obj["id"]] = (skeleton, annotated_action)
+            self.latest_pair_actions[pair_id] = annotated_action
         return results
 
     def _should_replace_with_pair(self, current, pair_action):
