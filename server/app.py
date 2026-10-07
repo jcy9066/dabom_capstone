@@ -399,6 +399,7 @@ latest_result = {
     "ok": True,
     "robot_id": SERVER_ROBOT_ID,
     "detections": [],
+    "pair_actions": [],
     "danger": False,
     "pipeline": None,
     "model_error": None,
@@ -1285,6 +1286,7 @@ def set_model_pipeline_enabled(enabled):
         if not enabled and success:
             with state_lock:
                 latest_result["detections"] = []
+                latest_result["pair_actions"] = []
                 latest_result["danger"] = False
 
         return success
@@ -2417,6 +2419,9 @@ def activate_stream_generation(robot_id, infer):
             )
 
         with state_lock:
+            latest_result["detections"] = []
+            latest_result["pair_actions"] = []
+            latest_result["danger"] = False
             frame_stats.update({"last_time": now, "count": 0, "fps": 0})
             decode_stats.update({"last_time": now, "count": 0, "fps": 0})
             publish_stats.update(
