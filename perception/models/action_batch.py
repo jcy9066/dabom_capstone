@@ -35,9 +35,18 @@ def process_keypoint_many(analyzer, frame, objs, total_frames):
     for obj in objs:
         kpts = obj.get("keypoints")
         scores = obj.get("keypoints_scores")
-        if kpts is None or len(kpts) == 0:
+        if (
+            kpts is None
+            or len(kpts) == 0
+            or scores is None
+            or len(scores) == 0
+        ):
             unavailable = getattr(analyzer, "observation_unavailable", None)
-            issue = unavailable(obj["id"], "YOLO pose keypoints unavailable") if callable(unavailable) else None
+            issue = (
+                unavailable(obj["id"], "YOLO pose keypoints or scores unavailable")
+                if callable(unavailable)
+                else None
+            )
             results[obj["id"]] = (None, issue)
             continue
         results[obj["id"]] = _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames)
