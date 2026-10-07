@@ -177,7 +177,9 @@ class ActionRecognizer:
             return results
 
         self._interaction_frame_counter += 1
-        for first, second in self._select_interaction_pairs(objs):
+        selected_pairs = self._select_interaction_pairs(objs)
+        self._clear_unselected_visible_pair_state(objs, selected_pairs)
+        for first, second in selected_pairs:
             pair_id = tuple(sorted((first["id"], second["id"])))
             self.pair_temporal_policy.mark_observed(pair_id)
             ran_pair_inference = (
@@ -283,6 +285,34 @@ class ActionRecognizer:
             if len(selected) >= self.interaction_max_pairs:
                 break
         return selected
+
+    def _clear_unselected_visible_pair_state(self, objs, selected_pairs):
+        by_id = {obj["id"]: obj for obj in objs}
+        selected_ids = {
+            tuple(sorted((first["id"], second["id"])))
+            for first, second in selected_pairs
+        }
+        known_pairs = set(self.pair_action_buffer)
+        if self.pair_temporal_policy is not None:
+            known_pairs.update(self.pair_temporal_policy.last_seen_at)
+            known_pairs.update(self.pair_temporal_policy.history)
+            known_pairs.update(self.pair_temporal_policy.current)
+
+        for pair_id in list(known_pairs):
+            if not isinstance(pair_id, tuple) or len(pair_id) != 2:
+                continue
+            normalized = tuple(sorted(pair_id))
+            if normalized in selected_ids:
+                continue
+            if normalized[0] not in by_id or normalized[1] not in by_id:
+                continue
+
+            self.pair_action_buffer.pop(pair_id, None)
+            self.pair_action_buffer.pop(normalized, None)
+            if self.pair_temporal_policy is not None:
+                self.pair_temporal_policy.clear(pair_id)
+                if normalized != pair_id:
+                    self.pair_temporal_policy.clear(normalized)
 
     def _is_interaction_pair(self, first, second):
         ratio = self._pair_distance_ratio(first, second)
