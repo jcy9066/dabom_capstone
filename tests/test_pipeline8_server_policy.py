@@ -288,3 +288,79 @@ def test_empty_scene_clears_preserved_pair_actions():
 
     assert 'latest_pairs = getattr(analyzer, "latest_pair_actions", None)' in source
     assert "latest_pairs.clear()" in source
+
+
+def test_stale_pair_display_expires_after_ttl(monkeypatch):
+    import server.app as server_app
+
+    monkeypatch.setattr(server_app, "ACTION_DISPLAY_TTL_SEC", 1.0)
+    buffer = {}
+    fresh = {
+        (1, 2): {
+            "label": "PUNCHING",
+            "score": 0.8,
+            "is_danger": True,
+            "source": "pair",
+            "observation_stale": False,
+        }
+    }
+    stale = {
+        (1, 2): {
+            "label": "PUNCHING",
+            "score": 0.8,
+            "is_danger": True,
+            "source": "pair",
+            "observation_stale": True,
+        }
+    }
+
+    first = server_app.resolve_pair_actions_for_display(fresh, buffer, now=10.0)
+    within_ttl = server_app.resolve_pair_actions_for_display(
+        stale,
+        buffer,
+        now=10.5,
+    )
+    expired = server_app.resolve_pair_actions_for_display(
+        stale,
+        buffer,
+        now=11.1,
+    )
+
+    assert (1, 2) in first
+    assert within_ttl[(1, 2)]["observation_stale"] is True
+    assert expired == {}
+    assert buffer == {}
+
+
+def test_local_frame_processor_uses_maximum_weight_pair_matching():
+    import server.app as server_app
+
+    pair_actions = {
+        (1, 2): {
+            "label": "PUNCHING",
+            "score": 0.90,
+            "is_danger": True,
+        },
+        (1, 3): {
+            "label": "PUNCHING",
+            "score": 0.80,
+            "is_danger": True,
+        },
+        (2, 4): {
+            "label": "PUNCHING",
+            "score": 0.80,
+            "is_danger": True,
+        },
+    }
+
+    selected = server_app.FrameProcessor._select_non_overlapping_pairs(
+        pair_actions
+    )
+
+    assert {pair_key for pair_key, _source in selected} == {(1, 3), (2, 4)}
+
+
+def test_pair_results_are_cleared_when_model_is_disabled():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert 'latest_result["pair_actions"] = []' in source
