@@ -128,6 +128,12 @@ class ActionRecognizer:
             and os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip()
             else 2
         )
+        self.interaction_max_pairs = (
+            env_int("ACTION_INTERACTION_MAX_PAIRS", minimum=1, maximum=16)
+            if self.recall_mode
+            and os.getenv("ACTION_INTERACTION_MAX_PAIRS", "").strip()
+            else 4
+        )
         self._interaction_frame_counter = 0
 
     def expire_tracking_state(self, now=None):
@@ -235,17 +241,16 @@ class ActionRecognizer:
                     continue
                 candidates.append((ratio, first["id"], second["id"], first, second))
 
-        selected = []
-        used_ids = set()
-        for _ratio, first_id, second_id, first, second in sorted(
+        ordered = sorted(
             candidates,
             key=lambda item: (item[0], item[1], item[2]),
-        ):
-            if first_id in used_ids or second_id in used_ids:
-                continue
-            used_ids.update((first_id, second_id))
-            selected.append((first, second))
-        return selected
+        )
+        return [
+            (first, second)
+            for _ratio, _first_id, _second_id, first, second in ordered[
+                : self.interaction_max_pairs
+            ]
+        ]
 
     def _is_interaction_pair(self, first, second):
         ratio = self._pair_distance_ratio(first, second)
