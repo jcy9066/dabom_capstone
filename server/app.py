@@ -2373,11 +2373,18 @@ def process_frame_for_dashboard(frame):
         },
     }
 
-def publish_preview_frame(frame, robot_id=SERVER_ROBOT_ID, original_bytes=None):
+def publish_preview_frame(
+    frame,
+    robot_id=SERVER_ROBOT_ID,
+    original_bytes=None,
+    stream_id=None,
+):
     global current_frame, current_frame_seq
 
     frame_bytes = encode_jpeg(frame)
     with frame_condition:
+        if stream_id is not None and stream_id != active_stream_id:
+            return None
         now = time.time()
         current_frame = frame_bytes
         current_frame_seq += 1
@@ -2497,6 +2504,7 @@ def publish_processed_inference_if_current(
         display_frame_seq = publish_preview_frame(
             processed["frame"],
             robot_id=robot_id,
+            stream_id=stream_id,
         )
         result = build_empty_result(robot_id)
         result["detections"] = processed["detections"]
@@ -2687,14 +2695,19 @@ def inference_worker():
                 continue
         except Exception as exc:
             with state_lock:
-                stream_stats["last_error"] = str(exc)
-                latest_result["model_error"] = str(exc)
+                current_generation = (
+                    stream_id is None or stream_id == active_stream_id
+                )
+                if current_generation:
+                    stream_stats["last_error"] = str(exc)
+                    latest_result["model_error"] = str(exc)
             print(f"[inference] worker error: {exc}")
-            submit_automatic_event(
-                "SYSTEM_MONITOR",
-                "SYSTEM_ERROR",
-                message="AI inference worker error detected.",
-            )
+            if current_generation:
+                submit_automatic_event(
+                    "SYSTEM_MONITOR",
+                    "SYSTEM_ERROR",
+                    message="AI inference worker error detected.",
+                )
 
 
 def start_inference_worker():
@@ -4644,6 +4657,9 @@ def h264_decode_loop(proc, robot_id, stream_id):
     min_preview_interval = 1.0 / PREVIEW_MAX_FPS
     try:
         while True:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    break
             ensure_runtime_model_config(reason="stream")
             infer = MODEL_ACTIVE
             with state_lock:
@@ -4674,7 +4690,10 @@ def h264_decode_loop(proc, robot_id, stream_id):
                 frame_seq = publish_preview_frame(
                     preview_frame,
                     robot_id=robot_id,
+                    stream_id=stream_id,
                 )
+                if frame_seq is None:
+                    break
                 last_preview_at = now
             should_infer = (
                 infer
@@ -4693,6 +4712,8 @@ def h264_decode_loop(proc, robot_id, stream_id):
                     stream_id=stream_id,
                 )
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["frames_decoded"] += 1
                 update_rate_counter(decode_stats, time.time())
                 stream_stats["last_frame_at"] = time.time()
@@ -4700,11 +4721,12 @@ def h264_decode_loop(proc, robot_id, stream_id):
     except Exception as exc:
         message = str(exc)
         with state_lock:
-            stream_stats["last_error"] = message
+            if stream_id == active_stream_id:
+                stream_stats["last_error"] = message
         print(f"[stream/h264] decode loop error: {message}")
 
 
-def ffmpeg_stderr_loop(proc):
+def ffmpeg_stderr_loop(proc, stream_id):
     if proc.stderr is None:
         return
     try:
@@ -4713,6 +4735,8 @@ def ffmpeg_stderr_loop(proc):
             if not line:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    return
                 stream_stats["ffmpeg_stderr_tail"].append(line)
                 stream_stats["ffmpeg_stderr_tail"] = stream_stats[
                     "ffmpeg_stderr_tail"
@@ -4777,7 +4801,7 @@ async def receive_h264_stream(request: Request):
     )
     stderr_reader = threading.Thread(
         target=ffmpeg_stderr_loop,
-        args=(proc,),
+        args=(proc, stream_id),
         daemon=True,
     )
     reader.start()
@@ -4789,6 +4813,8 @@ async def receive_h264_stream(request: Request):
             if not chunk:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["bytes_received"] += len(chunk)
                 stream_stats["last_byte_at"] = time.time()
                 stream_stats["ffmpeg_returncode"] = proc.poll()
@@ -4796,21 +4822,24 @@ async def receive_h264_stream(request: Request):
                 break
             if proc.poll() is not None:
                 with state_lock:
-                    stream_stats["ffmpeg_returncode"] = proc.returncode
+                    if stream_id == active_stream_id:
+                        stream_stats["ffmpeg_returncode"] = proc.returncode
                 break
             try:
                 await asyncio.to_thread(proc.stdin.write, chunk)
                 await asyncio.to_thread(proc.stdin.flush)
             except BrokenPipeError:
                 with state_lock:
-                    stream_stats["last_error"] = "ffmpeg stdin broken pipe"
-                    stream_stats["ffmpeg_returncode"] = proc.poll()
+                    if stream_id == active_stream_id:
+                        stream_stats["last_error"] = "ffmpeg stdin broken pipe"
+                        stream_stats["ffmpeg_returncode"] = proc.poll()
                 break
     except ClientDisconnect:
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
     finally:
         if proc.stdin is not None:
             try:
@@ -4824,9 +4853,10 @@ async def receive_h264_stream(request: Request):
         reader.join(timeout=2.0)
         stderr_reader.join(timeout=1.0)
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
 
     print(f"[stream/h264] disconnected robot_id={robot_id}")
     return {"ok": True, "robot_id": robot_id}

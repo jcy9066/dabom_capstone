@@ -105,3 +105,16 @@ def test_pipeline8_ignores_legacy_action_policy_controls():
 
     assert 'if pipeline != "8":' in source
     assert 'if config["pipeline"] != "8":' in source
+
+
+def test_stale_h264_generation_cannot_overwrite_new_stream_state():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert "stream_id=None," in source
+    assert "if stream_id is not None and stream_id != active_stream_id:" in source
+    assert "stream_id=stream_id," in source
+    assert "def ffmpeg_stderr_loop(proc, stream_id):" in source
+    assert "args=(proc, stream_id)" in source
+    assert "if stream_id != active_stream_id:" in source
+    assert "if stream_id == active_stream_id:" in source
+    assert "current_generation = (" in source
