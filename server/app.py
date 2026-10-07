@@ -522,6 +522,10 @@ database = Database()
 automatic_notifier = TelegramNotifier()
 event_log_worker = None
 system_status_writer = None
+interaction_incident_state = {
+    "next_id": 1,
+    "incidents": {},
+}
 privacy_processor = None
 privacy_processor_lock = threading.Lock()
 frozen_frame_cache = FrozenFrameCache()
@@ -1388,6 +1392,119 @@ def draw_corner_brackets(frame, box, color, thickness=2):
         cv2.line(frame, corner, end, color, thickness, cv2.LINE_AA)
 
 
+def _union_box(first_box, second_box):
+    return (
+        min(float(first_box[0]), float(second_box[0])),
+        min(float(first_box[1]), float(second_box[1])),
+        max(float(first_box[2]), float(second_box[2])),
+        max(float(first_box[3]), float(second_box[3])),
+    )
+
+
+def _box_iou(first_box, second_box):
+    x1 = max(first_box[0], second_box[0])
+    y1 = max(first_box[1], second_box[1])
+    x2 = min(first_box[2], second_box[2])
+    y2 = min(first_box[3], second_box[3])
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if intersection <= 0.0:
+        return 0.0
+    first_area = max(0.0, first_box[2] - first_box[0]) * max(
+        0.0,
+        first_box[3] - first_box[1],
+    )
+    second_area = max(0.0, second_box[2] - second_box[0]) * max(
+        0.0,
+        second_box[3] - second_box[1],
+    )
+    union = first_area + second_area - intersection
+    return 0.0 if union <= 0.0 else intersection / union
+
+
+def _box_center_distance(first_box, second_box):
+    first_center = (
+        (first_box[0] + first_box[2]) / 2.0,
+        (first_box[1] + first_box[3]) / 2.0,
+    )
+    second_center = (
+        (second_box[0] + second_box[2]) / 2.0,
+        (second_box[1] + second_box[3]) / 2.0,
+    )
+    return float(
+        np.linalg.norm(
+            np.asarray(first_center, dtype=float)
+            - np.asarray(second_center, dtype=float)
+        )
+    )
+
+
+def reset_interaction_incidents():
+    interaction_incident_state["next_id"] = 1
+    interaction_incident_state["incidents"].clear()
+
+
+def interaction_incident_key(
+    pair_key,
+    first,
+    second,
+    label,
+    *,
+    frame_token=None,
+    now=None,
+):
+    now = time.monotonic() if now is None else float(now)
+    ttl_sec = max(1.0, float(EVENT_SAVE_COOLDOWN_SEC))
+    incidents = interaction_incident_state["incidents"]
+    for incident_id, incident in list(incidents.items()):
+        if now - incident["last_seen"] > ttl_sec:
+            incidents.pop(incident_id, None)
+
+    current_box = _union_box(first["box"], second["box"])
+    current_width = max(1.0, current_box[2] - current_box[0])
+    current_height = max(1.0, current_box[3] - current_box[1])
+    current_scale = max(current_width, current_height)
+    normalized_label = str(label or "").strip().upper()
+    assigned_ids = {
+        incident_id
+        for incident_id, incident in incidents.items()
+        if frame_token is not None and incident.get("frame_token") == frame_token
+    }
+
+    best_id = None
+    best_affinity = float("-inf")
+    for incident_id, incident in incidents.items():
+        if incident_id in assigned_ids or incident["label"] != normalized_label:
+            continue
+        previous_box = incident["box"]
+        iou = _box_iou(current_box, previous_box)
+        distance = _box_center_distance(current_box, previous_box)
+        previous_scale = max(
+            1.0,
+            previous_box[2] - previous_box[0],
+            previous_box[3] - previous_box[1],
+        )
+        match_distance = max(40.0, 0.45 * max(current_scale, previous_scale))
+        if iou < 0.20 and distance > match_distance:
+            continue
+        affinity = iou - distance / max(match_distance, 1.0)
+        if affinity > best_affinity:
+            best_affinity = affinity
+            best_id = incident_id
+
+    if best_id is None:
+        best_id = interaction_incident_state["next_id"]
+        interaction_incident_state["next_id"] += 1
+
+    incidents[best_id] = {
+        "label": normalized_label,
+        "box": current_box,
+        "last_seen": now,
+        "frame_token": frame_token,
+        "pair_key": tuple(pair_key),
+    }
+    return f"interaction:{best_id}"
+
+
 def draw_interaction_badge(frame, text, center, color, score=None):
     if not text:
         return
@@ -1576,7 +1693,7 @@ def draw_interaction_overlays(frame, detections, pair_actions=None):
         detections,
         pair_actions,
     ):
-        danger = bool(source.get("danger"))
+        danger = bool(source.get("danger") or source.get("is_danger"))
         color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
 
         first_box = clamp_box(first["box"], frame_w, frame_h)
@@ -2015,6 +2132,7 @@ def process_frame_for_dashboard(frame):
         detections,
         pair_actions,
     )
+    incident_frame_token = time.monotonic_ns()
     for pair_key, first, second, source in resolved_pair_overlays:
         if not source.get("is_danger") or source.get("observation_stale"):
             continue
@@ -2033,6 +2151,7 @@ def process_frame_for_dashboard(frame):
                     first,
                     second,
                     action_label,
+                    frame_token=incident_frame_token,
                 ),
             )
 
@@ -2229,6 +2348,7 @@ def activate_stream_generation(robot_id, infer):
                 reset_tracking_state()
             processor.action_display_buffer.clear()
             processor.violence_heuristic.reset()
+        reset_interaction_incidents()
 
         with inference_condition:
             inference_slot.update(
