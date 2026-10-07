@@ -531,3 +531,24 @@ def test_pose_gap_resets_single_and_pair_history():
     assert pair_id not in analyzer.pair_action_buffer
     assert pair_id not in analyzer.pair_temporal_policy.history
     assert analyzer.last_valid_pose_at[7] == 11.1
+
+
+def test_competing_dangerous_pairs_keep_higher_score_for_shared_person():
+    analyzer = build_recall_analyzer()
+    weaker = {
+        "label": "PUSHING",
+        "score": 0.61,
+        "is_danger": True,
+        "confidence_level": "danger",
+        "source": "pair",
+    }
+    stronger = {
+        "label": "PUNCHING",
+        "score": 0.82,
+        "is_danger": True,
+        "confidence_level": "danger",
+        "source": "pair",
+    }
+
+    assert analyzer._should_replace_with_pair(weaker, stronger) is True
+    assert analyzer._should_replace_with_pair(stronger, weaker) is False
