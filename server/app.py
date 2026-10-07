@@ -1887,6 +1887,9 @@ def collect_action_results(frame, tracked_boxes):
         expire_tracking_state()
 
     if not persons:
+        latest_pairs = getattr(analyzer, "latest_pair_actions", None)
+        if isinstance(latest_pairs, dict):
+            latest_pairs.clear()
         return {}
 
     if hasattr(analyzer, "process_many"):
