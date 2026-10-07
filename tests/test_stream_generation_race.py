@@ -34,6 +34,9 @@ class _FakeProcessor:
         self.detector = _FakeDetector()
         self.action_analyzer = _FakeActionAnalyzer()
         self.action_display_buffer = {"old": {"label": "FALLING"}}
+        self.pair_action_display_buffer = {
+            (1, 2): {"label": "PUNCHING", "updated_at": 1.0}
+        }
         self.violence_heuristic = _FakeViolenceHeuristic()
 
 
@@ -108,6 +111,8 @@ def test_reconnect_rejects_old_frame_waiting_before_processing(monkeypatch):
     assert processor.action_analyzer.generation_seen_at_reset == new_generation
     assert processor.violence_heuristic.reset_calls == 1
     assert processor.action_display_buffer == {}
+    assert processor.pair_action_display_buffer == {}
+    assert app.latest_result.get("pair_actions") == []
     assert app.inference_slot["frame"] is None
     assert app.inference_slot["stream_id"] is None
 
