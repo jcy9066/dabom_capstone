@@ -1427,14 +1427,14 @@ def interaction_pair_overlays(detections):
         if first is None or second is None:
             continue
         seen.add(pair_key)
-        overlays.append((pair_key, first, second))
+        overlays.append((pair_key, first, second, detection))
     return overlays
 
 
 def draw_interaction_overlays(frame, detections):
     frame_h, frame_w = frame.shape[:2]
-    for _pair_key, first, second in interaction_pair_overlays(detections):
-        danger = bool(first.get("danger") or second.get("danger"))
+    for _pair_key, first, second, source in interaction_pair_overlays(detections):
+        danger = bool(source.get("danger"))
         color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
 
         first_box = clamp_box(first["box"], frame_w, frame_h)
@@ -1456,13 +1456,15 @@ def draw_interaction_overlays(frame, detections):
             cv2.circle(frame, center, 6, (18, 18, 18), -1, cv2.LINE_AA)
             cv2.circle(frame, center, 3, color, -1, cv2.LINE_AA)
 
-        label = first.get("label") or second.get("label") or "INTERACTION"
-        scores = [
-            value
-            for value in (first.get("score"), second.get("score"))
-            if value is not None
-        ]
-        score_text = f" · {max(float(value) for value in scores) * 100:.0f}%" if scores else ""
+        # Redraw both participant skeletons in the interaction color so the
+        # pair remains visually coherent even when one participant also has a
+        # stronger person-level action.
+        draw_skeleton_points(frame, first.get("skeleton"), color)
+        draw_skeleton_points(frame, second.get("skeleton"), color)
+
+        label = source.get("label") or "INTERACTION"
+        score = source.get("score")
+        score_text = f" · {float(score) * 100:.0f}%" if score is not None else ""
         badge_center = (
             int((first_center[0] + second_center[0]) / 2),
             max(18, int((first_center[1] + second_center[1]) / 2) - 26),
@@ -1718,6 +1720,7 @@ def process_frame_for_dashboard(frame):
             "interaction_pair_ids": None,
             "interaction_role": None,
             "action_source": None,
+            "observation_stale": False,
             "visual_state": "normal",
             "inference_status": None,
             "inference_error": None,
@@ -1784,6 +1787,9 @@ def process_frame_for_dashboard(frame):
                     "interaction_role"
                 )
                 detection["action_source"] = current_action.get("source")
+                detection["observation_stale"] = bool(
+                    current_action.get("observation_stale")
+                )
                 if current_action["is_danger"]:
                     danger = True
                     color = (0, 0, 255)
@@ -1797,19 +1803,17 @@ def process_frame_for_dashboard(frame):
                             f"!!! {action_label} !!! "
                             f"{current_action['score'] * 100:.0f}%"
                         )
-                    pair_ids = current_action.get("interaction_pair_ids") or []
-                    should_emit_event = (
-                        not pair_ids
-                        or oid == min(int(pair_id) for pair_id in pair_ids)
-                    )
-                    if not observation_issue and should_emit_event:
+                    if (
+                        not observation_issue
+                        and current_action.get("source") != "pair"
+                    ):
                         event_type = vision_event_type(action_label)
                         if event_type:
                             submit_automatic_event(
                                 "VISION_AI",
                                 event_type,
                                 confidence=detection["score"],
-                                message=f"위험 상호작용 감지: {action_label}",
+                                message=f"위험 행동 감지: {action_label}",
                                 frame=frame,
                             )
                         else:
@@ -1848,19 +1852,25 @@ def process_frame_for_dashboard(frame):
             detection["label"] = "WEAPON"
             detection["danger"] = True
 
-        # Bounding box visualization disabled. Keep this block for easy rollback.
-        # if cls_id == 0 and not detection["label"] and not detection["danger"]:
-        #     draw_translucent_box(display_frame, (x1, y1), (x2, y2), color)
-        # else:
-        #     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-        if skeleton is not None:
-            frame_processor.action_analyzer.draw_skeleton(
-                display_frame,
-                skeleton,
-                color,
-            )
-        draw_overlay_label(display_frame, label, (x1, y1 - 8), color)
         detections.append(detection)
+
+    for detection in detections:
+        if detection.get("box"):
+            draw_detection_overlay(display_frame, detection)
+
+    for _pair_key, _first, _second, source in interaction_pair_overlays(detections):
+        if not source.get("danger") or source.get("observation_stale"):
+            continue
+        action_label = source.get("label")
+        event_type = vision_event_type(action_label)
+        if event_type:
+            submit_automatic_event(
+                "VISION_AI",
+                event_type,
+                confidence=source.get("score"),
+                message=f"위험 상호작용 감지: {action_label}",
+                frame=frame,
+            )
 
     draw_interaction_overlays(display_frame, detections)
     render_ms = (time.time() - render_started) * 1000
