@@ -1613,6 +1613,41 @@ def serialize_pair_actions(pair_actions):
     ]
 
 
+def resolve_pair_actions_for_display(pair_actions, display_buffer, now=None):
+    now = time.time() if now is None else float(now)
+    normalized = _normalize_pair_actions(pair_actions)
+    resolved = {}
+
+    for pair_key, source in normalized.items():
+        source = dict(source)
+        if source.get("observation_stale"):
+            cached = display_buffer.get(pair_key)
+            if cached is None:
+                continue
+            if now - float(cached.get("updated_at", 0.0)) > ACTION_DISPLAY_TTL_SEC:
+                display_buffer.pop(pair_key, None)
+                continue
+            resolved_source = {
+                key: value
+                for key, value in cached.items()
+                if key != "updated_at"
+            }
+            resolved_source["observation_stale"] = True
+            resolved[pair_key] = resolved_source
+            continue
+
+        cached = dict(source)
+        cached["updated_at"] = now
+        display_buffer[pair_key] = cached
+        resolved[pair_key] = source
+
+    for pair_key in list(display_buffer):
+        if pair_key not in normalized:
+            display_buffer.pop(pair_key, None)
+
+    return resolved
+
+
 def _pair_weight(source):
     score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
     danger = bool(source.get("danger") or source.get("is_danger"))
@@ -1936,8 +1971,12 @@ def process_frame_for_dashboard(frame):
 
     action_started = time.time()
     action_results = collect_action_results(frame, tracked_boxes)
-    pair_actions = dict(
+    raw_pair_actions = dict(
         getattr(frame_processor.action_analyzer, "latest_pair_actions", {}) or {}
+    )
+    pair_actions = resolve_pair_actions_for_display(
+        raw_pair_actions,
+        frame_processor.pair_action_display_buffer,
     )
     skeletons_by_id = {
         oid: result[0]
@@ -2362,6 +2401,7 @@ def activate_stream_generation(robot_id, infer):
             if callable(reset_tracking_state):
                 reset_tracking_state()
             processor.action_display_buffer.clear()
+            processor.pair_action_display_buffer.clear()
             processor.violence_heuristic.reset()
         reset_interaction_incidents()
 
