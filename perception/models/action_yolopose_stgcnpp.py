@@ -357,10 +357,13 @@ class ActionRecognizer:
         pair_id = tuple(obj["id"] for obj in ordered)
         keypoints = [obj.get("keypoints") for obj in ordered]
         scores = [obj.get("keypoints_scores") for obj in ordered]
-        if any(value is None or len(value) == 0 for value in keypoints):
+        if (
+            any(value is None or len(value) == 0 for value in keypoints)
+            or any(value is None or len(value) == 0 for value in scores)
+        ):
             return pair_id, observation_issue(
                 OBSERVATION_UNAVAILABLE,
-                "interaction pose keypoints unavailable",
+                "interaction pose keypoints or scores unavailable",
             )
 
         buffer = self.pair_action_buffer.setdefault(
@@ -420,10 +423,15 @@ class ActionRecognizer:
 
         kpts = obj.get("keypoints")
         scores = obj.get("keypoints_scores")
-        if kpts is None or len(kpts) == 0:
+        if (
+            kpts is None
+            or len(kpts) == 0
+            or scores is None
+            or len(scores) == 0
+        ):
             return None, self.observation_unavailable(
                 obj_id,
-                "YOLO pose keypoints unavailable",
+                "YOLO pose keypoints or scores unavailable",
             )
 
         self.note_valid_pose(obj_id)
