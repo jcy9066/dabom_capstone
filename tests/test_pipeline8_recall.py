@@ -233,3 +233,27 @@ def test_single_person_interaction_is_suspicious_fallback(monkeypatch):
     assert action["is_danger"] is False
     assert action["confidence_level"] == "suspicious"
     assert action["source"] == "single_fallback"
+
+
+def test_interaction_pose_gap_is_reported_as_unavailable():
+    analyzer = build_recall_analyzer()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    first = {
+        "id": 10,
+        "box": [0, 0, 100, 200],
+        "center": (50.0, 100.0),
+        "keypoints": None,
+        "keypoints_scores": None,
+    }
+    second = {
+        "id": 11,
+        "box": [80, 0, 180, 200],
+        "center": (130.0, 100.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": np.ones(17, dtype=np.float32),
+    }
+
+    result = analyzer._process_interaction_pair(frame, first, second)
+
+    assert is_observation_issue(result)
+    assert result["observation_status"] == "unavailable"
