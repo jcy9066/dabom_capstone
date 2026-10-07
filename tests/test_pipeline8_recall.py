@@ -29,6 +29,7 @@ def build_recall_analyzer():
     analyzer.min_history_frames = 12
     analyzer.use_native_history_length = True
     analyzer.interaction_infer_every_n = 2
+    analyzer.interaction_max_pairs = 4
     analyzer._interaction_frame_counter = 0
     analyzer.temporal_policy = TemporalActionPolicy(
         window=5,
@@ -198,8 +199,9 @@ def test_interaction_pair_warmup_does_not_repeat_last_frame(monkeypatch):
     assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
 
 
-def test_pair_selection_is_nearest_and_non_overlapping():
+def test_pair_selection_keeps_nearest_candidates_with_budget():
     analyzer = build_recall_analyzer()
+    analyzer.interaction_max_pairs = 3
     objs = [
         {"id": 1, "box": [0, 0, 100, 200], "center": (50.0, 100.0)},
         {"id": 2, "box": [60, 0, 160, 200], "center": (110.0, 100.0)},
@@ -208,9 +210,12 @@ def test_pair_selection_is_nearest_and_non_overlapping():
     ]
 
     pairs = analyzer._select_interaction_pairs(objs)
-    pair_ids = {tuple(sorted((first["id"], second["id"]))) for first, second in pairs}
+    pair_ids = [tuple(sorted((first["id"], second["id"]))) for first, second in pairs]
 
-    assert pair_ids == {(1, 2), (3, 4)}
+    assert len(pair_ids) == 3
+    assert (1, 2) in pair_ids
+    assert (3, 4) in pair_ids
+    assert any(2 in pair and 3 in pair for pair in pair_ids)
 
 
 def test_single_person_interaction_is_suspicious_fallback(monkeypatch):
