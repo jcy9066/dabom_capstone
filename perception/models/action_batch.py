@@ -54,15 +54,42 @@ def _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames):
 
     cur_kpts = analyzer.action_buffer[obj_id]["kpts"]
     cur_scores = analyzer.action_buffer[obj_id]["scores"]
-    pad_len = total_frames - len(cur_kpts)
+    use_native_history = bool(getattr(analyzer, "use_native_history_length", False))
+    min_history_frames = int(getattr(analyzer, "min_history_frames", 1))
 
-    pad_kpts = cur_kpts + [cur_kpts[-1]] * pad_len if pad_len > 0 else cur_kpts
-    pad_scores = cur_scores + [cur_scores[-1]] * pad_len if pad_len > 0 else cur_scores
-    object_classifier = getattr(analyzer, "_classify_with_object", None)
-    if callable(object_classifier):
-        action_res = object_classifier(obj_id, pad_kpts, pad_scores, frame.shape)
+    if use_native_history and len(cur_kpts) < min_history_frames:
+        unavailable = getattr(analyzer, "observation_unavailable", None)
+        action_res = (
+            unavailable(
+                obj_id,
+                f"action warm-up {len(cur_kpts)}/{min_history_frames}",
+            )
+            if callable(unavailable)
+            else None
+        )
     else:
-        action_res = analyzer._classify(pad_kpts, pad_scores, frame.shape)
+        if use_native_history:
+            model_kpts = cur_kpts
+            model_scores = cur_scores
+        else:
+            pad_len = total_frames - len(cur_kpts)
+            model_kpts = (
+                cur_kpts + [cur_kpts[-1]] * pad_len if pad_len > 0 else cur_kpts
+            )
+            model_scores = (
+                cur_scores + [cur_scores[-1]] * pad_len if pad_len > 0 else cur_scores
+            )
+
+        object_classifier = getattr(analyzer, "_classify_with_object", None)
+        if callable(object_classifier):
+            action_res = object_classifier(
+                obj_id,
+                model_kpts,
+                model_scores,
+                frame.shape,
+            )
+        else:
+            action_res = analyzer._classify(model_kpts, model_scores, frame.shape)
 
     if len(analyzer.action_buffer[obj_id]["kpts"]) >= total_frames:
         analyzer.action_buffer[obj_id]["kpts"].pop(0)
