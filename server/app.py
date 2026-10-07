@@ -570,6 +570,7 @@ def submit_automatic_event(
     message=None,
     robot_id=SERVER_ROBOT_ID,
     frame=None,
+    cooldown_key=None,
 ):
     worker = event_log_worker
     if worker is None:
@@ -591,6 +592,7 @@ def submit_automatic_event(
         message=message,
         location=robot_status_snapshot(),
         frame=event_frame,
+        cooldown_key=cooldown_key,
     )
 
 
@@ -1933,7 +1935,7 @@ def process_frame_for_dashboard(frame):
         if detection.get("box"):
             draw_detection_overlay(display_frame, detection)
 
-    for _pair_key, _first, _second, source in interaction_pair_overlays(detections):
+    for pair_key, _first, _second, source in interaction_pair_overlays(detections):
         if not source.get("danger") or source.get("observation_stale"):
             continue
         action_label = source.get("label")
@@ -1945,6 +1947,7 @@ def process_frame_for_dashboard(frame):
                 confidence=source.get("score"),
                 message=f"위험 상호작용 감지: {action_label}",
                 frame=frame,
+                cooldown_key=f"pair:{pair_key[0]}:{pair_key[1]}",
             )
 
     draw_interaction_overlays(display_frame, detections)
