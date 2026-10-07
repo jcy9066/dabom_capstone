@@ -1452,8 +1452,7 @@ def interaction_pair_overlays(detections):
         for detection in detections
         if detection.get("box") is not None
     }
-    seen = set()
-    overlays = []
+    candidate_by_pair = {}
     for detection in detections:
         pair_ids = detection.get("interaction_pair_ids") or []
         if detection.get("action_source") != "pair" or len(pair_ids) != 2:
@@ -1462,14 +1461,37 @@ def interaction_pair_overlays(detections):
             pair_key = tuple(sorted(int(value) for value in pair_ids))
         except (TypeError, ValueError):
             continue
-        if pair_key in seen:
-            continue
         first = by_id.get(pair_key[0])
         second = by_id.get(pair_key[1])
         if first is None or second is None:
             continue
-        seen.add(pair_key)
-        overlays.append((pair_key, first, second, detection))
+
+        previous = candidate_by_pair.get(pair_key)
+        if previous is None or (
+            bool(detection.get("danger")),
+            float(detection.get("score") or 0.0),
+        ) > (
+            bool(previous[3].get("danger")),
+            float(previous[3].get("score") or 0.0),
+        ):
+            candidate_by_pair[pair_key] = (pair_key, first, second, detection)
+
+    ordered = sorted(
+        candidate_by_pair.values(),
+        key=lambda item: (
+            not bool(item[3].get("danger")),
+            -float(item[3].get("score") or 0.0),
+            item[0],
+        ),
+    )
+    overlays = []
+    used_track_ids = set()
+    for item in ordered:
+        pair_key = item[0]
+        if pair_key[0] in used_track_ids or pair_key[1] in used_track_ids:
+            continue
+        overlays.append(item)
+        used_track_ids.update(pair_key)
     return overlays
 
 
