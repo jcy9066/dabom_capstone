@@ -26,6 +26,10 @@ def build_recall_analyzer():
     }
     analyzer.pair_action_buffer = {}
     analyzer.interaction_pair_distance_ratio = 1.5
+    analyzer.min_history_frames = 12
+    analyzer.use_native_history_length = True
+    analyzer.interaction_infer_every_n = 2
+    analyzer._interaction_frame_counter = 0
     analyzer.temporal_policy = TemporalActionPolicy(
         window=5,
         suspicious_min_hits=1,
@@ -143,10 +147,12 @@ def test_interaction_pair_uses_two_person_skeleton_tensor(monkeypatch):
         "keypoints_scores": scores,
     }
 
-    action = analyzer._process_interaction_pair(frame, first, second)
+    action = None
+    for _ in range(analyzer.min_history_frames):
+        action = analyzer._process_interaction_pair(frame, first, second)
 
-    assert captured["keypoints_shape"] == (2, 100, 17, 2)
-    assert captured["scores_shape"] == (2, 100, 17)
+    assert captured["keypoints_shape"] == (2, analyzer.min_history_frames, 17, 2)
+    assert captured["scores_shape"] == (2, analyzer.min_history_frames, 17)
     assert action["label"] == "PUNCHING"
 
 
@@ -156,3 +162,74 @@ def test_interaction_pair_distance_gate_rejects_far_people():
     second = {"id": 2, "box": [1000, 0, 1100, 200], "center": (1050.0, 100.0)}
 
     assert analyzer._is_interaction_pair(first, second) is False
+
+
+def test_interaction_pair_warmup_does_not_repeat_last_frame(monkeypatch):
+    analyzer = build_recall_analyzer()
+    called = False
+
+    def fake_predict(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return np.zeros(60, dtype=np.float32)
+
+    monkeypatch.setattr(analyzer, "_predict_scores_array", fake_predict)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    scores = np.ones(17, dtype=np.float32)
+    first = {
+        "id": 1,
+        "box": [0, 0, 100, 200],
+        "center": (50.0, 100.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": scores,
+    }
+    second = {
+        "id": 2,
+        "box": [80, 0, 180, 200],
+        "center": (130.0, 100.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32) * 2,
+        "keypoints_scores": scores,
+    }
+
+    result = analyzer._process_interaction_pair(frame, first, second)
+
+    assert is_observation_issue(result)
+    assert called is False
+    assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
+
+
+def test_pair_selection_is_nearest_and_non_overlapping():
+    analyzer = build_recall_analyzer()
+    objs = [
+        {"id": 1, "box": [0, 0, 100, 200], "center": (50.0, 100.0)},
+        {"id": 2, "box": [60, 0, 160, 200], "center": (110.0, 100.0)},
+        {"id": 3, "box": [140, 0, 240, 200], "center": (190.0, 100.0)},
+        {"id": 4, "box": [200, 0, 300, 200], "center": (250.0, 100.0)},
+    ]
+
+    pairs = analyzer._select_interaction_pairs(objs)
+    pair_ids = {tuple(sorted((first["id"], second["id"]))) for first, second in pairs}
+
+    assert pair_ids == {(1, 2), (3, 4)}
+
+
+def test_single_person_interaction_is_suspicious_fallback(monkeypatch):
+    analyzer = build_recall_analyzer()
+
+    def fake_predict(*_args, **_kwargs):
+        prediction = np.zeros(60, dtype=np.float32)
+        prediction[49] = 0.9
+        return prediction
+
+    monkeypatch.setattr(analyzer, "_predict_scores", fake_predict)
+    action = analyzer._classify_with_object(
+        5,
+        [np.ones((17, 2), dtype=np.float32)] * analyzer.min_history_frames,
+        [np.ones(17, dtype=np.float32)] * analyzer.min_history_frames,
+        (480, 640, 3),
+    )
+
+    assert action["label"] == "PUNCHING"
+    assert action["is_danger"] is False
+    assert action["confidence_level"] == "suspicious"
+    assert action["source"] == "single_fallback"
