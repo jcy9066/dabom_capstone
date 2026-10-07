@@ -527,10 +527,15 @@ class NavigationControlApi:
                 "An emergency stop interrupted navigation startup.",
                 409,
             )
+        try:
+            progress_pose = self._get_live_pose()
+        except Exception:
+            progress_pose = None
+        progress_started_at = time.time()
         with self._lock:
             self._state["navigation_state"] = "NAVIGATING"
             self._state["last_error"] = None
-            self._reset_navigation_progress_locked()
+            self._start_navigation_progress_locked(progress_pose, progress_started_at)
             self._touch_locked()
         return {**self.state_response(), "navigation": result}
 
@@ -694,8 +699,14 @@ class NavigationControlApi:
                 "A newer emergency stop interrupted navigation restart.",
                 409,
             )
+        try:
+            progress_pose = self._get_live_pose()
+        except Exception:
+            progress_pose = None
+        progress_started_at = time.time()
         with self._lock:
             self._state["navigation_state"] = "NAVIGATING"
+            self._start_navigation_progress_locked(progress_pose, progress_started_at)
             self._touch_locked()
         return {**self.state_response(), "navigation": navigation, "replanned": True}
 
@@ -879,6 +890,23 @@ class NavigationControlApi:
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
 
+    def _start_navigation_progress_locked(
+        self,
+        payload: dict[str, Any] | None,
+        received_at: float,
+    ) -> None:
+        self._navigation_progress_pose = None
+        self._navigation_progress_at = received_at
+        if not isinstance(payload, dict):
+            return
+        try:
+            x = float(payload["x"])
+            y = float(payload["y"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return
+        if math.isfinite(x) and math.isfinite(y):
+            self._navigation_progress_pose = (x, y)
+
     def _note_navigation_progress_locked(
         self,
         payload: dict[str, Any] | None,
@@ -898,8 +926,12 @@ class NavigationControlApi:
             return
 
         previous = self._navigation_progress_pose
-        if previous is None or self._navigation_progress_at is None:
+        if previous is None:
             self._navigation_progress_pose = (x, y)
+            if self._navigation_progress_at is None:
+                self._navigation_progress_at = received_at
+            return
+        if self._navigation_progress_at is None:
             self._navigation_progress_at = received_at
             return
 

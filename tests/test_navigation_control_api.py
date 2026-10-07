@@ -210,6 +210,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
         self.assertFalse(started["motor_output_enabled"])
         self.assertTrue(started["dry_run"])
+        with self.api._lock:
+            self.assertIsNotNone(self.api._navigation_progress_at)
+            self.assertEqual((0.25, 0.5), self.api._navigation_progress_pose)
 
     async def test_goal_terminal_and_manual_tolerance_rules(self):
         await self.driving_ready()
