@@ -43,7 +43,11 @@ def test_rtmo_postprocess_keeps_17_keypoints_and_filters_low_score():
     assert scores.shape == (2,)
     assert keypoints.shape == (2, 17, 2)
     assert keypoint_scores.shape == (2, 17)
-    assert set(np.round(scores, 2).tolist()) == {0.92, 0.60}
+    np.testing.assert_allclose(
+        np.sort(scores),
+        np.array([0.60, 0.92], dtype=np.float32),
+        atol=1e-6,
+    )
 
 
 def test_rtmo_postprocess_preserves_overlapping_end2end_instances():
