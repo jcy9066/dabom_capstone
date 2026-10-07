@@ -1335,6 +1335,140 @@ def draw_overlay_label(frame, text, origin, color):
 
 PERSON_BASE_COLOR = (120, 220, 120)
 PERSON_BASE_OPACITY = 0.30
+INTERACTION_DANGER_COLOR = (36, 48, 255)
+INTERACTION_SUSPICIOUS_COLOR = (0, 170, 255)
+
+
+def draw_corner_brackets(frame, box, color, thickness=2):
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = clamp_box(box, width, height)
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    arm = max(10, min(28, int(min(box_w, box_h) * 0.16)))
+    segments = (
+        ((x1, y1 + arm), (x1, y1), (x1 + arm, y1)),
+        ((x2 - arm, y1), (x2, y1), (x2, y1 + arm)),
+        ((x1, y2 - arm), (x1, y2), (x1 + arm, y2)),
+        ((x2 - arm, y2), (x2, y2), (x2, y2 - arm)),
+    )
+    for start, corner, end in segments:
+        cv2.line(frame, start, corner, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, corner, end, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, start, corner, color, thickness, cv2.LINE_AA)
+        cv2.line(frame, corner, end, color, thickness, cv2.LINE_AA)
+
+
+def draw_interaction_badge(frame, text, center, color):
+    if not text:
+        return
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.58
+    thickness = 2
+    padding_x = 10
+    padding_y = 7
+    accent_w = 4
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+    width = text_w + padding_x * 2 + accent_w
+    height = text_h + baseline + padding_y * 2
+
+    frame_h, frame_w = frame.shape[:2]
+    x = int(center[0] - width / 2)
+    y = int(center[1] - height / 2)
+    x = max(4, min(frame_w - width - 4, x))
+    y = max(4, min(frame_h - height - 4, y))
+
+    overlay = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (x, y),
+        (x + width, y + height),
+        (18, 18, 20),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.84, frame, 0.16, 0, frame)
+    cv2.rectangle(frame, (x, y), (x + accent_w, y + height), color, -1)
+    cv2.rectangle(frame, (x, y), (x + width, y + height), (45, 45, 50), 1)
+    cv2.putText(
+        frame,
+        text,
+        (x + accent_w + padding_x, y + padding_y + text_h),
+        font,
+        scale,
+        (245, 245, 245),
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def interaction_pair_overlays(detections):
+    by_id = {
+        int(detection["id"]): detection
+        for detection in detections
+        if detection.get("box") is not None
+    }
+    seen = set()
+    overlays = []
+    for detection in detections:
+        pair_ids = detection.get("interaction_pair_ids") or []
+        if detection.get("action_source") != "pair" or len(pair_ids) != 2:
+            continue
+        try:
+            pair_key = tuple(sorted(int(value) for value in pair_ids))
+        except (TypeError, ValueError):
+            continue
+        if pair_key in seen:
+            continue
+        first = by_id.get(pair_key[0])
+        second = by_id.get(pair_key[1])
+        if first is None or second is None:
+            continue
+        seen.add(pair_key)
+        overlays.append((pair_key, first, second))
+    return overlays
+
+
+def draw_interaction_overlays(frame, detections):
+    frame_h, frame_w = frame.shape[:2]
+    for _pair_key, first, second in interaction_pair_overlays(detections):
+        danger = bool(first.get("danger") or second.get("danger"))
+        color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
+
+        first_box = clamp_box(first["box"], frame_w, frame_h)
+        second_box = clamp_box(second["box"], frame_w, frame_h)
+        draw_corner_brackets(frame, first_box, color)
+        draw_corner_brackets(frame, second_box, color)
+
+        first_center = (
+            int((first_box[0] + first_box[2]) / 2),
+            int((first_box[1] + first_box[3]) / 2),
+        )
+        second_center = (
+            int((second_box[0] + second_box[2]) / 2),
+            int((second_box[1] + second_box[3]) / 2),
+        )
+        cv2.line(frame, first_center, second_center, (18, 18, 18), 6, cv2.LINE_AA)
+        cv2.line(frame, first_center, second_center, color, 2, cv2.LINE_AA)
+        for center in (first_center, second_center):
+            cv2.circle(frame, center, 6, (18, 18, 18), -1, cv2.LINE_AA)
+            cv2.circle(frame, center, 3, color, -1, cv2.LINE_AA)
+
+        label = first.get("label") or second.get("label") or "INTERACTION"
+        scores = [
+            value
+            for value in (first.get("score"), second.get("score"))
+            if value is not None
+        ]
+        score_text = f" · {max(float(value) for value in scores) * 100:.0f}%" if scores else ""
+        badge_center = (
+            int((first_center[0] + second_center[0]) / 2),
+            max(18, int((first_center[1] + second_center[1]) / 2) - 26),
+        )
+        draw_interaction_badge(
+            frame,
+            f"{label}{score_text}",
+            badge_center,
+            color,
+        )
 
 
 def draw_translucent_box(frame, pt1, pt2, color, opacity=PERSON_BASE_OPACITY):
@@ -1426,8 +1560,12 @@ def draw_detection_overlay(frame, detection):
     )
     label = detection.get("label") or ("" if is_person else "WEAPON")
     score = detection.get("score")
-    if score is not None and detection.get("label"):
-        label = f"{label} {float(score) * 100:.0f}%"
+    if detection.get("action_source") == "pair":
+        # Pair action is rendered once as a shared interaction badge.
+        label = ""
+    elif score is not None and detection.get("label"):
+        suffix = "?" if detection.get("action_source") == "single_fallback" else ""
+        label = f"{label}{suffix} {float(score) * 100:.0f}%"
 
     # Bounding box visualization disabled. Keep this block for easy rollback.
     # if is_person and not has_action_label and not is_danger:
@@ -1451,6 +1589,7 @@ def render_latest_overlay(frame, now=None):
     for detection in detections:
         if detection.get("box"):
             draw_detection_overlay(display_frame, detection)
+    draw_interaction_overlays(display_frame, detections)
     return display_frame
 
 
@@ -1643,13 +1782,13 @@ def process_frame_for_dashboard(frame):
                     detection["visual_state"] = "danger"
                     action_label = current_action["label"]
                     if current_action.get("source") == "pair":
-                        overlay_action_label = f"PAIR {action_label}"
+                        # Shared pair badge is drawn after all detections are assembled.
+                        label = ""
                     else:
-                        overlay_action_label = action_label
-                    label = (
-                        f"!!! {overlay_action_label} !!! "
-                        f"{current_action['score'] * 100:.0f}%"
-                    )
+                        label = (
+                            f"!!! {action_label} !!! "
+                            f"{current_action['score'] * 100:.0f}%"
+                        )
                     pair_ids = current_action.get("interaction_pair_ids") or []
                     should_emit_event = (
                         not pair_ids
@@ -1677,12 +1816,17 @@ def process_frame_for_dashboard(frame):
                     suspicious_label = current_action["label"]
                     if current_action.get("source") == "single_fallback":
                         suspicious_label = f"{suspicious_label}?"
+                        label = (
+                            f"[{suspicious_label}] "
+                            f"{current_action['score'] * 100:.0f}%"
+                        )
                     elif current_action.get("source") == "pair":
-                        suspicious_label = f"PAIR {suspicious_label}"
-                    label = (
-                        f"[{suspicious_label}] "
-                        f"{current_action['score'] * 100:.0f}%"
-                    )
+                        label = ""
+                    else:
+                        label = (
+                            f"[{suspicious_label}] "
+                            f"{current_action['score'] * 100:.0f}%"
+                        )
             elif (
                 not restrict_to_target_actions
                 and TRIGGER_SUSPICIOUS_VISUAL_ENABLED
@@ -1710,6 +1854,7 @@ def process_frame_for_dashboard(frame):
         draw_overlay_label(display_frame, label, (x1, y1 - 8), color)
         detections.append(detection)
 
+    draw_interaction_overlays(display_frame, detections)
     render_ms = (time.time() - render_started) * 1000
     return {
         "frame": display_frame,
