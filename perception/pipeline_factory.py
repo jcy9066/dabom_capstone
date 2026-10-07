@@ -109,6 +109,7 @@ def create_pipeline(choice, device=None):
                 weight=str(assets["yolo_pose"]),
                 tracker="perception/config/botsort_recall.yaml",
                 device=device,
+                conf=0.05,
             ),
             "action_analyzer": ActionRecognizer(
                 device=device,
