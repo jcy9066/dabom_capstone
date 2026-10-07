@@ -186,7 +186,15 @@ class ActionRecognizer:
             if ran_pair_inference:
                 pair_action = self._process_interaction_pair(frame, first, second)
             else:
-                pair_action = self.pair_temporal_policy.current.get(pair_id)
+                _recorded_pair_id, record_issue = self._record_interaction_pair(
+                    first,
+                    second,
+                )
+                pair_action = (
+                    record_issue
+                    if record_issue is not None
+                    else self.pair_temporal_policy.current.get(pair_id)
+                )
 
             if not pair_action:
                 continue
@@ -280,28 +288,35 @@ class ActionRecognizer:
         ratio = self._pair_distance_ratio(first, second)
         return ratio is not None and ratio <= self.interaction_pair_distance_ratio
 
-    def _process_interaction_pair(self, frame, first, second):
+    def _record_interaction_pair(self, first, second):
         ordered = sorted((first, second), key=lambda obj: obj["id"])
         pair_id = tuple(obj["id"] for obj in ordered)
         keypoints = [obj.get("keypoints") for obj in ordered]
         scores = [obj.get("keypoints_scores") for obj in ordered]
         if any(value is None or len(value) == 0 for value in keypoints):
-            return observation_issue(
+            return pair_id, observation_issue(
                 OBSERVATION_UNAVAILABLE,
                 "interaction pose keypoints unavailable",
             )
 
-        buffer = self.pair_action_buffer.setdefault(pair_id, {"kpts": [], "scores": []})
+        buffer = self.pair_action_buffer.setdefault(
+            pair_id,
+            {"kpts": [], "scores": []},
+        )
         buffer["kpts"].append(np.stack(keypoints, axis=0))
         buffer["scores"].append(np.stack(scores, axis=0))
         if len(buffer["kpts"]) > 100:
             buffer["kpts"].pop(0)
             buffer["scores"].pop(0)
+        return pair_id, None
 
-        if len(buffer["kpts"]) < self.min_history_frames:
+    def _classify_interaction_pair(self, frame, pair_id):
+        buffer = self.pair_action_buffer.get(pair_id)
+        if not buffer or len(buffer["kpts"]) < self.min_history_frames:
+            observed = 0 if not buffer else len(buffer["kpts"])
             return observation_issue(
                 OBSERVATION_UNAVAILABLE,
-                f"interaction warm-up {len(buffer['kpts'])}/{self.min_history_frames}",
+                f"interaction warm-up {observed}/{self.min_history_frames}",
             )
 
         # MMAction2 skeleton annotations use (M, T, V, C) and (M, T, V).
@@ -311,8 +326,15 @@ class ActionRecognizer:
         pair_scores = np.transpose(np.asarray(buffer["scores"]), (1, 0, 2))
         self.pair_temporal_policy.mark_observed(pair_id)
         try:
-            pred_scores = self._predict_scores_array(pair_kpts, pair_scores, frame.shape)
-            candidate = classify_target_scores(pred_scores, self.interaction_actions)
+            pred_scores = self._predict_scores_array(
+                pair_kpts,
+                pair_scores,
+                frame.shape,
+            )
+            candidate = classify_target_scores(
+                pred_scores,
+                self.interaction_actions,
+            )
             return self.pair_temporal_policy.update(pair_id, candidate)
         except Exception as exc:
             LOGGER.exception("Interaction inference failed for pair=%s", pair_id)
@@ -320,6 +342,12 @@ class ActionRecognizer:
                 OBSERVATION_INFERENCE_ERROR,
                 str(exc) or "interaction inference failed",
             )
+
+    def _process_interaction_pair(self, frame, first, second):
+        pair_id, record_issue = self._record_interaction_pair(first, second)
+        if record_issue is not None:
+            return record_issue
+        return self._classify_interaction_pair(frame, pair_id)
 
     def process(self, frame, obj):
         obj_id = obj["id"]
