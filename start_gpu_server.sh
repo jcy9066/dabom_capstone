@@ -381,7 +381,47 @@ esac
 
 if (( model_active == 1 )); then
     [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
-    python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
+
+    if [[ "${PIPELINE}" == "8" ]]; then
+        python3 - <<'PY' >/dev/null 2>&1 || fail "Pipeline 8 runtime packages are missing; install requirements.txt"
+from importlib.metadata import PackageNotFoundError, version
+
+def installed(dist_name):
+    try:
+        version(dist_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+if not installed("opencv-contrib-python"):
+    raise RuntimeError("opencv-contrib-python is required by the perception runtime")
+if installed("opencv-python"):
+    raise RuntimeError(
+        "Both opencv-python and opencv-contrib-python are installed; "
+        "remove opencv-python and reinstall requirements.txt"
+    )
+
+import lap
+import numpy
+import scipy
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available to PyTorch")
+torch.cuda.init()
+
+import onnxruntime as ort
+import ultralytics
+from pytorchvideo.models.hub import x3d_m
+from ultralytics.trackers.bot_sort import BOTSORT
+
+if "CUDAExecutionProvider" not in ort.get_available_providers():
+    raise RuntimeError(
+        "onnxruntime-gpu is installed but CUDAExecutionProvider is unavailable"
+    )
+PY
+    else
+        python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
 from importlib.metadata import PackageNotFoundError, version
 
 def installed(dist_name):
@@ -413,10 +453,12 @@ import ultralytics
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is not available to PyTorch")
 PY
+    fi
 
     log "Ensuring model assets for pipeline ${PIPELINE:-unset}"
     python3 -m perception.model_assets --pipeline "${PIPELINE}" \
         || fail "Model asset preparation failed for pipeline ${PIPELINE}"
+
 fi
 
 exec 9>"${LOCK_FILE}"
@@ -486,7 +528,7 @@ esac
 health_url="http://${health_host}:${SERVER_PORT}/get_status"
 
 server_ready=0
-# Pipeline 8 loads YOLO26m-Pose + ST-GCN++ on CUDA during FastAPI startup.
+# Pipeline 8 loads RTMO-M ONNX + BotSORT + X3D-M on CUDA during FastAPI startup.
 # Allow enough time for model initialization before declaring startup failure.
 for _ in {1..120}; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then

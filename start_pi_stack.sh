@@ -333,7 +333,6 @@ required_env=(
     STREAM_HEIGHT
     STREAM_FPS
     STREAM_BITRATE
-    STREAM_INFER
     STREAM_RETRY_SEC
     CURL_CONNECT_TIMEOUT_SEC
 )
@@ -345,11 +344,6 @@ done
 case "${LIDAR_ENABLE,,}" in
     true|1|yes|on) ;;
     *) fail "LIDAR_ENABLE must be enabled for the final runtime" ;;
-esac
-
-case "${STREAM_INFER,,}" in
-    true|false|1|0|yes|no|on|off) ;;
-    *) fail "STREAM_INFER must be a boolean value" ;;
 esac
 
 [[ "${ROS_LOCALHOST_ONLY}" == "1" ]] \
@@ -594,7 +588,7 @@ sleep 0.5
 kill -0 "${ROBOT_PID}" 2>/dev/null \
     || fail "Robot command client exited during startup"
 
-STREAM_URL="${SERVER_BASE_URL%/}/stream/h264?robot_id=${ROBOT_ID}&infer=${STREAM_INFER}"
+STREAM_URL="${SERVER_BASE_URL%/}/stream/h264?robot_id=${ROBOT_ID}"
 export STREAM_URL
 
 camera_stream_loop() {
