@@ -74,10 +74,10 @@ class CooldownGate:
     def __init__(self, cooldown_sec: float, clock: Callable[[], float] = time.monotonic):
         self.cooldown_sec = max(0.0, float(cooldown_sec))
         self.clock = clock
-        self._last_allowed: dict[tuple[str, str], float] = {}
+        self._last_allowed: dict[tuple[str, ...], float] = {}
         self._lock = threading.Lock()
 
-    def allow(self, key: tuple[str, str]) -> bool:
+    def allow(self, key: tuple[str, ...]) -> bool:
         now = self.clock()
         with self._lock:
             previous = self._last_allowed.get(key)
@@ -86,7 +86,7 @@ class CooldownGate:
             self._last_allowed[key] = now
             return True
 
-    def release(self, key: tuple[str, str]) -> None:
+    def release(self, key: tuple[str, ...]) -> None:
         with self._lock:
             self._last_allowed.pop(key, None)
 
@@ -144,6 +144,7 @@ class EventLogWorker:
         message: str | None = None,
         location: Mapping[str, Any] | None = None,
         frame: np.ndarray | None = None,
+        cooldown_key: str | None = None,
     ) -> bool:
         if event_source not in EVENT_SOURCES or event_type not in EVENT_TYPES:
             raise ValueError("Unsupported event taxonomy.")
@@ -152,7 +153,11 @@ class EventLogWorker:
         frozen_frame = self._freeze_frame(frame) if event_source == "VISION_AI" else None
         if frozen_frame is not None and self.image_store is None:
             raise ValueError("An image store is required when an event includes a frame.")
-        key = (str(robot_id), event_type)
+        key = (
+            (str(robot_id), event_type)
+            if cooldown_key is None
+            else (str(robot_id), event_type, str(cooldown_key))
+        )
         if not self.gate.allow(key):
             return False
         item = PendingEvent(
