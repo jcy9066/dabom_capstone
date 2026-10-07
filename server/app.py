@@ -4663,6 +4663,8 @@ def h264_decode_loop(proc, robot_id, stream_id):
             ensure_runtime_model_config(reason="stream")
             infer = MODEL_ACTIVE
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["infer"] = infer
                 stream_stats["inference_available"] = frame_processor is not None
             raw_frame = read_exact(proc.stdout, frame_size)

@@ -118,3 +118,4 @@ def test_stale_h264_generation_cannot_overwrite_new_stream_state():
     assert "if stream_id != active_stream_id:" in source
     assert "if stream_id == active_stream_id:" in source
     assert "current_generation = (" in source
+    assert source.count("if stream_id != active_stream_id:") >= 4
