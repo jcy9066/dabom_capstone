@@ -49,8 +49,8 @@ def test_stale_pair_evidence_cannot_emit_new_alerts():
 def test_pair_overlay_uses_shared_source_metadata_and_one_badge():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
-    assert "seen.add(pair_key)" in source
-    assert "overlays.append((pair_key, first, second, detection))" in source
+    assert "candidate_by_pair" in source
+    assert "used_track_ids" in source
     assert 'label = source.get("label") or "INTERACTION"' in source
     assert 'score = source.get("score")' in source
     assert "draw_interaction_badge(" in source
