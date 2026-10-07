@@ -6,12 +6,12 @@ try:
 except ModuleNotFoundError:  # Direct perception script execution.
     from env_config import env_float, env_int
 
-SUSPICIOUS_ACTION_THRESHOLD = env_float(
-    "ACTION_SUSPICIOUS_THRESHOLD", minimum=0.0, maximum=1.0
-)
-DANGER_ACTION_THRESHOLD = env_float(
-    "ACTION_DANGER_THRESHOLD", minimum=0.0, maximum=1.0
-)
+def suspicious_action_threshold():
+    return env_float("ACTION_SUSPICIOUS_THRESHOLD", minimum=0.0, maximum=1.0)
+
+
+def danger_action_threshold():
+    return env_float("ACTION_DANGER_THRESHOLD", minimum=0.0, maximum=1.0)
 
 RECALL_TARGET_ACTIONS = {
     41: {"name": "STAGGERING", "danger": True},
@@ -45,14 +45,14 @@ def classify_target_action(action_idx, score, target_actions):
 
     if action_info is not None:
         is_configured_danger = bool(action_info.get("danger"))
-        if is_configured_danger and score >= DANGER_ACTION_THRESHOLD:
+        if is_configured_danger and score >= danger_action_threshold():
             action = {
                 "label": action_info["name"],
                 "score": float(score),
                 "is_danger": True,
                 "confidence_level": "danger",
             }
-        elif score >= SUSPICIOUS_ACTION_THRESHOLD:
+        elif score >= suspicious_action_threshold():
             action = {
                 "label": action_info["name"],
                 "score": float(score),
