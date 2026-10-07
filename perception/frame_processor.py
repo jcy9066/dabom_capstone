@@ -11,6 +11,95 @@ from .models.violence_heuristic import ViolenceHeuristic
 
 
 class FrameProcessor:
+    @staticmethod
+    def _pair_weight(source):
+        score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
+        danger = bool(source.get("danger") or source.get("is_danger"))
+        stale = bool(source.get("observation_stale"))
+        if danger:
+            base = 100.0 if not stale else 10.0
+        else:
+            base = 1.0 if not stale else 0.1
+        return base + score
+
+    @classmethod
+    def _select_non_overlapping_pairs(cls, pair_actions):
+        candidates = [
+            (tuple(sorted(pair_key)), dict(source))
+            for pair_key, source in (pair_actions or {}).items()
+            if isinstance(pair_key, tuple)
+            and len(pair_key) == 2
+            and isinstance(source, dict)
+        ]
+        candidates.sort(key=lambda item: item[0])
+        cache = {}
+
+        def search(index, used_ids):
+            key = (index, tuple(sorted(used_ids)))
+            if key in cache:
+                return cache[key]
+            if index >= len(candidates):
+                return 0.0, ()
+
+            best_weight, best_items = search(index + 1, used_ids)
+            pair_key, source = candidates[index]
+            if pair_key[0] not in used_ids and pair_key[1] not in used_ids:
+                include_weight, include_items = search(
+                    index + 1,
+                    used_ids | {pair_key[0], pair_key[1]},
+                )
+                include_weight += cls._pair_weight(source)
+                include_items = (candidates[index],) + include_items
+                if (
+                    include_weight > best_weight
+                    or (
+                        include_weight == best_weight
+                        and tuple(item[0] for item in include_items)
+                        < tuple(item[0] for item in best_items)
+                    )
+                ):
+                    best_weight, best_items = include_weight, include_items
+            cache[key] = (best_weight, best_items)
+            return cache[key]
+
+        return list(search(0, set())[1])
+
+    def _resolve_pair_actions_for_display(self, pair_actions, now):
+        resolved = {}
+        normalized = {
+            tuple(sorted(pair_key)): dict(source)
+            for pair_key, source in (pair_actions or {}).items()
+            if isinstance(pair_key, tuple)
+            and len(pair_key) == 2
+            and isinstance(source, dict)
+        }
+        for pair_key, source in normalized.items():
+            if source.get("observation_stale"):
+                cached = self.pair_action_display_buffer.get(pair_key)
+                if cached is None:
+                    continue
+                if now - float(cached.get("updated_at", 0.0)) > self.action_display_ttl_sec:
+                    self.pair_action_display_buffer.pop(pair_key, None)
+                    continue
+                current = {
+                    key: value
+                    for key, value in cached.items()
+                    if key != "updated_at"
+                }
+                current["observation_stale"] = True
+                resolved[pair_key] = current
+                continue
+
+            cached = dict(source)
+            cached["updated_at"] = now
+            self.pair_action_display_buffer[pair_key] = cached
+            resolved[pair_key] = source
+
+        for pair_key in list(self.pair_action_display_buffer):
+            if pair_key not in normalized:
+                self.pair_action_display_buffer.pop(pair_key, None)
+        return resolved
+
     def __init__(self, detector, action_analyzer, notifier=None):
         self.detector = detector
         self.action_analyzer = action_analyzer
@@ -41,6 +130,12 @@ class FrameProcessor:
         if analyze_all_persons and callable(batch_processor):
             person_objs = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
             batch_action_results = batch_processor(frame, person_objs)
+
+        pair_now = time.monotonic()
+        pair_actions = self._resolve_pair_actions_for_display(
+            dict(getattr(self.action_analyzer, "latest_pair_actions", {}) or {}),
+            pair_now,
+        )
 
         for obj in tracked_boxes:
             oid = obj["id"]
@@ -134,6 +229,57 @@ class FrameProcessor:
 
             detections.append(detection)
 
+        objects_by_id = {obj["id"]: obj for obj in tracked_boxes}
+        for pair_key, source in self._select_non_overlapping_pairs(pair_actions):
+            first = objects_by_id.get(pair_key[0])
+            second = objects_by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            pair_danger = bool(source.get("danger") or source.get("is_danger"))
+            pair_color = (0, 0, 255) if pair_danger else (0, 165, 255)
+            danger = danger or pair_danger
+
+            for participant in (first, second):
+                skeleton = participant.get("keypoints")
+                if skeleton is not None:
+                    self.action_analyzer.draw_skeleton(
+                        display_frame,
+                        skeleton,
+                        pair_color,
+                    )
+
+            first_center = tuple(map(int, first.get("center") or (0, 0)))
+            second_center = tuple(map(int, second.get("center") or (0, 0)))
+            cv2.line(
+                display_frame,
+                first_center,
+                second_center,
+                pair_color,
+                2,
+                cv2.LINE_AA,
+            )
+            label = source.get("label") or "INTERACTION"
+            score = source.get("score")
+            score_text = (
+                f" {float(score) * 100:.0f}%"
+                if score is not None
+                else ""
+            )
+            badge_center = (
+                int((first_center[0] + second_center[0]) / 2),
+                int((first_center[1] + second_center[1]) / 2),
+            )
+            cv2.putText(
+                display_frame,
+                f"{label}{score_text}",
+                badge_center,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                pair_color,
+                2,
+                cv2.LINE_AA,
+            )
+
         active_track_ids = {obj["id"] for obj in tracked_boxes}
         cleanup_now = time.monotonic()
         for buffered_id, updated_at in list(self.action_display_updated_at.items()):
@@ -147,5 +293,9 @@ class FrameProcessor:
         return {
             "frame": display_frame,
             "detections": detections,
+            "pair_actions": [
+                {"pair_ids": list(pair_key), **dict(source)}
+                for pair_key, source in self._select_non_overlapping_pairs(pair_actions)
+            ],
             "danger": danger,
         }
