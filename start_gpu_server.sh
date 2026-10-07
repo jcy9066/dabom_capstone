@@ -392,7 +392,22 @@ import mmengine
 import scipy
 import torch
 import ultralytics
+from importlib.metadata import PackageNotFoundError, version
 
+def installed(dist_name):
+    try:
+        version(dist_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+if not installed("opencv-contrib-python"):
+    raise RuntimeError("opencv-contrib-python is required by the MMAction2 runtime")
+if installed("opencv-python"):
+    raise RuntimeError(
+        "Both opencv-python and opencv-contrib-python are installed; "
+        "remove opencv-python and reinstall requirements.txt"
+    )
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is not available to PyTorch")
 PY
