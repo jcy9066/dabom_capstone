@@ -382,16 +382,6 @@ esac
 if (( model_active == 1 )); then
     [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
     python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
-import decord
-import einops
-import lap
-import mmaction
-import mmaction.models.localizers.drn
-import mmcv
-import mmengine
-import scipy
-import torch
-import ultralytics
 from importlib.metadata import PackageNotFoundError, version
 
 def installed(dist_name):
@@ -408,6 +398,18 @@ if installed("opencv-python"):
         "Both opencv-python and opencv-contrib-python are installed; "
         "remove opencv-python and reinstall requirements.txt"
     )
+
+import decord
+import einops
+import lap
+import mmaction
+import mmaction.models.localizers.drn
+import mmcv
+import mmengine
+import scipy
+import torch
+import ultralytics
+
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is not available to PyTorch")
 PY
