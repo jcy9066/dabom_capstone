@@ -329,9 +329,10 @@ def test_cached_pair_result_is_marked_stale(monkeypatch):
         objs,
     )
 
-    assert results[1][1]["observation_stale"] is True
-    assert results[2][1]["observation_stale"] is True
-    assert results[1][1]["source"] == "pair"
+    assert results[1][1] is None
+    assert results[2][1] is None
+    assert analyzer.latest_pair_actions[pair_id]["observation_stale"] is True
+    assert analyzer.latest_pair_actions[pair_id]["source"] == "pair"
 
 
 def test_single_person_inference_uses_real_history_length(monkeypatch):
