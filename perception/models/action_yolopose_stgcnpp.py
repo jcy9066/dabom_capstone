@@ -267,14 +267,31 @@ class ActionRecognizer:
                     obj["id"],
                     (obj.get("keypoints"), None),
                 )
-                if (
-                    annotated_action.get("is_danger")
-                    or current is None
-                    or is_observation_issue(current)
-                    or annotated_action["score"] >= current.get("score", 0.0)
-                ):
+                if self._should_replace_with_pair(current, annotated_action):
                     results[obj["id"]] = (skeleton, annotated_action)
         return results
+
+    def _should_replace_with_pair(self, current, pair_action):
+        if current is None or is_observation_issue(current):
+            return True
+
+        pair_danger = bool(pair_action.get("is_danger"))
+        current_danger = bool(current.get("is_danger"))
+        current_source = current.get("source")
+
+        if pair_danger != current_danger:
+            return pair_danger
+        if pair_danger and current_source != "pair":
+            # A confirmed two-person danger is stronger evidence than a
+            # person-level action even when the raw class scores differ.
+            return True
+        if current_source == "pair":
+            return float(pair_action.get("score", 0.0)) > float(
+                current.get("score", 0.0)
+            )
+        return float(pair_action.get("score", 0.0)) >= float(
+            current.get("score", 0.0)
+        )
 
     def _pair_distance_ratio(self, first, second):
         first_box = first.get("box")
