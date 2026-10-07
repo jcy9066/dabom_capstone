@@ -33,6 +33,7 @@ def build_recall_analyzer():
     analyzer.interaction_max_pairs = 4
     analyzer.pose_gap_reset_sec = 1.5
     analyzer.last_valid_pose_at = {}
+    analyzer.latest_pair_actions = {}
     analyzer._interaction_frame_counter = 0
     analyzer.temporal_policy = TemporalActionPolicy(
         window=5,
@@ -590,3 +591,45 @@ def test_process_many_preserves_all_pair_actions_separately(monkeypatch):
 
     assert len(analyzer.latest_pair_actions) == 3
     assert set(analyzer.latest_pair_actions) == {(1, 2), (2, 3), (1, 3)}
+
+
+def test_missing_pose_scores_are_unavailable():
+    analyzer = build_recall_analyzer()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    obj = {
+        "id": 91,
+        "cls": 0,
+        "box": [10, 10, 100, 200],
+        "center": (55.0, 105.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": None,
+    }
+
+    _skeleton, action = analyzer.process(frame, obj)
+
+    assert is_observation_issue(action)
+    assert action["observation_status"] == "unavailable"
+
+
+def test_pair_missing_pose_scores_are_unavailable():
+    analyzer = build_recall_analyzer()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    first = {
+        "id": 1,
+        "box": [0, 0, 100, 200],
+        "center": (50.0, 100.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": None,
+    }
+    second = {
+        "id": 2,
+        "box": [80, 0, 180, 200],
+        "center": (130.0, 100.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": np.ones(17, dtype=np.float32),
+    }
+
+    result = analyzer._process_interaction_pair(frame, first, second)
+
+    assert is_observation_issue(result)
+    assert result["observation_status"] == "unavailable"
