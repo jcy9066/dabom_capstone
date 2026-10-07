@@ -584,6 +584,78 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         issue = await self.api.evaluate_watchdog(now=time.time() + 1)
         self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", issue)
 
+    async def test_cancel_goal_preserves_terminal_success_race(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def completes_before_cancel():
+            self.map_api.ros_control.cancel_calls += 1
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": False,
+                "confirmed": True,
+                "completed": True,
+                "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = completes_before_cancel
+
+        result = await self.api.cancel_goal()
+
+        self.assertEqual("SUCCEEDED", result["navigation_state"])
+        self.assertIsNone(result["active_goal"])
+        self.assertEqual([], result["planned_path"])
+        self.assertFalse(result["emergency_stop"])
+
+    async def test_manual_takeover_does_not_retain_terminal_canceled_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def already_canceled():
+            self.map_api.ros_control.cancel_calls += 1
+            self.map_api.ros_control.state = "CANCELED"
+            return {
+                "requested": False,
+                "confirmed": True,
+                "completed": True,
+                "terminal": "CANCELED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = already_canceled
+
+        result = await self.api.pause_for_manual()
+
+        self.assertEqual("CANCELED", result["navigation_state"])
+        self.assertIsNone(result["active_goal"])
+        self.assertEqual([], result["planned_path"])
+        self.assertFalse(result["goal_retained"])
+
+    async def test_manual_takeover_preserves_terminal_failure_and_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def already_failed():
+            self.map_api.ros_control.cancel_calls += 1
+            self.map_api.ros_control.state = "FAILED"
+            return {
+                "requested": False,
+                "confirmed": True,
+                "completed": True,
+                "terminal": "FAILED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = already_failed
+
+        result = await self.api.pause_for_manual()
+
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(result["planned_path"])
+        self.assertTrue(result["goal_retained"])
+
     async def test_cancel_failure_still_sends_stop(self):
         await self.driving_ready()
 

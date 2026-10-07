@@ -555,11 +555,16 @@ class NavigationControlApi:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
             if cancel_error is None:
-                self._state["navigation_state"] = (
-                    "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "READY"
-                )
-                self._state["active_goal"] = None
-                self._state["planned_path"] = []
+                terminal = self._cancel_terminal(cancel)
+                if self._state["emergency_stop"]:
+                    self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif terminal is not None:
+                    self._apply_cancel_terminal_locked(terminal)
+                else:
+                    self._state["navigation_state"] = "READY"
+                    self._state["active_goal"] = None
+                    self._state["planned_path"] = []
+                self._reset_navigation_progress_locked()
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
@@ -585,13 +590,18 @@ class NavigationControlApi:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
             if cancel_error is None:
+                terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif terminal is not None:
+                    self._apply_cancel_terminal_locked(terminal)
                 elif self._state["navigation_mode"] == "MAPPING":
                     self._state["navigation_state"] = "IDLE"
                 else:
                     self._state["navigation_state"] = "READY"
-                self._state["last_error"] = None
+                if terminal != "FAILED":
+                    self._state["last_error"] = None
+                self._reset_navigation_progress_locked()
             else:
                 self._state["navigation_state"] = previous_navigation_state
                 self._state["last_error"] = str(cancel_error)
@@ -917,6 +927,19 @@ class NavigationControlApi:
             except Exception:
                 # State reads remain available even if a health adapter temporarily fails.
                 continue
+
+    @staticmethod
+    def _cancel_terminal(cancel: Any) -> str | None:
+        if not isinstance(cancel, dict):
+            return None
+        terminal = str(cancel.get("terminal") or "").upper()
+        return terminal if terminal in {"SUCCEEDED", "FAILED", "CANCELED"} else None
+
+    def _apply_cancel_terminal_locked(self, terminal: str) -> None:
+        self._state["navigation_state"] = terminal
+        if terminal in {"SUCCEEDED", "CANCELED"}:
+            self._state["active_goal"] = None
+            self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
         self._navigation_progress_pose = None
