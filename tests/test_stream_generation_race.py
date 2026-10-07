@@ -13,6 +13,14 @@ class _FakeActionAnalyzer:
         self.generation_seen_at_reset = app.active_stream_id
 
 
+class _FakeDetector:
+    def __init__(self):
+        self.reset_calls = 0
+
+    def reset_tracking_state(self):
+        self.reset_calls += 1
+
+
 class _FakeViolenceHeuristic:
     def __init__(self):
         self.reset_calls = 0
@@ -23,6 +31,7 @@ class _FakeViolenceHeuristic:
 
 class _FakeProcessor:
     def __init__(self):
+        self.detector = _FakeDetector()
         self.action_analyzer = _FakeActionAnalyzer()
         self.action_display_buffer = {"old": {"label": "FALLING"}}
         self.violence_heuristic = _FakeViolenceHeuristic()
@@ -94,6 +103,7 @@ def test_reconnect_rejects_old_frame_waiting_before_processing(monkeypatch):
     assert worker_result == [None]
     assert processed_frames == []
     assert app.inference_stats["dropped"] == 1
+    assert processor.detector.reset_calls == 1
     assert processor.action_analyzer.reset_calls == 1
     assert processor.action_analyzer.generation_seen_at_reset == new_generation
     assert processor.violence_heuristic.reset_calls == 1
