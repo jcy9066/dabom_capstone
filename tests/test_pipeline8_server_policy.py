@@ -36,3 +36,10 @@ def test_stale_pair_evidence_does_not_refresh_display_ttl():
 
     assert 'selected_action.get("observation_stale")' in source
     assert "do not refresh stale evidence" in source
+
+
+def test_stale_pair_evidence_cannot_emit_new_alerts():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert 'detection["inference_status"] = "stale"' in source
+    assert "and not observation_stale" in source
