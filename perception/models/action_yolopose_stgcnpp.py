@@ -180,7 +180,10 @@ class ActionRecognizer:
         for first, second in self._select_interaction_pairs(objs):
             pair_id = tuple(sorted((first["id"], second["id"])))
             self.pair_temporal_policy.mark_observed(pair_id)
-            if self._interaction_frame_counter % self.interaction_infer_every_n == 0:
+            ran_pair_inference = (
+                self._interaction_frame_counter % self.interaction_infer_every_n == 0
+            )
+            if ran_pair_inference:
                 pair_action = self._process_interaction_pair(frame, first, second)
             else:
                 pair_action = self.pair_temporal_policy.current.get(pair_id)
@@ -188,7 +191,9 @@ class ActionRecognizer:
             if not pair_action:
                 continue
 
-            observation_stale = is_observation_issue(pair_action)
+            observation_stale = (
+                not ran_pair_inference or is_observation_issue(pair_action)
+            )
             if observation_stale:
                 cached_pair_action = self.pair_temporal_policy.current.get(pair_id)
                 if cached_pair_action is None:
