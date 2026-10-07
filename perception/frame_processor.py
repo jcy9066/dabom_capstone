@@ -18,6 +18,7 @@ class FrameProcessor:
         self.notifier = notifier if notifier is not None else TelegramNotifier()
         self.action_display_buffer = {}
         self.action_display_updated_at = {}
+        self.pair_action_display_buffer = {}
         self.action_display_ttl_sec = env_float("ACTION_DISPLAY_TTL_SEC", minimum=0.1)
         self.violence_heuristic = ViolenceHeuristic()
         if getattr(self.action_analyzer, "restrict_to_target_actions", False):
