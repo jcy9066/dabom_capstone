@@ -113,10 +113,16 @@ class FrameProcessor:
         if getattr(self.action_analyzer, "restrict_to_target_actions", False):
             self.violence_heuristic.enabled = False
 
-    def _process_scene_classifier(self, frame, tracked_boxes, obj_states):
+    def _process_scene_classifier(
+        self,
+        frame,
+        tracked_boxes,
+        obj_states,
+        timestamp=None,
+    ):
         analyzer = self.action_analyzer
-        analyzer.observe_frame(frame)
-        scene_result = analyzer.classify_scene()
+        analyzer.observe_frame(frame, timestamp=timestamp)
+        scene_result = analyzer.classify_scene(now=timestamp)
 
         display_frame = frame.copy()
         detections = []
@@ -171,7 +177,7 @@ class FrameProcessor:
             "scene": scene_result,
         }
 
-    def process(self, frame):
+    def process(self, frame, timestamp=None):
         tracked_boxes = self.detector.track(frame)
         obj_states = self.trigger.get_object_states(tracked_boxes)
         if getattr(self.action_analyzer, "scene_level_classifier", False):
@@ -179,6 +185,7 @@ class FrameProcessor:
                 frame,
                 tracked_boxes,
                 obj_states,
+                timestamp=timestamp,
             )
 
         display_frame = frame.copy()

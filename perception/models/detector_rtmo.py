@@ -12,7 +12,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PERSON_CLASS_ID = 0
 RTMO_INPUT_SIZE = (640, 640)
 RTMO_SCORE_THRESHOLD = 0.05
-RTMO_NMS_THRESHOLD = 0.45
 RTMO_KEYPOINT_SCORE_THRESHOLD = 0.30
 RTMO_TRACK_MATCH_IOU_THRESHOLD = 0.10
 
@@ -27,7 +26,6 @@ class RTMOPoseDetector:
         tracker,
         device=None,
         score_threshold=RTMO_SCORE_THRESHOLD,
-        nms_threshold=RTMO_NMS_THRESHOLD,
     ):
         self.device = resolve_cuda_device(device)
         self.onnx_model_path = self._required_file(
@@ -35,7 +33,6 @@ class RTMOPoseDetector:
             "RTMO ONNX model",
         )
         self.score_threshold = float(score_threshold)
-        self.nms_threshold = float(nms_threshold)
         self.session = self._build_session()
         self.input_name = self.session.get_inputs()[0].name
         self.output_names = [output.name for output in self.session.get_outputs()]
@@ -132,28 +129,6 @@ class RTMOPoseDetector:
             where=union > 0,
         )
 
-    def _nms_keep(self, boxes, scores):
-        if len(boxes) == 0:
-            return np.empty((0,), dtype=np.int64)
-
-        keep_candidates = np.flatnonzero(scores >= self.score_threshold)
-        if len(keep_candidates) == 0:
-            return np.empty((0,), dtype=np.int64)
-
-        order = keep_candidates[
-            np.argsort(scores[keep_candidates])[::-1]
-        ]
-        kept = []
-        while len(order):
-            current = int(order[0])
-            kept.append(current)
-            if len(order) == 1:
-                break
-            remaining = order[1:]
-            ious = self._box_iou(boxes[current], boxes[remaining])
-            order = remaining[ious <= self.nms_threshold]
-        return np.asarray(kept, dtype=np.int64)
-
     @staticmethod
     def _preprocess(frame):
         input_h, input_w = RTMO_INPUT_SIZE
@@ -237,7 +212,13 @@ class RTMOPoseDetector:
             dtype=np.float32,
         )
 
-        keep = self._nms_keep(boxes, scores)
+        # This official MMDeploy end2end graph already applies the RTMO
+        # model test_cfg score threshold and NMS. Applying a second IoU NMS
+        # here would preferentially remove overlapping people, which is
+        # especially harmful for assault-scene recall. Keep every exported
+        # instance above the lightweight padding/garbage floor and let
+        # BotSORT handle temporal association.
+        keep = np.flatnonzero(scores >= self.score_threshold)
         return (
             boxes[keep],
             scores[keep],

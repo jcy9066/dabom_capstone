@@ -19,7 +19,6 @@ class FakeTracker:
 def build_detector():
     detector = RTMOPoseDetector.__new__(RTMOPoseDetector)
     detector.score_threshold = 0.05
-    detector.nms_threshold = 0.45
     detector.tracker = FakeTracker()
     return detector
 
@@ -47,21 +46,28 @@ def test_rtmo_postprocess_keeps_17_keypoints_and_filters_low_score():
     assert set(np.round(scores, 2).tolist()) == {0.92, 0.60}
 
 
-def test_rtmo_nms_suppresses_duplicate_person_boxes():
+def test_rtmo_postprocess_preserves_overlapping_end2end_instances():
     detector = build_detector()
-    boxes = np.array(
-        [
-            [0, 0, 100, 200],
-            [2, 2, 102, 202],
-            [250, 0, 350, 200],
-        ],
-        dtype=np.float32,
+    det = np.zeros((1, 3, 5), dtype=np.float32)
+    det[0, 0] = [0, 0, 100, 200, 0.95]
+    det[0, 1] = [2, 2, 102, 202, 0.80]
+    det[0, 2] = [250, 0, 350, 200, 0.75]
+    pose = np.zeros((1, 3, 17, 3), dtype=np.float32)
+    pose[0, :, :, 2] = 0.9
+
+    boxes, scores, keypoints, _ = detector._postprocess_outputs(
+        det,
+        pose,
+        ratio=1.0,
     )
-    scores = np.array([0.95, 0.80, 0.75], dtype=np.float32)
 
-    keep = detector._nms_keep(boxes, scores)
-
-    assert keep.tolist() == [0, 2]
+    # end2end.onnx has already applied model NMS. A second NMS here would
+    # incorrectly remove one of the first two heavily-overlapping people.
+    assert boxes.shape == (3, 4)
+    assert scores.shape == (3,)
+    assert keypoints.shape == (3, 17, 2)
+    assert np.allclose(boxes[0], [0, 0, 100, 200])
+    assert np.allclose(boxes[1], [2, 2, 102, 202])
 
 
 def test_rtmo_tracks_map_back_to_correct_poses_by_global_iou():
@@ -188,3 +194,13 @@ def test_rtmo_preprocess_preserves_bgr_and_uses_114_letterbox():
     assert ratio == 1.0
     assert tensor[0, :, 100, 100].tolist() == [10.0, 20.0, 30.0]
     assert tensor[0, :, 600, 100].tolist() == [114.0, 114.0, 114.0]
+
+
+def test_rtmo_detector_does_not_apply_second_nms_after_end2end_export():
+    source = (
+        ROOT_DIR / "perception" / "models" / "detector_rtmo.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_nms_keep" not in source
+    assert "np.flatnonzero(scores >= self.score_threshold)" in source
+    assert "end2end graph already applies" in source

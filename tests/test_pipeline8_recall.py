@@ -1,9 +1,14 @@
 import threading
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 
+from perception.frame_processor import FrameProcessor
 from perception.models.scene_x3d import SceneViolenceRecognizer
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 def build_recognizer(score=0.8):
@@ -147,3 +152,68 @@ def test_x3d_warming_overlay_is_visibly_distinct():
 
     assert np.count_nonzero(frame) > 0
     assert tuple(frame[2, 2]) != (0, 0, 255)
+
+
+class _TimestampDetector:
+    def track(self, _frame):
+        return []
+
+
+class _TimestampTrigger:
+    def get_object_states(self, _tracked):
+        return {}
+
+
+class _TimestampNotifier:
+    def send_event_alert_async(self, *_args, **_kwargs):
+        raise AssertionError("warming/normal timestamp test must not alert")
+
+
+class _TimestampSceneAnalyzer:
+    scene_level_classifier = True
+
+    def __init__(self):
+        self.observed_at = None
+        self.classified_at = None
+
+    def observe_frame(self, _frame, timestamp=None):
+        self.observed_at = timestamp
+
+    def classify_scene(self, now=None):
+        self.classified_at = now
+        return {
+            "status": "warming_up",
+            "label": None,
+            "score": None,
+            "danger": False,
+            "raw_danger": False,
+            "fresh": False,
+        }
+
+    def draw_scene_overlay(self, _frame, _result):
+        return None
+
+
+def test_frame_processor_passes_media_timestamp_to_x3d_scene_path():
+    analyzer = _TimestampSceneAnalyzer()
+    processor = FrameProcessor.__new__(FrameProcessor)
+    processor.detector = _TimestampDetector()
+    processor.trigger = _TimestampTrigger()
+    processor.action_analyzer = analyzer
+    processor.notifier = _TimestampNotifier()
+
+    processor.process(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        timestamp=3.75,
+    )
+
+    assert analyzer.observed_at == 3.75
+    assert analyzer.classified_at == 3.75
+
+
+def test_local_video_analysis_uses_media_time_not_processing_wall_clock():
+    source = (ROOT_DIR / "perception" / "main.py").read_text(encoding="utf-8")
+
+    assert "frame_timestamp = frame_count / reader.fps" in source
+    assert "timestamp=frame_timestamp" in source
+    assert "source_fps = float(self.cap.get(cv2.CAP_PROP_FPS))" in source
