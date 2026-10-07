@@ -26,7 +26,8 @@ def test_pipeline8_pair_actions_are_marked_as_interactions():
 
     assert '"interaction_pair_ids": None' in source
     assert 'current_action.get("interaction_pair_ids")' in source
-    assert 'overlay_action_label = f"PAIR {action_label}"' in source
+    assert "draw_interaction_overlays" in source
+    assert 'detection.get("action_source") == "pair"' in source
     assert "should_emit_event" in source
 
 
