@@ -153,3 +153,130 @@ def test_pair_events_use_pair_scoped_cooldown_key():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
     assert 'cooldown_key=f"pair:{pair_key[0]}:{pair_key[1]}"' in source
+
+
+def test_maximum_weight_matching_beats_greedy_pair_choice():
+    import server.app as server_app
+
+    detections = [
+        {"id": 1, "box": [0, 0, 40, 100]},
+        {"id": 2, "box": [50, 0, 90, 100]},
+        {"id": 3, "box": [100, 0, 140, 100]},
+        {"id": 4, "box": [150, 0, 190, 100]},
+    ]
+    pair_actions = {
+        (1, 2): {
+            "label": "PUNCHING",
+            "score": 0.90,
+            "is_danger": True,
+            "source": "pair",
+        },
+        (1, 3): {
+            "label": "PUNCHING",
+            "score": 0.80,
+            "is_danger": True,
+            "source": "pair",
+        },
+        (2, 4): {
+            "label": "PUNCHING",
+            "score": 0.80,
+            "is_danger": True,
+            "source": "pair",
+        },
+    }
+
+    overlays = server_app.interaction_pair_overlays(detections, pair_actions)
+    pair_keys = {item[0] for item in overlays}
+
+    assert pair_keys == {(1, 3), (2, 4)}
+
+
+def test_pair_actions_serialize_without_person_result_compression():
+    import server.app as server_app
+
+    pair_actions = {
+        (1, 2): {
+            "label": "PUSHING",
+            "score": 0.61,
+            "is_danger": True,
+            "source": "pair",
+        },
+        (1, 3): {
+            "label": "PUNCHING",
+            "score": 0.82,
+            "is_danger": True,
+            "source": "pair",
+        },
+    }
+
+    serialized = server_app.serialize_pair_actions(pair_actions)
+
+    assert len(serialized) == 2
+    assert {tuple(item["pair_ids"]) for item in serialized} == {(1, 2), (1, 3)}
+
+
+def test_interaction_incident_survives_track_id_switch():
+    import server.app as server_app
+
+    original_next_id = server_app.interaction_incident_state["next_id"]
+    original_incidents = dict(server_app.interaction_incident_state["incidents"])
+    try:
+        server_app.interaction_incident_state["incidents"].clear()
+        first_a = {"box": [10, 10, 60, 120]}
+        first_b = {"box": [70, 10, 120, 120]}
+        second_a = {"box": [13, 12, 63, 122]}
+        second_b = {"box": [73, 12, 123, 122]}
+
+        first_key = server_app.interaction_incident_key(
+            (11, 12),
+            first_a,
+            first_b,
+            "PUNCHING",
+            frame_token=1,
+            now=100.0,
+        )
+        second_key = server_app.interaction_incident_key(
+            (21, 22),
+            second_a,
+            second_b,
+            "PUSHING",
+            frame_token=2,
+            now=100.2,
+        )
+
+        assert first_key == second_key
+    finally:
+        server_app.interaction_incident_state["next_id"] = original_next_id
+        server_app.interaction_incident_state["incidents"].clear()
+        server_app.interaction_incident_state["incidents"].update(original_incidents)
+
+
+def test_distinct_same_frame_interactions_get_distinct_incident_ids():
+    import server.app as server_app
+
+    original_next_id = server_app.interaction_incident_state["next_id"]
+    original_incidents = dict(server_app.interaction_incident_state["incidents"])
+    try:
+        server_app.interaction_incident_state["incidents"].clear()
+        first_key = server_app.interaction_incident_key(
+            (1, 2),
+            {"box": [10, 10, 50, 100]},
+            {"box": [55, 10, 95, 100]},
+            "PUNCHING",
+            frame_token=77,
+            now=200.0,
+        )
+        second_key = server_app.interaction_incident_key(
+            (3, 4),
+            {"box": [180, 10, 220, 100]},
+            {"box": [225, 10, 265, 100]},
+            "PUNCHING",
+            frame_token=77,
+            now=200.0,
+        )
+
+        assert first_key != second_key
+    finally:
+        server_app.interaction_incident_state["next_id"] = original_next_id
+        server_app.interaction_incident_state["incidents"].clear()
+        server_app.interaction_incident_state["incidents"].update(original_incidents)
