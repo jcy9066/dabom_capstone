@@ -30,6 +30,7 @@ export PYTHONNOUSERSITE=1
 SERVER_PID=""
 ODOM_PID=""
 RESTART_LOCKED=0
+RUNTIME_OWNED=0
 
 log() {
     printf '[gpu-stack] %s\n' "$*"
@@ -280,17 +281,20 @@ cleanup() {
     trap '' INT TERM
     log "Shutting down GPU stack"
 
-    # FastAPI, odometry and both navigation modes are independent process
-    # groups. Stop them concurrently so Ctrl+C has one short bounded wait.
+    # Only the supervisor that successfully claimed the runtime may stop
+    # globally tagged process groups. A duplicate launcher that fails the
+    # restart lock must never tear down the already-running stack.
     local -a cleanup_jobs=()
-    stop_owned_groups "dabom-gpu-odom" TERM &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-gpu-fastapi" TERM &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM &
-    cleanup_jobs+=("$!")
+    if (( RUNTIME_OWNED )); then
+        stop_owned_groups "dabom-gpu-odom" TERM &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-gpu-fastapi" TERM &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-gpu-navigation-MAPPING" TERM &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-gpu-navigation-DRIVING" TERM &
+        cleanup_jobs+=("$!")
+    fi
 
     stop_own_group "${ODOM_PID}" TERM &
     cleanup_jobs+=("$!")
@@ -533,6 +537,7 @@ stop_matching "amcl" TERM || true
 stop_matching "ros2 run patrol_navigation map_bridge" TERM || true
 
 printf '%s\n' "$$" > "${PID_FILE}"
+RUNTIME_OWNED=1
 
 cd "${ROOT_DIR}"
 

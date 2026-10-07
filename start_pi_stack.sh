@@ -10,6 +10,7 @@ ROBOT_PID=""
 LIDAR_DRIVER_PID=""
 LIDAR_SENDER_PID=""
 CAMERA_PID=""
+RUNTIME_OWNED=0
 
 log() {
     printf '[pi-stack] %s\n' "$*"
@@ -260,17 +261,20 @@ cleanup() {
     trap '' INT TERM
     log "Shutting down Pi stack"
 
-    # Stop every independently-owned runtime role concurrently. Sequential
-    # role-by-role waits made one Ctrl+C appear to hang for tens of seconds.
+    # Only the supervisor that successfully claimed the runtime may stop
+    # globally tagged process groups. A duplicate launcher that fails the
+    # restart lock must never tear down the already-running stack.
     local -a cleanup_jobs=()
-    stop_owned_groups "dabom-pi-robot" INT &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-pi-lidar-sender" TERM &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-pi-lidar" TERM &
-    cleanup_jobs+=("$!")
-    stop_owned_groups "dabom-pi-camera" TERM &
-    cleanup_jobs+=("$!")
+    if (( RUNTIME_OWNED )); then
+        stop_owned_groups "dabom-pi-robot" INT &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-pi-lidar-sender" TERM &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-pi-lidar" TERM &
+        cleanup_jobs+=("$!")
+        stop_owned_groups "dabom-pi-camera" TERM &
+        cleanup_jobs+=("$!")
+    fi
 
     # Compatibility fallback for processes created before ownership tagging.
     stop_own_group "${ROBOT_PID}" INT &
@@ -494,6 +498,7 @@ fi
 log "Camera hardware READY"
 
 printf '%s\n' "$$" > "${PID_FILE}"
+RUNTIME_OWNED=1
 
 cd "${ROOT_DIR}"
 

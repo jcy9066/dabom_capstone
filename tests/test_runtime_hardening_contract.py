@@ -280,3 +280,32 @@ def test_gpu_stack_prefers_isolated_python310_runtime():
     assert '"${PYTHON_BIN}" -m uvicorn' in gpu
     assert '"${PYTHON_BIN}" server/wheel_odometry.py' in gpu
     assert '"${PYTHON_BIN}" -m perception.model_assets' in gpu
+
+
+
+def test_duplicate_launcher_lock_failure_preserves_running_stack():
+    cases = (
+        ("start_gpu_server.sh", 'stop_owned_groups "dabom-gpu-fastapi" TERM'),
+        ("start_pi_stack.sh", 'stop_owned_groups "dabom-pi-robot" INT'),
+    )
+
+    for script_path, owned_stop in cases:
+        script = read(script_path)
+
+        assert "RUNTIME_OWNED=0" in script
+        assert "RUNTIME_OWNED=1" in script
+
+        cleanup = script.split("cleanup() {", 1)[1].split(
+            "trap 'cleanup $?' EXIT", 1
+        )[0]
+
+        assert "if (( RUNTIME_OWNED )); then" in cleanup
+
+        guarded_cleanup = cleanup.split(
+            "if (( RUNTIME_OWNED )); then", 1
+        )[1].split("    fi", 1)[0]
+
+        assert owned_stop in guarded_cleanup
+
+        pid_claim = 'printf \'%s\\n\' "$$" > "${PID_FILE}"'
+        assert script.index(pid_claim) < script.index("RUNTIME_OWNED=1")
