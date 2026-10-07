@@ -38,6 +38,7 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("with self._cancel_lock:", ros)
         self.assertIn("if self._navigate_goal_handle is goal_handle:", ros)
         self.assertIn('"terminal": "SUCCEEDED"', ros)
+        self.assertIn('terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}', ros)
         self.assertIn("navigation_control_api.note_replanned_path", app)
         self.assertIn('"global_path_updated_at": global_path_updated_at', app)
         self.assertIn('data-lidar-display="obstacles" checked>Dynamic Obstacle', template)

@@ -409,6 +409,45 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RESUMING", self.api.state_response(now=base + 5.1)["navigation_state"])
         self.assertEqual(0, self.map_api.ros_control.cancel_calls)
 
+    async def test_terminal_result_during_blocked_cancel_wins_over_timeout(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 5.1,
+        )
+        self.api.note_navigation_sample("scan", now=base + 5.1)
+
+        def completes_while_canceling():
+            self.map_api.ros_control.cancel_calls += 1
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": False,
+                "confirmed": True,
+                "completed": True,
+                "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = completes_while_canceling
+
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
+
+        self.assertIsNone(issue)
+        current = self.api.state_response(now=base + 5.1)
+        self.assertEqual("SUCCEEDED", current["navigation_state"])
+        self.assertIsNone(current["active_goal"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertFalse(
+            any(command.get("reason") == "navigation_blocked_timeout" for _, command in self.commands)
+        )
+
     async def test_user_navigation_mutation_wins_blocked_watchdog_race(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})

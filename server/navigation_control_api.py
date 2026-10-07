@@ -823,11 +823,24 @@ class NavigationControlApi:
                 if self._state["navigation_state"] not in self.NO_PROGRESS_NAV_STATES:
                     return False
 
+            cancel_result: dict[str, Any] | None = None
             cancel_error = None
             try:
-                await asyncio.to_thread(self._ros.cancel_navigation)
+                raw_cancel_result = await asyncio.to_thread(self._ros.cancel_navigation)
+                if isinstance(raw_cancel_result, dict):
+                    cancel_result = raw_cancel_result
             except Exception as exc:
                 cancel_error = exc
+
+            terminal = str((cancel_result or {}).get("terminal") or "").upper()
+            if terminal in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                with self._lock:
+                    self._sync_ros_navigation_terminal_locked(
+                        {"state": terminal},
+                        time.time(),
+                        allow_during_blocked_failure=True,
+                    )
+                return False
 
             delivered = await self._send_robot_command(
                 self._robot_id,

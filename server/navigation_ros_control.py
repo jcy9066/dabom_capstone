@@ -424,8 +424,12 @@ class NavigationRosControl:
             with self._lock:
                 goal_handle = self._navigate_goal_handle
                 result_future = self._navigate_result_future
+                terminal_state = self._navigation_state
             if goal_handle is None:
-                return {"requested": False, "confirmed": True}
+                response = {"requested": False, "confirmed": True}
+                if terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                    response.update({"completed": True, "terminal": terminal_state})
+                return response
             response = self._wait_future(
                 goal_handle.cancel_goal_async(),
                 timeout_sec=env_float("NAV_CANCEL_TIMEOUT_SEC", minimum=0.1),
@@ -439,8 +443,12 @@ class NavigationRosControl:
                 # when this exact handle is no longer active.
                 with self._lock:
                     already_terminal = self._navigate_goal_handle is not goal_handle
+                    terminal_state = self._navigation_state
                 if already_terminal:
-                    return {"requested": False, "confirmed": True, "completed": True}
+                    response = {"requested": False, "confirmed": True, "completed": True}
+                    if terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                        response["terminal"] = terminal_state
+                    return response
                 raise NavigationRosError(
                     "NAVIGATION_CANCEL_REJECTED",
                     "Nav2 did not confirm goal cancellation.",
@@ -467,6 +475,12 @@ class NavigationRosControl:
                 # A goal can finish successfully while a cancel is in flight.
                 # That is a safe terminal race, not a cancellation failure.
                 if status == int(GoalStatus.STATUS_SUCCEEDED):
+                    with self._lock:
+                        if self._navigate_goal_handle is goal_handle:
+                            self._navigation_state = "SUCCEEDED"
+                            self._navigation_error = None
+                            self._navigate_goal_handle = None
+                            self._navigate_result_future = None
                     return {
                         "requested": True,
                         "confirmed": False,
