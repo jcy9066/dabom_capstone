@@ -1731,6 +1731,7 @@ def render_latest_overlay(frame, now=None):
     with state_lock:
         result = dict(latest_result)
     detections = result.get("detections") or []
+    pair_actions = result.get("pair_actions") or []
     if not detections:
         return frame
 
@@ -1738,7 +1739,7 @@ def render_latest_overlay(frame, now=None):
     for detection in detections:
         if detection.get("box"):
             draw_detection_overlay(display_frame, detection)
-    draw_interaction_overlays(display_frame, detections)
+    draw_interaction_overlays(display_frame, detections, pair_actions)
     return display_frame
 
 
@@ -1803,6 +1804,9 @@ def process_frame_for_dashboard(frame):
 
     action_started = time.time()
     action_results = collect_action_results(frame, tracked_boxes)
+    pair_actions = dict(
+        getattr(frame_processor.action_analyzer, "latest_pair_actions", {}) or {}
+    )
     skeletons_by_id = {
         oid: result[0]
         for oid, result in action_results.items()
@@ -2007,9 +2011,14 @@ def process_frame_for_dashboard(frame):
         if detection.get("box"):
             draw_detection_overlay(display_frame, detection)
 
-    for pair_key, _first, _second, source in interaction_pair_overlays(detections):
-        if not source.get("danger") or source.get("observation_stale"):
+    resolved_pair_overlays = interaction_pair_overlays(
+        detections,
+        pair_actions,
+    )
+    for pair_key, first, second, source in resolved_pair_overlays:
+        if not source.get("is_danger") or source.get("observation_stale"):
             continue
+        danger = True
         action_label = source.get("label")
         event_type = vision_event_type(action_label)
         if event_type:
@@ -2019,14 +2028,20 @@ def process_frame_for_dashboard(frame):
                 confidence=source.get("score"),
                 message=f"위험 상호작용 감지: {action_label}",
                 frame=frame,
-                cooldown_key=f"pair:{pair_key[0]}:{pair_key[1]}",
+                cooldown_key=interaction_incident_key(
+                    pair_key,
+                    first,
+                    second,
+                    action_label,
+                ),
             )
 
-    draw_interaction_overlays(display_frame, detections)
+    draw_interaction_overlays(display_frame, detections, pair_actions)
     render_ms = (time.time() - render_started) * 1000
     return {
         "frame": display_frame,
         "detections": detections,
+        "pair_actions": serialize_pair_actions(pair_actions),
         "danger": danger,
         "timings": {
             "detector_ms": round(detector_ms, 1),
@@ -2168,6 +2183,7 @@ def publish_processed_inference_if_current(
         )
         result = build_empty_result(robot_id)
         result["detections"] = processed["detections"]
+        result["pair_actions"] = processed.get("pair_actions", [])
         result["danger"] = processed["danger"]
         result["timings"] = dict(processed.get("timings") or {})
         result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
@@ -4044,6 +4060,7 @@ def process_and_publish_frame(
             processed = process_frame_for_dashboard(frame)
         result_frame = processed["frame"]
         result["detections"] = processed["detections"]
+        result["pair_actions"] = processed.get("pair_actions", [])
         result["danger"] = processed["danger"]
         result["timings"] = dict(processed.get("timings") or {})
         result["inference_ms"] = round((time.time() - started) * 1000, 1)
