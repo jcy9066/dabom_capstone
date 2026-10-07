@@ -95,9 +95,29 @@ def test_latest_legacy_pair_staleness_guards_are_preserved():
 def test_x3d_buffer_append_is_serialized_with_stream_reset():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
-    assert "Serialize scene-buffer append with stream/model reset" in source
-    assert "with processing_lock:" in source
-    assert "observe_scene_frame(" in source
+    observe_start = source.index("def observe_scene_frame(")
+    observe_end = source.index("def collect_action_results(", observe_start)
+    observe_block = source[observe_start:observe_end]
+
+    reset_start = source.index("def activate_stream_generation(")
+    reset_end = source.index("def inference_worker(", reset_start)
+    reset_block = source[reset_start:reset_end]
+
+    assert "with scene_buffer_generation_lock:" in observe_block
+    assert "with scene_buffer_generation_lock:" in reset_block
+    assert "if stream_id != active_stream_id:" in observe_block
+
+
+def test_h264_decode_does_not_wait_for_model_inference_lock():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    decode_start = source.index("def h264_decode_loop(")
+    decode_end = source.index("def ffmpeg_stderr_loop(", decode_start)
+    decode_block = source[decode_start:decode_end]
+
+    assert "observe_scene_frame(" in decode_block
+    assert "with processing_lock:" not in decode_block
+    assert "Keep decode independent from model inference" in decode_block
 
 
 def test_pipeline8_ignores_legacy_action_policy_controls():

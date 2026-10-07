@@ -637,6 +637,10 @@ env_reload_state = {
     "last_error": None,
 }
 processing_lock = threading.Lock()
+# Protect only X3D stream-generation reset vs. decoded-frame append.
+# Do not use processing_lock here: model inference can be much slower than
+# decode, and blocking decode would distort the rolling temporal window.
+scene_buffer_generation_lock = threading.Lock()
 inference_condition = threading.Condition()
 inference_slot = {
     "frame": None,
@@ -1993,20 +1997,23 @@ def build_preview_frame(frame, infer, now=None):
 
 
 def observe_scene_frame(frame, timestamp=None, stream_id=None):
-    if stream_id is not None:
-        with state_lock:
-            if stream_id != active_stream_id:
-                return False
+    # Serialize only generation validation + scene-buffer append against
+    # reconnect reset. X3D's own buffer lock handles concurrent sampling.
+    with scene_buffer_generation_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    return False
 
-    processor = frame_processor
-    analyzer = getattr(processor, "action_analyzer", None)
-    if not getattr(analyzer, "scene_level_classifier", False):
-        return False
-    observer = getattr(analyzer, "observe_frame", None)
-    if not callable(observer):
-        return False
-    observer(frame, timestamp=timestamp)
-    return True
+        processor = frame_processor
+        analyzer = getattr(processor, "action_analyzer", None)
+        if not getattr(analyzer, "scene_level_classifier", False):
+            return False
+        observer = getattr(analyzer, "observe_frame", None)
+        if not callable(observer):
+            return False
+        observer(frame, timestamp=timestamp)
+        return True
 
 
 def collect_action_results(frame, tracked_boxes):
@@ -2528,15 +2535,26 @@ def activate_stream_generation(robot_id, infer):
     global active_stream_id
 
     with processing_lock:
-        # Invalidate the previous generation before clearing tracking state.
-        # An inference that finished processing just before reconnect will now
-        # fail its post-processing generation check immediately.
-        with state_lock:
-            active_stream_id += 1
-            stream_id = active_stream_id
-            now = time.time()
+        # Invalidate the previous generation and clear the scene buffer while
+        # holding the same narrow lock used by decoded-frame appends. This
+        # prevents a stale frame from entering after reset without blocking
+        # decode on RTMO/X3D inference.
+        with scene_buffer_generation_lock:
+            with state_lock:
+                active_stream_id += 1
+                stream_id = active_stream_id
+                now = time.time()
 
-        processor = frame_processor
+            processor = frame_processor
+            if processor is not None:
+                reset_tracking_state = getattr(
+                    processor.action_analyzer,
+                    "reset_tracking_state",
+                    None,
+                )
+                if callable(reset_tracking_state):
+                    reset_tracking_state()
+
         if processor is not None:
             reset_detector_tracking = getattr(
                 processor.detector,
@@ -2545,14 +2563,6 @@ def activate_stream_generation(robot_id, infer):
             )
             if callable(reset_detector_tracking):
                 reset_detector_tracking()
-
-            reset_tracking_state = getattr(
-                processor.action_analyzer,
-                "reset_tracking_state",
-                None,
-            )
-            if callable(reset_tracking_state):
-                reset_tracking_state()
             processor.action_display_buffer.clear()
             processor.pair_action_display_buffer.clear()
             processor.violence_heuristic.reset()
@@ -4676,16 +4686,13 @@ def h264_decode_loop(proc, robot_id, stream_id):
             frame_index += 1
             now = time.time()
             if infer:
-                # Serialize scene-buffer append with stream/model reset so an
-                # old generation cannot append after the new generation has
-                # cleared the rolling X3D buffer.
-                with processing_lock:
-                    if MODEL_ACTIVE and frame_processor is not None:
-                        observe_scene_frame(
-                            frame,
-                            now,
-                            stream_id=stream_id,
-                        )
+                # Keep decode independent from model inference. The observer
+                # uses a dedicated generation lock only around buffer append.
+                observe_scene_frame(
+                    frame,
+                    now,
+                    stream_id=stream_id,
+                )
             frame_seq = None
             if now - last_preview_at >= min_preview_interval:
                 preview_frame = build_preview_frame(frame, infer, now)
