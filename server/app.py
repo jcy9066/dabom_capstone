@@ -1314,6 +1314,7 @@ def build_empty_result(robot_id):
         "ok": True,
         "robot_id": robot_id,
         "detections": [],
+        "pair_actions": [],
         "danger": False,
         "pipeline": latest_result.get("pipeline"),
         "model_error": model_error,
