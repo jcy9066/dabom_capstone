@@ -179,9 +179,20 @@ class ActionRecognizer:
             else:
                 pair_action = self.pair_temporal_policy.current.get(pair_id)
 
-            if not pair_action or is_observation_issue(pair_action):
+            if not pair_action:
                 continue
-            annotated_action = dict(pair_action)
+
+            observation_stale = is_observation_issue(pair_action)
+            if observation_stale:
+                cached_pair_action = self.pair_temporal_policy.current.get(pair_id)
+                if cached_pair_action is None:
+                    continue
+                annotated_action = dict(cached_pair_action)
+                annotated_action["observation_stale"] = True
+            else:
+                annotated_action = dict(pair_action)
+                annotated_action["observation_stale"] = False
+
             annotated_action["interaction"] = True
             annotated_action["interaction_pair_ids"] = list(pair_id)
             annotated_action["interaction_role"] = "participant"
@@ -246,7 +257,10 @@ class ActionRecognizer:
         keypoints = [obj.get("keypoints") for obj in ordered]
         scores = [obj.get("keypoints_scores") for obj in ordered]
         if any(value is None or len(value) == 0 for value in keypoints):
-            return None
+            return observation_issue(
+                OBSERVATION_UNAVAILABLE,
+                "interaction pose keypoints unavailable",
+            )
 
         buffer = self.pair_action_buffer.setdefault(pair_id, {"kpts": [], "scores": []})
         buffer["kpts"].append(np.stack(keypoints, axis=0))
