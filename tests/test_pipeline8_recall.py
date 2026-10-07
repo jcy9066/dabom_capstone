@@ -200,7 +200,7 @@ def test_interaction_pair_warmup_does_not_repeat_last_frame(monkeypatch):
     assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
 
 
-def test_pair_selection_keeps_nearest_candidates_with_budget():
+def test_pair_selection_is_nearest_and_non_overlapping():
     analyzer = build_recall_analyzer()
     analyzer.interaction_max_pairs = 3
     objs = [
@@ -212,11 +212,26 @@ def test_pair_selection_keeps_nearest_candidates_with_budget():
 
     pairs = analyzer._select_interaction_pairs(objs)
     pair_ids = [tuple(sorted((first["id"], second["id"]))) for first, second in pairs]
+    flattened = [track_id for pair in pair_ids for track_id in pair]
 
-    assert len(pair_ids) == 3
-    assert (1, 2) in pair_ids
-    assert (3, 4) in pair_ids
-    assert any(2 in pair and 3 in pair for pair in pair_ids)
+    assert pair_ids == [(1, 2), (3, 4)]
+    assert len(flattened) == len(set(flattened))
+
+
+def test_pair_selection_prefers_existing_pair_to_reduce_flicker():
+    analyzer = build_recall_analyzer()
+    analyzer.interaction_max_pairs = 2
+    analyzer.pair_action_buffer[(2, 3)] = {"kpts": [1], "scores": [1]}
+    objs = [
+        {"id": 1, "box": [0, 0, 100, 200], "center": (50.0, 100.0)},
+        {"id": 2, "box": [70, 0, 170, 200], "center": (120.0, 100.0)},
+        {"id": 3, "box": [145, 0, 245, 200], "center": (195.0, 100.0)},
+    ]
+
+    pairs = analyzer._select_interaction_pairs(objs)
+    pair_ids = [tuple(sorted((first["id"], second["id"]))) for first, second in pairs]
+
+    assert pair_ids == [(2, 3)]
 
 
 def test_single_person_interaction_is_suspicious_fallback(monkeypatch):
@@ -343,3 +358,65 @@ def test_single_person_inference_uses_real_history_length(monkeypatch):
 
     assert captured_lengths == [analyzer.min_history_frames]
     assert len(analyzer.action_buffer[31]["kpts"]) == analyzer.min_history_frames
+
+
+def test_confirmed_dangerous_pair_overrides_stronger_single_action(monkeypatch):
+    analyzer = build_recall_analyzer()
+    analyzer.interaction_infer_every_n = 2
+    analyzer._interaction_frame_counter = 1
+
+    keypoints = np.ones((17, 2), dtype=np.float32)
+    scores = np.ones(17, dtype=np.float32)
+    objs = [
+        {
+            "id": 1,
+            "cls": 0,
+            "box": [0, 0, 100, 200],
+            "center": (50.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+        {
+            "id": 2,
+            "cls": 0,
+            "box": [80, 0, 180, 200],
+            "center": (130.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+    ]
+    single = {
+        "label": "FALLING",
+        "score": 0.95,
+        "is_danger": True,
+        "confidence_level": "danger",
+    }
+    pair = {
+        "label": "PUNCHING",
+        "score": 0.70,
+        "is_danger": True,
+        "confidence_level": "danger",
+    }
+
+    monkeypatch.setattr(
+        action_module,
+        "process_keypoint_many",
+        lambda _analyzer, _frame, people, total_frames: {
+            obj["id"]: (obj["keypoints"], dict(single)) for obj in people
+        },
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_process_interaction_pair",
+        lambda _frame, _first, _second: dict(pair),
+    )
+
+    results = analyzer.process_many(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        objs,
+    )
+
+    assert results[1][1]["label"] == "PUNCHING"
+    assert results[2][1]["label"] == "PUNCHING"
+    assert results[1][1]["source"] == "pair"
+    assert results[2][1]["interaction_pair_ids"] == [1, 2]
