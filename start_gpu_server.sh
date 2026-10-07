@@ -391,6 +391,7 @@ export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME
 import fastapi
 import rclpy
 import uvicorn
+import websockets
 PY
 
 model_active=0

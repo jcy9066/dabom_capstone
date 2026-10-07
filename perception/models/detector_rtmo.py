@@ -15,6 +15,15 @@ RTMO_SCORE_THRESHOLD = 0.05
 RTMO_KEYPOINT_SCORE_THRESHOLD = 0.30
 RTMO_TRACK_MATCH_IOU_THRESHOLD = 0.10
 
+# RTMO end2end output can occasionally contain multiple differently-sized
+# boxes for effectively the same pose. Do not use a generic second NMS here:
+# overlapping people are important for violence-scene recall. Collapse only
+# candidates whose boxes overlap and whose visible keypoints describe the
+# same pose.
+RTMO_DUPLICATE_POSE_MIN_BOX_IOU = 0.30
+RTMO_DUPLICATE_POSE_MIN_SHARED_KEYPOINTS = 6
+RTMO_DUPLICATE_POSE_MAX_NORMALIZED_DISTANCE = 0.04
+
 
 class RTMOPoseDetector:
     """Official RTMO-M ONNX inference with persistent BotSORT IDs."""
@@ -234,6 +243,114 @@ class RTMOPoseDetector:
             ratio,
         )
 
+    @classmethod
+    def _deduplicate_pose_candidates(
+        cls,
+        bboxes,
+        bbox_scores,
+        keypoints,
+        keypoint_scores,
+    ):
+        """Collapse only near-identical pose duplicates before BotSORT."""
+        bboxes = np.asarray(bboxes, dtype=np.float32)
+        bbox_scores = np.asarray(bbox_scores, dtype=np.float32)
+        keypoints = np.asarray(keypoints, dtype=np.float32)
+        keypoint_scores = np.asarray(keypoint_scores, dtype=np.float32)
+
+        if len(bboxes) <= 1:
+            return (
+                bboxes,
+                bbox_scores,
+                keypoints,
+                keypoint_scores,
+            )
+
+        candidate_order = np.argsort(
+            -bbox_scores,
+            kind="stable",
+        )
+
+        keep = []
+
+        for candidate_index in candidate_order:
+            candidate_index = int(candidate_index)
+            duplicate = False
+
+            for kept_index in keep:
+                box_iou = float(
+                    cls._box_iou(
+                        bboxes[candidate_index],
+                        bboxes[[kept_index]],
+                    )[0]
+                )
+
+                if box_iou < RTMO_DUPLICATE_POSE_MIN_BOX_IOU:
+                    continue
+
+                shared_visible = (
+                    keypoint_scores[candidate_index]
+                    >= RTMO_KEYPOINT_SCORE_THRESHOLD
+                ) & (
+                    keypoint_scores[kept_index]
+                    >= RTMO_KEYPOINT_SCORE_THRESHOLD
+                )
+
+                if (
+                    int(np.count_nonzero(shared_visible))
+                    < RTMO_DUPLICATE_POSE_MIN_SHARED_KEYPOINTS
+                ):
+                    continue
+
+                pose_distance = np.linalg.norm(
+                    keypoints[candidate_index][shared_visible]
+                    - keypoints[kept_index][shared_visible],
+                    axis=1,
+                )
+
+                candidate_size = (
+                    bboxes[candidate_index][2:4]
+                    - bboxes[candidate_index][0:2]
+                )
+                kept_size = (
+                    bboxes[kept_index][2:4]
+                    - bboxes[kept_index][0:2]
+                )
+
+                normalization_scale = max(
+                    1.0,
+                    min(
+                        float(np.linalg.norm(candidate_size)),
+                        float(np.linalg.norm(kept_size)),
+                    ),
+                )
+
+                normalized_pose_distance = (
+                    float(np.median(pose_distance))
+                    / normalization_scale
+                )
+
+                if (
+                    normalized_pose_distance
+                    <= RTMO_DUPLICATE_POSE_MAX_NORMALIZED_DISTANCE
+                ):
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                keep.append(candidate_index)
+
+        keep_indices = np.asarray(
+            sorted(keep),
+            dtype=np.int64,
+        )
+
+        return (
+            bboxes[keep_indices],
+            bbox_scores[keep_indices],
+            keypoints[keep_indices],
+            keypoint_scores[keep_indices],
+        )
+
     def _associate_pose_indices(self, tracked_boxes, pose_boxes):
         """Globally associate current BotSORT boxes back to RTMO poses by IoU."""
         tracked_boxes = np.asarray(tracked_boxes, dtype=np.float32).reshape(-1, 4)
@@ -274,6 +391,19 @@ class RTMOPoseDetector:
         bboxes, bbox_scores, keypoints, keypoint_scores = (
             self._pose_predictions(frame)
         )
+
+        (
+            bboxes,
+            bbox_scores,
+            keypoints,
+            keypoint_scores,
+        ) = self._deduplicate_pose_candidates(
+            bboxes,
+            bbox_scores,
+            keypoints,
+            keypoint_scores,
+        )
+
         if len(bboxes) == 0:
             detection_data = np.empty((0, 6), dtype=np.float32)
         else:

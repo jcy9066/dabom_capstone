@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from perception.models.detector_rtmo import RTMOPoseDetector
 
@@ -208,3 +209,109 @@ def test_rtmo_detector_does_not_apply_second_nms_after_end2end_export():
     assert "_nms_keep" not in source
     assert "np.flatnonzero(scores >= self.score_threshold)" in source
     assert "end2end graph already applies" in source
+
+
+
+def test_rtmo_pose_dedup_collapses_same_person_duplicate_candidates():
+    detector = build_detector()
+
+    boxes = np.array(
+        [
+            [210, 145, 313, 422],
+            [180, 146, 377, 424],
+            [111, 145, 320, 428],
+        ],
+        dtype=np.float32,
+    )
+    scores = np.array([0.95, 0.80, 0.65], dtype=np.float32)
+
+    base_pose = np.stack(
+        [
+            np.linspace(245, 285, 17),
+            np.linspace(170, 395, 17),
+        ],
+        axis=1,
+    ).astype(np.float32)
+
+    keypoints = np.stack(
+        [
+            base_pose,
+            base_pose + 1.0,
+            base_pose - 1.0,
+        ],
+        axis=0,
+    )
+
+    keypoint_scores = np.full(
+        (3, 17),
+        0.9,
+        dtype=np.float32,
+    )
+
+    kept = detector._deduplicate_pose_candidates(
+        boxes,
+        scores,
+        keypoints,
+        keypoint_scores,
+    )
+
+    assert kept[0].shape == (1, 4)
+    assert kept[1].shape == (1,)
+    assert kept[2].shape == (1, 17, 2)
+    assert kept[3].shape == (1, 17)
+    assert float(kept[1][0]) == pytest.approx(0.95)
+
+
+def test_rtmo_pose_dedup_preserves_overlapping_distinct_people():
+    detector = build_detector()
+
+    boxes = np.array(
+        [
+            [100, 100, 300, 420],
+            [160, 100, 360, 420],
+        ],
+        dtype=np.float32,
+    )
+    scores = np.array([0.92, 0.88], dtype=np.float32)
+
+    pose_a = np.stack(
+        [
+            np.linspace(150, 250, 17),
+            np.linspace(140, 390, 17),
+        ],
+        axis=1,
+    ).astype(np.float32)
+
+    pose_b = pose_a.copy()
+    pose_b[:, 0] += 60.0
+
+    keypoints = np.stack([pose_a, pose_b], axis=0)
+    keypoint_scores = np.full((2, 17), 0.9, dtype=np.float32)
+
+    kept = detector._deduplicate_pose_candidates(
+        boxes,
+        scores,
+        keypoints,
+        keypoint_scores,
+    )
+
+    assert kept[0].shape == (2, 4)
+    assert kept[1].shape == (2,)
+
+
+def test_rtmo_track_applies_pose_dedup_before_botsort():
+    source = (
+        ROOT_DIR / "perception" / "models" / "detector_rtmo.py"
+    ).read_text(encoding="utf-8")
+
+    pose_call = source.index("self._pose_predictions(frame)")
+    dedup_call = source.index(
+        "self._deduplicate_pose_candidates(",
+        pose_call,
+    )
+    tracker_call = source.index(
+        "self.tracker.update(detections, frame)",
+        dedup_call,
+    )
+
+    assert pose_call < dedup_call < tracker_call

@@ -276,6 +276,7 @@ def test_gpu_stack_prefers_isolated_python310_runtime():
     assert 'export PYTHONNOUSERSITE=1' in gpu
     assert 'log "Using Python runtime: ${PYTHON_BIN}"' in gpu
 
+    assert 'import websockets' in gpu
     assert '"${PYTHON_BIN}" -m uvicorn' in gpu
     assert '"${PYTHON_BIN}" server/wheel_odometry.py' in gpu
     assert '"${PYTHON_BIN}" -m perception.model_assets' in gpu
