@@ -947,6 +947,26 @@ def read_runtime_model_config():
     device = env_text("DEVICE").lower()
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
+
+    # Validate action-runtime controls before accepting a hot reload. The
+    # recognizer reads these values when the pipeline is rebuilt.
+    env_float("ACTION_SUSPICIOUS_THRESHOLD", minimum=0.0, maximum=1.0)
+    env_float("ACTION_DANGER_THRESHOLD", minimum=0.0, maximum=1.0)
+    env_int("ACTION_TEMPORAL_WINDOW", minimum=1)
+    env_int("ACTION_SUSPICIOUS_MIN_HITS", minimum=1)
+    env_int("ACTION_DANGER_MIN_HITS", minimum=1)
+    env_int("ACTION_NORMAL_CLEAR_HITS", minimum=1)
+    env_float("ACTION_TRACK_STATE_TTL_SEC", minimum=0.1)
+    if os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip():
+        env_float(
+            "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+            minimum=0.1,
+            maximum=5.0,
+        )
+    if os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip():
+        env_int("ACTION_MIN_HISTORY_FRAMES", minimum=2, maximum=100)
+    if os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip():
+        env_int("ACTION_INTERACTION_INFER_EVERY_N", minimum=1, maximum=30)
     return {
         "pipeline": env_text("PIPELINE"),
         "model_required": env_bool("MODEL_REQUIRED"),
