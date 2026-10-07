@@ -463,3 +463,32 @@ def test_pair_history_updates_even_when_pair_inference_is_skipped(monkeypatch):
 
     assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
     assert analyzer._interaction_frame_counter == 1
+
+
+def test_unselected_visible_pair_state_is_cleared():
+    analyzer = build_recall_analyzer()
+    stale_pair = (1, 3)
+    analyzer.pair_action_buffer[stale_pair] = {"kpts": [1], "scores": [1]}
+    analyzer.pair_temporal_policy.update(
+        stale_pair,
+        {
+            "label": "PUSHING",
+            "score": 0.7,
+            "is_danger": True,
+            "confidence_level": "danger",
+        },
+        now=time.monotonic(),
+    )
+    objs = [
+        {"id": 1, "box": [0, 0, 100, 200], "center": (50.0, 100.0)},
+        {"id": 2, "box": [60, 0, 160, 200], "center": (110.0, 100.0)},
+        {"id": 3, "box": [500, 0, 600, 200], "center": (550.0, 100.0)},
+    ]
+    selected = analyzer._select_interaction_pairs(objs)
+
+    analyzer._clear_unselected_visible_pair_state(objs, selected)
+
+    assert stale_pair not in analyzer.pair_action_buffer
+    assert stale_pair not in analyzer.pair_temporal_policy.history
+    assert stale_pair not in analyzer.pair_temporal_policy.current
+    assert stale_pair not in analyzer.pair_temporal_policy.last_seen_at
