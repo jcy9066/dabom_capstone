@@ -16,7 +16,7 @@ ultralytics>=8.4.0,<9.0.0
 lap>=0.5.12,<1.0.0
 mmengine==0.10.7
 mmcv-lite==2.1.0
-mmaction2 @ git+https://github.com/open-mmlab/mmaction2.git@v1.2.0
+mmaction2 @ git+https://github.com/open-mmlab/mmaction2.git@a5a167dff2399e2d182a60332325f9c0d4663517
 einops==0.8.2
 decord==0.6.0
 scipy==1.11.4
