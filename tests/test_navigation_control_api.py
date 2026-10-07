@@ -387,6 +387,28 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("BLOCKED_TIMEOUT", issue)
         self.assertEqual("FAILED", self.api.state_response(now=base + 5.1)["navigation_state"])
 
+    async def test_resuming_does_not_trigger_no_progress_timeout(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        base = time.time()
+        with self.api._lock:
+            self.api._state["navigation_state"] = "RESUMING"
+            self.api._start_navigation_progress_locked(
+                {"x": 0.0, "y": 0.0},
+                base,
+            )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 5.1,
+        )
+        self.api.note_navigation_sample("scan", now=base + 5.1)
+
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
+
+        self.assertIsNone(issue)
+        self.assertEqual("RESUMING", self.api.state_response(now=base + 5.1)["navigation_state"])
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+
     async def test_watchdog_syncs_ros_success_without_state_polling(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})

@@ -53,6 +53,7 @@ class NavigationWatchdogConfig:
 class NavigationControlApi:
     MODES = frozenset({"MAPPING", "DRIVING"})
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
+    NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
     BLOCKED_TIMEOUT_SEC = 5.0
     PROGRESS_DISTANCE_M = 0.10
 
@@ -786,7 +787,11 @@ class NavigationControlApi:
                 return None
             else:
                 issue = self._watchdog_issue_locked(current)
-                blocked = issue is None and self._navigation_progress_timed_out_locked(current)
+                blocked = (
+                    issue is None
+                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
+                    and self._navigation_progress_timed_out_locked(current)
+                )
                 if blocked:
                     self._blocked_failure_in_progress = True
         if issue:
@@ -811,7 +816,7 @@ class NavigationControlApi:
                 )
                 if terminal is not None:
                     return False
-                if self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
+                if self._state["navigation_state"] not in self.NO_PROGRESS_NAV_STATES:
                     return False
 
             cancel_error = None
@@ -830,7 +835,7 @@ class NavigationControlApi:
                 self._stop_encoder_ticks = self._encoder_ticks
                 if (
                     cancel_error is None
-                    and self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
                     and not self._state["emergency_stop"]
                 ):
                     self._state["navigation_state"] = "FAILED"
