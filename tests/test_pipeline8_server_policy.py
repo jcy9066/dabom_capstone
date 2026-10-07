@@ -106,3 +106,50 @@ def test_pair_overlay_group_does_not_include_unrelated_third_person():
     assert {first["id"], second["id"]} == {1, 2}
     assert source["id"] == 1
     assert 3 not in pair_key
+
+
+def test_final_interaction_overlay_is_non_overlapping_and_prefers_danger():
+    import server.app as server_app
+
+    detections = [
+        {
+            "id": 1,
+            "box": [10, 10, 50, 100],
+            "label": "PUSHING",
+            "score": 0.60,
+            "danger": False,
+            "action_source": "pair",
+            "interaction_pair_ids": [1, 2],
+        },
+        {
+            "id": 2,
+            "box": [60, 10, 100, 100],
+            "label": "PUSHING",
+            "score": 0.60,
+            "danger": False,
+            "action_source": "pair",
+            "interaction_pair_ids": [1, 2],
+        },
+        {
+            "id": 3,
+            "box": [110, 10, 150, 100],
+            "label": "PUNCHING",
+            "score": 0.55,
+            "danger": True,
+            "action_source": "pair",
+            "interaction_pair_ids": [1, 3],
+        },
+    ]
+
+    overlays = server_app.interaction_pair_overlays(detections)
+
+    assert len(overlays) == 1
+    pair_key, _first, _second, source = overlays[0]
+    assert pair_key == (1, 3)
+    assert source["danger"] is True
+
+
+def test_pair_events_use_pair_scoped_cooldown_key():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert 'cooldown_key=f"pair:{pair_key[0]}:{pair_key[1]}"' in source
