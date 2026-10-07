@@ -19,3 +19,19 @@ def test_pipeline8_observation_issue_does_not_clear_display_state():
     assert "observation_issue = is_observation_issue(action)" in source
     assert "not observation_issue" in source
     assert "ACTION_DISPLAY_TTL_SEC" in source
+
+
+def test_pipeline8_pair_actions_are_marked_as_interactions():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert '"interaction_pair_ids": None' in source
+    assert 'current_action.get("interaction_pair_ids")' in source
+    assert 'overlay_action_label = f"PAIR {action_label}"' in source
+    assert "should_emit_event" in source
+
+
+def test_stale_pair_evidence_does_not_refresh_display_ttl():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert 'selected_action.get("observation_stale")' in source
+    assert "do not refresh stale evidence" in source
