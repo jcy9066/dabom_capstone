@@ -100,3 +100,28 @@ def test_stale_tracking_state_is_fully_expired():
     assert policy.current == {}
     assert policy.normal_streak == {}
     assert policy.last_seen_at == {}
+
+
+def test_temporal_policy_does_not_mix_different_action_labels():
+    policy = TemporalActionPolicy(
+        window=5,
+        suspicious_min_hits=2,
+        danger_min_hits=2,
+        normal_clear_hits=2,
+    )
+    punching = {
+        "label": "PUNCHING",
+        "score": 0.40,
+        "is_danger": False,
+        "confidence_level": "suspicious",
+    }
+    kicking = {
+        "label": "KICKING",
+        "score": 0.45,
+        "is_danger": False,
+        "confidence_level": "suspicious",
+    }
+
+    assert policy.update(21, punching) is None
+    assert policy.update(21, kicking) is None
+    assert policy.update(21, punching)["label"] == "PUNCHING"
