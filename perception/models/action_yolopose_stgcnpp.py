@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from perception.device import resolve_cuda_device
-from perception.env_config import env_float
+from perception.env_config import env_float, env_int
 from perception.models.action_batch import process_keypoint_many
 from perception.models.action_policy import (
     OBSERVATION_INFERENCE_ERROR,
@@ -48,12 +48,24 @@ class ActionRecognizer:
         action_checkpoint = action_checkpoint or find_weight("weights/stgcnpp_8xb16-joint-u100*.pth")
 
         from mmaction.apis import inference_recognizer, init_recognizer
+        from mmengine.config import Config
         from mmengine.registry import DefaultScope
 
         self._inference_recognizer = inference_recognizer
         self._default_scope_cls = DefaultScope
+        runtime_config = Config.fromfile(action_config)
+        # The official evaluation config uses 10 temporal clips. That is useful
+        # for offline accuracy, but multiplies live inference cost. Use one
+        # deterministic clip for the real-time patrol pipeline.
+        for transform in runtime_config.test_pipeline:
+            if transform.get("type") == "UniformSampleFrames":
+                transform["num_clips"] = 1
         with self._default_scope_cls.overwrite_default_scope("mmaction"):
-            self.action_model = init_recognizer(action_config, action_checkpoint, device=device)
+            self.action_model = init_recognizer(
+                runtime_config,
+                action_checkpoint,
+                device=device,
+            )
 
         self.action_buffer = {}
         self.skeleton_links = [
@@ -104,6 +116,19 @@ class ActionRecognizer:
             and os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip()
             else 1.5
         )
+        self.min_history_frames = (
+            env_int("ACTION_MIN_HISTORY_FRAMES", minimum=2)
+            if self.recall_mode and os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip()
+            else 12
+        )
+        self.use_native_history_length = self.recall_mode
+        self.interaction_infer_every_n = (
+            env_int("ACTION_INTERACTION_INFER_EVERY_N", minimum=1)
+            if self.recall_mode
+            and os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip()
+            else 2
+        )
+        self._interaction_frame_counter = 0
 
     def expire_tracking_state(self, now=None):
         if self.temporal_policy is None:
@@ -121,6 +146,7 @@ class ActionRecognizer:
     def reset_tracking_state(self):
         self.action_buffer.clear()
         self.pair_action_buffer.clear()
+        self._interaction_frame_counter = 0
         if self.temporal_policy is not None:
             self.temporal_policy.reset()
         if self.pair_temporal_policy is not None:
@@ -144,28 +170,37 @@ class ActionRecognizer:
         if not self.recall_mode or len(objs) < 2:
             return results
 
-        for first_index, first in enumerate(objs):
-            for second in objs[first_index + 1 :]:
-                if not self._is_interaction_pair(first, second):
-                    continue
+        self._interaction_frame_counter += 1
+        for first, second in self._select_interaction_pairs(objs):
+            pair_id = tuple(sorted((first["id"], second["id"])))
+            self.pair_temporal_policy.mark_observed(pair_id)
+            if self._interaction_frame_counter % self.interaction_infer_every_n == 0:
                 pair_action = self._process_interaction_pair(frame, first, second)
-                if not pair_action or is_observation_issue(pair_action):
-                    continue
-                for obj in (first, second):
-                    skeleton, current = results.get(obj["id"], (obj.get("keypoints"), None))
-                    if (
-                        current is None
-                        or is_observation_issue(current)
-                        or pair_action["score"] >= current.get("score", 0.0)
-                    ):
-                        results[obj["id"]] = (skeleton, pair_action)
+            else:
+                pair_action = self.pair_temporal_policy.current.get(pair_id)
+
+            if not pair_action or is_observation_issue(pair_action):
+                continue
+            annotated_action = dict(pair_action)
+            annotated_action["interaction"] = True
+            annotated_action["interaction_pair_ids"] = list(pair_id)
+            annotated_action["interaction_role"] = "participant"
+            annotated_action["source"] = "pair"
+            for obj in (first, second):
+                skeleton, current = results.get(obj["id"], (obj.get("keypoints"), None))
+                if (
+                    current is None
+                    or is_observation_issue(current)
+                    or annotated_action["score"] >= current.get("score", 0.0)
+                ):
+                    results[obj["id"]] = (skeleton, annotated_action)
         return results
 
-    def _is_interaction_pair(self, first, second):
+    def _pair_distance_ratio(self, first, second):
         first_box = first.get("box")
         second_box = second.get("box")
         if first_box is None or second_box is None:
-            return False
+            return None
 
         first_center = first.get("center") or (
             (first_box[0] + first_box[2]) / 2.0,
@@ -178,7 +213,32 @@ class ActionRecognizer:
         distance = float(np.linalg.norm(np.asarray(first_center) - np.asarray(second_center)))
         first_height = max(float(first_box[3] - first_box[1]), 1.0)
         second_height = max(float(second_box[3] - second_box[1]), 1.0)
-        return distance <= self.interaction_pair_distance_ratio * max(first_height, second_height)
+        return distance / max(first_height, second_height)
+
+    def _select_interaction_pairs(self, objs):
+        candidates = []
+        for first_index, first in enumerate(objs):
+            for second in objs[first_index + 1 :]:
+                ratio = self._pair_distance_ratio(first, second)
+                if ratio is None or ratio > self.interaction_pair_distance_ratio:
+                    continue
+                candidates.append((ratio, first["id"], second["id"], first, second))
+
+        selected = []
+        used_ids = set()
+        for _ratio, first_id, second_id, first, second in sorted(
+            candidates,
+            key=lambda item: (item[0], item[1], item[2]),
+        ):
+            if first_id in used_ids or second_id in used_ids:
+                continue
+            used_ids.update((first_id, second_id))
+            selected.append((first, second))
+        return selected
+
+    def _is_interaction_pair(self, first, second):
+        ratio = self._pair_distance_ratio(first, second)
+        return ratio is not None and ratio <= self.interaction_pair_distance_ratio
 
     def _process_interaction_pair(self, frame, first, second):
         ordered = sorted((first, second), key=lambda obj: obj["id"])
@@ -195,13 +255,17 @@ class ActionRecognizer:
             buffer["kpts"].pop(0)
             buffer["scores"].pop(0)
 
-        pad_len = 100 - len(buffer["kpts"])
-        padded_kpts = buffer["kpts"] + [buffer["kpts"][-1]] * pad_len
-        padded_scores = buffer["scores"] + [buffer["scores"][-1]] * pad_len
+        if len(buffer["kpts"]) < self.min_history_frames:
+            return observation_issue(
+                OBSERVATION_UNAVAILABLE,
+                f"interaction warm-up {len(buffer['kpts'])}/{self.min_history_frames}",
+            )
 
         # MMAction2 skeleton annotations use (M, T, V, C) and (M, T, V).
-        pair_kpts = np.transpose(np.asarray(padded_kpts), (1, 0, 2, 3))
-        pair_scores = np.transpose(np.asarray(padded_scores), (1, 0, 2))
+        # Keep the real temporal history; UniformSampleFrames performs the
+        # model-required sampling instead of fabricating repeated tail frames.
+        pair_kpts = np.transpose(np.asarray(buffer["kpts"]), (1, 0, 2, 3))
+        pair_scores = np.transpose(np.asarray(buffer["scores"]), (1, 0, 2))
         self.pair_temporal_policy.mark_observed(pair_id)
         try:
             pred_scores = self._predict_scores_array(pair_kpts, pair_scores, frame.shape)
@@ -263,7 +327,7 @@ class ActionRecognizer:
             original_shape=(shape[0], shape[1]),
             start_index=0,
             modality="Pose",
-            total_frames=100,
+            total_frames=int(keypoints.shape[1]),
             keypoint=keypoints,
             keypoint_score=keypoint_scores,
         )
@@ -290,8 +354,14 @@ class ActionRecognizer:
 
         try:
             pred_scores = self._predict_scores(kpts, scores, shape)
-            target_actions = self.single_person_actions or self.target_actions
-            candidate = classify_target_scores(pred_scores, target_actions)
+            candidate = classify_target_scores(pred_scores, self.target_actions)
+            if candidate and candidate.get("label") in {"PUNCHING", "KICKING", "PUSHING"}:
+                candidate = dict(candidate)
+                candidate["is_danger"] = False
+                candidate["confidence_level"] = "suspicious"
+                candidate["interaction"] = True
+                candidate["interaction_role"] = "unconfirmed"
+                candidate["source"] = "single_fallback"
             return self.temporal_policy.update(obj_id, candidate)
         except Exception as exc:
             LOGGER.exception("Action inference failed for track_id=%s", obj_id)
