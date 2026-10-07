@@ -149,10 +149,11 @@ def test_final_interaction_overlay_is_non_overlapping_and_prefers_danger():
     assert source["danger"] is True
 
 
-def test_pair_events_use_pair_scoped_cooldown_key():
+def test_pair_events_use_incident_scoped_cooldown_key():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
-    assert 'cooldown_key=f"pair:{pair_key[0]}:{pair_key[1]}"' in source
+    assert "interaction_incident_key(" in source
+    assert "cooldown_key=interaction_incident_key(" in source
 
 
 def test_maximum_weight_matching_beats_greedy_pair_choice():
