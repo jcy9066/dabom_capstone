@@ -1,6 +1,7 @@
 import glob
 import logging
 import os
+import time
 
 import cv2
 import numpy as np
@@ -134,6 +135,13 @@ class ActionRecognizer:
             and os.getenv("ACTION_INTERACTION_MAX_PAIRS", "").strip()
             else 4
         )
+        self.pose_gap_reset_sec = (
+            env_float("ACTION_POSE_GAP_RESET_SEC", minimum=0.1, maximum=30.0)
+            if self.recall_mode
+            and os.getenv("ACTION_POSE_GAP_RESET_SEC", "").strip()
+            else 1.5
+        )
+        self.last_valid_pose_at = {}
         self._interaction_frame_counter = 0
 
     def expire_tracking_state(self, now=None):
@@ -142,6 +150,7 @@ class ActionRecognizer:
         expired = self.temporal_policy.expire_stale(now=now)
         for object_id in expired:
             self.action_buffer.pop(object_id, None)
+            self.last_valid_pose_at.pop(object_id, None)
 
         if self.pair_temporal_policy is not None:
             expired_pairs = self.pair_temporal_policy.expire_stale(now=now)
@@ -152,19 +161,54 @@ class ActionRecognizer:
     def reset_tracking_state(self):
         self.action_buffer.clear()
         self.pair_action_buffer.clear()
+        self.last_valid_pose_at.clear()
         self._interaction_frame_counter = 0
         if self.temporal_policy is not None:
             self.temporal_policy.reset()
         if self.pair_temporal_policy is not None:
             self.pair_temporal_policy.reset()
 
-    def _mark_observed(self, object_id):
+    def _mark_observed(self, object_id, now=None):
         if self.temporal_policy is None:
             return
-        self.temporal_policy.mark_observed(object_id)
+        self.temporal_policy.mark_observed(object_id, now=now)
+
+    def _clear_pose_dependent_state(self, object_id):
+        self.action_buffer.pop(object_id, None)
+        if self.temporal_policy is not None:
+            self.temporal_policy.clear(object_id)
+
+        known_pairs = set(self.pair_action_buffer)
+        if self.pair_temporal_policy is not None:
+            known_pairs.update(self.pair_temporal_policy.last_seen_at)
+            known_pairs.update(self.pair_temporal_policy.history)
+            known_pairs.update(self.pair_temporal_policy.current)
+        for pair_id in list(known_pairs):
+            if (
+                isinstance(pair_id, tuple)
+                and len(pair_id) == 2
+                and object_id in pair_id
+            ):
+                self.pair_action_buffer.pop(pair_id, None)
+                if self.pair_temporal_policy is not None:
+                    self.pair_temporal_policy.clear(pair_id)
+
+    def note_valid_pose(self, object_id, now=None):
+        now = time.monotonic() if now is None else float(now)
+        previous = self.last_valid_pose_at.get(object_id)
+        if previous is not None and now - previous > self.pose_gap_reset_sec:
+            self._clear_pose_dependent_state(object_id)
+        self.last_valid_pose_at[object_id] = now
+        self._mark_observed(object_id, now=now)
 
     def observation_unavailable(self, object_id, reason):
-        self._mark_observed(object_id)
+        now = time.monotonic()
+        last_valid = self.last_valid_pose_at.get(object_id)
+        if last_valid is not None and now - last_valid > self.pose_gap_reset_sec:
+            self._clear_pose_dependent_state(object_id)
+            self.last_valid_pose_at.pop(object_id, None)
+        else:
+            self._mark_observed(object_id, now=now)
         return observation_issue(OBSERVATION_UNAVAILABLE, reason)
 
     def process_many(self, frame, objs):
@@ -390,6 +434,7 @@ class ActionRecognizer:
                 "YOLO pose keypoints unavailable",
             )
 
+        self.note_valid_pose(obj_id)
         if obj_id not in self.action_buffer:
             self.action_buffer[obj_id] = {"kpts": [], "scores": []}
 
