@@ -299,12 +299,18 @@ class ActionRecognizer:
 
         cur_kpts = self.action_buffer[obj_id]["kpts"]
         cur_scores = self.action_buffer[obj_id]["scores"]
-        pad_len = 100 - len(cur_kpts)
-
-        pad_kpts = cur_kpts + [cur_kpts[-1]] * pad_len if pad_len > 0 else cur_kpts
-        pad_scores = cur_scores + [cur_scores[-1]] * pad_len if pad_len > 0 else cur_scores
-
-        action_res = self._classify_with_object(obj_id, pad_kpts, pad_scores, frame.shape)
+        if self.recall_mode and len(cur_kpts) < self.min_history_frames:
+            action_res = self.observation_unavailable(
+                obj_id,
+                f"action warm-up {len(cur_kpts)}/{self.min_history_frames}",
+            )
+        else:
+            action_res = self._classify_with_object(
+                obj_id,
+                cur_kpts,
+                cur_scores,
+                frame.shape,
+            )
 
         if len(self.action_buffer[obj_id]["kpts"]) >= 100:
             self.action_buffer[obj_id]["kpts"].pop(0)
