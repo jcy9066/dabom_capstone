@@ -1382,7 +1382,7 @@ def draw_corner_brackets(frame, box, color, thickness=2):
         cv2.line(frame, corner, end, color, thickness, cv2.LINE_AA)
 
 
-def draw_interaction_badge(frame, text, center, color):
+def draw_interaction_badge(frame, text, center, color, score=None):
     if not text:
         return
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -1393,7 +1393,8 @@ def draw_interaction_badge(frame, text, center, color):
     accent_w = 4
     (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
     width = text_w + padding_x * 2 + accent_w
-    height = text_h + baseline + padding_y * 2
+    progress_h = 3 if score is not None else 0
+    height = text_h + baseline + padding_y * 2 + progress_h
 
     frame_h, frame_w = frame.shape[:2]
     x = int(center[0] - width / 2)
@@ -1422,6 +1423,27 @@ def draw_interaction_badge(frame, text, center, color):
         thickness,
         cv2.LINE_AA,
     )
+    if score is not None:
+        progress = max(0.0, min(1.0, float(score)))
+        bar_x1 = x + accent_w
+        bar_x2 = x + width
+        bar_y1 = y + height - progress_h
+        cv2.rectangle(
+            frame,
+            (bar_x1, bar_y1),
+            (bar_x2, y + height),
+            (55, 55, 60),
+            -1,
+        )
+        filled_x = bar_x1 + int((bar_x2 - bar_x1) * progress)
+        if filled_x > bar_x1:
+            cv2.rectangle(
+                frame,
+                (bar_x1, bar_y1),
+                (filled_x, y + height),
+                color,
+                -1,
+            )
 
 
 def interaction_pair_overlays(detections):
@@ -1484,7 +1506,7 @@ def draw_interaction_overlays(frame, detections):
 
         label = source.get("label") or "INTERACTION"
         score = source.get("score")
-        score_text = f" · {float(score) * 100:.0f}%" if score is not None else ""
+        score_text = f"  |  {float(score) * 100:.0f}%" if score is not None else ""
         badge_center = (
             int((first_center[0] + second_center[0]) / 2),
             max(18, int((first_center[1] + second_center[1]) / 2) - 26),
@@ -1494,6 +1516,7 @@ def draw_interaction_overlays(frame, detections):
             f"{label}{score_text}",
             badge_center,
             color,
+            score=score,
         )
 
 
@@ -1813,7 +1836,8 @@ def process_frame_for_dashboard(frame):
                 )
                 detection["action_source"] = current_action.get("source")
                 detection["observation_stale"] = bool(
-                    current_action.get("observation_stale")
+                    observation_stale
+                    or current_action.get("observation_stale")
                 )
                 if current_action["is_danger"]:
                     danger = True
