@@ -951,12 +951,32 @@ def read_runtime_model_config():
 
     # Validate action-runtime controls before accepting a hot reload. The
     # recognizer reads these values when the pipeline is rebuilt.
-    env_float("ACTION_SUSPICIOUS_THRESHOLD", minimum=0.0, maximum=1.0)
-    env_float("ACTION_DANGER_THRESHOLD", minimum=0.0, maximum=1.0)
-    env_int("ACTION_TEMPORAL_WINDOW", minimum=1)
-    env_int("ACTION_SUSPICIOUS_MIN_HITS", minimum=1)
-    env_int("ACTION_DANGER_MIN_HITS", minimum=1)
+    suspicious_threshold = env_float(
+        "ACTION_SUSPICIOUS_THRESHOLD",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    danger_threshold = env_float(
+        "ACTION_DANGER_THRESHOLD",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    temporal_window = env_int("ACTION_TEMPORAL_WINDOW", minimum=1)
+    suspicious_min_hits = env_int("ACTION_SUSPICIOUS_MIN_HITS", minimum=1)
+    danger_min_hits = env_int("ACTION_DANGER_MIN_HITS", minimum=1)
     env_int("ACTION_NORMAL_CLEAR_HITS", minimum=1)
+    if danger_threshold < suspicious_threshold:
+        raise ValueError(
+            "ACTION_DANGER_THRESHOLD must be >= ACTION_SUSPICIOUS_THRESHOLD"
+        )
+    if suspicious_min_hits > temporal_window:
+        raise ValueError(
+            "ACTION_SUSPICIOUS_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+        )
+    if danger_min_hits > temporal_window:
+        raise ValueError(
+            "ACTION_DANGER_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+        )
     env_float("ACTION_TRACK_STATE_TTL_SEC", minimum=0.1)
     if os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip():
         env_float(
