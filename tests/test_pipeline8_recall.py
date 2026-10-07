@@ -31,6 +31,8 @@ def build_recall_analyzer():
     analyzer.use_native_history_length = True
     analyzer.interaction_infer_every_n = 2
     analyzer.interaction_max_pairs = 4
+    analyzer.pose_gap_reset_sec = 1.5
+    analyzer.last_valid_pose_at = {}
     analyzer._interaction_frame_counter = 0
     analyzer.temporal_policy = TemporalActionPolicy(
         window=5,
@@ -200,7 +202,7 @@ def test_interaction_pair_warmup_does_not_repeat_last_frame(monkeypatch):
     assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
 
 
-def test_pair_selection_is_nearest_and_non_overlapping():
+def test_pair_selection_keeps_top_candidates_even_when_people_overlap():
     analyzer = build_recall_analyzer()
     analyzer.interaction_max_pairs = 3
     objs = [
@@ -212,13 +214,12 @@ def test_pair_selection_is_nearest_and_non_overlapping():
 
     pairs = analyzer._select_interaction_pairs(objs)
     pair_ids = [tuple(sorted((first["id"], second["id"]))) for first, second in pairs]
-    flattened = [track_id for pair in pair_ids for track_id in pair]
 
-    assert pair_ids == [(1, 2), (3, 4)]
-    assert len(flattened) == len(set(flattened))
+    assert pair_ids == [(1, 2), (3, 4), (2, 3)]
+    assert any(2 in pair for pair in pair_ids[1:])
 
 
-def test_pair_selection_prefers_existing_pair_to_reduce_flicker():
+def test_pair_selection_keeps_existing_pair_bias_without_excluding_others():
     analyzer = build_recall_analyzer()
     analyzer.interaction_max_pairs = 2
     analyzer.pair_action_buffer[(2, 3)] = {"kpts": [1], "scores": [1]}
@@ -231,7 +232,8 @@ def test_pair_selection_prefers_existing_pair_to_reduce_flicker():
     pairs = analyzer._select_interaction_pairs(objs)
     pair_ids = [tuple(sorted((first["id"], second["id"]))) for first, second in pairs]
 
-    assert pair_ids == [(2, 3)]
+    assert pair_ids[0] == (2, 3)
+    assert (1, 2) in pair_ids
 
 
 def test_single_person_interaction_is_suspicious_fallback(monkeypatch):
@@ -465,7 +467,7 @@ def test_pair_history_updates_even_when_pair_inference_is_skipped(monkeypatch):
     assert analyzer._interaction_frame_counter == 1
 
 
-def test_unselected_visible_pair_state_is_cleared():
+def test_geometrically_ineligible_visible_pair_state_is_cleared():
     analyzer = build_recall_analyzer()
     stale_pair = (1, 3)
     analyzer.pair_action_buffer[stale_pair] = {"kpts": [1], "scores": [1]}
@@ -492,3 +494,40 @@ def test_unselected_visible_pair_state_is_cleared():
     assert stale_pair not in analyzer.pair_temporal_policy.history
     assert stale_pair not in analyzer.pair_temporal_policy.current
     assert stale_pair not in analyzer.pair_temporal_policy.last_seen_at
+
+
+def test_pose_gap_resets_single_and_pair_history():
+    analyzer = build_recall_analyzer()
+    analyzer.pose_gap_reset_sec = 1.0
+    analyzer.note_valid_pose(7, now=10.0)
+    analyzer.action_buffer[7] = {"kpts": [1], "scores": [1]}
+    analyzer.temporal_policy.update(
+        7,
+        {
+            "label": "FALLING",
+            "score": 0.8,
+            "is_danger": True,
+            "confidence_level": "danger",
+        },
+        now=10.0,
+    )
+    pair_id = (7, 8)
+    analyzer.pair_action_buffer[pair_id] = {"kpts": [1], "scores": [1]}
+    analyzer.pair_temporal_policy.update(
+        pair_id,
+        {
+            "label": "PUNCHING",
+            "score": 0.8,
+            "is_danger": True,
+            "confidence_level": "danger",
+        },
+        now=10.0,
+    )
+
+    analyzer.note_valid_pose(7, now=11.1)
+
+    assert 7 not in analyzer.action_buffer
+    assert 7 not in analyzer.temporal_policy.history
+    assert pair_id not in analyzer.pair_action_buffer
+    assert pair_id not in analyzer.pair_temporal_policy.history
+    assert analyzer.last_valid_pose_at[7] == 11.1
