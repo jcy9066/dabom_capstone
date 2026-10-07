@@ -28,7 +28,7 @@ def test_pipeline8_pair_actions_are_marked_as_interactions():
     assert 'current_action.get("interaction_pair_ids")' in source
     assert "draw_interaction_overlays" in source
     assert 'detection.get("action_source") == "pair"' in source
-    assert "should_emit_event" in source
+    assert 'current_action.get("source") != "pair"' in source
 
 
 def test_stale_pair_evidence_does_not_refresh_display_ttl():
@@ -42,4 +42,67 @@ def test_stale_pair_evidence_cannot_emit_new_alerts():
     source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
 
     assert 'detection["inference_status"] = "stale"' in source
-    assert "and not observation_stale" in source
+    assert 'source.get("observation_stale")' in source
+    assert "observation_stale" in source
+
+
+def test_pair_overlay_uses_shared_source_metadata_and_one_badge():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert "seen.add(pair_key)" in source
+    assert "overlays.append((pair_key, first, second, detection))" in source
+    assert 'label = source.get("label") or "INTERACTION"' in source
+    assert 'score = source.get("score")' in source
+    assert "draw_interaction_badge(" in source
+
+
+def test_pair_overlay_highlights_both_participants():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+
+    assert "draw_corner_brackets(frame, first_box, color)" in source
+    assert "draw_corner_brackets(frame, second_box, color)" in source
+    assert 'draw_skeleton_points(frame, first.get("skeleton"), color)' in source
+    assert 'draw_skeleton_points(frame, second.get("skeleton"), color)' in source
+
+
+def test_pair_overlay_group_does_not_include_unrelated_third_person():
+    import server.app as server_app
+
+    detections = [
+        {
+            "id": 1,
+            "box": [10, 10, 50, 100],
+            "label": "PUNCHING",
+            "score": 0.8,
+            "danger": True,
+            "action_source": "pair",
+            "interaction_pair_ids": [1, 2],
+        },
+        {
+            "id": 2,
+            "box": [60, 10, 100, 100],
+            "label": "",
+            "score": None,
+            "danger": False,
+            "action_source": None,
+            "interaction_pair_ids": None,
+        },
+        {
+            "id": 3,
+            "box": [180, 10, 220, 100],
+            "label": "",
+            "score": None,
+            "danger": False,
+            "action_source": None,
+            "interaction_pair_ids": None,
+        },
+    ]
+
+    overlays = server_app.interaction_pair_overlays(detections)
+
+    assert len(overlays) == 1
+    pair_key, first, second, source = overlays[0]
+    assert pair_key == (1, 2)
+    assert {first["id"], second["id"]} == {1, 2}
+    assert source["id"] == 1
+    assert 3 not in pair_key
