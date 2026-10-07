@@ -362,7 +362,7 @@ def test_single_person_inference_uses_real_history_length(monkeypatch):
     assert len(analyzer.action_buffer[31]["kpts"]) == analyzer.min_history_frames
 
 
-def test_confirmed_dangerous_pair_overrides_stronger_single_action(monkeypatch):
+def test_confirmed_pair_is_preserved_separately_from_person_action(monkeypatch):
     analyzer = build_recall_analyzer()
     analyzer.interaction_infer_every_n = 2
     analyzer._interaction_frame_counter = 1
@@ -418,10 +418,10 @@ def test_confirmed_dangerous_pair_overrides_stronger_single_action(monkeypatch):
         objs,
     )
 
-    assert results[1][1]["label"] == "PUNCHING"
-    assert results[2][1]["label"] == "PUNCHING"
-    assert results[1][1]["source"] == "pair"
-    assert results[2][1]["interaction_pair_ids"] == [1, 2]
+    assert results[1][1]["label"] == "FALLING"
+    assert results[2][1]["label"] == "FALLING"
+    assert analyzer.latest_pair_actions[(1, 2)]["label"] == "PUNCHING"
+    assert analyzer.latest_pair_actions[(1, 2)]["interaction_pair_ids"] == [1, 2]
 
 
 def test_pair_history_updates_even_when_pair_inference_is_skipped(monkeypatch):
