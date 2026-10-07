@@ -1551,6 +1551,10 @@ def process_frame_for_dashboard(frame):
             "has_skeleton": False,
             "skeleton": None,
             "confidence_level": None,
+            "interaction": False,
+            "interaction_pair_ids": None,
+            "interaction_role": None,
+            "action_source": None,
             "visual_state": "normal",
             "inference_status": None,
             "inference_error": None,
@@ -1605,35 +1609,58 @@ def process_frame_for_dashboard(frame):
                 detection["confidence_level"] = current_action.get(
                     "confidence_level"
                 )
+                detection["interaction"] = bool(current_action.get("interaction"))
+                detection["interaction_pair_ids"] = current_action.get(
+                    "interaction_pair_ids"
+                )
+                detection["interaction_role"] = current_action.get(
+                    "interaction_role"
+                )
+                detection["action_source"] = current_action.get("source")
                 if current_action["is_danger"]:
                     danger = True
                     color = (0, 0, 255)
                     detection["visual_state"] = "danger"
+                    action_label = current_action["label"]
+                    if current_action.get("source") == "pair":
+                        overlay_action_label = f"PAIR {action_label}"
+                    else:
+                        overlay_action_label = action_label
                     label = (
-                        f"!!! {current_action['label']} !!! "
+                        f"!!! {overlay_action_label} !!! "
                         f"{current_action['score'] * 100:.0f}%"
                     )
-                    if not observation_issue:
-                        event_type = vision_event_type(current_action["label"])
+                    pair_ids = current_action.get("interaction_pair_ids") or []
+                    should_emit_event = (
+                        not pair_ids
+                        or oid == min(int(pair_id) for pair_id in pair_ids)
+                    )
+                    if not observation_issue and should_emit_event:
+                        event_type = vision_event_type(action_label)
                         if event_type:
                             submit_automatic_event(
                                 "VISION_AI",
                                 event_type,
                                 confidence=detection["score"],
-                                message=f"위험 행동 감지: {current_action['label']}",
+                                message=f"위험 상호작용 감지: {action_label}",
                                 frame=frame,
                             )
                         else:
                             automatic_notifier.send_event_alert_async(
-                                f"위험 행동 감지: {current_action['label']}",
+                                f"위험 행동 감지: {action_label}",
                                 robot_id=SERVER_ROBOT_ID,
-                                event_type=vision_alert_type(current_action["label"]),
+                                event_type=vision_alert_type(action_label),
                             )
                 else:
                     color = (0, 165, 255)
                     detection["visual_state"] = "suspicious"
+                    suspicious_label = current_action["label"]
+                    if current_action.get("source") == "single_fallback":
+                        suspicious_label = f"{suspicious_label}?"
+                    elif current_action.get("source") == "pair":
+                        suspicious_label = f"PAIR {suspicious_label}"
                     label = (
-                        f"[{current_action['label']}] "
+                        f"[{suspicious_label}] "
                         f"{current_action['score'] * 100:.0f}%"
                     )
             elif (
