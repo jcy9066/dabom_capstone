@@ -420,3 +420,46 @@ def test_confirmed_dangerous_pair_overrides_stronger_single_action(monkeypatch):
     assert results[2][1]["label"] == "PUNCHING"
     assert results[1][1]["source"] == "pair"
     assert results[2][1]["interaction_pair_ids"] == [1, 2]
+
+
+def test_pair_history_updates_even_when_pair_inference_is_skipped(monkeypatch):
+    analyzer = build_recall_analyzer()
+    analyzer.interaction_infer_every_n = 2
+    analyzer._interaction_frame_counter = 0
+
+    keypoints = np.ones((17, 2), dtype=np.float32)
+    scores = np.ones(17, dtype=np.float32)
+    objs = [
+        {
+            "id": 1,
+            "cls": 0,
+            "box": [0, 0, 100, 200],
+            "center": (50.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+        {
+            "id": 2,
+            "cls": 0,
+            "box": [80, 0, 180, 200],
+            "center": (130.0, 100.0),
+            "keypoints": keypoints * 2,
+            "keypoints_scores": scores,
+        },
+    ]
+
+    monkeypatch.setattr(
+        action_module,
+        "process_keypoint_many",
+        lambda _analyzer, _frame, people, total_frames: {
+            obj["id"]: (obj["keypoints"], None) for obj in people
+        },
+    )
+
+    analyzer.process_many(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        objs,
+    )
+
+    assert len(analyzer.pair_action_buffer[(1, 2)]["kpts"]) == 1
+    assert analyzer._interaction_frame_counter == 1
