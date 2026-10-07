@@ -57,6 +57,35 @@ class SceneViolenceRecognizer:
         self._last_result = self._warming_result(0.0)
         self.model = self._load_model()
 
+    @staticmethod
+    def _normalize_checkpoint_state_dict(state_dict):
+        """Normalize the released violence checkpoint to PyTorchVideo X3D keys."""
+        normalized = {}
+
+        for key, value in state_dict.items():
+            normalized_key = str(key)
+
+            if normalized_key.startswith("module."):
+                normalized_key = normalized_key[len("module."):]
+
+            if normalized_key.startswith("backbone."):
+                normalized_key = normalized_key[len("backbone."):]
+
+            if normalized_key == "blocks.5.proj.1.weight":
+                normalized_key = "blocks.5.proj.weight"
+            elif normalized_key == "blocks.5.proj.1.bias":
+                normalized_key = "blocks.5.proj.bias"
+
+            if normalized_key in normalized:
+                raise RuntimeError(
+                    "Duplicate X3D checkpoint key after normalization: "
+                    f"{normalized_key}"
+                )
+
+            normalized[normalized_key] = value
+
+        return normalized
+
     def _load_model(self):
         from pytorchvideo.models.hub import x3d_m
 
@@ -79,11 +108,8 @@ class SceneViolenceRecognizer:
             state_dict = checkpoint
         if not isinstance(state_dict, dict):
             raise RuntimeError("X3D checkpoint does not contain a state dict")
-        if state_dict and all(str(key).startswith("module.") for key in state_dict):
-            state_dict = {
-                str(key)[7:]: value
-                for key, value in state_dict.items()
-            }
+
+        state_dict = self._normalize_checkpoint_state_dict(state_dict)
         model.load_state_dict(state_dict, strict=True)
         model.to(self.device)
         model.eval()
