@@ -1452,58 +1452,130 @@ def draw_interaction_badge(frame, text, center, color, score=None):
             )
 
 
-def interaction_pair_overlays(detections):
+def _normalize_pair_actions(pair_actions):
+    if not pair_actions:
+        return {}
+    if isinstance(pair_actions, dict):
+        normalized = {}
+        for pair_key, source in pair_actions.items():
+            try:
+                key = tuple(sorted(int(value) for value in pair_key))
+            except (TypeError, ValueError):
+                continue
+            if len(key) == 2 and isinstance(source, dict):
+                normalized[key] = dict(source)
+        return normalized
+
+    normalized = {}
+    for item in pair_actions:
+        if not isinstance(item, dict):
+            continue
+        pair_ids = item.get("pair_ids") or item.get("interaction_pair_ids") or []
+        try:
+            key = tuple(sorted(int(value) for value in pair_ids))
+        except (TypeError, ValueError):
+            continue
+        if len(key) != 2:
+            continue
+        source = dict(item)
+        source.pop("pair_ids", None)
+        normalized[key] = source
+    return normalized
+
+
+def serialize_pair_actions(pair_actions):
+    return [
+        {"pair_ids": list(pair_key), **dict(source)}
+        for pair_key, source in sorted(_normalize_pair_actions(pair_actions).items())
+    ]
+
+
+def _pair_weight(source):
+    score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
+    # One confirmed danger must outrank every suspicious combination within
+    # the bounded candidate budget, while multiple independent dangers add.
+    return (100.0 if source.get("danger") or source.get("is_danger") else 1.0) + score
+
+
+def _maximum_weight_pair_matching(candidates):
+    ordered = sorted(candidates, key=lambda item: item[0])
+    cache = {}
+
+    def search(index, used_ids):
+        key = (index, tuple(sorted(used_ids)))
+        if key in cache:
+            return cache[key]
+        if index >= len(ordered):
+            return 0.0, ()
+
+        best_weight, best_items = search(index + 1, used_ids)
+        pair_key, _first, _second, source = ordered[index]
+        if pair_key[0] not in used_ids and pair_key[1] not in used_ids:
+            include_weight, include_items = search(
+                index + 1,
+                used_ids | {pair_key[0], pair_key[1]},
+            )
+            include_weight += _pair_weight(source)
+            include_items = (ordered[index],) + include_items
+            if (
+                include_weight > best_weight
+                or (
+                    include_weight == best_weight
+                    and tuple(item[0] for item in include_items)
+                    < tuple(item[0] for item in best_items)
+                )
+            ):
+                best_weight, best_items = include_weight, include_items
+
+        cache[key] = (best_weight, best_items)
+        return cache[key]
+
+    return list(search(0, set())[1])
+
+
+def interaction_pair_overlays(detections, pair_actions=None):
     by_id = {
         int(detection["id"]): detection
         for detection in detections
         if detection.get("box") is not None
     }
+    explicit_pairs = _normalize_pair_actions(pair_actions)
     candidate_by_pair = {}
-    for detection in detections:
-        pair_ids = detection.get("interaction_pair_ids") or []
-        if detection.get("action_source") != "pair" or len(pair_ids) != 2:
-            continue
-        try:
-            pair_key = tuple(sorted(int(value) for value in pair_ids))
-        except (TypeError, ValueError):
-            continue
-        first = by_id.get(pair_key[0])
-        second = by_id.get(pair_key[1])
-        if first is None or second is None:
-            continue
 
-        previous = candidate_by_pair.get(pair_key)
-        if previous is None or (
-            bool(detection.get("danger")),
-            float(detection.get("score") or 0.0),
-        ) > (
-            bool(previous[3].get("danger")),
-            float(previous[3].get("score") or 0.0),
-        ):
-            candidate_by_pair[pair_key] = (pair_key, first, second, detection)
+    if explicit_pairs:
+        for pair_key, source in explicit_pairs.items():
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            candidate_by_pair[pair_key] = (pair_key, first, second, source)
+    else:
+        # Backward-compatible fallback for older stored results.
+        for detection in detections:
+            pair_ids = detection.get("interaction_pair_ids") or []
+            if detection.get("action_source") != "pair" or len(pair_ids) != 2:
+                continue
+            try:
+                pair_key = tuple(sorted(int(value) for value in pair_ids))
+            except (TypeError, ValueError):
+                continue
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            previous = candidate_by_pair.get(pair_key)
+            if previous is None or _pair_weight(detection) > _pair_weight(previous[3]):
+                candidate_by_pair[pair_key] = (pair_key, first, second, detection)
 
-    ordered = sorted(
-        candidate_by_pair.values(),
-        key=lambda item: (
-            not bool(item[3].get("danger")),
-            -float(item[3].get("score") or 0.0),
-            item[0],
-        ),
-    )
-    overlays = []
-    used_track_ids = set()
-    for item in ordered:
-        pair_key = item[0]
-        if pair_key[0] in used_track_ids or pair_key[1] in used_track_ids:
-            continue
-        overlays.append(item)
-        used_track_ids.update(pair_key)
-    return overlays
+    return _maximum_weight_pair_matching(list(candidate_by_pair.values()))
 
 
-def draw_interaction_overlays(frame, detections):
+def draw_interaction_overlays(frame, detections, pair_actions=None):
     frame_h, frame_w = frame.shape[:2]
-    for _pair_key, first, second, source in interaction_pair_overlays(detections):
+    for _pair_key, first, second, source in interaction_pair_overlays(
+        detections,
+        pair_actions,
+    ):
         danger = bool(source.get("danger"))
         color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
 
