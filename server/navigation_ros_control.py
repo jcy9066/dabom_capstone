@@ -447,7 +447,9 @@ class NavigationRosControl:
                     502,
                 )
             with self._lock:
-                self._navigation_state = "CANCELING"
+                # Do not overwrite a terminal result callback that won the race.
+                if self._navigate_goal_handle is goal_handle:
+                    self._navigation_state = "CANCELING"
             if result_future is None:
                 raise NavigationRosError(
                     "NAVIGATION_CANCEL_UNCONFIRMED",
@@ -460,12 +462,30 @@ class NavigationRosControl:
                 error_code="NAVIGATION_CANCEL_TIMEOUT",
                 message="Timed out waiting for Nav2 to finish canceling the goal.",
             )
-            if int(result.status) != int(GoalStatus.STATUS_CANCELED):
+            status = int(result.status)
+            if status != int(GoalStatus.STATUS_CANCELED):
+                # A goal can finish successfully while a cancel is in flight.
+                # That is a safe terminal race, not a cancellation failure.
+                if status == int(GoalStatus.STATUS_SUCCEEDED):
+                    return {
+                        "requested": True,
+                        "confirmed": False,
+                        "completed": True,
+                        "terminal": "SUCCEEDED",
+                    }
                 raise NavigationRosError(
                     "NAVIGATION_CANCEL_UNCONFIRMED",
                     f"Nav2 completed cancel with status={result.status}.",
                     502,
                 )
+            with self._lock:
+                # Make cancellation synchronous for callers even if the result
+                # callback has not run yet. The callback becomes a harmless no-op.
+                if self._navigate_goal_handle is goal_handle:
+                    self._navigation_state = "CANCELED"
+                    self._navigation_error = "NavigateToPose status=CANCELED"
+                    self._navigate_goal_handle = None
+                    self._navigate_result_future = None
             return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self) -> dict[str, Any]:
