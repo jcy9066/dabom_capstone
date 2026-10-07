@@ -1,12 +1,28 @@
 # -*- coding: utf-8 -*-
 fastapi==0.136.1
 uvicorn==0.46.0
+websockets==12.0
 python-multipart==0.0.27
 requests==2.28.2
-opencv-python==4.8.1.78
+# MMAction2 requires opencv-contrib-python; use one cv2 wheel only.
+opencv-contrib-python==4.8.1.78
 python-dotenv==1.2.2
 numpy==1.26.4
 Jinja2==3.1.6
+
+# GPU perception runtime (pipeline 8)
+torch>=2.7.0,<3.0.0
+torchvision>=0.22.0,<1.0.0
+ultralytics>=8.4.0,<9.0.0
+pytorchvideo==0.1.5
+onnxruntime-gpu>=1.20.0,<2.0.0
+lap>=0.5.12,<1.0.0
+mmengine==0.10.7
+mmcv-lite==2.1.0
+mmaction2 @ git+https://github.com/open-mmlab/mmaction2.git@a5a167dff2399e2d182a60332325f9c0d4663517
+einops==0.8.2
+decord==0.6.0
+scipy==1.11.4
 
 PyMySQL==1.1.2
 bcrypt==4.3.0

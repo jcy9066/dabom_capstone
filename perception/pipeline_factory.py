@@ -8,7 +8,7 @@ PIPELINE_OPTIONS = {
     "5": "YOLO11xPose_BotSORT_STGCNpp",
     "6": "YOLO26m_BotSORT_RTMPose_STGCNpp",
     "7": "YOLO26m_BotSORT_RTMPose_PoseConv3D",
-    "8": "YOLO26mPose_BotSORT_STGCNpp",
+    "8": "RTMOM_BotSORT_X3DMScene",
     "9": "YOLO26mPose_BotSORT_PoseConv3D",
 }
 
@@ -22,7 +22,7 @@ def print_pipeline_menu():
     print("5. YOLO11x-Pose - Bot-SORT - (통합) - ST-GCN++")
     print("6. YOLO26m - Bot-SORT - RTMPose - ST-GCN++")
     print("7. YOLO26m - Bot-SORT - RTMPose - PoseConv3D")
-    print("8. YOLO26m-Pose - Bot-SORT - (통합) - ST-GCN++")
+    print("8. RTMO-M - Bot-SORT - X3D-M scene violence")
     print("9. YOLO26m-Pose - Bot-SORT - (통합) - PoseConv3D")
 
 
@@ -98,13 +98,22 @@ def create_pipeline(choice, device=None):
             "action_analyzer": ActionRecognizer(device=device),
         }
     if choice == "8":
-        from .models.detector_yolo import YOLOPoseDetector
-        from .models.action_yolopose_stgcnpp import ActionRecognizer
+        from .model_assets import ensure_pipeline_assets
+        from .models.detector_rtmo import RTMOPoseDetector
+        from .models.scene_x3d import SceneViolenceRecognizer
 
+        assets = ensure_pipeline_assets(choice)
         return {
             "name": PIPELINE_OPTIONS[choice],
-            "detector": YOLOPoseDetector(weight="weights/yolo26m-pose.pt", tracker="botsort", device=device),
-            "action_analyzer": ActionRecognizer(device=device),
+            "detector": RTMOPoseDetector(
+                onnx_model=assets["rtmo_onnx"],
+                tracker="perception/config/botsort_recall.yaml",
+                device=device,
+            ),
+            "action_analyzer": SceneViolenceRecognizer(
+                device=device,
+                checkpoint=assets["scene_checkpoint"],
+            ),
         }
     if choice == "9":
         from .models.detector_yolo import YOLOPoseDetector

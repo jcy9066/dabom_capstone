@@ -204,7 +204,9 @@ def test_stack_shutdown_tuning_does_not_shorten_startup_readiness():
     pi = read("start_pi_stack.sh")
     gpu = read("start_gpu_server.sh")
 
-    assert 'server_ready=0\nfor _ in {1..30}; do' in gpu
+    assert 'server_startup_timeout_sec="${GPU_SERVER_STARTUP_TIMEOUT_SEC:-180}"' in gpu
+    assert 'startup_deadline=$((SECONDS + server_startup_timeout_sec))' in gpu
+    assert 'while (( SECONDS < startup_deadline )); do' in gpu
     assert 'local publisher_ready=0\n    local topic_info\n    for _ in {1..20}; do' in gpu
     assert 'robot_connected=0' in pi
     assert 'for _ in {1..20}; do\n        robot_json=' in pi
@@ -263,3 +265,18 @@ def test_runtime_process_roles_use_owned_process_groups():
     assert "len(status[pgid_key]) != 1" in navigation
     assert "def _owned_executable_exists(self, mode: str, name: str)" in navigation
     assert 'owner.startswith(self.OWNER_PREFIX)' in navigation
+
+
+def test_gpu_stack_prefers_isolated_python310_runtime():
+    gpu = read("start_gpu_server.sh")
+
+    assert 'DABOM_GPU_PYTHON' in gpu
+    assert '${HOME}/.venvs/dabom-gpu310/bin/python' in gpu
+    assert '${ROOT_DIR}/.venv-gpu310/bin/python' in gpu
+    assert 'export PYTHONNOUSERSITE=1' in gpu
+    assert 'log "Using Python runtime: ${PYTHON_BIN}"' in gpu
+
+    assert 'import websockets' in gpu
+    assert '"${PYTHON_BIN}" -m uvicorn' in gpu
+    assert '"${PYTHON_BIN}" server/wheel_odometry.py' in gpu
+    assert '"${PYTHON_BIN}" -m perception.model_assets' in gpu

@@ -36,6 +36,7 @@ if str(PERCEPTION_DIR) not in sys.path:
 
 from perception.device import resolve_cuda_device
 from perception.frame_processor import FrameProcessor
+from perception.models.action_policy import is_observation_issue
 from perception.pipeline_factory import PIPELINE_OPTIONS, create_pipeline
 from perception.utils.event_taxonomy import vision_alert_type, vision_event_type
 from perception.utils.telegram_notifier import TelegramNotifier
@@ -398,7 +399,9 @@ latest_result = {
     "ok": True,
     "robot_id": SERVER_ROBOT_ID,
     "detections": [],
+    "pair_actions": [],
     "danger": False,
+    "scene": None,
     "pipeline": None,
     "model_error": None,
 }
@@ -515,11 +518,16 @@ stream_stats = {
 status_frame_cache = {"key": None, "frame": None}
 frame_processor = None
 model_error = None
+model_generation = 0
 model_reload_lock = threading.Lock()
 database = Database()
 automatic_notifier = TelegramNotifier()
 event_log_worker = None
 system_status_writer = None
+interaction_incident_state = {
+    "next_id": 1,
+    "incidents": {},
+}
 privacy_processor = None
 privacy_processor_lock = threading.Lock()
 frozen_frame_cache = FrozenFrameCache()
@@ -568,6 +576,7 @@ def submit_automatic_event(
     message=None,
     robot_id=SERVER_ROBOT_ID,
     frame=None,
+    cooldown_key=None,
 ):
     worker = event_log_worker
     if worker is None:
@@ -589,6 +598,7 @@ def submit_automatic_event(
         message=message,
         location=robot_status_snapshot(),
         frame=event_frame,
+        cooldown_key=cooldown_key,
     )
 
 
@@ -627,6 +637,10 @@ env_reload_state = {
     "last_error": None,
 }
 processing_lock = threading.Lock()
+# Protect only X3D stream-generation reset vs. decoded-frame append.
+# Do not use processing_lock here: model inference can be much slower than
+# decode, and blocking decode would distort the rolling temporal window.
+scene_buffer_generation_lock = threading.Lock()
 inference_condition = threading.Condition()
 inference_slot = {
     "frame": None,
@@ -923,6 +937,18 @@ RUNTIME_MODEL_ENV_KEYS = (
     "INFERENCE_MAX_FPS",
     "ADAPTIVE_BATCHING_ENABLED",
     "ADAPTIVE_BATCH_MAX_WAIT_MS",
+    "ACTION_SUSPICIOUS_THRESHOLD",
+    "ACTION_DANGER_THRESHOLD",
+    "ACTION_TEMPORAL_WINDOW",
+    "ACTION_SUSPICIOUS_MIN_HITS",
+    "ACTION_DANGER_MIN_HITS",
+    "ACTION_NORMAL_CLEAR_HITS",
+    "ACTION_TRACK_STATE_TTL_SEC",
+    "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+    "ACTION_INTERACTION_MAX_PAIRS",
+    "ACTION_MIN_HISTORY_FRAMES",
+    "ACTION_POSE_GAP_RESET_SEC",
+    "ACTION_INTERACTION_INFER_EVERY_N",
     "ACTION_DISPLAY_TTL_SEC",
     "TRIGGER_SUSPICIOUS_VISUAL_ENABLED",
     "INFERENCE_MAX_RESULT_AGE_SEC",
@@ -935,18 +961,101 @@ def read_runtime_model_config():
     device = env_text("DEVICE").lower()
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
+    pipeline = env_text("PIPELINE")
+    stream_infer_every_n = env_int("STREAM_INFER_EVERY_N", minimum=1)
+    inference_max_fps = env_float("INFERENCE_MAX_FPS", minimum=0.1)
+    effective_request_fps = min(
+        inference_max_fps,
+        STREAM_FPS / stream_infer_every_n,
+    )
+    if (
+        pipeline == "8"
+        and (inference_enabled or visualization_enabled)
+        and effective_request_fps < 1.0
+    ):
+        raise ValueError(
+            "Pipeline 8 requires an effective inference request rate >= 1 Hz "
+            f"(current={effective_request_fps:.3f} Hz)"
+        )
+
+    # Pipeline 8 does not use the legacy ST-GCN action-policy controls.
+    # Validate them only for pipelines that actually consume those settings.
+    if pipeline != "8":
+        suspicious_threshold = env_float(
+            "ACTION_SUSPICIOUS_THRESHOLD",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        danger_threshold = env_float(
+            "ACTION_DANGER_THRESHOLD",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        temporal_window = env_int("ACTION_TEMPORAL_WINDOW", minimum=1)
+        suspicious_min_hits = env_int(
+            "ACTION_SUSPICIOUS_MIN_HITS",
+            minimum=1,
+        )
+        danger_min_hits = env_int("ACTION_DANGER_MIN_HITS", minimum=1)
+        env_int("ACTION_NORMAL_CLEAR_HITS", minimum=1)
+
+        if danger_threshold < suspicious_threshold:
+            raise ValueError(
+                "ACTION_DANGER_THRESHOLD must be >= ACTION_SUSPICIOUS_THRESHOLD"
+            )
+        if suspicious_min_hits > temporal_window:
+            raise ValueError(
+                "ACTION_SUSPICIOUS_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+            )
+        if danger_min_hits > temporal_window:
+            raise ValueError(
+                "ACTION_DANGER_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+            )
+
+        env_float("ACTION_TRACK_STATE_TTL_SEC", minimum=0.1)
+
+        if os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip():
+            env_float(
+                "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+                minimum=0.1,
+                maximum=5.0,
+            )
+
+        if os.getenv("ACTION_INTERACTION_MAX_PAIRS", "").strip():
+            env_int(
+                "ACTION_INTERACTION_MAX_PAIRS",
+                minimum=1,
+                maximum=16,
+            )
+
+        if os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip():
+            env_int(
+                "ACTION_MIN_HISTORY_FRAMES",
+                minimum=2,
+                maximum=100,
+            )
+
+        if os.getenv("ACTION_POSE_GAP_RESET_SEC", "").strip():
+            env_float(
+                "ACTION_POSE_GAP_RESET_SEC",
+                minimum=0.1,
+                maximum=30.0,
+            )
+
+        if os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip():
+            env_int(
+                "ACTION_INTERACTION_INFER_EVERY_N",
+                minimum=1,
+                maximum=30,
+            )
     return {
-        "pipeline": env_text("PIPELINE"),
+        "pipeline": pipeline,
         "model_required": env_bool("MODEL_REQUIRED"),
         "inference_enabled": inference_enabled,
         "visualization_enabled": visualization_enabled,
         "model_active": inference_enabled or visualization_enabled,
-        "stream_infer_every_n": env_int(
-            "STREAM_INFER_EVERY_N", minimum=1
-        ),
-        "inference_max_fps": env_float(
-            "INFERENCE_MAX_FPS", minimum=0.1
-        ),
+        "stream_infer_every_n": stream_infer_every_n,
+        "inference_max_fps": inference_max_fps,
         "adaptive_batching_enabled": env_bool("ADAPTIVE_BATCHING_ENABLED"),
         "adaptive_batch_max_wait_ms": env_float(
             "ADAPTIVE_BATCH_MAX_WAIT_MS", minimum=0.0
@@ -999,14 +1108,39 @@ def apply_runtime_model_config(config):
 
 
 def runtime_model_signature(config):
-    return config["pipeline"], config["model_active"], config["device"]
+    action_env_signature = ()
+    if config["pipeline"] != "8":
+        action_env_signature = tuple(
+            (key, os.getenv(key))
+            for key in (
+                "ACTION_SUSPICIOUS_THRESHOLD",
+                "ACTION_DANGER_THRESHOLD",
+                "ACTION_TEMPORAL_WINDOW",
+                "ACTION_SUSPICIOUS_MIN_HITS",
+                "ACTION_DANGER_MIN_HITS",
+                "ACTION_NORMAL_CLEAR_HITS",
+                "ACTION_TRACK_STATE_TTL_SEC",
+                "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+                "ACTION_INTERACTION_MAX_PAIRS",
+                "ACTION_MIN_HISTORY_FRAMES",
+                "ACTION_POSE_GAP_RESET_SEC",
+                "ACTION_INTERACTION_INFER_EVERY_N",
+            )
+        )
+    return (
+        config["pipeline"],
+        config["model_active"],
+        config["device"],
+        action_env_signature,
+    )
 
 
 def detach_frame_processor():
-    global frame_processor
+    global frame_processor, model_generation
     with processing_lock:
         processor = frame_processor
         frame_processor = None
+        model_generation += 1
     return processor
 
 
@@ -1151,6 +1285,60 @@ def ensure_runtime_model_config(force=False, reason="env"):
             env_reload_state["last_error"] = None
 
 
+def set_model_pipeline_enabled(enabled):
+    """Toggle the single in-process model pipeline without touching privacy processing."""
+    enabled = bool(enabled)
+
+    with model_reload_lock:
+        if enabled and MODEL_ACTIVE and frame_processor is not None:
+            return True
+        if not enabled and not MODEL_ACTIVE and frame_processor is None:
+            return True
+
+        config = read_runtime_model_config()
+        config["inference_enabled"] = enabled
+        config["visualization_enabled"] = enabled
+        config["model_active"] = enabled
+
+        if not enabled:
+            with inference_condition:
+                inference_slot.update(
+                    {
+                        "frame": None,
+                        "robot_id": None,
+                        "frame_seq": None,
+                        "captured_at": None,
+                        "stream_id": None,
+                    }
+                )
+
+        apply_runtime_model_config(config)
+        env_reload_state["signature"] = runtime_model_signature(config)
+        success = reload_model_pipeline(
+            config,
+            reason="dashboard_toggle",
+            initial=False,
+        )
+
+        if enabled and not success:
+            config["inference_enabled"] = False
+            config["visualization_enabled"] = False
+            config["model_active"] = False
+            apply_runtime_model_config(config)
+            env_reload_state["signature"] = runtime_model_signature(config)
+
+        env_reload_state["last_error"] = None if success else model_error
+
+        if not enabled and success:
+            with state_lock:
+                latest_result["detections"] = []
+                latest_result["pair_actions"] = []
+                latest_result["danger"] = False
+                latest_result["scene"] = None
+
+        return success
+
+
 def encode_jpeg(frame):
     ok, buffer = cv2.imencode(
         ".jpg",
@@ -1175,7 +1363,9 @@ def build_empty_result(robot_id):
         "ok": True,
         "robot_id": robot_id,
         "detections": [],
+        "pair_actions": [],
         "danger": False,
+        "scene": None,
         "pipeline": latest_result.get("pipeline"),
         "model_error": model_error,
     }
@@ -1230,6 +1420,418 @@ def draw_overlay_label(frame, text, origin, color):
 
 PERSON_BASE_COLOR = (120, 220, 120)
 PERSON_BASE_OPACITY = 0.30
+INTERACTION_DANGER_COLOR = (36, 48, 255)
+INTERACTION_SUSPICIOUS_COLOR = (0, 170, 255)
+
+
+def draw_corner_brackets(frame, box, color, thickness=2):
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = clamp_box(box, width, height)
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    arm = max(10, min(28, int(min(box_w, box_h) * 0.16)))
+    segments = (
+        ((x1, y1 + arm), (x1, y1), (x1 + arm, y1)),
+        ((x2 - arm, y1), (x2, y1), (x2, y1 + arm)),
+        ((x1, y2 - arm), (x1, y2), (x1 + arm, y2)),
+        ((x2 - arm, y2), (x2, y2), (x2, y2 - arm)),
+    )
+    for start, corner, end in segments:
+        cv2.line(frame, start, corner, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, corner, end, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, start, corner, color, thickness, cv2.LINE_AA)
+        cv2.line(frame, corner, end, color, thickness, cv2.LINE_AA)
+
+
+def _union_box(first_box, second_box):
+    return (
+        min(float(first_box[0]), float(second_box[0])),
+        min(float(first_box[1]), float(second_box[1])),
+        max(float(first_box[2]), float(second_box[2])),
+        max(float(first_box[3]), float(second_box[3])),
+    )
+
+
+def _box_iou(first_box, second_box):
+    x1 = max(first_box[0], second_box[0])
+    y1 = max(first_box[1], second_box[1])
+    x2 = min(first_box[2], second_box[2])
+    y2 = min(first_box[3], second_box[3])
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if intersection <= 0.0:
+        return 0.0
+    first_area = max(0.0, first_box[2] - first_box[0]) * max(
+        0.0,
+        first_box[3] - first_box[1],
+    )
+    second_area = max(0.0, second_box[2] - second_box[0]) * max(
+        0.0,
+        second_box[3] - second_box[1],
+    )
+    union = first_area + second_area - intersection
+    return 0.0 if union <= 0.0 else intersection / union
+
+
+def _box_center_distance(first_box, second_box):
+    first_center = (
+        (first_box[0] + first_box[2]) / 2.0,
+        (first_box[1] + first_box[3]) / 2.0,
+    )
+    second_center = (
+        (second_box[0] + second_box[2]) / 2.0,
+        (second_box[1] + second_box[3]) / 2.0,
+    )
+    return float(
+        np.linalg.norm(
+            np.asarray(first_center, dtype=float)
+            - np.asarray(second_center, dtype=float)
+        )
+    )
+
+
+def reset_interaction_incidents():
+    # Keep next_id monotonic so an EventLogWorker cooldown key from the
+    # previous stream generation cannot suppress a new incident.
+    interaction_incident_state["incidents"].clear()
+
+
+def interaction_incident_key(
+    pair_key,
+    first,
+    second,
+    label,
+    *,
+    frame_token=None,
+    now=None,
+):
+    now = time.monotonic() if now is None else float(now)
+    ttl_sec = max(1.0, float(EVENT_SAVE_COOLDOWN_SEC))
+    incidents = interaction_incident_state["incidents"]
+    for incident_id, incident in list(incidents.items()):
+        if now - incident["last_seen"] > ttl_sec:
+            incidents.pop(incident_id, None)
+
+    current_box = _union_box(first["box"], second["box"])
+    current_width = max(1.0, current_box[2] - current_box[0])
+    current_height = max(1.0, current_box[3] - current_box[1])
+    current_scale = max(current_width, current_height)
+    normalized_label = (
+        vision_event_type(label)
+        or str(label or "").strip().upper()
+        or "INTERACTION"
+    )
+    assigned_ids = {
+        incident_id
+        for incident_id, incident in incidents.items()
+        if frame_token is not None and incident.get("frame_token") == frame_token
+    }
+
+    best_id = None
+    best_affinity = float("-inf")
+    for incident_id, incident in incidents.items():
+        if incident_id in assigned_ids or incident["label"] != normalized_label:
+            continue
+        previous_box = incident["box"]
+        iou = _box_iou(current_box, previous_box)
+        distance = _box_center_distance(current_box, previous_box)
+        previous_scale = max(
+            1.0,
+            previous_box[2] - previous_box[0],
+            previous_box[3] - previous_box[1],
+        )
+        match_distance = max(40.0, 0.45 * max(current_scale, previous_scale))
+        if iou < 0.20 and distance > match_distance:
+            continue
+        affinity = iou - distance / max(match_distance, 1.0)
+        if affinity > best_affinity:
+            best_affinity = affinity
+            best_id = incident_id
+
+    if best_id is None:
+        best_id = interaction_incident_state["next_id"]
+        interaction_incident_state["next_id"] += 1
+
+    incidents[best_id] = {
+        "label": normalized_label,
+        "box": current_box,
+        "last_seen": now,
+        "frame_token": frame_token,
+        "pair_key": tuple(pair_key),
+    }
+    return f"interaction:{best_id}"
+
+
+def draw_interaction_badge(frame, text, center, color, score=None):
+    if not text:
+        return
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.58
+    thickness = 2
+    padding_x = 10
+    padding_y = 7
+    accent_w = 4
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+    width = text_w + padding_x * 2 + accent_w
+    progress_h = 3 if score is not None else 0
+    height = text_h + baseline + padding_y * 2 + progress_h
+
+    frame_h, frame_w = frame.shape[:2]
+    x = int(center[0] - width / 2)
+    y = int(center[1] - height / 2)
+    x = max(4, min(frame_w - width - 4, x))
+    y = max(4, min(frame_h - height - 4, y))
+
+    overlay = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (x, y),
+        (x + width, y + height),
+        (18, 18, 20),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.84, frame, 0.16, 0, frame)
+    cv2.rectangle(frame, (x, y), (x + accent_w, y + height), color, -1)
+    cv2.rectangle(frame, (x, y), (x + width, y + height), (45, 45, 50), 1)
+    cv2.putText(
+        frame,
+        text,
+        (x + accent_w + padding_x, y + padding_y + text_h),
+        font,
+        scale,
+        (245, 245, 245),
+        thickness,
+        cv2.LINE_AA,
+    )
+    if score is not None:
+        progress = max(0.0, min(1.0, float(score)))
+        bar_x1 = x + accent_w
+        bar_x2 = x + width
+        bar_y1 = y + height - progress_h
+        cv2.rectangle(
+            frame,
+            (bar_x1, bar_y1),
+            (bar_x2, y + height),
+            (55, 55, 60),
+            -1,
+        )
+        filled_x = bar_x1 + int((bar_x2 - bar_x1) * progress)
+        if filled_x > bar_x1:
+            cv2.rectangle(
+                frame,
+                (bar_x1, bar_y1),
+                (filled_x, y + height),
+                color,
+                -1,
+            )
+
+
+def _normalize_pair_actions(pair_actions):
+    if not pair_actions:
+        return {}
+    if isinstance(pair_actions, dict):
+        normalized = {}
+        for pair_key, source in pair_actions.items():
+            try:
+                key = tuple(sorted(int(value) for value in pair_key))
+            except (TypeError, ValueError):
+                continue
+            if len(key) == 2 and isinstance(source, dict):
+                normalized[key] = dict(source)
+        return normalized
+
+    normalized = {}
+    for item in pair_actions:
+        if not isinstance(item, dict):
+            continue
+        pair_ids = item.get("pair_ids") or item.get("interaction_pair_ids") or []
+        try:
+            key = tuple(sorted(int(value) for value in pair_ids))
+        except (TypeError, ValueError):
+            continue
+        if len(key) != 2:
+            continue
+        source = dict(item)
+        source.pop("pair_ids", None)
+        normalized[key] = source
+    return normalized
+
+
+def serialize_pair_actions(pair_actions):
+    return [
+        {"pair_ids": list(pair_key), **dict(source)}
+        for pair_key, source in sorted(_normalize_pair_actions(pair_actions).items())
+    ]
+
+
+def resolve_pair_actions_for_display(pair_actions, display_buffer, now=None):
+    now = time.time() if now is None else float(now)
+    normalized = _normalize_pair_actions(pair_actions)
+    resolved = {}
+
+    for pair_key, source in normalized.items():
+        source = dict(source)
+        if source.get("observation_stale"):
+            cached = display_buffer.get(pair_key)
+            if cached is None:
+                continue
+            if now - float(cached.get("updated_at", 0.0)) > ACTION_DISPLAY_TTL_SEC:
+                display_buffer.pop(pair_key, None)
+                continue
+            resolved_source = {
+                key: value
+                for key, value in cached.items()
+                if key != "updated_at"
+            }
+            resolved_source["observation_stale"] = True
+            resolved[pair_key] = resolved_source
+            continue
+
+        cached = dict(source)
+        cached["updated_at"] = now
+        display_buffer[pair_key] = cached
+        resolved[pair_key] = source
+
+    for pair_key in list(display_buffer):
+        if pair_key not in normalized:
+            display_buffer.pop(pair_key, None)
+
+    return resolved
+
+
+def _pair_weight(source):
+    score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
+    danger = bool(source.get("danger") or source.get("is_danger"))
+    stale = bool(source.get("observation_stale"))
+    # Fresh evidence must outrank stale cached evidence when pairs compete.
+    # A danger also outranks any bounded combination of suspicious pairs.
+    if danger:
+        base = 100.0 if not stale else 10.0
+    else:
+        base = 1.0 if not stale else 0.1
+    return base + score
+
+
+def _maximum_weight_pair_matching(candidates):
+    ordered = sorted(candidates, key=lambda item: item[0])
+    cache = {}
+
+    def search(index, used_ids):
+        key = (index, tuple(sorted(used_ids)))
+        if key in cache:
+            return cache[key]
+        if index >= len(ordered):
+            return 0.0, ()
+
+        best_weight, best_items = search(index + 1, used_ids)
+        pair_key, _first, _second, source = ordered[index]
+        if pair_key[0] not in used_ids and pair_key[1] not in used_ids:
+            include_weight, include_items = search(
+                index + 1,
+                used_ids | {pair_key[0], pair_key[1]},
+            )
+            include_weight += _pair_weight(source)
+            include_items = (ordered[index],) + include_items
+            if (
+                include_weight > best_weight
+                or (
+                    include_weight == best_weight
+                    and tuple(item[0] for item in include_items)
+                    < tuple(item[0] for item in best_items)
+                )
+            ):
+                best_weight, best_items = include_weight, include_items
+
+        cache[key] = (best_weight, best_items)
+        return cache[key]
+
+    return list(search(0, set())[1])
+
+
+def interaction_pair_overlays(detections, pair_actions=None):
+    by_id = {
+        int(detection["id"]): detection
+        for detection in detections
+        if detection.get("box") is not None
+    }
+    explicit_pairs = _normalize_pair_actions(pair_actions)
+    candidate_by_pair = {}
+
+    if explicit_pairs:
+        for pair_key, source in explicit_pairs.items():
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            candidate_by_pair[pair_key] = (pair_key, first, second, source)
+    else:
+        # Backward-compatible fallback for older stored results.
+        for detection in detections:
+            pair_ids = detection.get("interaction_pair_ids") or []
+            if detection.get("action_source") != "pair" or len(pair_ids) != 2:
+                continue
+            try:
+                pair_key = tuple(sorted(int(value) for value in pair_ids))
+            except (TypeError, ValueError):
+                continue
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            previous = candidate_by_pair.get(pair_key)
+            if previous is None or _pair_weight(detection) > _pair_weight(previous[3]):
+                candidate_by_pair[pair_key] = (pair_key, first, second, detection)
+
+    return _maximum_weight_pair_matching(list(candidate_by_pair.values()))
+
+
+def draw_interaction_overlays(frame, detections, pair_actions=None):
+    frame_h, frame_w = frame.shape[:2]
+    for _pair_key, first, second, source in interaction_pair_overlays(
+        detections,
+        pair_actions,
+    ):
+        danger = bool(source.get("danger") or source.get("is_danger"))
+        color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
+
+        first_box = clamp_box(first["box"], frame_w, frame_h)
+        second_box = clamp_box(second["box"], frame_w, frame_h)
+        draw_corner_brackets(frame, first_box, color)
+        draw_corner_brackets(frame, second_box, color)
+
+        first_center = (
+            int((first_box[0] + first_box[2]) / 2),
+            int((first_box[1] + first_box[3]) / 2),
+        )
+        second_center = (
+            int((second_box[0] + second_box[2]) / 2),
+            int((second_box[1] + second_box[3]) / 2),
+        )
+        cv2.line(frame, first_center, second_center, (18, 18, 18), 6, cv2.LINE_AA)
+        cv2.line(frame, first_center, second_center, color, 2, cv2.LINE_AA)
+        for center in (first_center, second_center):
+            cv2.circle(frame, center, 6, (18, 18, 18), -1, cv2.LINE_AA)
+            cv2.circle(frame, center, 3, color, -1, cv2.LINE_AA)
+
+        # Redraw both participant skeletons in the interaction color so the
+        # pair remains visually coherent even when one participant also has a
+        # stronger person-level action.
+        draw_skeleton_points(frame, first.get("skeleton"), color)
+        draw_skeleton_points(frame, second.get("skeleton"), color)
+
+        label = source.get("label") or "INTERACTION"
+        score = source.get("score")
+        score_text = f"  |  {float(score) * 100:.0f}%" if score is not None else ""
+        badge_center = (
+            int((first_center[0] + second_center[0]) / 2),
+            max(18, int((first_center[1] + second_center[1]) / 2) - 26),
+        )
+        draw_interaction_badge(
+            frame,
+            f"{label}{score_text}",
+            badge_center,
+            color,
+            score=score,
+        )
 
 
 def draw_translucent_box(frame, pt1, pt2, color, opacity=PERSON_BASE_OPACITY):
@@ -1272,8 +1874,8 @@ def draw_skeleton_points(frame, skeleton, color):
     points = [(int(x), int(y)) for x, y in skeleton]
     height, width = frame.shape[:2]
     for x, y in points:
-        if 0 <= x < width and 0 <= y < height:
-            cv2.circle(frame, (x, y), 2, color, -1)
+        if (x, y) != (0, 0) and 0 <= x < width and 0 <= y < height:
+            cv2.circle(frame, (x, y), 3, color, -1, cv2.LINE_AA)
 
     links = getattr(
         getattr(frame_processor, "action_analyzer", None),
@@ -1293,7 +1895,7 @@ def draw_skeleton_points(frame, skeleton, color):
             and 0 <= x2 < width
             and 0 <= y2 < height
         ):
-            cv2.line(frame, (x1, y1), (x2, y2), color, 1)
+            cv2.line(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
 def draw_detection_overlay(frame, detection):
@@ -1319,10 +1921,18 @@ def draw_detection_overlay(frame, detection):
             else PERSON_BASE_COLOR
         )
     )
-    label = detection.get("label") or ("" if is_person else "WEAPON")
+    label = (
+        detection.get("label")
+        or detection.get("track_label")
+        or ("" if is_person else "WEAPON")
+    )
     score = detection.get("score")
-    if score is not None and detection.get("label"):
-        label = f"{label} {float(score) * 100:.0f}%"
+    if detection.get("action_source") == "pair":
+        # Pair action is rendered once as a shared interaction badge.
+        label = ""
+    elif score is not None and detection.get("label"):
+        suffix = "?" if detection.get("action_source") == "single_fallback" else ""
+        label = f"{label}{suffix} {float(score) * 100:.0f}%"
 
     # Bounding box visualization disabled. Keep this block for easy rollback.
     # if is_person and not has_action_label and not is_danger:
@@ -1333,19 +1943,50 @@ def draw_detection_overlay(frame, detection):
     draw_overlay_label(frame, label, (x1, y1 - 8), color)
 
 
+def draw_scene_overlay(frame, scene):
+    processor = frame_processor
+    analyzer = getattr(processor, "action_analyzer", None)
+    renderer = getattr(analyzer, "draw_scene_overlay", None)
+    if callable(renderer):
+        renderer(frame, scene)
+
+
 def render_latest_overlay(frame, now=None):
+    now = now or time.time()
     if not inference_result_is_fresh(now):
         return frame
     with state_lock:
         result = dict(latest_result)
     detections = result.get("detections") or []
-    if not detections:
+    pair_actions = result.get("pair_actions") or []
+    scene = result.get("scene")
+    if not detections and not scene:
         return frame
 
+    processed_at = result.get("processed_at")
+    result_age_sec = (
+        float("inf")
+        if processed_at is None
+        else max(0.0, now - float(processed_at))
+    )
+    pose_overlay_fresh = result_age_sec <= min(
+        INFERENCE_MAX_RESULT_AGE_SEC,
+        1.25,
+    )
+
     display_frame = frame.copy()
-    for detection in detections:
-        if detection.get("box"):
-            draw_detection_overlay(display_frame, detection)
+    if pose_overlay_fresh:
+        for detection in detections:
+            if detection.get("box"):
+                draw_detection_overlay(display_frame, detection)
+        draw_interaction_overlays(
+            display_frame,
+            detections,
+            pair_actions,
+        )
+
+    if scene:
+        draw_scene_overlay(display_frame, scene)
     return display_frame
 
 
@@ -1355,12 +1996,40 @@ def build_preview_frame(frame, infer, now=None):
     return frame
 
 
+def observe_scene_frame(frame, timestamp=None, stream_id=None):
+    # Serialize only generation validation + scene-buffer append against
+    # reconnect reset. X3D's own buffer lock handles concurrent sampling.
+    with scene_buffer_generation_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    return False
+
+        processor = frame_processor
+        analyzer = getattr(processor, "action_analyzer", None)
+        if not getattr(analyzer, "scene_level_classifier", False):
+            return False
+        observer = getattr(analyzer, "observe_frame", None)
+        if not callable(observer):
+            return False
+        observer(frame, timestamp=timestamp)
+        return True
+
+
 def collect_action_results(frame, tracked_boxes):
     persons = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
+    analyzer = frame_processor.action_analyzer
+
+    expire_tracking_state = getattr(analyzer, "expire_tracking_state", None)
+    if callable(expire_tracking_state):
+        expire_tracking_state()
+
     if not persons:
+        latest_pairs = getattr(analyzer, "latest_pair_actions", None)
+        if isinstance(latest_pairs, dict):
+            latest_pairs.clear()
         return {}
 
-    analyzer = frame_processor.action_analyzer
     if hasattr(analyzer, "process_many"):
         return analyzer.process_many(frame, persons)
 
@@ -1392,8 +2061,12 @@ def process_frame_for_dashboard(frame):
             "frame": frame,
             "detections": [],
             "danger": False,
+            "scene": None,
             "timings": {},
         }
+
+    analyzer = frame_processor.action_analyzer
+    scene_level = bool(getattr(analyzer, "scene_level_classifier", False))
 
     detector_started = time.time()
     tracked_boxes = frame_processor.detector.track(frame)
@@ -1404,16 +2077,56 @@ def process_frame_for_dashboard(frame):
     trigger_ms = (time.time() - trigger_started) * 1000
 
     action_started = time.time()
-    action_results = collect_action_results(frame, tracked_boxes)
-    skeletons_by_id = {
-        oid: result[0]
-        for oid, result in action_results.items()
-        if result and result[0] is not None
-    }
-    violence_results = frame_processor.violence_heuristic.update(
-        tracked_boxes,
-        skeletons_by_id,
-    )
+    scene_result = None
+    pair_actions = {}
+
+    if scene_level:
+        action_results = {
+            obj["id"]: (obj.get("keypoints"), None)
+            for obj in tracked_boxes
+            if obj.get("cls", 0) == 0
+        }
+        scene_result = analyzer.classify_scene()
+        restrict_to_target_actions = True
+        violence_results = {}
+    else:
+        action_results = collect_action_results(frame, tracked_boxes)
+
+        raw_pair_actions = dict(
+            getattr(
+                frame_processor.action_analyzer,
+                "latest_pair_actions",
+                {},
+            )
+            or {}
+        )
+        pair_actions = resolve_pair_actions_for_display(
+            raw_pair_actions,
+            frame_processor.pair_action_display_buffer,
+        )
+
+        skeletons_by_id = {
+            oid: result[0]
+            for oid, result in action_results.items()
+            if result and result[0] is not None
+        }
+
+        restrict_to_target_actions = bool(
+            getattr(
+                analyzer,
+                "restrict_to_target_actions",
+                False,
+            )
+        )
+
+        violence_results = (
+            {}
+            if restrict_to_target_actions
+            else frame_processor.violence_heuristic.update(
+                tracked_boxes,
+                skeletons_by_id,
+            )
+        )
     action_ms = (time.time() - action_started) * 1000
 
     render_started = time.time()
@@ -1422,14 +2135,24 @@ def process_frame_for_dashboard(frame):
     danger = False
     height, width = display_frame.shape[:2]
 
+    active_track_ids = {obj["id"] for obj in tracked_boxes}
+    cleanup_now = time.time()
+    if not scene_level:
+        for buffered_id, buffered_action in list(
+            frame_processor.action_display_buffer.items()
+        ):
+            if (
+                buffered_id not in active_track_ids
+                and cleanup_now - buffered_action.get("updated_at", 0.0)
+                > ACTION_DISPLAY_TTL_SEC
+            ):
+                frame_processor.action_display_buffer.pop(buffered_id, None)
+
     for obj in tracked_boxes:
         oid = obj["id"]
         cls_id = obj.get("cls", 0)
         state = obj_states.get(oid, 0)
-        x1, y1, x2, y2 = clamp_box(obj["box"], width, height)
         color = PERSON_BASE_COLOR if cls_id == 0 else (0, 0, 255)
-        label = "" if cls_id == 0 else "WEAPON"
-        skeleton = None
 
         detection = {
             "id": oid,
@@ -1437,12 +2160,20 @@ def process_frame_for_dashboard(frame):
             "box": [float(v) for v in obj["box"]],
             "state": state,
             "label": "",
+            "track_label": f"ID {oid}" if (scene_level and cls_id == 0) else "",
             "score": None,
             "danger": False,
             "has_skeleton": False,
             "skeleton": None,
             "confidence_level": None,
+            "interaction": False,
+            "interaction_pair_ids": None,
+            "interaction_role": None,
+            "action_source": None,
+            "observation_stale": False,
             "visual_state": "normal",
+            "inference_status": None,
+            "inference_error": None,
         }
 
         if cls_id == 0:
@@ -1450,88 +2181,193 @@ def process_frame_for_dashboard(frame):
             detection["has_skeleton"] = skeleton is not None
             detection["skeleton"] = skeleton_to_list(skeleton)
 
-            now = time.time()
-            heuristic_action = violence_results.get(oid)
-            selected_action = select_action_result(action, heuristic_action)
-            if selected_action:
-                selected_action = dict(selected_action)
-                selected_action["updated_at"] = now
-                frame_processor.action_display_buffer[oid] = selected_action
-
-            current_action = frame_processor.action_display_buffer.get(oid)
-            if (
-                current_action
-                and now - current_action.get("updated_at", 0.0)
-                > ACTION_DISPLAY_TTL_SEC
-            ):
-                frame_processor.action_display_buffer.pop(oid, None)
-                current_action = None
-
-            if current_action:
-                detection["label"] = current_action["label"]
-                detection["score"] = float(current_action["score"])
-                detection["danger"] = bool(current_action["is_danger"])
-                detection["confidence_level"] = current_action.get(
-                    "confidence_level"
+            if scene_level:
+                detection["inference_status"] = "pose_visualization"
+            else:
+                now = time.time()
+                observation_issue = is_observation_issue(action)
+                observation_stale = bool(
+                    isinstance(action, dict) and action.get("observation_stale")
                 )
-                if current_action["is_danger"]:
-                    danger = True
-                    color = (0, 0, 255)
-                    detection["visual_state"] = "danger"
-                    label = (
-                        f"!!! {current_action['label']} !!! "
-                        f"{current_action['score'] * 100:.0f}%"
-                    )
-                    event_type = vision_event_type(current_action["label"])
-                    if event_type:
-                        submit_automatic_event(
-                            "VISION_AI",
-                            event_type,
-                            confidence=detection["score"],
-                            message=f"위험 행동 감지: {current_action['label']}",
-                            frame=frame,
-                        )
-                    else:
-                        automatic_notifier.send_event_alert_async(
-                            f"위험 행동 감지: {current_action['label']}",
-                            robot_id=SERVER_ROBOT_ID,
-                            event_type=vision_alert_type(current_action["label"]),
-                        )
+                if observation_issue:
+                    detection["inference_status"] = action.get("observation_status")
+                    detection["inference_error"] = action.get("error")
+                elif observation_stale:
+                    detection["inference_status"] = "stale"
                 else:
-                    color = (0, 165, 255)
-                    detection["visual_state"] = "suspicious"
-                    label = (
-                        f"[{current_action['label']}] "
-                        f"{current_action['score'] * 100:.0f}%"
+                    detection["inference_status"] = "ok"
+
+                heuristic_action = (
+                    None
+                    if restrict_to_target_actions
+                    else violence_results.get(oid)
+                )
+                selected_action = (
+                    None
+                    if observation_issue
+                    else select_action_result(action, heuristic_action)
+                )
+                if selected_action and not selected_action.get("observation_stale"):
+                    selected_action = dict(selected_action)
+                    selected_action["updated_at"] = now
+                    frame_processor.action_display_buffer[oid] = selected_action
+                elif selected_action and selected_action.get("observation_stale"):
+                    pass
+                elif (
+                    not observation_issue
+                    and getattr(analyzer, "manages_action_hysteresis", False)
+                ):
+                    frame_processor.action_display_buffer.pop(oid, None)
+
+                current_action = frame_processor.action_display_buffer.get(oid)
+                if (
+                    current_action
+                    and now - current_action.get("updated_at", 0.0)
+                    > ACTION_DISPLAY_TTL_SEC
+                ):
+                    frame_processor.action_display_buffer.pop(oid, None)
+                    current_action = None
+
+                if current_action:
+                    detection["label"] = current_action["label"]
+                    detection["score"] = float(current_action["score"])
+                    detection["danger"] = bool(current_action["is_danger"])
+                    detection["confidence_level"] = current_action.get(
+                        "confidence_level"
                     )
-            elif TRIGGER_SUSPICIOUS_VISUAL_ENABLED and state == 1:
-                color = (0, 165, 255)
-                detection["confidence_level"] = "trigger_suspicious"
-                detection["visual_state"] = "suspicious"
+                    detection["interaction"] = bool(
+                        current_action.get("interaction")
+                    )
+                    detection["interaction_pair_ids"] = current_action.get(
+                        "interaction_pair_ids"
+                    )
+                    detection["interaction_role"] = current_action.get(
+                        "interaction_role"
+                    )
+                    detection["action_source"] = current_action.get("source")
+                    detection["observation_stale"] = bool(
+                        current_action.get("observation_stale")
+                    )
+                    if current_action["is_danger"]:
+                        danger = True
+                        detection["visual_state"] = "danger"
+                        action_label = current_action["label"]
+                        if (
+                            not observation_issue
+                            and current_action.get("source") != "pair"
+                        ):
+                            event_type = vision_event_type(action_label)
+                            if event_type:
+                                submit_automatic_event(
+                                    "VISION_AI",
+                                    event_type,
+                                    confidence=detection["score"],
+                                    message=f"위험 행동 감지: {action_label}",
+                                    frame=frame,
+                                )
+                            else:
+                                automatic_notifier.send_event_alert_async(
+                                    f"위험 행동 감지: {action_label}",
+                                    robot_id=SERVER_ROBOT_ID,
+                                    event_type=vision_alert_type(action_label),
+                                )
+                    else:
+                        detection["visual_state"] = "suspicious"
+                elif (
+                    not restrict_to_target_actions
+                    and TRIGGER_SUSPICIOUS_VISUAL_ENABLED
+                    and state == 1
+                ):
+                    detection["confidence_level"] = "trigger_suspicious"
+                    detection["visual_state"] = "suspicious"
         else:
             danger = True
             detection["label"] = "WEAPON"
             detection["danger"] = True
 
-        # Bounding box visualization disabled. Keep this block for easy rollback.
-        # if cls_id == 0 and not detection["label"] and not detection["danger"]:
-        #     draw_translucent_box(display_frame, (x1, y1), (x2, y2), color)
-        # else:
-        #     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-        if skeleton is not None:
-            frame_processor.action_analyzer.draw_skeleton(
-                display_frame,
-                skeleton,
-                color,
-            )
-        draw_overlay_label(display_frame, label, (x1, y1 - 8), color)
         detections.append(detection)
 
+    for detection in detections:
+        if detection.get("box"):
+            draw_detection_overlay(display_frame, detection)
+
+    if not scene_level:
+        resolved_pair_overlays = interaction_pair_overlays(
+            detections,
+            pair_actions,
+        )
+
+        incident_frame_token = time.monotonic_ns()
+
+        for pair_key, first, second, source in resolved_pair_overlays:
+            if (
+                not source.get("is_danger")
+                or source.get("observation_stale")
+            ):
+                continue
+
+            danger = True
+            action_label = source.get("label")
+            event_type = vision_event_type(action_label)
+
+            if event_type:
+                submit_automatic_event(
+                    "VISION_AI",
+                    event_type,
+                    confidence=source.get("score"),
+                    message=f"위험 상호작용 감지: {action_label}",
+                    frame=frame,
+                    cooldown_key=interaction_incident_key(
+                        pair_key,
+                        first,
+                        second,
+                        action_label,
+                        frame_token=incident_frame_token,
+                    ),
+                )
+
+        draw_interaction_overlays(
+            display_frame,
+            detections,
+            pair_actions,
+        )
+
+    if scene_level and scene_result is not None:
+        scene_danger = bool(scene_result.get("danger"))
+        danger = danger or scene_danger
+
+        draw_scene_overlay(
+            display_frame,
+            scene_result,
+        )
+
+        if (
+            scene_result.get("status") == "ok"
+            and scene_result.get("fresh")
+            and bool(scene_result.get("raw_danger"))
+        ):
+            event_type = vision_event_type("VIOLENCE")
+
+            if event_type:
+                submit_automatic_event(
+                    "VISION_AI",
+                    event_type,
+                    confidence=float(
+                        scene_result.get("score") or 0.0
+                    ),
+                    message=(
+                        "폭행 상황 감지: VIOLENCE "
+                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%"
+                    ),
+                    frame=frame,
+                )
     render_ms = (time.time() - render_started) * 1000
     return {
         "frame": display_frame,
         "detections": detections,
+        "pair_actions": serialize_pair_actions(pair_actions),
         "danger": danger,
+        "scene": scene_result,
         "timings": {
             "detector_ms": round(detector_ms, 1),
             "trigger_ms": round(trigger_ms, 1),
@@ -1544,12 +2380,18 @@ def process_frame_for_dashboard(frame):
         },
     }
 
-
-def publish_preview_frame(frame, robot_id=SERVER_ROBOT_ID, original_bytes=None):
+def publish_preview_frame(
+    frame,
+    robot_id=SERVER_ROBOT_ID,
+    original_bytes=None,
+    stream_id=None,
+):
     global current_frame, current_frame_seq
 
     frame_bytes = encode_jpeg(frame)
     with frame_condition:
+        if stream_id is not None and stream_id != active_stream_id:
+            return None
         now = time.time()
         current_frame = frame_bytes
         current_frame_seq += 1
@@ -1623,6 +2465,171 @@ def update_latest_result(result, frame_seq=None, input_captured_at=None, elapsed
         stream_stats["frames_inferred"] = stream_stats.get("frames_inferred", 0) + 1
 
 
+def process_stream_frame_if_current(frame, stream_id):
+    """Process only if the frame still belongs to the active stream/model generation."""
+    with processing_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return None
+
+        if frame_processor is None or not MODEL_ACTIVE:
+            return None
+
+        processed = process_frame_for_dashboard(frame)
+        processed["_model_generation"] = model_generation
+        return processed
+
+
+def publish_processed_inference_if_current(
+    processed,
+    *,
+    robot_id,
+    stream_id,
+    processed_model_generation,
+    captured_at,
+    adaptive_wait_ms,
+    started_at,
+):
+    """Publish an inference result only while its stream/model generation is current."""
+    with processing_lock:
+        if (
+            processed_model_generation != model_generation
+            or frame_processor is None
+            or not MODEL_ACTIVE
+        ):
+            inference_stats["dropped"] += 1
+            return False
+
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return False
+
+        display_frame_seq = publish_preview_frame(
+            processed["frame"],
+            robot_id=robot_id,
+            stream_id=stream_id,
+        )
+        result = build_empty_result(robot_id)
+        result["detections"] = processed["detections"]
+        result["pair_actions"] = processed.get("pair_actions", [])
+        result["danger"] = processed["danger"]
+        result["scene"] = processed.get("scene")
+        result["timings"] = dict(processed.get("timings") or {})
+        result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
+        elapsed_ms = (time.time() - started_at) * 1000
+        update_latest_result(
+            result,
+            frame_seq=display_frame_seq,
+            input_captured_at=captured_at,
+            elapsed_ms=elapsed_ms,
+        )
+        return True
+
+
+def activate_stream_generation(robot_id, infer):
+    """Atomically reset tracking state and publish a new stream generation."""
+    global active_stream_id
+
+    with processing_lock:
+        # Invalidate the previous generation and clear the scene buffer while
+        # holding the same narrow lock used by decoded-frame appends. This
+        # prevents a stale frame from entering after reset without blocking
+        # decode on RTMO/X3D inference.
+        with scene_buffer_generation_lock:
+            with state_lock:
+                active_stream_id += 1
+                stream_id = active_stream_id
+                now = time.time()
+
+            processor = frame_processor
+            if processor is not None:
+                reset_tracking_state = getattr(
+                    processor.action_analyzer,
+                    "reset_tracking_state",
+                    None,
+                )
+                if callable(reset_tracking_state):
+                    reset_tracking_state()
+
+        if processor is not None:
+            reset_detector_tracking = getattr(
+                processor.detector,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_detector_tracking):
+                reset_detector_tracking()
+            processor.action_display_buffer.clear()
+            processor.pair_action_display_buffer.clear()
+            processor.violence_heuristic.reset()
+        reset_interaction_incidents()
+
+        with inference_condition:
+            inference_slot.update(
+                {
+                    "frame": None,
+                    "robot_id": None,
+                    "frame_seq": None,
+                    "captured_at": None,
+                    "stream_id": None,
+                }
+            )
+
+        with state_lock:
+            latest_result["detections"] = []
+            latest_result["pair_actions"] = []
+            latest_result["danger"] = False
+            frame_stats.update({"last_time": now, "count": 0, "fps": 0})
+            decode_stats.update({"last_time": now, "count": 0, "fps": 0})
+            publish_stats.update(
+                {
+                    "last_time": now,
+                    "count": 0,
+                    "fps": 0,
+                    "last_publish_at": None,
+                }
+            )
+            inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
+            inference_stats.update(
+                {
+                    "requested": 0,
+                    "completed": 0,
+                    "dropped": 0,
+                    "last_ms": None,
+                    "last_result_at": None,
+                    "last_input_seq": None,
+                    "last_started_at": None,
+                    "device": DEVICE,
+                }
+            )
+            stream_stats.update(
+                {
+                    "connected": True,
+                    "robot_id": robot_id,
+                    "connected_at": now,
+                    "disconnected_at": None,
+                    "bytes_received": 0,
+                    "frames_received": 0,
+                    "last_byte_at": None,
+                    "frames_decoded": 0,
+                    "frames_inferred": 0,
+                    "last_frame_at": None,
+                    "last_error": None,
+                    "ffmpeg_returncode": None,
+                    "ffmpeg_stderr_tail": [],
+                    "infer": infer,
+                    "inference_available": frame_processor is not None,
+                    "stream_id": stream_id,
+                }
+            )
+
+    return stream_id
+
+
 def inference_worker():
     while True:
         min_interval = 1.0 / INFERENCE_MAX_FPS
@@ -1676,46 +2683,41 @@ def inference_worker():
             inference_stats["dropped"] += 1
             continue
 
-        if frame_processor is None:
-            continue
-
         started = time.time()
         try:
-            with processing_lock:
-                processed = process_frame_for_dashboard(frame)
-            if stream_id is not None:
-                with state_lock:
-                    is_stale_stream = stream_id != active_stream_id
-                if is_stale_stream:
-                    inference_stats["dropped"] += 1
-                    continue
+            processed = process_stream_frame_if_current(frame, stream_id)
+            if processed is None:
+                continue
 
-            display_frame_seq = publish_preview_frame(
-                processed["frame"],
+            processed_model_generation = processed.pop(
+                "_model_generation",
+                None,
+            )
+            if not publish_processed_inference_if_current(
+                processed,
                 robot_id=robot_id,
-            )
-            result = build_empty_result(robot_id)
-            result["detections"] = processed["detections"]
-            result["danger"] = processed["danger"]
-            result["timings"] = dict(processed.get("timings") or {})
-            result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
-            elapsed_ms = (time.time() - started) * 1000
-            update_latest_result(
-                result,
-                frame_seq=display_frame_seq,
-                input_captured_at=captured_at,
-                elapsed_ms=elapsed_ms,
-            )
+                stream_id=stream_id,
+                processed_model_generation=processed_model_generation,
+                captured_at=captured_at,
+                adaptive_wait_ms=adaptive_wait_ms,
+                started_at=started,
+            ):
+                continue
         except Exception as exc:
             with state_lock:
-                stream_stats["last_error"] = str(exc)
-                latest_result["model_error"] = str(exc)
+                current_generation = (
+                    stream_id is None or stream_id == active_stream_id
+                )
+                if current_generation:
+                    stream_stats["last_error"] = str(exc)
+                    latest_result["model_error"] = str(exc)
             print(f"[inference] worker error: {exc}")
-            submit_automatic_event(
-                "SYSTEM_MONITOR",
-                "SYSTEM_ERROR",
-                message="AI inference worker error detected.",
-            )
+            if current_generation:
+                submit_automatic_event(
+                    "SYSTEM_MONITOR",
+                    "SYSTEM_ERROR",
+                    message="AI inference worker error detected.",
+                )
 
 
 def start_inference_worker():
@@ -3398,15 +4400,67 @@ def process_and_publish_frame(
     result_frame = frame
     result = build_empty_result(robot_id)
 
-    if infer and frame_processor is not None:
-        started = time.time()
+    if infer:
         with processing_lock:
-            processed = process_frame_for_dashboard(frame)
-        result_frame = processed["frame"]
-        result["detections"] = processed["detections"]
-        result["danger"] = processed["danger"]
-        result["timings"] = dict(processed.get("timings") or {})
-        result["inference_ms"] = round((time.time() - started) * 1000, 1)
+            if MODEL_ACTIVE and frame_processor is not None:
+                observe_scene_frame(
+                    frame,
+                    time.time(),
+                )
+
+                started = time.time()
+                processed = process_frame_for_dashboard(frame)
+
+                result_frame = processed["frame"]
+                result["detections"] = processed["detections"]
+                result["pair_actions"] = processed.get(
+                    "pair_actions",
+                    [],
+                )
+                result["danger"] = processed["danger"]
+                result["scene"] = processed.get("scene")
+                result["timings"] = dict(
+                    processed.get("timings") or {}
+                )
+                result["inference_ms"] = round(
+                    (time.time() - started) * 1000,
+                    1,
+                )
+
+                frame_seq = publish_preview_frame(
+                    result_frame,
+                    robot_id=robot_id,
+                    original_bytes=original_bytes,
+                )
+
+                result["source_frame_seq"] = frame_seq
+                result["processed_at"] = time.time()
+
+                with state_lock:
+                    latest_result = result
+                    inference_stats["completed"] += 1
+                    inference_stats["last_ms"] = result.get(
+                        "inference_ms"
+                    )
+                    inference_stats["last_result_at"] = result[
+                        "processed_at"
+                    ]
+                    inference_stats["last_input_seq"] = frame_seq
+
+                    update_rate_counter(
+                        inference_rate_stats,
+                        result["processed_at"],
+                    )
+
+                    stream_stats["frames_inferred"] = (
+                        stream_stats.get(
+                            "frames_inferred",
+                            0,
+                        )
+                        + 1
+                    )
+
+                return result
 
     frame_seq = publish_preview_frame(
         result_frame,
@@ -3417,18 +4471,7 @@ def process_and_publish_frame(
     result["processed_at"] = time.time()
     with state_lock:
         latest_result = result
-        if infer and frame_processor is not None:
-            inference_stats["completed"] += 1
-            inference_stats["last_ms"] = result.get("inference_ms")
-            inference_stats["last_result_at"] = result["processed_at"]
-            inference_stats["last_input_seq"] = frame_seq
-            update_rate_counter(inference_rate_stats, result["processed_at"])
-            stream_stats["frames_inferred"] = (
-                stream_stats.get("frames_inferred", 0) + 1
-            )
-
     return result
-
 
 def build_camera_status(now=None):
     now = now or time.time()
@@ -3577,12 +4620,7 @@ def build_status_frame(message):
 @app.post("/frame")
 async def receive_frame(request: Request, file: UploadFile | None = File(None)):
     ensure_runtime_model_config(reason="frame")
-    infer_param = request.query_params.get("infer")
-    infer = (
-        MODEL_ACTIVE
-        if infer_param is None
-        else infer_param.lower() in ("1", "true", "yes", "on")
-    )
+    infer = MODEL_ACTIVE
     if file is not None:
         data = await file.read()
     else:
@@ -3622,16 +4660,21 @@ def read_exact(stream, size):
     return b"".join(chunks)
 
 
-def h264_decode_loop(proc, robot_id, infer_override, stream_id):
+def h264_decode_loop(proc, robot_id, stream_id):
     frame_size = STREAM_WIDTH * STREAM_HEIGHT * 3
     frame_index = 0
     last_preview_at = 0.0
     min_preview_interval = 1.0 / PREVIEW_MAX_FPS
     try:
         while True:
-            ensure_runtime_model_config(reason="stream")
-            infer = MODEL_ACTIVE if infer_override is None else infer_override
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
+            ensure_runtime_model_config(reason="stream")
+            infer = MODEL_ACTIVE
+            with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["infer"] = infer
                 stream_stats["inference_available"] = frame_processor is not None
             raw_frame = read_exact(proc.stdout, frame_size)
@@ -3642,13 +4685,24 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
             )
             frame_index += 1
             now = time.time()
+            if infer:
+                # Keep decode independent from model inference. The observer
+                # uses a dedicated generation lock only around buffer append.
+                observe_scene_frame(
+                    frame,
+                    now,
+                    stream_id=stream_id,
+                )
             frame_seq = None
             if now - last_preview_at >= min_preview_interval:
                 preview_frame = build_preview_frame(frame, infer, now)
                 frame_seq = publish_preview_frame(
                     preview_frame,
                     robot_id=robot_id,
+                    stream_id=stream_id,
                 )
+                if frame_seq is None:
+                    break
                 last_preview_at = now
             should_infer = (
                 infer
@@ -3667,6 +4721,8 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
                     stream_id=stream_id,
                 )
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["frames_decoded"] += 1
                 update_rate_counter(decode_stats, time.time())
                 stream_stats["last_frame_at"] = time.time()
@@ -3674,11 +4730,12 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
     except Exception as exc:
         message = str(exc)
         with state_lock:
-            stream_stats["last_error"] = message
+            if stream_id == active_stream_id:
+                stream_stats["last_error"] = message
         print(f"[stream/h264] decode loop error: {message}")
 
 
-def ffmpeg_stderr_loop(proc):
+def ffmpeg_stderr_loop(proc, stream_id):
     if proc.stderr is None:
         return
     try:
@@ -3687,6 +4744,8 @@ def ffmpeg_stderr_loop(proc):
             if not line:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    return
                 stream_stats["ffmpeg_stderr_tail"].append(line)
                 stream_stats["ffmpeg_stderr_tail"] = stream_stats[
                     "ffmpeg_stderr_tail"
@@ -3699,17 +4758,10 @@ def ffmpeg_stderr_loop(proc):
 
 @app.api_route("/stream/h264", methods=["POST", "PUT"])
 async def receive_h264_stream(request: Request):
-    global active_stream_id
 
     ensure_runtime_model_config(reason="stream_connect")
     robot_id = request.query_params.get("robot_id", SERVER_ROBOT_ID)
-    infer_param = request.query_params.get("infer")
-    infer_override = (
-        None
-        if infer_param is None
-        else infer_param.lower() in ("1", "true", "yes", "on")
-    )
-    infer = MODEL_ACTIVE if infer_override is None else infer_override
+    infer = MODEL_ACTIVE
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -3750,71 +4802,15 @@ async def receive_h264_stream(request: Request):
             status_code=500,
         )
 
-    with inference_condition:
-        inference_slot.update(
-            {
-                "frame": None,
-                "robot_id": None,
-                "frame_seq": None,
-                "captured_at": None,
-                "stream_id": None,
-            }
-        )
-    with state_lock:
-        active_stream_id += 1
-        stream_id = active_stream_id
-        now = time.time()
-        frame_stats.update({"last_time": now, "count": 0, "fps": 0})
-        decode_stats.update({"last_time": now, "count": 0, "fps": 0})
-        publish_stats.update(
-            {
-                "last_time": now,
-                "count": 0,
-                "fps": 0,
-                "last_publish_at": None,
-            }
-        )
-        inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
-        inference_stats.update(
-            {
-                "requested": 0,
-                "completed": 0,
-                "dropped": 0,
-                "last_ms": None,
-                "last_result_at": None,
-                "last_input_seq": None,
-                "last_started_at": None,
-                "device": DEVICE,
-            }
-        )
-        stream_stats.update(
-            {
-                "connected": True,
-                "robot_id": robot_id,
-                "connected_at": now,
-                "disconnected_at": None,
-                "bytes_received": 0,
-                "frames_received": 0,
-                "last_byte_at": None,
-                "frames_decoded": 0,
-                "frames_inferred": 0,
-                "last_frame_at": None,
-                "last_error": None,
-                "ffmpeg_returncode": None,
-                "ffmpeg_stderr_tail": [],
-                "infer": infer,
-                "inference_available": frame_processor is not None,
-                "stream_id": stream_id,
-            }
-        )
+    stream_id = activate_stream_generation(robot_id, infer)
     reader = threading.Thread(
         target=h264_decode_loop,
-        args=(proc, robot_id, infer_override, stream_id),
+        args=(proc, robot_id, stream_id),
         daemon=True,
     )
     stderr_reader = threading.Thread(
         target=ffmpeg_stderr_loop,
-        args=(proc,),
+        args=(proc, stream_id),
         daemon=True,
     )
     reader.start()
@@ -3826,6 +4822,8 @@ async def receive_h264_stream(request: Request):
             if not chunk:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["bytes_received"] += len(chunk)
                 stream_stats["last_byte_at"] = time.time()
                 stream_stats["ffmpeg_returncode"] = proc.poll()
@@ -3833,21 +4831,24 @@ async def receive_h264_stream(request: Request):
                 break
             if proc.poll() is not None:
                 with state_lock:
-                    stream_stats["ffmpeg_returncode"] = proc.returncode
+                    if stream_id == active_stream_id:
+                        stream_stats["ffmpeg_returncode"] = proc.returncode
                 break
             try:
                 await asyncio.to_thread(proc.stdin.write, chunk)
                 await asyncio.to_thread(proc.stdin.flush)
             except BrokenPipeError:
                 with state_lock:
-                    stream_stats["last_error"] = "ffmpeg stdin broken pipe"
-                    stream_stats["ffmpeg_returncode"] = proc.poll()
+                    if stream_id == active_stream_id:
+                        stream_stats["last_error"] = "ffmpeg stdin broken pipe"
+                        stream_stats["ffmpeg_returncode"] = proc.poll()
                 break
     except ClientDisconnect:
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
     finally:
         if proc.stdin is not None:
             try:
@@ -3861,9 +4862,10 @@ async def receive_h264_stream(request: Request):
         reader.join(timeout=2.0)
         stderr_reader.join(timeout=1.0)
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
 
     print(f"[stream/h264] disconnected robot_id={robot_id}")
     return {"ok": True, "robot_id": robot_id}
@@ -3947,6 +4949,8 @@ async def get_stream_status():
         status["visualization_enabled"] = VISUALIZATION_ENABLED
         status["model_active"] = MODEL_ACTIVE
         status["inference_available"] = frame_processor is not None
+        status["model_error"] = model_error
+        status["pipeline"] = latest_result.get("pipeline")
         status["stream_infer_every_n"] = STREAM_INFER_EVERY_N
         status["inference_max_fps"] = INFERENCE_MAX_FPS
         status["adaptive_batching_enabled"] = ADAPTIVE_BATCHING_ENABLED
@@ -4001,6 +5005,51 @@ async def get_stream_status():
         status["gpu_memory_used_mb"] = gpu["gpu_memory_used_mb"]
         status["gpu_error"] = gpu["error"]
         return status
+
+
+@app.post("/api/model-pipeline")
+async def set_model_pipeline_state(request: Request):
+    if not request.session.get("user"):
+        return JSONResponse(
+            {"ok": False, "detail": "Authentication required."},
+            status_code=401,
+        )
+
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "detail": "enabled must be a boolean."},
+            status_code=400,
+        )
+
+    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
+
+    if not success:
+        return JSONResponse(
+            {
+                "ok": False,
+                "enabled": actual_enabled,
+                "model_error": model_error,
+                "detail": model_error or "Model pipeline state change failed.",
+            },
+            status_code=500,
+        )
+
+    return {
+        "ok": True,
+        "enabled": actual_enabled,
+        "pipeline": latest_result.get("pipeline"),
+        "model_error": model_error,
+    }
 
 
 @app.websocket("/ws/sensors/{robot_id}/lidar")

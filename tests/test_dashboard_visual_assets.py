@@ -31,7 +31,11 @@ def test_all_component_assets_share_cache_busting_key():
     component_assets = re.findall(r'(?:href|src)="(/components/[^"]+)"', TEMPLATE)
     assert component_assets
     assert all("?v=" in asset for asset in component_assets)
-    assert len(component_assets) == 18
+    assert len(component_assets) == len(set(component_assets))
+    assert any(
+        asset.startswith("/components/controls/model_pipeline_toggle.js?v=")
+        for asset in component_assets
+    )
 
 
 def test_static_assets_use_same_cache_busting_strategy():
