@@ -552,3 +552,61 @@ def test_competing_dangerous_pairs_keep_higher_score_for_shared_person():
 
     assert analyzer._should_replace_with_pair(weaker, stronger) is True
     assert analyzer._should_replace_with_pair(stronger, weaker) is False
+
+
+def test_process_many_preserves_all_pair_actions_separately(monkeypatch):
+    analyzer = build_recall_analyzer()
+    analyzer.interaction_max_pairs = 3
+    analyzer.interaction_infer_every_n = 1
+    analyzer._interaction_frame_counter = 0
+    keypoints = np.ones((17, 2), dtype=np.float32)
+    scores = np.ones(17, dtype=np.float32)
+    objs = [
+        {
+            "id": 1,
+            "cls": 0,
+            "box": [0, 0, 100, 200],
+            "center": (50.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+        {
+            "id": 2,
+            "cls": 0,
+            "box": [60, 0, 160, 200],
+            "center": (110.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+        {
+            "id": 3,
+            "cls": 0,
+            "box": [120, 0, 220, 200],
+            "center": (170.0, 100.0),
+            "keypoints": keypoints,
+            "keypoints_scores": scores,
+        },
+    ]
+
+    monkeypatch.setattr(
+        action_module,
+        "process_keypoint_many",
+        lambda _analyzer, _frame, people, total_frames: {
+            obj["id"]: (obj["keypoints"], None) for obj in people
+        },
+    )
+
+    def fake_pair(_frame, first, second):
+        pair_id = tuple(sorted((first["id"], second["id"])))
+        return {
+            "label": "PUNCHING",
+            "score": 0.50 + 0.05 * sum(pair_id),
+            "is_danger": True,
+            "confidence_level": "danger",
+        }
+
+    monkeypatch.setattr(analyzer, "_process_interaction_pair", fake_pair)
+    analyzer.process_many(np.zeros((480, 640, 3), dtype=np.uint8), objs)
+
+    assert len(analyzer.latest_pair_actions) == 3
+    assert set(analyzer.latest_pair_actions) == {(1, 2), (2, 3), (1, 3)}
