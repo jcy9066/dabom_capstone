@@ -925,6 +925,16 @@ RUNTIME_MODEL_ENV_KEYS = (
     "INFERENCE_MAX_FPS",
     "ADAPTIVE_BATCHING_ENABLED",
     "ADAPTIVE_BATCH_MAX_WAIT_MS",
+    "ACTION_SUSPICIOUS_THRESHOLD",
+    "ACTION_DANGER_THRESHOLD",
+    "ACTION_TEMPORAL_WINDOW",
+    "ACTION_SUSPICIOUS_MIN_HITS",
+    "ACTION_DANGER_MIN_HITS",
+    "ACTION_NORMAL_CLEAR_HITS",
+    "ACTION_TRACK_STATE_TTL_SEC",
+    "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+    "ACTION_MIN_HISTORY_FRAMES",
+    "ACTION_INTERACTION_INFER_EVERY_N",
     "ACTION_DISPLAY_TTL_SEC",
     "TRIGGER_SUSPICIOUS_VISUAL_ENABLED",
     "INFERENCE_MAX_RESULT_AGE_SEC",
@@ -1001,7 +1011,27 @@ def apply_runtime_model_config(config):
 
 
 def runtime_model_signature(config):
-    return config["pipeline"], config["model_active"], config["device"]
+    action_env_signature = tuple(
+        (key, os.getenv(key))
+        for key in (
+            "ACTION_SUSPICIOUS_THRESHOLD",
+            "ACTION_DANGER_THRESHOLD",
+            "ACTION_TEMPORAL_WINDOW",
+            "ACTION_SUSPICIOUS_MIN_HITS",
+            "ACTION_DANGER_MIN_HITS",
+            "ACTION_NORMAL_CLEAR_HITS",
+            "ACTION_TRACK_STATE_TTL_SEC",
+            "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+            "ACTION_MIN_HISTORY_FRAMES",
+            "ACTION_INTERACTION_INFER_EVERY_N",
+        )
+    )
+    return (
+        config["pipeline"],
+        config["model_active"],
+        config["device"],
+        action_env_signature,
+    )
 
 
 def detach_frame_processor():
