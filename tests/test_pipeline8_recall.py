@@ -315,3 +315,31 @@ def test_cached_pair_result_is_marked_stale(monkeypatch):
     assert results[1][1]["observation_stale"] is True
     assert results[2][1]["observation_stale"] is True
     assert results[1][1]["source"] == "pair"
+
+
+def test_single_person_inference_uses_real_history_length(monkeypatch):
+    analyzer = build_recall_analyzer()
+    captured_lengths = []
+
+    def fake_predict(kpts, _scores, _shape):
+        captured_lengths.append(len(kpts))
+        prediction = np.zeros(60, dtype=np.float32)
+        prediction[42] = 0.3
+        return prediction
+
+    monkeypatch.setattr(analyzer, "_predict_scores", fake_predict)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    obj = {
+        "id": 31,
+        "cls": 0,
+        "box": [100, 100, 200, 300],
+        "center": (150.0, 200.0),
+        "keypoints": np.ones((17, 2), dtype=np.float32),
+        "keypoints_scores": np.ones(17, dtype=np.float32),
+    }
+
+    for _ in range(analyzer.min_history_frames):
+        analyzer.process_many(frame, [obj])
+
+    assert captured_lengths == [analyzer.min_history_frames]
+    assert len(analyzer.action_buffer[31]["kpts"]) == analyzer.min_history_frames
