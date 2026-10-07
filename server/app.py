@@ -1615,9 +1615,15 @@ def serialize_pair_actions(pair_actions):
 
 def _pair_weight(source):
     score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
-    # One confirmed danger must outrank every suspicious combination within
-    # the bounded candidate budget, while multiple independent dangers add.
-    return (100.0 if source.get("danger") or source.get("is_danger") else 1.0) + score
+    danger = bool(source.get("danger") or source.get("is_danger"))
+    stale = bool(source.get("observation_stale"))
+    # Fresh evidence must outrank stale cached evidence when pairs compete.
+    # A danger also outranks any bounded combination of suspicious pairs.
+    if danger:
+        base = 100.0 if not stale else 10.0
+    else:
+        base = 1.0 if not stale else 0.1
+    return base + score
 
 
 def _maximum_weight_pair_matching(candidates):
