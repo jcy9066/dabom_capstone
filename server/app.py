@@ -1806,6 +1806,14 @@ def activate_stream_generation(robot_id, infer):
 
         processor = frame_processor
         if processor is not None:
+            reset_detector_tracking = getattr(
+                processor.detector,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_detector_tracking):
+                reset_detector_tracking()
+
             reset_tracking_state = getattr(
                 processor.action_analyzer,
                 "reset_tracking_state",
