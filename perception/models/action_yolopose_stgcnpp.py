@@ -209,9 +209,13 @@ class ActionRecognizer:
             annotated_action["interaction_role"] = "participant"
             annotated_action["source"] = "pair"
             for obj in (first, second):
-                skeleton, current = results.get(obj["id"], (obj.get("keypoints"), None))
+                skeleton, current = results.get(
+                    obj["id"],
+                    (obj.get("keypoints"), None),
+                )
                 if (
-                    current is None
+                    annotated_action.get("is_danger")
+                    or current is None
                     or is_observation_issue(current)
                     or annotated_action["score"] >= current.get("score", 0.0)
                 ):
@@ -246,16 +250,29 @@ class ActionRecognizer:
                     continue
                 candidates.append((ratio, first["id"], second["id"], first, second))
 
+        active_pairs = set(self.pair_action_buffer)
         ordered = sorted(
             candidates,
-            key=lambda item: (item[0], item[1], item[2]),
+            key=lambda item: (
+                0
+                if tuple(sorted((item[1], item[2]))) in active_pairs
+                else 1,
+                item[0],
+                item[1],
+                item[2],
+            ),
         )
-        return [
-            (first, second)
-            for _ratio, _first_id, _second_id, first, second in ordered[
-                : self.interaction_max_pairs
-            ]
-        ]
+
+        selected = []
+        used_track_ids = set()
+        for _ratio, first_id, second_id, first, second in ordered:
+            if first_id in used_track_ids or second_id in used_track_ids:
+                continue
+            selected.append((first, second))
+            used_track_ids.update((first_id, second_id))
+            if len(selected) >= self.interaction_max_pairs:
+                break
+        return selected
 
     def _is_interaction_pair(self, first, second):
         ratio = self._pair_distance_ratio(first, second)
