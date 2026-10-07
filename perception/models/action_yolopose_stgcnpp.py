@@ -111,19 +111,19 @@ class ActionRecognizer:
         self.pair_action_buffer = {}
         self.pair_temporal_policy = TemporalActionPolicy.from_env() if self.recall_mode else None
         self.interaction_pair_distance_ratio = (
-            env_float("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", minimum=0.1)
+            env_float("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", minimum=0.1, maximum=5.0)
             if self.recall_mode
             and os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip()
             else 1.5
         )
         self.min_history_frames = (
-            env_int("ACTION_MIN_HISTORY_FRAMES", minimum=2)
+            env_int("ACTION_MIN_HISTORY_FRAMES", minimum=2, maximum=100)
             if self.recall_mode and os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip()
             else 12
         )
         self.use_native_history_length = self.recall_mode
         self.interaction_infer_every_n = (
-            env_int("ACTION_INTERACTION_INFER_EVERY_N", minimum=1)
+            env_int("ACTION_INTERACTION_INFER_EVERY_N", minimum=1, maximum=30)
             if self.recall_mode
             and os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip()
             else 2
