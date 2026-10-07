@@ -275,23 +275,21 @@ class ActionRecognizer:
             ),
         )
 
-        selected = []
-        used_track_ids = set()
-        for _ratio, first_id, second_id, first, second in ordered:
-            if first_id in used_track_ids or second_id in used_track_ids:
-                continue
-            selected.append((first, second))
-            used_track_ids.update((first_id, second_id))
-            if len(selected) >= self.interaction_max_pairs:
-                break
-        return selected
+        return [
+            (first, second)
+            for _ratio, _first_id, _second_id, first, second in ordered[
+                : self.interaction_max_pairs
+            ]
+        ]
 
     def _clear_unselected_visible_pair_state(self, objs, selected_pairs):
         by_id = {obj["id"]: obj for obj in objs}
-        selected_ids = {
-            tuple(sorted((first["id"], second["id"])))
-            for first, second in selected_pairs
-        }
+        eligible_ids = set()
+        for first_index, first in enumerate(objs):
+            for second in objs[first_index + 1 :]:
+                if self._is_interaction_pair(first, second):
+                    eligible_ids.add(tuple(sorted((first["id"], second["id"]))))
+
         known_pairs = set(self.pair_action_buffer)
         if self.pair_temporal_policy is not None:
             known_pairs.update(self.pair_temporal_policy.last_seen_at)
@@ -302,7 +300,7 @@ class ActionRecognizer:
             if not isinstance(pair_id, tuple) or len(pair_id) != 2:
                 continue
             normalized = tuple(sorted(pair_id))
-            if normalized in selected_ids:
+            if normalized in eligible_ids:
                 continue
             if normalized[0] not in by_id or normalized[1] not in by_id:
                 continue
