@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,6 +107,18 @@ class FakeProcess:
 
 class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self._env_patch = patch.dict(
+            os.environ,
+            {
+                "NAV_DRIVING_READY_TIMEOUT_SEC": "5",
+                "DASHBOARD_ESTOP_COOLDOWN_SEC": "0",
+                "DASHBOARD_GOAL_REACHED_TOLERANCE_M": "0.25",
+            },
+            clear=False,
+        )
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
+
         self.map_api = FakeMapApi()
         self.process = FakeProcess()
         self.commands = []
