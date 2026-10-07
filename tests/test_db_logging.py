@@ -659,6 +659,41 @@ def test_event_worker_cooldown_is_per_robot_and_event_type():
         worker.stop()
 
 
+def test_event_worker_cooldown_can_be_scoped_per_incident():
+    database = RecordingDatabase()
+    notifier = RecordingNotifier()
+    worker = EventLogWorker(database, notifier, cooldown_sec=10)
+    now = [100.0]
+    worker.gate.clock = lambda: now[0]
+    worker.start()
+    try:
+        assert worker.submit(
+            robot_id="robot-1",
+            event_source="VISION_AI",
+            event_type="ASSAULT",
+            confidence=0.9,
+            cooldown_key="pair:1:2",
+        )
+        assert not worker.submit(
+            robot_id="robot-1",
+            event_source="VISION_AI",
+            event_type="ASSAULT",
+            confidence=0.8,
+            cooldown_key="pair:1:2",
+        )
+        assert worker.submit(
+            robot_id="robot-1",
+            event_source="VISION_AI",
+            event_type="ASSAULT",
+            confidence=0.85,
+            cooldown_key="pair:3:4",
+        )
+        worker.queue.join()
+        assert len(database.events) == 2
+    finally:
+        worker.stop()
+
+
 def test_event_worker_stops_after_a_full_queue_drains():
     database = BlockingDatabase()
     worker = EventLogWorker(
