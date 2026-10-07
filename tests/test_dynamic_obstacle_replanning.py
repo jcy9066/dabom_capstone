@@ -34,6 +34,8 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn('GLOBAL_PATH_TOPIC = "/plan"', ros)
         self.assertIn('GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"', ros)
         self.assertIn('"dynamic_obstacles": dynamic_obstacles', ros)
+        self.assertIn("self._cancel_lock = threading.Lock()", ros)
+        self.assertIn("with self._cancel_lock:", ros)
         self.assertIn("navigation_control_api.note_replanned_path", app)
         self.assertIn('"global_path_updated_at": global_path_updated_at', app)
         self.assertIn('data-lidar-display="obstacles" checked>Dynamic Obstacle', template)

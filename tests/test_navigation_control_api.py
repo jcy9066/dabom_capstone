@@ -409,6 +409,75 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RESUMING", self.api.state_response(now=base + 5.1)["navigation_state"])
         self.assertEqual(0, self.map_api.ros_control.cancel_calls)
 
+    async def test_user_navigation_mutation_wins_blocked_watchdog_race(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 5.1,
+        )
+        self.api.note_navigation_sample("scan", now=base + 5.1)
+
+        await self.api._operation_lock.acquire()
+        try:
+            watchdog_task = asyncio.create_task(
+                self.api.evaluate_watchdog(now=base + 5.1)
+            )
+            await asyncio.sleep(0)
+            with self.api._lock:
+                self.api._state["navigation_state"] = "READY"
+                self.api._state["active_goal"] = None
+                self.api._state["planned_path"] = []
+        finally:
+            self.api._operation_lock.release()
+
+        issue = await watchdog_task
+
+        self.assertIsNone(issue)
+        self.assertEqual("READY", self.api.state_response(now=base + 5.1)["navigation_state"])
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertFalse(self.api.state_response(now=base + 5.1)["emergency_stop"])
+
+    async def test_blocked_cancel_error_after_estop_does_not_reclassify_failure(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose",
+            now=base,
+            payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False},
+            now=base + 5.1,
+        )
+        self.api.note_navigation_sample("scan", now=base + 5.1)
+
+        def canceled_by_estop():
+            with self.api._lock:
+                self.api._state["emergency_stop"] = True
+                self.api._state["emergency_reason"] = "operator"
+                self.api._state["navigation_state"] = "EMERGENCY_STOPPED"
+            raise RuntimeError("duplicate cancel rejected")
+
+        self.map_api.ros_control.cancel_navigation = canceled_by_estop
+
+        issue = await self.api.evaluate_watchdog(now=base + 5.1)
+
+        self.assertIsNone(issue)
+        current = self.api.state_response(now=base + 5.1)
+        self.assertTrue(current["emergency_stop"])
+        self.assertEqual("EMERGENCY_STOPPED", current["navigation_state"])
+        self.assertEqual("operator", current["emergency_reason"])
+
     async def test_watchdog_syncs_ros_success_without_state_polling(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})

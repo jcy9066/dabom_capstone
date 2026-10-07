@@ -101,6 +101,7 @@ class NavigationRosControl:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._cancel_lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._node = None
         self._executor = None
@@ -416,41 +417,56 @@ class NavigationRosControl:
         return {"accepted": True, "action": "/navigate_to_pose"}
 
     def cancel_navigation(self) -> dict[str, Any]:
-        with self._lock:
-            goal_handle = self._navigate_goal_handle
-            result_future = self._navigate_result_future
-        if goal_handle is None:
-            return {"requested": False, "confirmed": True}
-        response = self._wait_future(
-            goal_handle.cancel_goal_async(),
-            timeout_sec=env_float("NAV_CANCEL_TIMEOUT_SEC", minimum=0.1),
-            error_code="NAVIGATION_CANCEL_TIMEOUT",
-            message="Timed out while canceling the Nav2 goal.",
-        )
-        confirmed = bool(getattr(response, "goals_canceling", []))
-        if not confirmed:
-            raise NavigationRosError("NAVIGATION_CANCEL_REJECTED", "Nav2 did not confirm goal cancellation.", 502)
-        with self._lock:
-            self._navigation_state = "CANCELING"
-        if result_future is None:
-            raise NavigationRosError(
-                "NAVIGATION_CANCEL_UNCONFIRMED",
-                "Nav2 did not provide a result future for the active goal.",
-                502,
+        # Multiple server paths may request a stop at nearly the same time
+        # (blocked watchdog, operator Cancel/Manual, emergency stop). Serialize
+        # cancellation so only one request reaches a given Nav2 goal handle.
+        with self._cancel_lock:
+            with self._lock:
+                goal_handle = self._navigate_goal_handle
+                result_future = self._navigate_result_future
+            if goal_handle is None:
+                return {"requested": False, "confirmed": True}
+            response = self._wait_future(
+                goal_handle.cancel_goal_async(),
+                timeout_sec=env_float("NAV_CANCEL_TIMEOUT_SEC", minimum=0.1),
+                error_code="NAVIGATION_CANCEL_TIMEOUT",
+                message="Timed out while canceling the Nav2 goal.",
             )
-        result = self._wait_future(
-            result_future,
-            timeout_sec=env_float("NAV_CANCEL_RESULT_TIMEOUT_SEC", minimum=0.1),
-            error_code="NAVIGATION_CANCEL_TIMEOUT",
-            message="Timed out waiting for Nav2 to finish canceling the goal.",
-        )
-        if int(result.status) != int(GoalStatus.STATUS_CANCELED):
-            raise NavigationRosError(
-                "NAVIGATION_CANCEL_UNCONFIRMED",
-                f"Nav2 completed cancel with status={result.status}.",
-                502,
+            confirmed = bool(getattr(response, "goals_canceling", []))
+            if not confirmed:
+                # The result callback may have completed the goal while the
+                # cancel response was in flight. Treat that as idempotent only
+                # when this exact handle is no longer active.
+                with self._lock:
+                    already_terminal = self._navigate_goal_handle is not goal_handle
+                if already_terminal:
+                    return {"requested": False, "confirmed": True, "completed": True}
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_REJECTED",
+                    "Nav2 did not confirm goal cancellation.",
+                    502,
+                )
+            with self._lock:
+                self._navigation_state = "CANCELING"
+            if result_future is None:
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_UNCONFIRMED",
+                    "Nav2 did not provide a result future for the active goal.",
+                    502,
+                )
+            result = self._wait_future(
+                result_future,
+                timeout_sec=env_float("NAV_CANCEL_RESULT_TIMEOUT_SEC", minimum=0.1),
+                error_code="NAVIGATION_CANCEL_TIMEOUT",
+                message="Timed out waiting for Nav2 to finish canceling the goal.",
             )
-        return {"requested": True, "confirmed": True, "completed": True}
+            if int(result.status) != int(GoalStatus.STATUS_CANCELED):
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_UNCONFIRMED",
+                    f"Nav2 completed cancel with status={result.status}.",
+                    502,
+                )
+            return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:

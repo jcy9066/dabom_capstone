@@ -798,7 +798,11 @@ class NavigationControlApi:
             await self.emergency_stop(issue, automatic=True)
             return issue
         if blocked:
-            failed = await self._fail_blocked_navigation()
+            # User navigation mutations (Cancel / Manual / Resume) use the same
+            # operation lock. If one wins the race, re-checking inside
+            # _fail_blocked_navigation() turns this watchdog attempt into a no-op.
+            async with self._operation_lock:
+                failed = await self._fail_blocked_navigation()
             return "BLOCKED_TIMEOUT" if failed else None
         return None
 
@@ -845,6 +849,16 @@ class NavigationControlApi:
                     failed = True
 
             if cancel_error is not None:
+                # A concurrent E-stop or another completed state transition can
+                # make Nav2 reject a duplicate cancel. Do not reinterpret that
+                # already-safe transition as a new automatic E-stop.
+                with self._lock:
+                    superseded = (
+                        self._state["navigation_state"] not in self.NO_PROGRESS_NAV_STATES
+                        or self._state["emergency_stop"]
+                    )
+                if superseded:
+                    return False
                 await self.emergency_stop("BLOCKED_TIMEOUT", automatic=True)
                 return True
             if not delivered:
