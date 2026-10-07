@@ -19,7 +19,8 @@ class LocalVideoReader:
         self.cap = cv2.VideoCapture(path)
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS)) or 30
+        source_fps = float(self.cap.get(cv2.CAP_PROP_FPS))
+        self.fps = source_fps if source_fps > 0.0 else 30.0
 
     def get_frame(self):
         ret, frame = self.cap.read()
@@ -71,7 +72,11 @@ def main():
             frame = reader.get_frame()
             if frame is None: break
 
-            processed = processor.process(frame)
+            frame_timestamp = frame_count / reader.fps
+            processed = processor.process(
+                frame,
+                timestamp=frame_timestamp,
+            )
             writer.write(processed["frame"])
             frame_count += 1
             if args.max_frames and frame_count >= args.max_frames:

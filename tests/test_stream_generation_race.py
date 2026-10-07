@@ -204,6 +204,23 @@ def test_model_toggle_drops_result_processed_before_off(monkeypatch):
 
 def test_old_result_stays_stale_after_off_then_on(monkeypatch):
     processor = _isolate_stream_globals(monkeypatch)
+
+    def fake_process(frame):
+        return {
+            "frame": frame,
+            "detections": [],
+            "pair_actions": [],
+            "danger": False,
+            "scene": None,
+            "timings": {},
+        }
+
+    monkeypatch.setattr(
+        app,
+        "process_frame_for_dashboard",
+        fake_process,
+    )
+
     processed = app.process_stream_frame_if_current("old-frame", 41)
     old_generation = processed.pop("_model_generation")
 

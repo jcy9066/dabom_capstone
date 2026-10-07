@@ -113,9 +113,81 @@ class FrameProcessor:
         if getattr(self.action_analyzer, "restrict_to_target_actions", False):
             self.violence_heuristic.enabled = False
 
-    def process(self, frame):
+    def _process_scene_classifier(
+        self,
+        frame,
+        tracked_boxes,
+        obj_states,
+        timestamp=None,
+    ):
+        analyzer = self.action_analyzer
+        analyzer.observe_frame(frame, timestamp=timestamp)
+        scene_result = analyzer.classify_scene(now=timestamp)
+
+        display_frame = frame.copy()
+        detections = []
+        danger = False
+
+        for obj in tracked_boxes:
+            oid = obj["id"]
+            cls_id = obj.get("cls", 0)
+            state = obj_states.get(oid, 0)
+            detection = {
+                "id": oid,
+                "cls": cls_id,
+                "box": [float(v) for v in obj["box"]],
+                "state": state,
+                "label": "",
+                "score": None,
+                "danger": False,
+            }
+
+            if cls_id == 0:
+                skeleton = obj.get("keypoints")
+                if skeleton is not None:
+                    analyzer.draw_skeleton(
+                        display_frame,
+                        skeleton,
+                        (120, 220, 120),
+                    )
+            else:
+                detection["label"] = "WEAPON"
+                detection["danger"] = True
+                danger = True
+
+            detections.append(detection)
+
+        danger = danger or bool(scene_result.get("danger"))
+        analyzer.draw_scene_overlay(display_frame, scene_result)
+        if (
+            scene_result.get("status") == "ok"
+            and scene_result.get("fresh")
+            and bool(scene_result.get("raw_danger"))
+        ):
+            self.notifier.send_event_alert_async(
+                "폭행 상황 감지: VIOLENCE",
+                robot_id="local-video",
+                event_type=vision_alert_type("VIOLENCE"),
+            )
+
+        return {
+            "frame": display_frame,
+            "detections": detections,
+            "danger": danger,
+            "scene": scene_result,
+        }
+
+    def process(self, frame, timestamp=None):
         tracked_boxes = self.detector.track(frame)
         obj_states = self.trigger.get_object_states(tracked_boxes)
+        if getattr(self.action_analyzer, "scene_level_classifier", False):
+            return self._process_scene_classifier(
+                frame,
+                tracked_boxes,
+                obj_states,
+                timestamp=timestamp,
+            )
+
         display_frame = frame.copy()
         detections = []
         danger = False

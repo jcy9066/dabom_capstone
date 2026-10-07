@@ -6,6 +6,27 @@ ENV_FILE="${ROOT_DIR}/.env"
 LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/dabom-gpu-stack.lock"
 PID_FILE="${XDG_RUNTIME_DIR:-/tmp}/dabom-gpu-stack.pid"
 
+# Prefer the project-local Python 3.10 GPU runtime. It is created with
+# --system-site-packages so ROS 2 Humble rclpy remains available, while
+# PYTHONNOUSERSITE prevents ~/.local packages from contaminating CUDA deps.
+if [[ -n "${DABOM_GPU_PYTHON:-}" ]]; then
+    PYTHON_BIN="${DABOM_GPU_PYTHON}"
+elif [[ -x "${HOME}/.venvs/dabom-gpu310/bin/python" ]]; then
+    PYTHON_BIN="${HOME}/.venvs/dabom-gpu310/bin/python"
+elif [[ -x "${ROOT_DIR}/.venv-gpu310/bin/python" ]]; then
+    PYTHON_BIN="${ROOT_DIR}/.venv-gpu310/bin/python"
+else
+    PYTHON_BIN="$(command -v python3 || true)"
+fi
+
+[[ -n "${PYTHON_BIN}" && -x "${PYTHON_BIN}" ]] \
+    || {
+        printf '[gpu-stack] ERROR: Python runtime not found\n' >&2
+        exit 1
+    }
+
+export PYTHONNOUSERSITE=1
+
 SERVER_PID=""
 ODOM_PID=""
 RESTART_LOCKED=0
@@ -337,7 +358,7 @@ esac
 [[ "${ENCODER_ROS_TOPIC}" == "${WHEEL_TICKS_TOPIC}" ]] \
     || fail "ENCODER_ROS_TOPIC and WHEEL_TICKS_TOPIC must match"
 
-require_cmd python3
+log "Using Python runtime: ${PYTHON_BIN}"
 require_cmd curl
 require_cmd flock
 require_cmd setsid
@@ -366,10 +387,11 @@ export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV
 export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME
 
-python3 - <<'PY' >/dev/null 2>&1 || fail "Required Python packages for the GPU runtime are missing"
+"${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "Required Python packages for the GPU runtime are missing"
 import fastapi
 import rclpy
 import uvicorn
+import websockets
 PY
 
 model_active=0
@@ -381,7 +403,47 @@ esac
 
 if (( model_active == 1 )); then
     [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
-    python3 - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
+
+    if [[ "${PIPELINE}" == "8" ]]; then
+        "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "Pipeline 8 runtime packages are missing; install requirements.txt"
+from importlib.metadata import PackageNotFoundError, version
+
+def installed(dist_name):
+    try:
+        version(dist_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+if not installed("opencv-contrib-python"):
+    raise RuntimeError("opencv-contrib-python is required by the perception runtime")
+if installed("opencv-python"):
+    raise RuntimeError(
+        "Both opencv-python and opencv-contrib-python are installed; "
+        "remove opencv-python and force-reinstall opencv-contrib-python"
+    )
+
+import lap
+import numpy
+import scipy
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available to PyTorch")
+torch.cuda.init()
+
+import onnxruntime as ort
+import ultralytics
+from pytorchvideo.models.hub import x3d_m
+from ultralytics.trackers.bot_sort import BOTSORT
+
+if "CUDAExecutionProvider" not in ort.get_available_providers():
+    raise RuntimeError(
+        "onnxruntime-gpu is installed but CUDAExecutionProvider is unavailable"
+    )
+PY
+    else
+        "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
 from importlib.metadata import PackageNotFoundError, version
 
 def installed(dist_name):
@@ -396,7 +458,7 @@ if not installed("opencv-contrib-python"):
 if installed("opencv-python"):
     raise RuntimeError(
         "Both opencv-python and opencv-contrib-python are installed; "
-        "remove opencv-python and reinstall requirements.txt"
+        "remove opencv-python and force-reinstall opencv-contrib-python"
     )
 
 import decord
@@ -413,10 +475,12 @@ import ultralytics
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA is not available to PyTorch")
 PY
+    fi
 
     log "Ensuring model assets for pipeline ${PIPELINE:-unset}"
-    python3 -m perception.model_assets --pipeline "${PIPELINE}" \
+    "${PYTHON_BIN}" -m perception.model_assets --pipeline "${PIPELINE}" \
         || fail "Model asset preparation failed for pipeline ${PIPELINE}"
+
 fi
 
 exec 9>"${LOCK_FILE}"
@@ -473,7 +537,7 @@ printf '%s\n' "$$" > "${PID_FILE}"
 cd "${ROOT_DIR}"
 
 log "Starting FastAPI"
-setsid env DABOM_PROCESS_OWNER="dabom-gpu-fastapi" python3 -m uvicorn \
+setsid env DABOM_PROCESS_OWNER="dabom-gpu-fastapi" "${PYTHON_BIN}" -m uvicorn \
     server.app:app \
     --host "${SERVER_HOST}" \
     --port "${SERVER_PORT}" &
@@ -486,16 +550,27 @@ esac
 health_url="http://${health_host}:${SERVER_PORT}/get_status"
 
 server_ready=0
-# Pipeline 8 loads YOLO26m-Pose + ST-GCN++ on CUDA during FastAPI startup.
-# Allow enough time for model initialization before declaring startup failure.
-for _ in {1..120}; do
+server_startup_timeout_sec="${GPU_SERVER_STARTUP_TIMEOUT_SEC:-180}"
+
+[[ "${server_startup_timeout_sec}" =~ ^[1-9][0-9]*$ ]] \
+    || fail "GPU_SERVER_STARTUP_TIMEOUT_SEC must be a positive integer"
+
+# Pipeline 8 cold-starts RTMO-M ONNX + BotSORT + X3D-M on CUDA.
+# First startup can take well over one minute while CUDA/model libraries load.
+startup_deadline=$((SECONDS + server_startup_timeout_sec))
+
+log "Waiting up to ${server_startup_timeout_sec}s for FastAPI readiness"
+
+while (( SECONDS < startup_deadline )); do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         break
     fi
+
     if curl --fail --silent --show-error --max-time 1 "${health_url}" >/dev/null 2>&1; then
         server_ready=1
         break
     fi
+
     sleep 0.5
 done
 
@@ -505,7 +580,7 @@ fi
 
 start_odometry() {
     log "Starting wheel odometry"
-    setsid env DABOM_PROCESS_OWNER="dabom-gpu-odom" python3 server/wheel_odometry.py &
+    setsid env DABOM_PROCESS_OWNER="dabom-gpu-odom" "${PYTHON_BIN}" server/wheel_odometry.py &
     ODOM_PID=$!
 
     local publisher_ready=0
@@ -553,7 +628,7 @@ log "FastAPI PID=${SERVER_PID}"
 log "Odometry PID=${ODOM_PID}"
 
 if curl --fail --silent --max-time 1 "${health_url}" \
-    | python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data.get("updated_at") is not None else 1)' \
+    | "${PYTHON_BIN}" -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data.get("updated_at") is not None else 1)' \
     >/dev/null 2>&1; then
     log "CONNECTED: Raspberry Pi status is already arriving"
 else
