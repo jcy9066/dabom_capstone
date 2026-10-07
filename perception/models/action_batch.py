@@ -46,6 +46,9 @@ def process_keypoint_many(analyzer, frame, objs, total_frames):
 
 def _append_and_classify(analyzer, frame, obj, kpts, scores, total_frames):
     obj_id = obj["id"]
+    note_valid_pose = getattr(analyzer, "note_valid_pose", None)
+    if callable(note_valid_pose):
+        note_valid_pose(obj_id)
     if obj_id not in analyzer.action_buffer:
         analyzer.action_buffer[obj_id] = {"kpts": [], "scores": []}
 
