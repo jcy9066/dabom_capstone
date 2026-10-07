@@ -170,23 +170,46 @@ class TemporalActionPolicy:
             self.current.pop(object_id, None)
             return None
 
-        danger_hits = [
-            action
-            for action in history
-            if action is not None and action.get("confidence_level") == "danger"
-        ]
-        target_hits = [action for action in history if action is not None]
+        actions_by_label = {}
+        danger_by_label = {}
+        for action in history:
+            if action is None:
+                continue
+            label = action.get("label")
+            if not label:
+                continue
+            actions_by_label.setdefault(label, []).append(action)
+            if action.get("confidence_level") == "danger":
+                danger_by_label.setdefault(label, []).append(action)
 
-        if len(danger_hits) >= self.danger_min_hits:
-            selected = max(danger_hits, key=lambda action: action["score"])
+        eligible_danger = [
+            hits
+            for hits in danger_by_label.values()
+            if len(hits) >= self.danger_min_hits
+        ]
+        if eligible_danger:
+            selected_hits = max(
+                eligible_danger,
+                key=lambda hits: max(action["score"] for action in hits),
+            )
+            selected = max(selected_hits, key=lambda action: action["score"])
             resolved = dict(selected)
             resolved["is_danger"] = True
             resolved["confidence_level"] = "danger"
             self.current[object_id] = resolved
             return resolved
 
-        if len(target_hits) >= self.suspicious_min_hits:
-            selected = max(target_hits, key=lambda action: action["score"])
+        eligible_targets = [
+            hits
+            for hits in actions_by_label.values()
+            if len(hits) >= self.suspicious_min_hits
+        ]
+        if eligible_targets:
+            selected_hits = max(
+                eligible_targets,
+                key=lambda hits: max(action["score"] for action in hits),
+            )
+            selected = max(selected_hits, key=lambda action: action["score"])
             resolved = dict(selected)
             resolved["is_danger"] = False
             resolved["confidence_level"] = "suspicious"
