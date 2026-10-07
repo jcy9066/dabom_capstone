@@ -17,7 +17,7 @@ class YOLODetector:
 
     def track(self, frame):
         results = self.model.track(
-            frame, persist=True, tracker=self.tracker, half=True, verbose=False, classes=self.target_classes, conf=0.25, imgsz=640, device=self.device
+            frame, persist=True, tracker=self.tracker, half=True, verbose=False, classes=self.target_classes, conf=self.conf, imgsz=640, device=self.device
         )
         boxes = []
         if results[0].boxes.id is not None:
@@ -31,7 +31,7 @@ class YOLODetector:
 class YOLOPoseDetector(YOLODetector):
     def track(self, frame):
         results = self.model.track(
-            frame, persist=True, tracker=self.tracker, half=True, verbose=False, classes=self.target_classes, conf=0.25, imgsz=640, device=self.device
+            frame, persist=True, tracker=self.tracker, half=True, verbose=False, classes=self.target_classes, conf=self.conf, imgsz=640, device=self.device
         )
         boxes = []
         if results[0].boxes.id is not None:
