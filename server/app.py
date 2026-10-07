@@ -1738,10 +1738,14 @@ def process_frame_for_dashboard(frame):
                 if observation_issue
                 else select_action_result(action, heuristic_action)
             )
-            if selected_action:
+            if selected_action and not selected_action.get("observation_stale"):
                 selected_action = dict(selected_action)
                 selected_action["updated_at"] = now
                 frame_processor.action_display_buffer[oid] = selected_action
+            elif selected_action and selected_action.get("observation_stale"):
+                # Keep the previously confirmed interaction only until its
+                # display TTL expires; do not refresh stale evidence.
+                pass
             elif (
                 not observation_issue
                 and getattr(
