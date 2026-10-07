@@ -1733,9 +1733,14 @@ def process_frame_for_dashboard(frame):
 
             now = time.time()
             observation_issue = is_observation_issue(action)
+            observation_stale = bool(
+                isinstance(action, dict) and action.get("observation_stale")
+            )
             if observation_issue:
                 detection["inference_status"] = action.get("observation_status")
                 detection["inference_error"] = action.get("error")
+            elif observation_stale:
+                detection["inference_status"] = "stale"
             else:
                 detection["inference_status"] = "ok"
 
