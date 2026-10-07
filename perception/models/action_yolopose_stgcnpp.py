@@ -254,10 +254,12 @@ class ActionRecognizer:
         ordered = sorted(
             candidates,
             key=lambda item: (
-                0
-                if tuple(sorted((item[1], item[2]))) in active_pairs
-                else 1,
-                item[0],
+                item[0]
+                * (
+                    0.85
+                    if tuple(sorted((item[1], item[2]))) in active_pairs
+                    else 1.0
+                ),
                 item[1],
                 item[2],
             ),
