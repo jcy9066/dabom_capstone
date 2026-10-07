@@ -935,6 +935,7 @@ RUNTIME_MODEL_ENV_KEYS = (
     "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
     "ACTION_INTERACTION_MAX_PAIRS",
     "ACTION_MIN_HISTORY_FRAMES",
+    "ACTION_POSE_GAP_RESET_SEC",
     "ACTION_INTERACTION_INFER_EVERY_N",
     "ACTION_DISPLAY_TTL_SEC",
     "TRIGGER_SUSPICIOUS_VISUAL_ENABLED",
@@ -988,6 +989,8 @@ def read_runtime_model_config():
         env_int("ACTION_INTERACTION_MAX_PAIRS", minimum=1, maximum=16)
     if os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip():
         env_int("ACTION_MIN_HISTORY_FRAMES", minimum=2, maximum=100)
+    if os.getenv("ACTION_POSE_GAP_RESET_SEC", "").strip():
+        env_float("ACTION_POSE_GAP_RESET_SEC", minimum=0.1, maximum=30.0)
     if os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip():
         env_int("ACTION_INTERACTION_INFER_EVERY_N", minimum=1, maximum=30)
     return {
@@ -1067,6 +1070,7 @@ def runtime_model_signature(config):
             "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
             "ACTION_INTERACTION_MAX_PAIRS",
             "ACTION_MIN_HISTORY_FRAMES",
+            "ACTION_POSE_GAP_RESET_SEC",
             "ACTION_INTERACTION_INFER_EVERY_N",
         )
     )
