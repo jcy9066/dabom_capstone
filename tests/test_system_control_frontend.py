@@ -242,13 +242,15 @@ def test_resume_ack_requires_matching_pi_safety_epoch():
             ack_epoch = 0
 
             async def send_json(self, command):
-                await manager.receive_ack("pi-01", {
+                # ACK arrives asynchronously from the active WebSocket.
+                # Scheduling it prevents re-entering the manager's send lock.
+                asyncio.create_task(manager.receive_ack("pi-01", self, {
                     "command_id": command["command_id"],
                     "ok": True,
                     "emergency_stop": False,
                     "safety_session": "test-pi",
                     "safety_epoch": self.ack_epoch,
-                })
+                }))
 
         socket = FakeSocket()
         manager.active["pi-01"] = socket
