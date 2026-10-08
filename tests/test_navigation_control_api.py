@@ -220,6 +220,26 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.api.note_pi_status({"mode": "auto", "navigation_mode": "mapping", "emergency_stop": False}, now=now)
         self.api.note_navigation_sample("scan", now=now)
 
+    async def test_pi_safety_state_is_fresh_and_separate_from_gpu_estop(self):
+        now = time.time()
+        self.api.note_pi_status({
+            "safety_session": "test-pi",
+            "safety_epoch": 7,
+            "emergency_stop": True,
+        }, now=now)
+        result = self.api.state_response(now=now + 0.1)
+        self.assertTrue(result["pi_safety"]["fresh"])
+        self.assertTrue(result["pi_safety"]["emergency_stop"])
+        self.assertEqual("test-pi", result["pi_safety"]["safety_session"])
+        self.assertEqual(7, result["pi_safety"]["safety_epoch"])
+        stale = self.api.state_response(now=now + 10)
+        self.assertFalse(stale["pi_safety"]["fresh"])
+        self.assertIsNone(stale["pi_safety"]["emergency_stop"])
+        self.api.note_pi_connection(False)
+        disconnected = self.api.state_response()
+        self.assertFalse(disconnected["pi_safety"]["fresh"])
+        self.assertIsNone(disconnected["pi_safety"]["emergency_stop"])
+
     async def driving_ready(self):
         result = await self.api.switch_mode(
             {
