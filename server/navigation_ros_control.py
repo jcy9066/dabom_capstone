@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -13,7 +14,7 @@ from server.env_config import env_float
 try:
     import rclpy
     from action_msgs.msg import GoalStatus
-    from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+    from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import ComputePathToPose, NavigateToPose
     from nav2_msgs.srv import LoadMap
@@ -38,6 +39,7 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     GoalStatus = None
     PoseStamped = None
     PoseWithCovarianceStamped = None
+    Twist = None
     ComputePathToPose = None
     NavigateToPose = None
     GetState = None
@@ -98,6 +100,10 @@ class NavigationRosControl:
     AMCL_POSE_TOPIC = "/amcl_pose"
     GLOBAL_PATH_TOPIC = "/plan"
     GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"
+    NAV_COMMAND_TOPIC = "/cmd_vel_nav_dry_run"
+    ROTATION_COMMAND_MAX_AGE_SEC = 0.5
+    ROTATION_MIN_ANGULAR_RPS = 0.05
+    ROTATION_MAX_LINEAR_MPS = 0.02
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -120,6 +126,16 @@ class NavigationRosControl:
         self._navigation_error = None
         self._last_scan_at = None
         self._last_odom_at = None
+        self._last_odom_stamp_ns = None
+        self._last_odom_previous_at = None
+        self._last_odom_yaw = None
+        self._last_odom_yaw_delta = None
+        self._odom_yaw_window = deque()
+        self._odom_sequence = 0
+        self._last_nav_command_at = None
+        self._last_nav_command_linear_x = None
+        self._last_nav_command_angular_z = None
+        self._rotation_command_since_at = None
         self._last_tf_at = None
         self._tf_buffer = None
         self._tf_listener = None
@@ -163,6 +179,7 @@ class NavigationRosControl:
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(Odometry, "/odom", self._on_odom, 10)
+            self._node.create_subscription(Twist, self.NAV_COMMAND_TOPIC, self._on_nav_command, 10)
             self._node.create_subscription(
                 Path,
                 self.GLOBAL_PATH_TOPIC,
@@ -718,9 +735,81 @@ class NavigationRosControl:
         with self._lock:
             self._last_scan_at = time.monotonic()
 
-    def _on_odom(self, _message: Any) -> None:
+    def rotation_status(self) -> dict[str, Any]:
         with self._lock:
-            self._last_odom_at = time.monotonic()
+            now = time.monotonic()
+            return {
+                "command_age_sec": self._monotonic_age(now, self._last_nav_command_at),
+                "command_linear_x": self._last_nav_command_linear_x,
+                "command_angular_z": self._last_nav_command_angular_z,
+                "command_since_at": self._rotation_command_since_at,
+                "odometry_age_sec": self._monotonic_age(now, self._last_odom_at),
+                "odom_interval_start_at": self._last_odom_previous_at,
+                "odom_yaw": self._last_odom_yaw,
+                "odom_yaw_delta": self._last_odom_yaw_delta,
+                "odom_sequence": self._odom_sequence,
+            }
+
+    def _on_nav_command(self, message: Any) -> None:
+        try:
+            linear = float(message.linear.x)
+            angular = float(message.angular.z)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return
+        now = time.monotonic()
+        with self._lock:
+            previously_rotating = (
+                self._rotation_command_since_at is not None
+                and self._monotonic_age(now, self._last_nav_command_at) <= self.ROTATION_COMMAND_MAX_AGE_SEC
+                and self._last_nav_command_angular_z * angular > 0
+            )
+            rotating = (
+                math.isfinite(linear) and math.isfinite(angular)
+                and abs(linear) <= self.ROTATION_MAX_LINEAR_MPS
+                and abs(angular) >= self.ROTATION_MIN_ANGULAR_RPS
+            )
+            self._rotation_command_since_at = (
+                self._rotation_command_since_at if previously_rotating else now
+            ) if rotating else None
+            self._last_nav_command_at = now
+            self._last_nav_command_linear_x = linear
+            self._last_nav_command_angular_z = angular
+
+    def _on_odom(self, message: Any) -> None:
+        try:
+            yaw = self._yaw_from_orientation(message.pose.pose.orientation)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(yaw):
+            return
+        stamp_ns = None
+        if self._node is not None:
+            try:
+                stamp = message.header.stamp
+                stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+                source_age = (int(self._node.get_clock().now().nanoseconds) - stamp_ns) / 1_000_000_000
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return
+            if stamp_ns <= 0 or not -0.05 <= source_age <= self.ROTATION_COMMAND_MAX_AGE_SEC:
+                return
+        with self._lock:
+            if stamp_ns is not None:
+                if self._last_odom_stamp_ns is not None and stamp_ns <= self._last_odom_stamp_ns:
+                    return
+                self._last_odom_stamp_ns = stamp_ns
+            now = time.monotonic()
+            self._odom_yaw_window.append((now, yaw))
+            while len(self._odom_yaw_window) > 1 and now - self._odom_yaw_window[0][0] > self.ROTATION_COMMAND_MAX_AGE_SEC:
+                self._odom_yaw_window.popleft()
+            previous_at, previous_yaw = self._odom_yaw_window[0]
+            self._last_odom_previous_at = previous_at if len(self._odom_yaw_window) > 1 else None
+            self._last_odom_yaw_delta = (
+                math.atan2(math.sin(yaw - previous_yaw), math.cos(yaw - previous_yaw))
+                if len(self._odom_yaw_window) > 1 else None
+            )
+            self._last_odom_yaw = yaw
+            self._last_odom_at = now
+            self._odom_sequence += 1
 
     def _on_map(self, message: Any) -> None:
         with self._condition:

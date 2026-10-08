@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -17,6 +18,7 @@ from server.navigation_control_api import (
     NavigationControlError,
     NavigationWatchdogConfig,
 )
+from server.navigation_ros_control import NavigationRosControl
 
 
 @dataclass
@@ -32,6 +34,9 @@ class FakeMap:
 
 
 class FakeRos:
+    ROTATION_MIN_ANGULAR_RPS = NavigationRosControl.ROTATION_MIN_ANGULAR_RPS
+    ROTATION_MAX_LINEAR_MPS = NavigationRosControl.ROTATION_MAX_LINEAR_MPS
+
     def __init__(self):
         self.plan_calls = 0
         self.navigate_calls = 0
@@ -45,6 +50,7 @@ class FakeRos:
             "localization_ok": True,
             "localization_age_sec": 0.01,
         }
+        self.rotation = {}
 
     def compute_path(self, goal):
         self.plan_calls += 1
@@ -65,6 +71,9 @@ class FakeRos:
 
     def watchdog_status(self, now=None):
         return dict(self.health)
+
+    def rotation_status(self):
+        return dict(self.rotation)
 
 
 class FakeMapApi:
@@ -184,6 +193,26 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False}
         )
         return result
+
+    def set_rotation(self, sequence, *, command_age=0.01, odom_age=0.01,
+                     angular=0.4, yaw_delta=0.04, linear=0.0, yaw=None):
+        self.map_api.ros_control.rotation = {
+            "odom_sequence": sequence,
+            "command_age_sec": command_age,
+            "odometry_age_sec": odom_age,
+            "command_linear_x": linear,
+            "command_angular_z": angular,
+            "odom_yaw": sequence * 0.04 if yaw is None else yaw,
+            "odom_yaw_delta": yaw_delta,
+            "command_since_at": 1.0,
+            "odom_interval_start_at": 2.0,
+        }
+
+    def refresh_watchdog_samples(self, now):
+        self.api.note_pi_status(
+            {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False}, now=now,
+        )
+        self.api.note_navigation_sample("scan", now=now)
 
     async def test_current_mapping_transitions_directly_to_driving_with_live_pose(self):
         result = await self.api.switch_mode(
@@ -374,6 +403,19 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
 
+    async def test_ten_centimeter_translation_resets_five_second_progress_timer(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.api.note_navigation_sample("pose", now=base + 4.0, payload={"x": 0.10, "y": 0.0})
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        self.refresh_watchdog_samples(base + 9.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1))
+
     async def test_rotation_does_not_mask_blocked_translation(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
@@ -399,6 +441,110 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("BLOCKED_TIMEOUT", issue)
         self.assertEqual("FAILED", self.api.state_response(now=base + 5.1)["navigation_state"])
+
+    async def test_fresh_nav2_command_and_odom_rotation_extend_progress_until_cap(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+
+        for sequence, elapsed in enumerate((4.0, 8.0, 12.0), start=1):
+            self.set_rotation(sequence)
+            self.refresh_watchdog_samples(base + elapsed)
+            self.assertIsNone(await self.api.evaluate_watchdog(now=base + elapsed))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+
+        self.set_rotation(4)
+        self.refresh_watchdog_samples(base + 15.0)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.0))
+
+    async def test_translation_resets_cumulative_rotation_allowance(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        for sequence, elapsed in enumerate((4.0, 8.0, 12.0), start=1):
+            self.set_rotation(sequence)
+            self.refresh_watchdog_samples(base + elapsed)
+            self.assertIsNone(await self.api.evaluate_watchdog(now=base + elapsed))
+        self.api.note_navigation_sample("pose", now=base + 12.1, payload={"x": 0.10, "y": 0.0})
+        self.set_rotation(4)
+        self.refresh_watchdog_samples(base + 16.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 16.0))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+
+    async def test_rotation_command_without_new_odom_yaw_keeps_five_second_timeout(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, yaw_delta=0.0)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1))
+
+    async def test_old_yaw_change_cannot_be_reused_for_new_rotation_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, yaw=0.04)
+        self.refresh_watchdog_samples(base + 4.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 4.0))
+        self.set_rotation(2, yaw=0.04)
+        self.refresh_watchdog_samples(base + 9.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1))
+
+    async def test_stale_rotation_command_does_not_extend_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, command_age=0.51)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1))
+
+    async def test_stale_odometry_does_not_extend_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, odom_age=0.51)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1))
+
+    async def test_opposite_yaw_does_not_extend_rotation_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, angular=-0.4)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1))
+
+    async def test_linear_nav2_command_does_not_extend_rotation_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, linear=0.1)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1))
 
     async def test_resuming_does_not_trigger_no_progress_timeout(self):
         await self.driving_ready()
@@ -597,6 +743,55 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         issue = await self.api.evaluate_watchdog(now=time.time() + 1)
         self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", issue)
 
+    async def test_accepted_start_clears_old_stop_baseline_but_new_stop_is_monitored(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        with self.api._lock:
+            self.api._stop_commanded_at = time.time() - 10
+            self.api._stop_encoder_ticks = (0, 0, 0, 0)
+            self.api._encoder_stop_violation = True
+        await self.api.start_navigation()
+        self.api.note_encoder(dict.fromkeys(
+            ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"), 10,
+        ))
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        with self.api._lock:
+            self.assertIsNone(self.api._stop_commanded_at)
+            self.assertIsNone(self.api._stop_encoder_ticks)
+            self.assertFalse(self.api._encoder_stop_violation)
+        await self.api.emergency_stop("operator")
+        self.api.note_encoder(dict.fromkeys(
+            ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"), 20,
+        ), now=time.time() + 1)
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+
+    async def test_failed_start_keeps_old_stop_baseline(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        with self.api._lock:
+            self.api._stop_commanded_at = time.time() - 10
+            self.api._stop_encoder_ticks = (0, 0, 0, 0)
+        self.map_api.ros_control.navigate_to_pose = lambda _goal: (_ for _ in ()).throw(RuntimeError("rejected"))
+        with self.assertRaisesRegex(RuntimeError, "rejected"):
+            await self.api.start_navigation()
+        with self.api._lock:
+            self.assertIsNotNone(self.api._stop_commanded_at)
+            self.assertEqual((0, 0, 0, 0), self.api._stop_encoder_ticks)
+
+    async def test_resume_clears_prior_encoder_violation(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.emergency_stop("operator")
+        with self.api._lock:
+            self.api._encoder_stop_violation = True
+        resumed = await self.api.resume_navigation()
+        self.assertEqual("NAVIGATING", resumed["navigation_state"])
+        with self.api._lock:
+            self.assertIsNone(self.api._stop_commanded_at)
+            self.assertIsNone(self.api._stop_encoder_ticks)
+            self.assertFalse(self.api._encoder_stop_violation)
+        self.assertIsNone(await self.api.evaluate_watchdog())
+
     async def test_cancel_goal_preserves_terminal_success_race(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
@@ -756,6 +951,44 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.api.state_response()["emergency_stop"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 2)
 
+    async def test_estop_after_goal_acceptance_cannot_be_overwritten_by_start(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        self.api._get_live_pose = self._estop_during_progress_pose
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.start_navigation()
+        self.assertEqual("NAVIGATION_START_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        with self.api._lock:
+            self.assertIsNotNone(self.api._stop_commanded_at)
+
+    async def test_estop_after_resume_goal_acceptance_cannot_be_overwritten(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.emergency_stop("initial")
+        self.api._get_live_pose = self._estop_during_progress_pose
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+
+    def _estop_during_progress_pose(self):
+        failures = []
+
+        def stop_in_thread():
+            try:
+                asyncio.run(self.api.emergency_stop("operator"))
+            except Exception as exc:
+                failures.append(exc)
+
+        thread = threading.Thread(target=stop_in_thread)
+        thread.start()
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], failures)
+        return {"x": 0.25, "y": 0.5, "yaw": 0.4}
+
+
     async def test_rotated_map_bounds_are_enforced(self):
         self.map_api.saved_map.origin_x = 0.0
         self.map_api.saved_map.origin_y = 0.0
@@ -855,6 +1088,54 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         ).state_response()
         self.assertIsNone(offline["watchdog"]["pi_age_sec"])
         self.assertIsNone(offline["watchdog"]["lidar_age_sec"])
+
+
+class NavigationRosRotationTelemetryTests(unittest.TestCase):
+    @staticmethod
+    def odom(yaw, stamp_ns=None):
+        message = SimpleNamespace(pose=SimpleNamespace(pose=SimpleNamespace(
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=math.sin(yaw / 2), w=math.cos(yaw / 2)),
+        )))
+        if stamp_ns is not None:
+            message.header = SimpleNamespace(stamp=SimpleNamespace(
+                sec=stamp_ns // 1_000_000_000, nanosec=stamp_ns % 1_000_000_000,
+            ))
+        return message
+
+    def test_nav2_command_and_odom_yaw_are_sampled_with_freshness(self):
+        ros = NavigationRosControl()
+        ros._on_nav_command(SimpleNamespace(
+            linear=SimpleNamespace(x=0.0), angular=SimpleNamespace(z=0.4),
+        ))
+        ros._on_odom(self.odom(3.13))
+        ros._on_odom(self.odom(-3.13))
+        status = ros.rotation_status()
+        self.assertEqual(2, status["odom_sequence"])
+        self.assertAlmostEqual(-3.13, status["odom_yaw"])
+        self.assertGreater(status["odom_yaw_delta"], 0.005)
+        self.assertLess(status["command_age_sec"], 0.5)
+        self.assertLess(status["odometry_age_sec"], 0.5)
+        self.assertGreaterEqual(status["odom_interval_start_at"], status["command_since_at"])
+
+        with ros._lock:
+            ros._last_nav_command_at -= 1.0
+            ros._last_odom_at -= 1.0
+        stale = ros.rotation_status()
+        self.assertGreater(stale["command_age_sec"], 0.5)
+        self.assertGreater(stale["odometry_age_sec"], 0.5)
+
+    def test_stale_and_replayed_odom_source_stamps_are_rejected(self):
+        ros = NavigationRosControl()
+        ros._node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(nanoseconds=10_000_000_000),
+        ))
+        ros._on_odom(self.odom(0.0, 9_000_000_000))
+        self.assertEqual(0, ros.rotation_status()["odom_sequence"])
+        ros._on_odom(self.odom(0.0, 9_900_000_000))
+        ros._on_odom(self.odom(0.4, 9_900_000_000))
+        self.assertEqual(1, ros.rotation_status()["odom_sequence"])
+        ros._on_odom(self.odom(0.4, 9_950_000_000))
+        self.assertEqual(2, ros.rotation_status()["odom_sequence"])
 
 
 if __name__ == "__main__":

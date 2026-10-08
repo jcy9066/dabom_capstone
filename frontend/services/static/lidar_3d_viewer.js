@@ -1446,7 +1446,16 @@ if (root && canvas) {
         control = currentControlState,
         state = currentVisualizationState,
     ) {
-        if (!control?.active_goal) return [];
+        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
+        const livePathStatus = String(state?.globalPathStatus || 'none');
+
+        // Show standalone ComputePathToPose results for debugging.
+        if (!control?.active_goal) {
+            return livePathStatus === 'fresh' && livePath.length >= 2
+                ? livePath
+                : [];
+        }
+
         const navState = String(control.navigation_state || '').toUpperCase();
         if (navState === 'FAILED') return [];
 
@@ -1454,8 +1463,6 @@ if (root && canvas) {
             return control.planned_path || [];
         }
 
-        const livePathStatus = String(state?.globalPathStatus || 'none');
-        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
         if (livePathStatus === 'fresh') {
             return livePath.length >= 2 ? livePath : [];
         }

@@ -56,6 +56,9 @@ class NavigationControlApi:
     NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
     BLOCKED_TIMEOUT_SEC = 5.0
     PROGRESS_DISTANCE_M = 0.10
+    ROTATION_DATA_MAX_AGE_SEC = 0.5
+    ROTATION_MIN_YAW_DELTA_RAD = 0.005
+    ROTATION_MAX_CUMULATIVE_SEC = 15.0
 
     def __init__(
         self,
@@ -119,6 +122,10 @@ class NavigationControlApi:
         self._last_pose_at: float | None = None
         self._navigation_progress_pose: tuple[float, float] | None = None
         self._navigation_progress_at: float | None = None
+        self._rotation_extension_sec = 0.0
+        self._rotation_last_odom_sequence: int | None = None
+        self._rotation_last_verified_yaw: float | None = None
+        self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
@@ -516,11 +523,22 @@ class NavigationControlApi:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
         result = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
+        try:
+            progress_pose = self._get_live_pose()
+        except Exception:
+            progress_pose = None
+        progress_started_at = time.time()
         with self._lock:
-            interrupted = (
-                self._estop_generation != estop_generation
-                or self._state["emergency_stop"]
-            )
+            interrupted = self._estop_generation != estop_generation or self._state["emergency_stop"]
+            if not interrupted:
+                self._state["navigation_state"] = "NAVIGATING"
+                self._state["last_error"] = None
+                # Only an accepted run supersedes the previous stop baseline.
+                self._stop_commanded_at = None
+                self._stop_encoder_ticks = None
+                self._encoder_stop_violation = False
+                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._touch_locked()
         if interrupted:
             await self.emergency_stop("NAVIGATION_START_INTERRUPTED", automatic=True)
             raise NavigationControlError(
@@ -528,16 +546,6 @@ class NavigationControlApi:
                 "An emergency stop interrupted navigation startup.",
                 409,
             )
-        try:
-            progress_pose = self._get_live_pose()
-        except Exception:
-            progress_pose = None
-        progress_started_at = time.time()
-        with self._lock:
-            self._state["navigation_state"] = "NAVIGATING"
-            self._state["last_error"] = None
-            self._start_navigation_progress_locked(progress_pose, progress_started_at)
-            self._touch_locked()
         return {**self.state_response(), "navigation": result}
 
     async def cancel_goal(self) -> dict[str, Any]:
@@ -687,6 +695,7 @@ class NavigationControlApi:
                 self._reset_navigation_progress_locked()
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
+                self._encoder_stop_violation = False
                 self._touch_locked()
         if retry_stop:
             await self.emergency_stop("RESUME_INTERRUPTED", automatic=True)
@@ -698,11 +707,17 @@ class NavigationControlApi:
         except Exception:
             await self.emergency_stop("RESUME_NAVIGATION_FAILED", automatic=True)
             raise
+        try:
+            progress_pose = self._get_live_pose()
+        except Exception:
+            progress_pose = None
+        progress_started_at = time.time()
         with self._lock:
-            interrupted = (
-                self._estop_generation != estop_generation
-                or self._state["emergency_stop"]
-            )
+            interrupted = self._estop_generation != estop_generation or self._state["emergency_stop"]
+            if not interrupted:
+                self._state["navigation_state"] = "NAVIGATING"
+                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._touch_locked()
         if interrupted:
             await self.emergency_stop("RESUME_INTERRUPTED", automatic=True)
             raise NavigationControlError(
@@ -710,15 +725,6 @@ class NavigationControlApi:
                 "A newer emergency stop interrupted navigation restart.",
                 409,
             )
-        try:
-            progress_pose = self._get_live_pose()
-        except Exception:
-            progress_pose = None
-        progress_started_at = time.time()
-        with self._lock:
-            self._state["navigation_state"] = "NAVIGATING"
-            self._start_navigation_progress_locked(progress_pose, progress_started_at)
-            self._touch_locked()
         return {**self.state_response(), "navigation": navigation, "replanned": True}
 
     async def beep(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -785,6 +791,10 @@ class NavigationControlApi:
             ros_nav = self._ros.navigation_status()
         except Exception:
             ros_nav = {"state": "UNAVAILABLE"}
+        try:
+            rotation = self._ros.rotation_status()
+        except Exception:
+            rotation = {}
 
         blocked = False
         with self._lock:
@@ -797,6 +807,8 @@ class NavigationControlApi:
                 return None
             else:
                 issue = self._watchdog_issue_locked(current)
+                if issue is None and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES:
+                    self._note_rotation_progress_locked(rotation, current)
                 blocked = (
                     issue is None
                     and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
@@ -944,13 +956,17 @@ class NavigationControlApi:
     def _reset_navigation_progress_locked(self) -> None:
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
+        self._rotation_extension_sec = 0.0
+        self._rotation_last_odom_sequence = None
+        self._rotation_last_verified_yaw = None
+        self._rotation_limit_reached = False
 
     def _start_navigation_progress_locked(
         self,
         payload: dict[str, Any] | None,
         received_at: float,
     ) -> None:
-        self._navigation_progress_pose = None
+        self._reset_navigation_progress_locked()
         self._navigation_progress_at = received_at
         if not isinstance(payload, dict):
             return
@@ -994,11 +1010,64 @@ class NavigationControlApi:
         if moved:
             self._navigation_progress_pose = (x, y)
             self._navigation_progress_at = received_at
+            self._rotation_extension_sec = 0.0
+            self._rotation_last_verified_yaw = None
+            self._rotation_limit_reached = False
+
+    def _note_rotation_progress_locked(self, rotation: dict[str, Any], now: float) -> None:
+        if self._navigation_progress_at is None or self._rotation_limit_reached:
+            return
+        sequence = rotation.get("odom_sequence")
+        if not isinstance(sequence, int) or sequence == self._rotation_last_odom_sequence:
+            return
+        self._rotation_last_odom_sequence = sequence
+        try:
+            command_age = float(rotation["command_age_sec"])
+            odom_age = float(rotation["odometry_age_sec"])
+            linear = float(rotation["command_linear_x"])
+            angular = float(rotation["command_angular_z"])
+            yaw = float(rotation["odom_yaw"])
+            yaw_delta = float(rotation["odom_yaw_delta"])
+            command_since = float(rotation["command_since_at"])
+            odom_interval_start = float(rotation["odom_interval_start_at"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return
+        if not all(math.isfinite(value) for value in (
+            command_age, odom_age, linear, angular, yaw, yaw_delta, command_since, odom_interval_start,
+        )):
+            return
+        if self._rotation_last_verified_yaw is not None:
+            since_verified = math.atan2(
+                math.sin(yaw - self._rotation_last_verified_yaw),
+                math.cos(yaw - self._rotation_last_verified_yaw),
+            )
+            if abs(since_verified) < self.ROTATION_MIN_YAW_DELTA_RAD or angular * since_verified <= 0:
+                return
+        if (
+            not 0 <= command_age <= self.ROTATION_DATA_MAX_AGE_SEC
+            or not 0 <= odom_age <= self.ROTATION_DATA_MAX_AGE_SEC
+            or abs(linear) > self._ros.ROTATION_MAX_LINEAR_MPS
+            or abs(angular) < self._ros.ROTATION_MIN_ANGULAR_RPS
+            or abs(yaw_delta) < self.ROTATION_MIN_YAW_DELTA_RAD
+            or angular * yaw_delta <= 0
+            or odom_interval_start < command_since
+        ):
+            return
+        extension = max(0.0, now - self._navigation_progress_at)
+        if self._rotation_extension_sec + extension >= self.ROTATION_MAX_CUMULATIVE_SEC:
+            self._rotation_limit_reached = True
+            return
+        self._rotation_extension_sec += extension
+        self._rotation_last_verified_yaw = yaw
+        self._navigation_progress_at = now
 
     def _navigation_progress_timed_out_locked(self, now: float) -> bool:
         return (
-            self._navigation_progress_at is not None
-            and now - self._navigation_progress_at >= self.BLOCKED_TIMEOUT_SEC
+            self._rotation_limit_reached
+            or (
+                self._navigation_progress_at is not None
+                and now - self._navigation_progress_at >= self.BLOCKED_TIMEOUT_SEC
+            )
         )
 
     def _assert_resume_safety_locked(self, require_estop: bool) -> None:

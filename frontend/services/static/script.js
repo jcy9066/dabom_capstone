@@ -586,31 +586,42 @@ function cancelNavigationGlobalPathStaleTimer() {
 
 function scheduleNavigationGlobalPathStale(receivedAtSec = null) {
     cancelNavigationGlobalPathStaleTimer();
+
+    // Standalone ComputePathToPose debugging:
+    // retain the latest path until another path or reset arrives.
+    if (navigationGlobalPathRunKey === null) {
+        return;
+    }
+
     let delayMs = GLOBAL_PATH_STALE_MS;
     const received = Number(receivedAtSec);
+
     if (Number.isFinite(received) && received > 0) {
         delayMs = Math.max(
             0,
             GLOBAL_PATH_STALE_MS - Math.max(0, Date.now() - received * 1000),
         );
     }
+
     if (delayMs <= 0) {
         lidarState.globalPath = [];
         lidarState.globalPathStatus = 'stale';
         return;
     }
+
     navigationGlobalPathStaleTimer = window.setTimeout(() => {
         navigationGlobalPathStaleTimer = null;
+
         if (
             lidarState.globalPathStatus !== 'fresh'
             && lidarState.globalPathStatus !== 'pending'
         ) return;
+
         lidarState.globalPath = [];
         lidarState.globalPathStatus = 'stale';
         emitNavigationVisualizationState(false);
     }, delayMs);
 }
-
 function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
     lidarState.globalPath = Array.isArray(path) ? path : [];
     if (lidarState.globalPath.length >= 2) {
@@ -699,7 +710,10 @@ function applyNavigationSnapshot(data) {
             data.global_path_updated_at ?? null,
             false,
         );
-    } else if (lidarState.globalPathStatus !== 'pending') {
+    } else if (
+        navigationGlobalPathRunKey !== null
+        && lidarState.globalPathStatus !== 'pending'
+    ) {
         resetNavigationGlobalPath();
     }
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
