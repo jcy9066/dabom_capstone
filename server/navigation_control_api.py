@@ -490,6 +490,37 @@ class NavigationControlApi:
                 "connected": self._connected,
                 "robot_mode": self._robot_mode,
                 "pi_navigation_mode": self._pi_navigation_mode,
+                # Pi telemetry is distinct from the GPU's local E-STOP latch.
+                # Do not report a stale or disconnected Pi as safely stopped.
+                "pi_safety": {
+                    "fresh": bool(
+                        self._connected
+                        and self._pi_updated_at is not None
+                        and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    ),
+                    "emergency_stop": (
+                        self._pi_estop_latched
+                        if self._connected
+                        and self._pi_updated_at is not None
+                        and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                        else None
+                    ),
+                    "safety_session": (
+                        self._pi_safety_session
+                        if self._connected
+                        and self._pi_updated_at is not None
+                        and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                        else None
+                    ),
+                    "safety_epoch": (
+                        self._pi_safety_epoch
+                        if self._connected
+                        and self._pi_updated_at is not None
+                        and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                        else None
+                    ),
+                    "updated_at": self._pi_updated_at,
+                },
                 "led_enabled": self._led_enabled,
                 "motor_output_enabled": self._motor_output_enabled,
                 "dry_run": not self._motor_output_enabled,
