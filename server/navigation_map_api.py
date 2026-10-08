@@ -54,6 +54,12 @@ class NavigationMapApi:
     def set_control_loader(self, loader: Callable[..., Any]) -> None:
         self._control_loader = loader
 
+    def set_visualization_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        self._ros.set_visualization_listener(listener)
+
     async def activate_map(self, payload: dict[str, Any], user: str = "navigation_control") -> dict[str, Any]:
         """Load a saved map through the same serialized path used by the dashboard."""
         if not self._load_lock.acquire(blocking=False):

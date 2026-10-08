@@ -68,6 +68,13 @@ def generate_launch_description():
     pkg_share = FindPackageShare(
         "patrol_navigation"
     )
+    navigate_to_pose_bt = PathJoinSubstitution(
+        [
+            pkg_share,
+            "behavior_trees",
+            "navigate_to_pose_dynamic_replanning.xml",
+        ]
+    )
 
     # ---------------------------------------------------------
     # Launch arguments
@@ -237,7 +244,10 @@ def generate_launch_description():
         name="bt_navigator",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "default_nav_to_pose_bt_xml": navigate_to_pose_bt,
+            },
         ],
         remappings=common_remappings,
     )

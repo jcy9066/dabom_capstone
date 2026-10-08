@@ -96,7 +96,7 @@ controller_server:
         - PathDist
         - GoalDist
 
-      BaseObstacle.scale: 0.02
+      BaseObstacle.scale: 0.05
 
       # Stay close to the Global Path instead of cutting directly to the Goal.
       PathAlign.scale: 64.0
@@ -121,7 +121,7 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
 
-      update_frequency: 5.0
+      update_frequency: 10.0
       publish_frequency: 2.0
 
       rolling_window: true
@@ -172,8 +172,8 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
 
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      update_frequency: 2.0
+      publish_frequency: 2.0
       resolution: 0.05
 
       robot_radius: 0.20
@@ -201,6 +201,10 @@ global_costmap:
           clearing: true
           marking: true
           inf_is_valid: false
+          # Keep a dynamic obstacle for one 2 Hz global-planner cycle so a
+          # single missing scan does not flip A* between left/right routes.
+          # Local costmap intentionally stays at 0 persistence for fast DWB response.
+          observation_persistence: 0.5
 
           max_obstacle_height: 2.0
           obstacle_min_range: 0.10
@@ -220,7 +224,7 @@ planner_server:
   ros__parameters:
     use_sim_time: false
 
-    expected_planner_frequency: 1.0
+    expected_planner_frequency: 2.0
     planner_plugins: ["GridBased"]
 
     GridBased:

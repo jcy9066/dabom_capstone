@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -13,11 +14,11 @@ from server.env_config import env_float
 try:
     import rclpy
     from action_msgs.msg import GoalStatus
-    from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+    from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import ComputePathToPose, NavigateToPose
     from nav2_msgs.srv import LoadMap
-    from nav_msgs.msg import OccupancyGrid, Odometry
+    from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
@@ -38,12 +39,14 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     GoalStatus = None
     PoseStamped = None
     PoseWithCovarianceStamped = None
+    Twist = None
     ComputePathToPose = None
     NavigateToPose = None
     GetState = None
     LoadMap = None
     OccupancyGrid = None
     Odometry = None
+    Path = None
     LaserScan = None
     ActionClient = None
     Duration = None
@@ -74,6 +77,8 @@ class _MapObservation:
     resolution: float | None = None
     origin_x: float | None = None
     origin_y: float | None = None
+    origin_yaw: float | None = None
+    data: tuple[int, ...] | None = None
     received_at: float | None = None
 
 
@@ -93,9 +98,16 @@ class NavigationRosControl:
     INITIAL_POSE_TOPIC = "/initialpose"
     MAP_TOPIC = "/map"
     AMCL_POSE_TOPIC = "/amcl_pose"
+    GLOBAL_PATH_TOPIC = "/plan"
+    GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"
+    NAV_COMMAND_TOPIC = "/cmd_vel_nav_dry_run"
+    ROTATION_COMMAND_MAX_AGE_SEC = 0.5
+    ROTATION_MIN_ANGULAR_RPS = 0.05
+    ROTATION_MAX_LINEAR_MPS = 0.02
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._cancel_lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._node = None
         self._executor = None
@@ -114,12 +126,23 @@ class NavigationRosControl:
         self._navigation_error = None
         self._last_scan_at = None
         self._last_odom_at = None
+        self._last_odom_stamp_ns = None
+        self._last_odom_previous_at = None
+        self._last_odom_yaw = None
+        self._last_odom_yaw_delta = None
+        self._odom_yaw_window = deque()
+        self._odom_sequence = 0
+        self._last_nav_command_at = None
+        self._last_nav_command_linear_x = None
+        self._last_nav_command_angular_z = None
+        self._rotation_command_since_at = None
         self._last_tf_at = None
         self._tf_buffer = None
         self._tf_listener = None
         self._map = _MapObservation()
         self._amcl = _AmclObservation()
         self._last_lifecycle = {"map_server": "unavailable", "amcl": "unavailable"}
+        self._visualization_listener: Callable[[dict[str, Any]], None] | None = None
 
     def start(self) -> bool:
         with self._lock:
@@ -156,6 +179,19 @@ class NavigationRosControl:
                 qos_profile_sensor_data,
             )
             self._node.create_subscription(Odometry, "/odom", self._on_odom, 10)
+            self._node.create_subscription(Twist, self.NAV_COMMAND_TOPIC, self._on_nav_command, 10)
+            self._node.create_subscription(
+                Path,
+                self.GLOBAL_PATH_TOPIC,
+                self._on_global_path,
+                10,
+            )
+            self._node.create_subscription(
+                OccupancyGrid,
+                self.GLOBAL_COSTMAP_TOPIC,
+                self._on_global_costmap,
+                map_qos,
+            )
             self._compute_path_client = ActionClient(
                 self._node,
                 ComputePathToPose,
@@ -210,6 +246,30 @@ class NavigationRosControl:
                 rclpy.shutdown()
             except Exception:
                 pass
+
+    def set_visualization_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        with self._lock:
+            self._visualization_listener = listener
+
+    def _publish_visualization(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            listener = self._visualization_listener
+        if listener is None:
+            return
+        try:
+            listener(dict(event))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _yaw_from_orientation(orientation: Any) -> float:
+        return math.atan2(
+            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
+        )
 
     def load_map_and_reset_pose(
         self,
@@ -374,41 +434,90 @@ class NavigationRosControl:
         return {"accepted": True, "action": "/navigate_to_pose"}
 
     def cancel_navigation(self) -> dict[str, Any]:
-        with self._lock:
-            goal_handle = self._navigate_goal_handle
-            result_future = self._navigate_result_future
-        if goal_handle is None:
-            return {"requested": False, "confirmed": True}
-        response = self._wait_future(
-            goal_handle.cancel_goal_async(),
-            timeout_sec=env_float("NAV_CANCEL_TIMEOUT_SEC", minimum=0.1),
-            error_code="NAVIGATION_CANCEL_TIMEOUT",
-            message="Timed out while canceling the Nav2 goal.",
-        )
-        confirmed = bool(getattr(response, "goals_canceling", []))
-        if not confirmed:
-            raise NavigationRosError("NAVIGATION_CANCEL_REJECTED", "Nav2 did not confirm goal cancellation.", 502)
-        with self._lock:
-            self._navigation_state = "CANCELING"
-        if result_future is None:
-            raise NavigationRosError(
-                "NAVIGATION_CANCEL_UNCONFIRMED",
-                "Nav2 did not provide a result future for the active goal.",
-                502,
+        # Multiple server paths may request a stop at nearly the same time
+        # (blocked watchdog, operator Cancel/Manual, emergency stop). Serialize
+        # cancellation so only one request reaches a given Nav2 goal handle.
+        with self._cancel_lock:
+            with self._lock:
+                goal_handle = self._navigate_goal_handle
+                result_future = self._navigate_result_future
+                terminal_state = self._navigation_state
+            if goal_handle is None:
+                response = {"requested": False, "confirmed": True}
+                if terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                    response.update({"completed": True, "terminal": terminal_state})
+                return response
+            response = self._wait_future(
+                goal_handle.cancel_goal_async(),
+                timeout_sec=env_float("NAV_CANCEL_TIMEOUT_SEC", minimum=0.1),
+                error_code="NAVIGATION_CANCEL_TIMEOUT",
+                message="Timed out while canceling the Nav2 goal.",
             )
-        result = self._wait_future(
-            result_future,
-            timeout_sec=env_float("NAV_CANCEL_RESULT_TIMEOUT_SEC", minimum=0.1),
-            error_code="NAVIGATION_CANCEL_TIMEOUT",
-            message="Timed out waiting for Nav2 to finish canceling the goal.",
-        )
-        if int(result.status) != int(GoalStatus.STATUS_CANCELED):
-            raise NavigationRosError(
-                "NAVIGATION_CANCEL_UNCONFIRMED",
-                f"Nav2 completed cancel with status={result.status}.",
-                502,
+            confirmed = bool(getattr(response, "goals_canceling", []))
+            if not confirmed:
+                # The result callback may have completed the goal while the
+                # cancel response was in flight. Treat that as idempotent only
+                # when this exact handle is no longer active.
+                with self._lock:
+                    already_terminal = self._navigate_goal_handle is not goal_handle
+                    terminal_state = self._navigation_state
+                if already_terminal:
+                    response = {"requested": False, "confirmed": True, "completed": True}
+                    if terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                        response["terminal"] = terminal_state
+                    return response
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_REJECTED",
+                    "Nav2 did not confirm goal cancellation.",
+                    502,
+                )
+            with self._lock:
+                # Do not overwrite a terminal result callback that won the race.
+                if self._navigate_goal_handle is goal_handle:
+                    self._navigation_state = "CANCELING"
+            if result_future is None:
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_UNCONFIRMED",
+                    "Nav2 did not provide a result future for the active goal.",
+                    502,
+                )
+            result = self._wait_future(
+                result_future,
+                timeout_sec=env_float("NAV_CANCEL_RESULT_TIMEOUT_SEC", minimum=0.1),
+                error_code="NAVIGATION_CANCEL_TIMEOUT",
+                message="Timed out waiting for Nav2 to finish canceling the goal.",
             )
-        return {"requested": True, "confirmed": True, "completed": True}
+            status = int(result.status)
+            if status != int(GoalStatus.STATUS_CANCELED):
+                # A goal can finish successfully while a cancel is in flight.
+                # That is a safe terminal race, not a cancellation failure.
+                if status == int(GoalStatus.STATUS_SUCCEEDED):
+                    with self._lock:
+                        if self._navigate_goal_handle is goal_handle:
+                            self._navigation_state = "SUCCEEDED"
+                            self._navigation_error = None
+                            self._navigate_goal_handle = None
+                            self._navigate_result_future = None
+                    return {
+                        "requested": True,
+                        "confirmed": False,
+                        "completed": True,
+                        "terminal": "SUCCEEDED",
+                    }
+                raise NavigationRosError(
+                    "NAVIGATION_CANCEL_UNCONFIRMED",
+                    f"Nav2 completed cancel with status={result.status}.",
+                    502,
+                )
+            with self._lock:
+                # Make cancellation synchronous for callers even if the result
+                # callback has not run yet. The callback becomes a harmless no-op.
+                if self._navigate_goal_handle is goal_handle:
+                    self._navigation_state = "CANCELED"
+                    self._navigation_error = "NavigateToPose status=CANCELED"
+                    self._navigate_goal_handle = None
+                    self._navigate_result_future = None
+            return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:
@@ -626,9 +735,81 @@ class NavigationRosControl:
         with self._lock:
             self._last_scan_at = time.monotonic()
 
-    def _on_odom(self, _message: Any) -> None:
+    def rotation_status(self) -> dict[str, Any]:
         with self._lock:
-            self._last_odom_at = time.monotonic()
+            now = time.monotonic()
+            return {
+                "command_age_sec": self._monotonic_age(now, self._last_nav_command_at),
+                "command_linear_x": self._last_nav_command_linear_x,
+                "command_angular_z": self._last_nav_command_angular_z,
+                "command_since_at": self._rotation_command_since_at,
+                "odometry_age_sec": self._monotonic_age(now, self._last_odom_at),
+                "odom_interval_start_at": self._last_odom_previous_at,
+                "odom_yaw": self._last_odom_yaw,
+                "odom_yaw_delta": self._last_odom_yaw_delta,
+                "odom_sequence": self._odom_sequence,
+            }
+
+    def _on_nav_command(self, message: Any) -> None:
+        try:
+            linear = float(message.linear.x)
+            angular = float(message.angular.z)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return
+        now = time.monotonic()
+        with self._lock:
+            previously_rotating = (
+                self._rotation_command_since_at is not None
+                and self._monotonic_age(now, self._last_nav_command_at) <= self.ROTATION_COMMAND_MAX_AGE_SEC
+                and self._last_nav_command_angular_z * angular > 0
+            )
+            rotating = (
+                math.isfinite(linear) and math.isfinite(angular)
+                and abs(linear) <= self.ROTATION_MAX_LINEAR_MPS
+                and abs(angular) >= self.ROTATION_MIN_ANGULAR_RPS
+            )
+            self._rotation_command_since_at = (
+                self._rotation_command_since_at if previously_rotating else now
+            ) if rotating else None
+            self._last_nav_command_at = now
+            self._last_nav_command_linear_x = linear
+            self._last_nav_command_angular_z = angular
+
+    def _on_odom(self, message: Any) -> None:
+        try:
+            yaw = self._yaw_from_orientation(message.pose.pose.orientation)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(yaw):
+            return
+        stamp_ns = None
+        if self._node is not None:
+            try:
+                stamp = message.header.stamp
+                stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+                source_age = (int(self._node.get_clock().now().nanoseconds) - stamp_ns) / 1_000_000_000
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return
+            if stamp_ns <= 0 or not -0.05 <= source_age <= self.ROTATION_COMMAND_MAX_AGE_SEC:
+                return
+        with self._lock:
+            if stamp_ns is not None:
+                if self._last_odom_stamp_ns is not None and stamp_ns <= self._last_odom_stamp_ns:
+                    return
+                self._last_odom_stamp_ns = stamp_ns
+            now = time.monotonic()
+            self._odom_yaw_window.append((now, yaw))
+            while len(self._odom_yaw_window) > 1 and now - self._odom_yaw_window[0][0] > self.ROTATION_COMMAND_MAX_AGE_SEC:
+                self._odom_yaw_window.popleft()
+            previous_at, previous_yaw = self._odom_yaw_window[0]
+            self._last_odom_previous_at = previous_at if len(self._odom_yaw_window) > 1 else None
+            self._last_odom_yaw_delta = (
+                math.atan2(math.sin(yaw - previous_yaw), math.cos(yaw - previous_yaw))
+                if len(self._odom_yaw_window) > 1 else None
+            )
+            self._last_odom_yaw = yaw
+            self._last_odom_at = now
+            self._odom_sequence += 1
 
     def _on_map(self, message: Any) -> None:
         with self._condition:
@@ -638,15 +819,88 @@ class NavigationRosControl:
             self._map.resolution = float(message.info.resolution)
             self._map.origin_x = float(message.info.origin.position.x)
             self._map.origin_y = float(message.info.origin.position.y)
+            self._map.origin_yaw = self._yaw_from_orientation(message.info.origin.orientation)
+            self._map.data = tuple(int(value) for value in message.data)
             self._map.received_at = time.monotonic()
             self._condition.notify_all()
 
+    def _on_global_path(self, message: Any) -> None:
+        path: list[dict[str, float]] = []
+        for item in list(message.poses)[:5000]:
+            x = float(item.pose.position.x)
+            y = float(item.pose.position.y)
+            if math.isfinite(x) and math.isfinite(y):
+                path.append({"x": x, "y": y})
+        self._publish_visualization(
+            {"type": "global_path", "path": path, "received_at": time.time()}
+        )
+
+    def _on_global_costmap(self, message: Any) -> None:
+        width = int(message.info.width)
+        height = int(message.info.height)
+        resolution = float(message.info.resolution)
+        total = width * height
+        if width <= 0 or height <= 0 or resolution <= 0 or len(message.data) < total:
+            return
+
+        origin_x = float(message.info.origin.position.x)
+        origin_y = float(message.info.origin.position.y)
+        origin_yaw = self._yaw_from_orientation(message.info.origin.orientation)
+        with self._lock:
+            sw, sh = self._map.width, self._map.height
+            sr = self._map.resolution
+            sox, soy, soyaw = self._map.origin_x, self._map.origin_y, self._map.origin_yaw
+            sdata = self._map.data
+
+        static_ready = bool(
+            sw and sh and sr and sr > 0 and sox is not None and soy is not None
+            and soyaw is not None and sdata is not None
+            and len(sdata) >= int(sw) * int(sh)
+        )
+        cc, cs = math.cos(origin_yaw), math.sin(origin_yaw)
+        sc, ss = math.cos(soyaw or 0.0), math.sin(soyaw or 0.0)
+        dynamic_obstacles: list[int] = []
+        inflation: list[int] = []
+
+        for index in range(total):
+            value = int(message.data[index])
+            if 0 < value < 100:
+                inflation.append(index)
+                continue
+            if value != 100 or not static_ready:
+                continue
+
+            col, row = index % width, index // width
+            lx, ly = (col + 0.5) * resolution, (row + 0.5) * resolution
+            wx = origin_x + cc * lx - cs * ly
+            wy = origin_y + cs * lx + cc * ly
+            dx, dy = wx - float(sox), wy - float(soy)
+            sx, sy = sc * dx + ss * dy, -ss * dx + sc * dy
+            scol, srow = math.floor(sx / float(sr)), math.floor(sy / float(sr))
+            static_occupied = False
+            if 0 <= scol < int(sw) and 0 <= srow < int(sh):
+                static_occupied = int(sdata[srow * int(sw) + scol]) >= 50
+            if not static_occupied:
+                dynamic_obstacles.append(index)
+
+        self._publish_visualization(
+            {
+                "type": "costmap",
+                "costmap": {
+                    "width": width,
+                    "height": height,
+                    "resolution": resolution,
+                    "origin": {"x": origin_x, "y": origin_y, "yaw": origin_yaw},
+                    "dynamic_obstacles": dynamic_obstacles,
+                    "inflation": inflation,
+                    "received_at": time.time(),
+                },
+            }
+        )
+
     def _on_amcl_pose(self, message: Any) -> None:
         orientation = message.pose.pose.orientation
-        yaw = math.atan2(
-            2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
-            1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z),
-        )
+        yaw = self._yaw_from_orientation(orientation)
         with self._condition:
             self._amcl.sequence += 1
             self._amcl.x = float(message.pose.pose.position.x)

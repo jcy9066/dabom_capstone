@@ -119,6 +119,14 @@ def test_float_parsers_reject_non_finite_values(monkeypatch, raw, module_name):
         module.env_float("TEST_FLOAT")
 
 
+def test_navigation_watchdog_interval_is_capped_at_half_second(monkeypatch):
+    from server.navigation_control_api import NavigationWatchdogConfig
+
+    monkeypatch.setenv("NAV_WATCHDOG_INTERVAL_SEC", "0.75")
+    with pytest.raises(EnvConfigurationError):
+        NavigationWatchdogConfig.from_env()
+
+
 def test_stream_fps_uses_float_contract_in_active_server_runtime():
     server_source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
     contract = 'env_float("STREAM_FPS", minimum=0.1)'

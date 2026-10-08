@@ -21,6 +21,7 @@ setup(
         # Python 코드가 아닌 runtime asset들을 package share 디렉터리에 설치한다.
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (f"share/{package_name}/config", glob("config/*.yaml")),
+        (f"share/{package_name}/behavior_trees", glob("behavior_trees/*.xml")),
         (f"share/{package_name}/rviz", glob("rviz/*.rviz")),
         (f"share/{package_name}/maps", glob("../../maps/slam_test_01.*")),
     ],

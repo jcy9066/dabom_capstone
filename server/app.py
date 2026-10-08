@@ -464,6 +464,9 @@ navigation_state = {
     "map": None,
     "pose": None,
     "scan": None,
+    "global_path": [],
+    "global_path_updated_at": None,
+    "costmap": None,
     "decision": None,
     "map_updated_at": None,
     "map_revision": None,
@@ -668,7 +671,7 @@ class RobotConnectionManager:
             old = self.active.get(robot_id)
             self.active[robot_id] = websocket
             pending = []
-            for command_id, (pending_robot_id, future) in list(self.pending_acks.items()):
+            for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
                 if pending_robot_id == robot_id:
                     pending.append(future)
                     self.pending_acks.pop(command_id, None)
@@ -681,17 +684,21 @@ class RobotConnectionManager:
             except Exception:
                 pass
 
+    async def is_current(self, robot_id, websocket):
+        async with self.lock:
+            return self.active.get(robot_id) is websocket
+
     async def disconnect(self, robot_id, websocket):
         disconnected = False
         async with self.lock:
             if self.active.get(robot_id) is websocket:
                 self.active.pop(robot_id, None)
                 disconnected = True
-                pending = [
-                    future
-                    for pending_robot_id, future in self.pending_acks.values()
-                    if pending_robot_id == robot_id
-                ]
+                pending = []
+                for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
+                    if pending_robot_id == robot_id and pending_socket is websocket:
+                        pending.append(future)
+                        self.pending_acks.pop(command_id, None)
             else:
                 pending = []
         for future in pending:
@@ -704,7 +711,10 @@ class RobotConnectionManager:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        await websocket.send_json(command)
+        async with self.lock:
+            if self.active.get(robot_id) is not websocket:
+                return False
+            await websocket.send_json(command)
         return True
 
     async def send_command_wait_ack(self, robot_id, command):
@@ -718,10 +728,25 @@ class RobotConnectionManager:
             websocket = self.active.get(robot_id)
             if websocket is None:
                 return False
-            self.pending_acks[command_id] = (robot_id, future)
+            if command_id in self.pending_acks:
+                return False
+            self.pending_acks[command_id] = (robot_id, websocket, future)
         try:
-            await websocket.send_json(command)
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+                await websocket.send_json(command)
             ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            if command.get("type") == "resume_safety_check":
+                return ack if isinstance(ack, dict) else False
+            if command.get("type") == "resume_navigation":
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("emergency_stop") is False
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and ack.get("safety_epoch") == command.get("safety_epoch")
+                )
             return isinstance(ack, dict) and ack.get("ok") is True
         except Exception:
             return False
@@ -729,18 +754,24 @@ class RobotConnectionManager:
             async with self.lock:
                 self.pending_acks.pop(command_id, None)
 
-    async def receive_ack(self, robot_id, message):
+    async def receive_ack(self, robot_id, websocket, message):
         command_id = str(message.get("command_id") or "")
         if not command_id:
             return False
         async with self.lock:
             pending = self.pending_acks.get(command_id)
-        if pending is None or pending[0] != robot_id:
-            return False
-        future = pending[1]
-        if not future.done():
+            if (
+                self.active.get(robot_id) is not websocket
+                or pending is None
+                or pending[0] != robot_id
+                or pending[1] is not websocket
+            ):
+                return False
+            future = pending[2]
+            if future.done():
+                return False
             future.set_result(dict(message))
-        return True
+            return True
 
     async def is_connected(self, robot_id):
         async with self.lock:
@@ -853,6 +884,9 @@ def clear_navigation_visualization_state():
     with state_lock:
         navigation_state["map"] = None
         navigation_state["pose"] = None
+        navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
+        navigation_state["costmap"] = None
         navigation_state["decision"] = None
         navigation_state["map_updated_at"] = None
         navigation_state["pose_updated_at"] = None
@@ -894,6 +928,32 @@ navigation_control_api = NavigationControlApi(
     clear_visualization=clear_navigation_visualization_state,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+
+def publish_navigation_ros_visualization(event):
+    if not isinstance(event, dict):
+        return
+    payload = dict(event)
+    event_type = str(payload.get("type") or "")
+    if event_type == "global_path":
+        path = payload.get("path")
+        normalized = [dict(point) for point in path] if isinstance(path, list) else []
+        received_at = payload.get("received_at")
+        try:
+            received_at = float(received_at)
+        except (TypeError, ValueError):
+            received_at = time.time()
+        with state_lock:
+            navigation_state["global_path"] = normalized
+            navigation_state["global_path_updated_at"] = received_at
+        navigation_control_api.note_replanned_path(normalized)
+    elif event_type == "costmap":
+        costmap = payload.get("costmap")
+        with state_lock:
+            navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
+    navigation_visualization_hub.publish(payload)
+
+
+navigation_map_api.set_visualization_listener(publish_navigation_ros_visualization)
 
 lidar_ros_bridge = None
 encoder_ros_bridge = None
@@ -4190,6 +4250,9 @@ def build_navigation_snapshot_payload(map_revision=None):
         current_revision = navigation_state.get("map_revision")
         pose = navigation_state.get("pose")
         scan = navigation_state.get("scan")
+        global_path = navigation_state.get("global_path") or []
+        global_path_updated_at = navigation_state.get("global_path_updated_at")
+        costmap = navigation_state.get("costmap")
 
         if current_map is None:
             map_changed = map_revision is not None
@@ -4209,6 +4272,9 @@ def build_navigation_snapshot_payload(map_revision=None):
             "pose": pose,
             "scan_available": scan is not None,
             "scan": scan,
+            "global_path": [dict(point) for point in global_path],
+            "global_path_updated_at": global_path_updated_at,
+            "costmap": dict(costmap) if isinstance(costmap, dict) else None,
         }
         if map_changed:
             snapshot["map"] = current_map
@@ -5224,6 +5290,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
     try:
         while True:
             message = await websocket.receive_json()
+            if not await connections.is_current(robot_id, websocket):
+                break
             if message.get("type") == "status":
                 status_data = message.get("data", {})
                 if not isinstance(status_data, dict):
@@ -5273,9 +5341,9 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
-                await connections.receive_ack(robot_id, message)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_pi_status(message)
+                await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
     finally:
@@ -5340,7 +5408,7 @@ async def send_robot_command(
 
     command_type = str(
         payload.get("type", "move")
-    ).strip()
+    ).strip().lower()
 
     if not command_type:
         return JSONResponse(
@@ -5349,6 +5417,12 @@ async def send_robot_command(
                 "error": "command type is required",
             },
             status_code=400,
+        )
+
+    if command_type.lower() in {"resume_safety_check", "resume_navigation"}:
+        return JSONResponse(
+            {"ok": False, "error": "Use the navigation Resume endpoint."},
+            status_code=409,
         )
 
     command = {
@@ -5510,10 +5584,24 @@ async def send_robot_command(
             status_code=200,
         )
 
-    delivered = await connections.send_command(
-        robot_id,
-        command,
-    )
+    controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
+    motion_context = None
+    if controlled_motion:
+        motion_context = navigation_control_api.motion_safety_context()
+        if motion_context is None:
+            return JSONResponse(
+                {"ok": False, "delivered": False,
+                 "error": "Motion safety context unavailable."},
+                status_code=409,
+            )
+        command["safety_session"] = motion_context["safety_session"]
+        command["safety_epoch"] = motion_context["safety_epoch"]
+    if controlled_motion and navigation_control_api.motion_requires_ack():
+        delivered = await connections.send_command_wait_ack(robot_id, command)
+    else:
+        delivered = await connections.send_command(robot_id, command)
+    if delivered and controlled_motion:
+        delivered = navigation_control_api.note_authorized_motion(motion_context)
 
     status_code = (
         200 if delivered else 409

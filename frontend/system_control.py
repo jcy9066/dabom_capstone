@@ -467,6 +467,12 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
         command_type = str(command.get("type") or "").strip().lower()
         if not command_type:
             return error("Command type is required.", 400)
+        if command_type in {"resume_safety_check", "resume_navigation"}:
+            return error(
+                "Use the navigation Resume endpoint for emergency stop release.",
+                409,
+                error_code="NAVIGATION_RESUME_REQUIRED",
+            )
 
         allowed, owner = authorize_dashboard_command(
             command_type,
@@ -483,10 +489,25 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
             )
 
         module = server_module()
+        motion_context = None
+        if command_type in CONTROLLED_COMMAND_TYPES:
+            motion_context = module.navigation_control_api.motion_safety_context()
+            if motion_context is None:
+                return error(
+                    "Motion safety context unavailable.",
+                    409,
+                    error_code="NAVIGATION_SAFETY_STOP_ACTIVE",
+                )
+            command = dict(command)
+            command["type"] = command_type
+            command["safety_session"] = motion_context["safety_session"]
+            command["safety_epoch"] = motion_context["safety_epoch"]
         delivered = await module.connections.send_command_wait_ack(
             module.SERVER_ROBOT_ID,
             command,
         )
+        if delivered and command_type in CONTROLLED_COMMAND_TYPES:
+            delivered = module.navigation_control_api.note_authorized_motion(motion_context)
         if not delivered:
             if command_type in CONTROLLED_COMMAND_TYPES:
                 with dashboard_control_lock:
