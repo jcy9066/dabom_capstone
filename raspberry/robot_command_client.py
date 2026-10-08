@@ -463,6 +463,11 @@ class RobotCommandClient:
                 )
 
             elif command_type == "stop":
+                # Invalidate commands issued before this stop, including motor
+                # work still waiting for the UART command lock.
+                with self._safety_lock:
+                    self._safety_epoch += 1
+                self._resume_safety_prepared = False
                 await asyncio.to_thread(
                     self.motor.stop,
                     message.get(
