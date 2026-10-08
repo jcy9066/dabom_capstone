@@ -1,4 +1,5 @@
 import json
+import threading
 import sys
 import unittest
 from argparse import Namespace
@@ -48,16 +49,23 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
 
     def make_client(self):
         client = RobotCommandClient.__new__(RobotCommandClient)
+        client._safety_lock = threading.RLock()
         client.current_mode = "manual"
         client.navigation_mode = "mapping"
         client.emergency_stop_latched = False
+        client._safety_session = "test-pi"
+        client._safety_epoch = 0
+        client._resume_safety_prepared = False
+        client._pico_reboot_generation = 0
         client.led_enabled = False
         client._manual_led_enabled = False
         client._led_task = None
         client._warning_task = None
         client.motor = Mock()
+        client.motor._command_lock = threading.RLock()
         client.motor.current_motion = "stop"
         client.motor.connected = True
+        client.motor.pico_reboot_pending.return_value = False
         client.speaker = Mock()
         return client
 
@@ -77,9 +85,176 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.messages[-1]["ok"])
         client.motor.drive.assert_not_called()
 
-        await client.handle_command(socket, {"type": "resume_navigation", "command_id": "resume"})
+        await client.handle_command(socket, {"type": "resume_navigation", "command_id": "early-resume"})
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertTrue(client.emergency_stop_latched)
+
+        client.motor.encoder_snapshot.return_value = {"sequence": 17}
+        await client.handle_command(socket, {"type": "resume_safety_check", "command_id": "check"})
+        self.assertTrue(client.emergency_stop_latched)
+        self.assertTrue(socket.messages[-1]["ok"])
+        self.assertEqual(17, socket.messages[-1]["encoder_sequence"])
+        self.assertTrue(socket.messages[-1]["emergency_stop"])
+        self.assertEqual(client._safety_epoch, socket.messages[-1]["safety_epoch"])
+
+        await client.handle_command(socket, {
+            "type": "resume_navigation", "command_id": "resume",
+            "safety_session": "test-pi", "safety_epoch": client._safety_epoch,
+        })
         self.assertFalse(client.emergency_stop_latched)
         self.assertTrue(socket.messages[-1]["ok"])
+        self.assertFalse(socket.messages[-1]["emergency_stop"])
+
+    async def test_inflight_motion_invalidated_by_safety_epoch_change(self):
+        import asyncio
+        import threading
+
+        client = self.make_client()
+        client.current_mode = "manual"
+        client._safety_session = "test-pi"
+        client._safety_epoch = 5
+        client.emergency_stop_latched = False
+
+        entered = threading.Event()
+        release = threading.Event()
+        operations = []
+
+        def delayed_move(direction, speed):
+            entered.set()
+            if not release.wait(timeout=3):
+                raise RuntimeError("test motor release timed out")
+            operations.append("move")
+
+        stop_attempted = threading.Event()
+
+        def record_stop(*args, **kwargs):
+            stop_attempted.set()
+            with client.motor._command_lock:
+                operations.append("stop")
+
+        client.motor.move.side_effect = delayed_move
+        client.motor.stop.side_effect = record_stop
+
+        socket = FakeWebSocket()
+        task = asyncio.create_task(client.handle_command(socket, {
+            "type": "move",
+            "command_id": "inflight-motion",
+            "direction": "forward",
+            "speed": 0.2,
+            "safety_session": "test-pi",
+            "safety_epoch": 5,
+        }))
+
+        stop_task = None
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+
+            # Simulate a safety event while motor execution is pending.
+            with client._safety_lock:
+                client.emergency_stop_latched = True
+                client._safety_epoch += 1
+
+            stop_task = asyncio.create_task(
+                asyncio.to_thread(
+                    client.motor.stop,
+                    reason="simulated_pico_reboot",
+                    suppress_errors=True,
+                )
+            )
+            self.assertTrue(
+                await asyncio.to_thread(stop_attempted.wait, 1)
+            )
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=5)
+            if stop_task is not None:
+                await asyncio.wait_for(stop_task, timeout=5)
+
+        self.assertTrue(client.emergency_stop_latched)
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertEqual("stop", operations[-1])
+        first_stop = operations.index("stop")
+        self.assertNotIn(
+            "move",
+            operations[first_stop + 1:],
+            "A stale MOVE ran after the safety STOP",
+        )
+
+    async def test_motion_rejects_stale_safety_generation(self):
+        for command_type in ("move", "auto_drive"):
+            with self.subTest(command_type=command_type):
+                client = self.make_client()
+                client._safety_epoch = 2
+                client.emergency_stop_latched = False
+                client.current_mode = (
+                    "manual" if command_type == "move" else "auto"
+                )
+
+                socket = FakeWebSocket()
+                command = {
+                    "type": command_type,
+                    "command_id": "stale-motion",
+                    "safety_session": "test-pi",
+                    "safety_epoch": 1,
+                }
+
+                if command_type == "move":
+                    command.update(direction="forward", speed=0.2)
+                else:
+                    command.update(left_mps=0.1, right_mps=0.1)
+
+                await client.handle_command(socket, command)
+
+                self.assertFalse(socket.messages[-1]["ok"])
+                if command_type == "move":
+                    client.motor.move.assert_not_called()
+                else:
+                    client.motor.drive.assert_not_called()
+
+    async def test_resume_rejects_changed_safety_epoch(self):
+        client = self.make_client()
+        client.emergency_stop_latched = True
+        client.motor.encoder_snapshot.return_value = {"sequence": 17}
+        socket = FakeWebSocket()
+        await client.handle_command(socket, {"type": "resume_safety_check", "command_id": "check"})
+        old_epoch = client._safety_epoch
+        client._safety_epoch += 1
+        await client.handle_command(socket, {
+            "type": "resume_navigation", "command_id": "resume",
+            "safety_session": "test-pi", "safety_epoch": old_epoch,
+        })
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertTrue(client.emergency_stop_latched)
+
+    async def test_pico_reboot_during_resume_check_keeps_latch(self):
+        client = self.make_client()
+        client.emergency_stop_latched = True
+        client.motor.encoder_snapshot.return_value = {"sequence": 17}
+        client.motor.stop.side_effect = lambda *_args: setattr(
+            client, "_pico_reboot_generation", client._pico_reboot_generation + 1
+        )
+        socket = FakeWebSocket()
+        await client.handle_command(socket, {"type": "resume_safety_check", "command_id": "check"})
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertTrue(client.emergency_stop_latched)
+        self.assertFalse(client._resume_safety_prepared)
+
+    async def test_pico_reboot_during_resume_release_keeps_latch(self):
+        client = self.make_client()
+        client.emergency_stop_latched = True
+        client.motor.encoder_snapshot.return_value = {"sequence": 17}
+        socket = FakeWebSocket()
+        await client.handle_command(socket, {"type": "resume_safety_check", "command_id": "check"})
+        self.assertTrue(client._resume_safety_prepared)
+        client.motor.stop.side_effect = lambda *_args: setattr(
+            client, "_pico_reboot_generation", client._pico_reboot_generation + 1
+        )
+        await client.handle_command(socket, {
+            "type": "resume_navigation", "command_id": "resume",
+            "safety_session": "test-pi", "safety_epoch": client._safety_epoch,
+        })
+        self.assertFalse(socket.messages[-1]["ok"])
+        self.assertTrue(client.emergency_stop_latched)
 
     async def test_navigation_mode_does_not_change_auto_manual_mode(self):
         client = self.make_client()

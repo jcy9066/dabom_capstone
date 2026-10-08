@@ -5,6 +5,7 @@ import asyncio
 import json
 import threading
 import time
+from uuid import uuid4
 from pathlib import Path
 from urllib.parse import quote
 
@@ -67,7 +68,12 @@ class RobotCommandClient:
         self.running = True
         self.current_mode = "manual"
         self.navigation_mode = "mapping"
+        self._safety_lock = threading.Lock()
         self.emergency_stop_latched = False
+        self._safety_session = uuid4().hex
+        self._safety_epoch = 0
+        self._resume_safety_prepared = False
+        self._pico_reboot_generation = 0
         self.led_enabled = False
         self._manual_led_enabled = False
         self._led_task = None
@@ -192,6 +198,9 @@ class RobotCommandClient:
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
+        with self._safety_lock:
+            safety_epoch = self._safety_epoch
+            emergency_stop_latched = self.emergency_stop_latched
 
         if self._server_reachable is True:
             internet = "ok"
@@ -216,12 +225,14 @@ class RobotCommandClient:
             "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
             "navigation_mode": self.navigation_mode,
+            "safety_session": self._safety_session,
+            "safety_epoch": safety_epoch,
             "navigation_state": (
                 "EMERGENCY_STOPPED"
-                if self.emergency_stop_latched
+                if emergency_stop_latched
                 else "IDLE"
             ),
-            "emergency_stop": self.emergency_stop_latched,
+            "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
             "motor_motion": self.motor.current_motion,
@@ -295,13 +306,16 @@ class RobotCommandClient:
                         except Exception as exc:
                             print(f"[encoder] telemetry stopped: {exc}")
                         finally:
+                            self._resume_safety_prepared = False
                             was_moving = self.motor.current_motion != "stop"
                             self.motor.stop(
                                 reason="websocket_disconnected",
                                 suppress_errors=True,
                             )
                             if was_moving:
-                                self.emergency_stop_latched = True
+                                with self._safety_lock:
+                                    self.emergency_stop_latched = True
+                                    self._safety_epoch += 1
 
             except asyncio.CancelledError:
                 raise
@@ -335,6 +349,11 @@ class RobotCommandClient:
 
         while self.running:
             if self.motor.pico_reboot_pending():
+                self._pico_reboot_generation += 1
+                self._resume_safety_prepared = False
+                with self._safety_lock:
+                    self.emergency_stop_latched = True
+                    self._safety_epoch += 1
                 try:
                     await asyncio.to_thread(
                         self.motor.recover_after_pico_reboot
@@ -408,11 +427,11 @@ class RobotCommandClient:
 
         ok = True
         error = None
+        encoder_sequence = None
 
         try:
             if command_type == "move":
-                if self.emergency_stop_latched:
-                    raise RuntimeError("emergency stop is latched")
+                self._require_current_motion_safety(message)
                 if self.current_mode != "manual":
                     raise RuntimeError(
                         "수동 모드가 아니므로 "
@@ -420,14 +439,15 @@ class RobotCommandClient:
                     )
 
                 await asyncio.to_thread(
+                    self._run_guarded_motor_motion,
+                    message,
                     self.motor.move,
                     message.get("direction", ""),
                     message.get("speed", 1.0),
                 )
 
             elif command_type == "auto_drive":
-                if self.emergency_stop_latched:
-                    raise RuntimeError("emergency stop is latched")
+                self._require_current_motion_safety(message)
                 if self.current_mode != "auto":
                     raise RuntimeError(
                         "자동 모드가 아니므로 "
@@ -435,6 +455,8 @@ class RobotCommandClient:
                     )
 
                 await asyncio.to_thread(
+                    self._run_guarded_motor_motion,
+                    message,
                     self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
@@ -450,18 +472,61 @@ class RobotCommandClient:
                 )
 
             elif command_type == "emergency_stop":
+                with self._safety_lock:
+                    self.emergency_stop_latched = True
+                    self._safety_epoch += 1
+                self._resume_safety_prepared = False
                 await asyncio.to_thread(
                     self.motor.stop,
                     "emergency_stop",
                 )
-                self.emergency_stop_latched = True
 
-            elif command_type == "resume_navigation":
+            elif command_type == "resume_safety_check":
+                with self._safety_lock:
+                    if not self.emergency_stop_latched:
+                        raise RuntimeError("emergency stop is not latched")
+                    check_epoch = self._safety_epoch
+                reboot_generation = self._pico_reboot_generation
+                self._resume_safety_prepared = False
                 await asyncio.to_thread(
                     self.motor.stop,
                     "resume_safety_check",
                 )
-                self.emergency_stop_latched = False
+                snapshot = self.motor.encoder_snapshot()
+                if not isinstance(snapshot, dict) or "sequence" not in snapshot:
+                    raise RuntimeError("encoder sequence unavailable")
+                if self._pico_reboot_generation != reboot_generation or self.motor.pico_reboot_pending():
+                    raise RuntimeError("Pico reboot interrupted resume safety check")
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or self._safety_epoch != check_epoch:
+                        raise RuntimeError("emergency stop changed during safety check")
+                encoder_sequence = int(snapshot["sequence"])
+                self._resume_safety_prepared = True
+
+            elif command_type == "resume_navigation":
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or not self._resume_safety_prepared:
+                        raise RuntimeError("resume safety check is required")
+                    if (
+                        message.get("safety_session") != self._safety_session
+                        or message.get("safety_epoch") != self._safety_epoch
+                    ):
+                        raise RuntimeError("resume safety epoch changed")
+                reboot_generation = self._pico_reboot_generation
+                self._resume_safety_prepared = False
+                await asyncio.to_thread(
+                    self.motor.stop,
+                    "resume_safety_check",
+                )
+                if (
+                    self._pico_reboot_generation != reboot_generation
+                    or self.motor.pico_reboot_pending()
+                ):
+                    raise RuntimeError("Pico reboot interrupted resume release")
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or message.get("safety_epoch") != self._safety_epoch:
+                        raise RuntimeError("emergency stop changed during resume release")
+                    self.emergency_stop_latched = False
 
             elif command_type == "navigation_mode":
                 target_navigation_mode = str(
@@ -570,6 +635,9 @@ class RobotCommandClient:
                     suppress_errors=True,
                 )
 
+        with self._safety_lock:
+            safety_epoch = self._safety_epoch
+            emergency_stop_latched = self.emergency_stop_latched
         await websocket.send(
             json.dumps(
                 {
@@ -579,9 +647,12 @@ class RobotCommandClient:
                     ),
                     "ok": ok,
                     "error": error,
+                    "encoder_sequence": encoder_sequence,
+                    "safety_session": self._safety_session,
+                    "safety_epoch": safety_epoch,
                     "mode": self.current_mode,
                     "navigation_mode": self.navigation_mode,
-                    "emergency_stop": self.emergency_stop_latched,
+                    "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
                     "motion": self.motor.current_motion,
                     "motor_connected": (
@@ -590,6 +661,27 @@ class RobotCommandClient:
                 }
             )
         )
+
+    def _run_guarded_motor_motion(self, message: dict, operation, *args) -> None:
+        # Share the actual MotorController's UART command lock.
+        # A STOP and a stale motion command cannot overtake each other.
+        with self.motor._command_lock:
+            self._require_current_motion_safety(message)
+            operation(*args)
+            self._require_current_motion_safety(message)
+
+    def _require_current_motion_safety(self, message: dict) -> None:
+        with self._safety_lock:
+            if self.emergency_stop_latched:
+                raise RuntimeError("emergency stop is latched")
+            if (
+                message.get("safety_session") != self._safety_session
+                or type(message.get("safety_epoch")) is not int
+                or message["safety_epoch"] != self._safety_epoch
+            ):
+                raise RuntimeError(
+                    "stale or missing motion safety generation"
+                )
 
     @staticmethod
     def _duration_ms(value) -> int:

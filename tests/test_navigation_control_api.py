@@ -131,9 +131,48 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.map_api = FakeMapApi()
         self.process = FakeProcess()
         self.commands = []
+        self._auto_encoder_recovery = True
+        self._fake_safety_epoch = 0
 
         async def sender(robot_id, command):
             self.commands.append((robot_id, dict(command)))
+            if command["type"] == "emergency_stop":
+                self._fake_safety_epoch += 1
+                self.api.note_pi_status({
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": True,
+                })
+            if command["type"] == "resume_safety_check":
+                marker = self.api._encoder_sequence or 0
+                self.api.note_pi_status({
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": True,
+                })
+                if self._auto_encoder_recovery:
+                    ticks = self.api._encoder_ticks or (0, 0, 0, 0)
+                    loop = asyncio.get_running_loop()
+                    for delay, sequence in ((0.02, marker + 1), (0.17, marker + 2)):
+                        loop.call_later(delay, self.api.note_encoder, {
+                            "sequence": sequence,
+                            **dict(zip(
+                                ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"),
+                                ticks,
+                            )),
+                        })
+                return {
+                    "ok": True,
+                    "encoder_sequence": marker,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                }
+            if command["type"] == "resume_navigation":
+                self.api.note_pi_status({
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": False,
+                })
             return True
 
         self.app = FastAPI()
@@ -175,6 +214,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             ),
             motor_output_enabled=False,
         )
+        self.api.STOP_CONFIRM_STABLE_SEC = 0.1
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.8
         now = time.time()
         self.api.note_pi_status({"mode": "auto", "navigation_mode": "mapping", "emergency_stop": False}, now=now)
         self.api.note_navigation_sample("scan", now=now)
@@ -193,6 +234,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             {"mode": "auto", "navigation_mode": "driving", "emergency_stop": False}
         )
         return result
+
+    async def confirm_pending_stop_for_test(self):
+        """Simulate a stop ACK followed by fresh, stable encoder samples."""
+        with self.api._lock:
+            self.assertIsNotNone(self.api._stop_commanded_at)
+            marker = self.api._stop_confirmation_after_sequence
+            if marker is None:
+                # Tests that manually constructed an acknowledged stop.
+                marker = self.api._encoder_sequence or 0
+                self.api._stop_confirmation_after_sequence = marker
+            ticks = self.api._stop_encoder_ticks or (0, 0, 0, 0)
+            self.api._stop_confirmation_ticks = None
+            self.api._stop_confirmation_started_at = None
+            self.api._stop_confirmation_last_at = None
+            self.api._stop_confirmation_samples = 0
+
+        keys = (
+            "left_front_ticks", "right_front_ticks",
+            "left_rear_ticks", "right_rear_ticks",
+        )
+        self.api.note_encoder({
+            "sequence": marker + 1,
+            **dict(zip(keys, ticks)),
+        })
+        await asyncio.sleep(self.api.STOP_CONFIRM_STABLE_SEC + 0.04)
+        self.api.note_encoder({
+            "sequence": marker + 2,
+            **dict(zip(keys, ticks)),
+        })
+        with self.api._lock:
+            self.assertTrue(self.api._stop_confirmed_locked(time.time()))
 
     def set_rotation(self, sequence, *, command_age=0.01, odom_age=0.01,
                      angular=0.4, yaw_delta=0.04, linear=0.0, yaw=None):
@@ -334,6 +406,27 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resumed["emergency_stop"])
         self.assertFalse(resumed["replanned"])
         self.assertEqual("IDLE", resumed["navigation_state"])
+        with self.api._lock:
+            self.assertIsNotNone(self.api._stop_commanded_at)
+            self.assertEqual((0, 0, 0, 0), self.api._stop_encoder_ticks)
+
+    async def test_motion_after_resume_without_command_triggers_estop(self):
+        await self.api.emergency_stop("operator")
+        await self.api.resume_navigation()
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 4))
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+
+    async def test_authorized_motion_releases_post_resume_baseline(self):
+        await self.api.emergency_stop("operator")
+        await self.api.resume_navigation()
+        self.assertTrue(self.api.note_authorized_motion())
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 4))
+        self.assertIsNone(await self.api.evaluate_watchdog())
 
     async def test_mapping_transition_clears_stale_visualization(self):
         await self.driving_ready()
@@ -743,27 +836,72 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         issue = await self.api.evaluate_watchdog(now=time.time() + 1)
         self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", issue)
 
-    async def test_accepted_start_clears_old_stop_baseline_but_new_stop_is_monitored(self):
+    async def test_start_rejects_unresolved_encoder_violation(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         with self.api._lock:
             self.api._stop_commanded_at = time.time() - 10
             self.api._stop_encoder_ticks = (0, 0, 0, 0)
             self.api._encoder_stop_violation = True
-        await self.api.start_navigation()
-        self.api.note_encoder(dict.fromkeys(
-            ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"), 10,
-        ))
-        self.assertIsNone(await self.api.evaluate_watchdog())
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.start_navigation()
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
         with self.api._lock:
-            self.assertIsNone(self.api._stop_commanded_at)
-            self.assertIsNone(self.api._stop_encoder_ticks)
-            self.assertFalse(self.api._encoder_stop_violation)
-        await self.api.emergency_stop("operator")
+            self.assertIsNotNone(self.api._stop_commanded_at)
+            self.assertEqual((0, 0, 0, 0), self.api._stop_encoder_ticks)
+            self.assertTrue(self.api._encoder_stop_violation)
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
         self.api.note_encoder(dict.fromkeys(
             ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"), 20,
         ), now=time.time() + 1)
-        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertIsNone(await self.api.evaluate_watchdog())
+
+    async def test_cancel_blocks_direct_motion_until_stop_confirmed(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        canceled = await self.api.cancel_goal()
+        self.assertTrue(canceled["stop_delivered"])
+
+        # An outstanding stop must not be bypassed by manual motion.
+        self.assertFalse(self.api.motion_allowed())
+        self.assertFalse(self.api.note_authorized_motion())
+
+        with self.api._lock:
+            self.assertIsNotNone(self.api._stop_commanded_at)
+
+        await self.confirm_pending_stop_for_test()
+
+        self.assertTrue(self.api.motion_allowed())
+        self.assertTrue(self.api.note_authorized_motion())
+
+    async def test_cancel_then_confirmed_stop_allows_new_goal(self):
+        await self.driving_ready()
+        self.api.note_encoder({
+            "sequence": 10,
+            **dict.fromkeys((
+                "left_front_ticks", "right_front_ticks",
+                "left_rear_ticks", "right_rear_ticks",
+            ), 0),
+        })
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        canceled = await self.api.cancel_goal()
+        self.assertTrue(canceled["stop_delivered"])
+
+        await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.start_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+
+        await self.confirm_pending_stop_for_test()
+        started = await self.api.start_navigation()
+        self.assertEqual("NAVIGATING", started["navigation_state"])
+        self.assertEqual(2, self.map_api.ros_control.navigate_calls)
+        with self.api._lock:
+            self.assertIsNone(self.api._stop_commanded_at)
 
     async def test_failed_start_keeps_old_stop_baseline(self):
         await self.driving_ready()
@@ -771,6 +909,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with self.api._lock:
             self.api._stop_commanded_at = time.time() - 10
             self.api._stop_encoder_ticks = (0, 0, 0, 0)
+        await self.confirm_pending_stop_for_test()
         self.map_api.ros_control.navigate_to_pose = lambda _goal: (_ for _ in ()).throw(RuntimeError("rejected"))
         with self.assertRaisesRegex(RuntimeError, "rejected"):
             await self.api.start_navigation()
@@ -778,12 +917,21 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(self.api._stop_commanded_at)
             self.assertEqual((0, 0, 0, 0), self.api._stop_encoder_ticks)
 
-    async def test_resume_clears_prior_encoder_violation(self):
+    async def test_resume_requires_stable_fresh_encoder_before_clearing_violation(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.emergency_stop("operator")
         with self.api._lock:
             self.api._encoder_stop_violation = True
+        self._auto_encoder_recovery = False
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        with self.api._lock:
+            self.assertTrue(self.api._encoder_stop_violation)
+        self.assertNotIn("resume_navigation", [command[1]["type"] for command in self.commands])
+        self._auto_encoder_recovery = True
         resumed = await self.api.resume_navigation()
         self.assertEqual("NAVIGATING", resumed["navigation_state"])
         with self.api._lock:
@@ -791,6 +939,363 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.api._stop_encoder_ticks)
             self.assertFalse(self.api._encoder_stop_violation)
         self.assertIsNone(await self.api.evaluate_watchdog())
+
+    async def test_resume_rejects_stale_encoder_sequence(self):
+        await self.api.emergency_stop("operator")
+        self._auto_encoder_recovery = False
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.3
+        self.api.note_encoder(dict.fromkeys(
+            ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"), 0,
+        ) | {"sequence": 10})
+        original_sender = self.api._send_robot_command
+
+        async def stale_sender(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_safety_check":
+                loop = asyncio.get_running_loop()
+                for delay, sequence in ((0.02, 10), (0.17, 9)):
+                    loop.call_later(delay, self.api.note_encoder, {
+                        "sequence": sequence,
+                        **dict.fromkeys((
+                            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+                        ), 0),
+                    })
+            return result
+
+        self.api._send_robot_command = stale_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertNotIn("resume_navigation", [command[1]["type"] for command in self.commands])
+
+    async def test_resume_rejects_encoder_motion_during_confirmation(self):
+        await self.api.emergency_stop("operator")
+        self._auto_encoder_recovery = False
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.4
+        original_sender = self.api._send_robot_command
+
+        async def moving_sender(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_safety_check":
+                loop = asyncio.get_running_loop()
+                for delay, sequence, ticks in ((0.02, 1, 0), (0.17, 2, 1), (0.32, 3, 2)):
+                    loop.call_later(delay, self.api.note_encoder, {
+                        "sequence": sequence,
+                        **dict.fromkeys((
+                            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+                        ), ticks),
+                    })
+            return result
+
+        self.api._send_robot_command = moving_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertNotIn("resume_navigation", [command[1]["type"] for command in self.commands])
+
+    async def test_new_estop_during_resume_confirmation_blocks_release(self):
+        await self.api.emergency_stop("initial")
+        self._auto_encoder_recovery = False
+        original_sender = self.api._send_robot_command
+
+        async def interrupted_sender(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_safety_check":
+                asyncio.get_running_loop().call_later(
+                    0.02, lambda: asyncio.create_task(self.api.emergency_stop("operator"))
+                )
+            return result
+
+        self.api._send_robot_command = interrupted_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertNotIn("resume_navigation", [command[1]["type"] for command in self.commands])
+
+    async def test_start_rejects_unconfirmed_previous_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+
+        with self.api._lock:
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_encoder_ticks = (0, 0, 0, 0)
+            self.api._encoder_stop_violation = False
+
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.start_navigation()
+
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
+
+    async def test_encoder_violation_during_start_cannot_be_approved(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        with self.api._lock:
+            self.api._stop_commanded_at = time.time() - 1
+            self.api._stop_encoder_ticks = (0, 0, 0, 0)
+        await self.confirm_pending_stop_for_test()
+        original_navigate = self.map_api.ros_control.navigate_to_pose
+
+        def violating_navigate(goal):
+            result = original_navigate(goal)
+            self.api.note_encoder(dict.fromkeys((
+                "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+            ), 4))
+            return result
+
+        self.map_api.ros_control.navigate_to_pose = violating_navigate
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.start_navigation()
+        self.assertEqual("NAVIGATION_START_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", self.api.state_response()["emergency_reason"])
+        self.assertTrue(self.api._encoder_stop_violation)
+
+    async def test_encoder_violation_during_resume_release_cannot_be_approved(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 0))
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def violating_sender(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_navigation":
+                self.api.note_encoder(dict.fromkeys((
+                    "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+                ), 4))
+            return result
+
+        self.api._send_robot_command = violating_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertTrue(self.api._encoder_stop_violation)
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
+
+    async def test_new_pi_estop_during_resume_release_cannot_be_approved(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def stopped_sender(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_navigation":
+                self.api.note_pi_status({"emergency_stop": True})
+            return result
+
+        self.api._send_robot_command = stopped_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
+
+    async def test_pi_latch_still_true_after_release_blocks_resume(self):
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def still_latched_sender(robot_id, command):
+            if command["type"] == "resume_navigation":
+                return True
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = still_latched_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+
+    async def test_newer_pi_estop_status_survives_older_release_ack(self):
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def reordered_sender(robot_id, command):
+            if command["type"] == "resume_navigation":
+                self.api.note_pi_status({
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch + 1,
+                    "emergency_stop": True,
+                })
+                self.api.note_pi_status({
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": False,
+                })
+                return True
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reordered_sender
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertTrue(self.api._pi_estop_latched)
+
+    async def test_motion_during_slow_release_invalidates_prior_confirmation(self):
+        await self.api.emergency_stop("operator")
+        with self.api._lock:
+            self.api._encoder_stop_violation = True
+        original_sender = self.api._send_robot_command
+
+        async def moving_release(robot_id, command):
+            result = await original_sender(robot_id, command)
+            if command["type"] == "resume_navigation":
+                marker = self.api._encoder_sequence or 0
+                ticks = ("left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks")
+                self.api.note_encoder({"sequence": marker + 1, **dict.fromkeys(ticks, 1)})
+                await asyncio.sleep(0.12)
+                self.api.note_encoder({"sequence": marker + 2, **dict.fromkeys(ticks, 1)})
+            return result
+
+        self.api._send_robot_command = moving_release
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api._encoder_stop_violation)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+
+    async def test_encoder_violation_watchdog_sends_one_estop(self):
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 0))
+        await self.api.emergency_stop("operator")
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 4))
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.assertEqual(2, sum(command[1]["type"] == "emergency_stop" for command in self.commands))
+        self.assertTrue(self.api._encoder_stop_violation)
+
+    async def test_failed_encoder_estop_is_retried_with_a_bound(self):
+        await self.api.emergency_stop("operator")
+        with self.api._lock:
+            self.api._encoder_stop_violation = True
+        original_sender = self.api._send_robot_command
+        attempts = 0
+
+        async def flaky_stop(robot_id, command):
+            nonlocal attempts
+            if command["type"] == "emergency_stop":
+                attempts += 1
+                if attempts == 1:
+                    return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = flaky_stop
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        with self.api._lock:
+            self.api._estop_last_attempt_at = time.time() - 2
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertEqual(2, attempts)
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.assertTrue(self.api._estop_command_acknowledged)
+
+    async def test_unlatched_pi_status_rearms_failed_estop_delivery(self):
+        await self.api.emergency_stop("operator")
+        with self.api._lock:
+            self.api._encoder_stop_violation = True
+        original_sender = self.api._send_robot_command
+        attempts = 0
+
+        async def failed_stop(robot_id, command):
+            nonlocal attempts
+            if command["type"] == "emergency_stop":
+                attempts += 1
+                return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = failed_stop
+        for attempt in range(self.api.ESTOP_MAX_ATTEMPTS):
+            if attempt:
+                with self.api._lock:
+                    self.api._estop_last_attempt_at = time.time() - 2
+            self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.assertEqual(self.api.ESTOP_MAX_ATTEMPTS, attempts)
+        self.api.note_pi_status({
+            "safety_session": "test-pi",
+            "safety_epoch": self._fake_safety_epoch,
+            "emergency_stop": False,
+        })
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertEqual(self.api.ESTOP_MAX_ATTEMPTS + 1, attempts)
+
+        for _ in range(1, self.api.ESTOP_MAX_ATTEMPTS):
+            with self.api._lock:
+                self.api._estop_last_attempt_at = time.time() - 2
+            self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.api.note_pi_status({
+            "safety_session": "test-pi",
+            "safety_epoch": self._fake_safety_epoch,
+            "emergency_stop": False,
+        })
+        with self.api._lock:
+            self.api._estop_last_attempt_at = time.time() - self.api.ESTOP_RETRY_WINDOW_SEC - 1
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertEqual(self.api.ESTOP_MAX_ATTEMPTS * 2 + 1, attempts)
+
+    async def test_ros_terminal_does_not_hide_encoder_violation(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._encoder_stop_violation = True
+        self.map_api.ros_control.state = "SUCCEEDED"
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+
+    async def test_pi_reconnect_requires_fresh_status_for_motion(self):
+        await self.driving_ready()
+
+        status = {
+            "mode": "auto",
+            "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "reconnect-test-pi",
+            "safety_epoch": 1,
+        }
+
+        self.api.note_pi_status(status)
+        self.assertIsNotNone(self.api.motion_safety_context())
+
+        self.api.note_pi_connection(False)
+        self.assertIsNone(self.api.motion_safety_context())
+
+        self.api.note_pi_connection(True)
+
+        # A WebSocket connection alone is not a fresh Pi safety report.
+        self.assertIsNone(self.api.motion_safety_context())
+
+        self.api.note_pi_status(status)
+        self.assertIsNotNone(self.api.motion_safety_context())
+
+    async def test_pi_reconnect_accepts_new_encoder_sequence(self):
+        self.api.note_encoder({
+            "sequence": 15,
+            **dict.fromkeys((
+                "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+            ), 0),
+        })
+        self.api.note_pi_connection(False)
+        self.api.note_pi_connection(True)
+        self.api.note_encoder({
+            "sequence": 1,
+            **dict.fromkeys((
+                "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+            ), 0),
+        })
+        self.assertEqual(1, self.api._encoder_sequence)
 
     async def test_cancel_goal_preserves_terminal_success_race(self):
         await self.driving_ready()
@@ -950,6 +1455,35 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("NAVIGATION_START_INTERRUPTED", raised.exception.error_code)
         self.assertTrue(self.api.state_response()["emergency_stop"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 2)
+
+    async def test_prior_encoder_estop_still_cancels_late_start_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        with self.api._lock:
+            self.api._stop_commanded_at = time.time() - 1
+            self.api._stop_encoder_ticks = (0, 0, 0, 0)
+        await self.confirm_pending_stop_for_test()
+        entered = threading.Event()
+        release = threading.Event()
+        original_navigate = self.map_api.ros_control.navigate_to_pose
+
+        def blocked_navigate(goal):
+            entered.set()
+            release.wait(timeout=2)
+            return original_navigate(goal)
+
+        self.map_api.ros_control.navigate_to_pose = blocked_navigate
+        start_task = asyncio.create_task(self.api.start_navigation())
+        self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+        self.api.note_encoder(dict.fromkeys((
+            "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
+        ), 4))
+        self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
+        release.set()
+        with self.assertRaises(NavigationControlError):
+            await start_task
+        self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 2)
+        self.assertEqual(2, sum(command[1]["type"] == "emergency_stop" for command in self.commands))
 
     async def test_estop_after_goal_acceptance_cannot_be_overwritten_by_start(self):
         await self.driving_ready()

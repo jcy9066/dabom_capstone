@@ -725,6 +725,16 @@ class RobotConnectionManager:
         try:
             await websocket.send_json(command)
             ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            if command.get("type") == "resume_safety_check":
+                return ack if isinstance(ack, dict) else False
+            if command.get("type") == "resume_navigation":
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("emergency_stop") is False
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and ack.get("safety_epoch") == command.get("safety_epoch")
+                )
             return isinstance(ack, dict) and ack.get("ok") is True
         except Exception:
             return False
@@ -5311,9 +5321,9 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
-                await connections.receive_ack(robot_id, message)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_pi_status(message)
+                await connections.receive_ack(robot_id, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
     finally:
@@ -5378,7 +5388,7 @@ async def send_robot_command(
 
     command_type = str(
         payload.get("type", "move")
-    ).strip()
+    ).strip().lower()
 
     if not command_type:
         return JSONResponse(
@@ -5387,6 +5397,12 @@ async def send_robot_command(
                 "error": "command type is required",
             },
             status_code=400,
+        )
+
+    if command_type.lower() in {"resume_safety_check", "resume_navigation"}:
+        return JSONResponse(
+            {"ok": False, "error": "Use the navigation Resume endpoint."},
+            status_code=409,
         )
 
     command = {
@@ -5548,10 +5564,24 @@ async def send_robot_command(
             status_code=200,
         )
 
-    delivered = await connections.send_command(
-        robot_id,
-        command,
-    )
+    controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
+    motion_context = None
+    if controlled_motion:
+        motion_context = navigation_control_api.motion_safety_context()
+        if motion_context is None:
+            return JSONResponse(
+                {"ok": False, "delivered": False,
+                 "error": "Motion safety context unavailable."},
+                status_code=409,
+            )
+        command["safety_session"] = motion_context["safety_session"]
+        command["safety_epoch"] = motion_context["safety_epoch"]
+    if controlled_motion and navigation_control_api.motion_requires_ack():
+        delivered = await connections.send_command_wait_ack(robot_id, command)
+    else:
+        delivered = await connections.send_command(robot_id, command)
+    if delivered and controlled_motion:
+        delivered = navigation_control_api.note_authorized_motion(motion_context)
 
     status_code = (
         200 if delivered else 409

@@ -59,6 +59,12 @@ class NavigationControlApi:
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
     ROTATION_MAX_CUMULATIVE_SEC = 15.0
+    STOP_CONFIRM_STABLE_SEC = 0.3
+    STOP_CONFIRM_MAX_AGE_SEC = 0.5
+    STOP_CONFIRM_TIMEOUT_SEC = 2.0
+    ESTOP_RETRY_INTERVAL_SEC = 1.0
+    ESTOP_MAX_ATTEMPTS = 3
+    ESTOP_RETRY_WINDOW_SEC = 10.0
 
     def __init__(
         self,
@@ -69,7 +75,7 @@ class NavigationControlApi:
         robot_id: str,
         get_live_map: Callable[[], dict[str, Any] | None],
         save_map: Callable[[dict[str, Any], str | None], dict[str, Any]],
-        send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool]],
+        send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool | dict[str, Any]]],
         get_live_pose: Callable[[], dict[str, Any] | None] | None = None,
         clear_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
@@ -117,6 +123,11 @@ class NavigationControlApi:
         self._pi_updated_at: float | None = None
         self._robot_mode = "manual"
         self._pi_navigation_mode: str | None = None
+        self._pi_estop_latched: bool | None = None
+        self._pi_safety_session: str | None = None
+        self._pi_safety_epoch: int | None = None
+        self._pi_seen_safety_sessions: set[str] = set()
+        self._pi_session_stop_pending: str | None = None
         self._led_enabled: bool | None = None
         self._last_scan_at: float | None = None
         self._last_pose_at: float | None = None
@@ -128,10 +139,23 @@ class NavigationControlApi:
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
         self._encoder_ticks: tuple[int, int, int, int] | None = None
+        self._encoder_sequence: int | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_commanded_at: float | None = None
         self._encoder_stop_violation = False
+        self._stop_confirmation_after_sequence: int | None = None
+        self._stop_confirmation_ticks: tuple[int, int, int, int] | None = None
+        self._stop_confirmation_started_at: float | None = None
+        self._stop_confirmation_last_at: float | None = None
+        self._stop_confirmation_samples = 0
+        self._stop_confirmation_episode = 0
+        self._post_resume_motion_ready = False
         self._estop_generation = 0
+        self._estop_attempt_reason: str | None = None
+        self._estop_attempts = 0
+        self._estop_last_attempt_at: float | None = None
+        self._estop_command_acknowledged = False
+        self._estop_delivery_token = 0
         self._state: dict[str, Any] = {
             "navigation_mode": env_text("NAVIGATION_DEFAULT_MODE").upper(),
             "navigation_state": "IDLE",
@@ -169,14 +193,67 @@ class NavigationControlApi:
     def note_pi_connection(self, connected: bool, now: float | None = None) -> None:
         with self._lock:
             self._connected = bool(connected)
-            if connected:
-                self._pi_updated_at = now or time.time()
+            # A WebSocket connection alone does not prove Pi safety.
+            # Require fresh telemetry before authorizing motion.
+            self._pi_updated_at = None
+            self._pi_estop_latched = None
+            if not connected:
+                self._encoder_sequence = None
+                self._stop_confirmation_after_sequence = None
+                self._estop_generation += 1
+                if not self._estop_command_acknowledged:
+                    self._estop_attempts = 0
+                    self._estop_last_attempt_at = None
 
     def note_pi_status(self, payload: dict[str, Any], now: float | None = None) -> None:
         if not isinstance(payload, dict):
             return
         received_at = now or time.time()
+        safety_session = str(payload.get("safety_session") or "").strip()
+        try:
+            safety_epoch = int(payload["safety_epoch"]) if safety_session else None
+        except (KeyError, TypeError, ValueError):
+            safety_epoch = None
         with self._lock:
+            new_safety_stop = False
+            if safety_session and safety_epoch is not None and safety_epoch >= 0:
+                if safety_session != self._pi_safety_session:
+                    if safety_session in self._pi_seen_safety_sessions:
+                        return
+                    new_safety_stop = self._pi_safety_session is not None
+                    self._pi_safety_session = safety_session
+                    self._pi_safety_epoch = safety_epoch
+                    self._pi_seen_safety_sessions.add(safety_session)
+                    if new_safety_stop:
+                        reason = (
+                            "ENCODER_MOVEMENT_AFTER_STOP"
+                            if self._encoder_stop_violation
+                            else "PI_SAFETY_SESSION_CHANGED"
+                        )
+                        self._pi_session_stop_pending = reason
+                        self._estop_attempt_reason = None
+                        self._estop_attempts = 0
+                        self._estop_last_attempt_at = None
+                        self._estop_command_acknowledged = False
+                        self._state["emergency_stop"] = True
+                        self._state["emergency_reason"] = reason
+                        self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                        if not self._encoder_stop_violation:
+                            self._stop_commanded_at = received_at
+                            self._stop_encoder_ticks = self._encoder_ticks
+                elif self._pi_safety_epoch is not None and safety_epoch < self._pi_safety_epoch:
+                    return
+                elif self._pi_safety_epoch is None or safety_epoch > self._pi_safety_epoch:
+                    self._pi_safety_epoch = safety_epoch
+                    new_safety_stop = payload.get("emergency_stop") is True
+            elif self._pi_safety_session is not None:
+                if payload.get("emergency_stop") is True:
+                    self._estop_generation += 1
+                    self._pi_estop_latched = True
+                    self._state["emergency_stop"] = True
+                    self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                    self._touch_locked(received_at)
+                return
             self._connected = True
             self._pi_updated_at = received_at
             reported_mode = str(payload.get("mode", "")).strip().lower()
@@ -187,6 +264,17 @@ class NavigationControlApi:
                 self._pi_navigation_mode = reported_navigation
                 self._state["navigation_mode"] = reported_navigation
             if isinstance(payload.get("emergency_stop"), bool):
+                if new_safety_stop or (payload["emergency_stop"] and self._pi_estop_latched is False):
+                    self._estop_generation += 1
+                if (
+                    not payload["emergency_stop"]
+                    and self._pi_estop_latched is not False
+                    and self._state["emergency_stop"]
+                    and not self._estop_command_acknowledged
+                ):
+                    self._estop_attempts = 0
+                    self._estop_last_attempt_at = None
+                self._pi_estop_latched = payload["emergency_stop"]
                 if payload["emergency_stop"]:
                     self._state["emergency_stop"] = True
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
@@ -238,18 +326,133 @@ class NavigationControlApi:
             ticks = tuple(int(payload[key]) for key in keys)
         except (KeyError, TypeError, ValueError):
             return
+        received_at = time.time() if now is None else now
+        try:
+            sequence = int(payload["sequence"])
+        except (KeyError, TypeError, ValueError):
+            sequence = None
         with self._lock:
+            if sequence is not None:
+                if self._encoder_sequence is not None and sequence <= self._encoder_sequence:
+                    return
+                self._encoder_sequence = sequence
             self._encoder_ticks = ticks
+            marker = self._stop_confirmation_after_sequence
+            if marker is not None and sequence is not None and sequence > marker:
+                baseline = self._stop_confirmation_ticks
+                if baseline is None or ticks != baseline:
+                    self._stop_confirmation_ticks = ticks
+                    self._stop_confirmation_started_at = received_at
+                    self._stop_confirmation_samples = 1
+                    self._stop_confirmation_episode += 1
+                else:
+                    self._stop_confirmation_samples += 1
+                self._stop_confirmation_last_at = received_at
             if (
                 self._stop_commanded_at is not None
-                and (now or time.time()) - self._stop_commanded_at >= self._watchdog.stop_encoder_grace_sec
+                and received_at - self._stop_commanded_at >= self._watchdog.stop_encoder_grace_sec
                 and self._stop_encoder_ticks is not None
                 and max(
                     abs(current - baseline)
                     for current, baseline in zip(ticks, self._stop_encoder_ticks)
                 ) >= self._watchdog.stop_encoder_tick_threshold
             ):
-                self._encoder_stop_violation = True
+                if not self._encoder_stop_violation:
+                    self._encoder_stop_violation = True
+                    self._estop_generation += 1
+
+    def _motion_allowed_locked(self, now: float) -> bool:
+        if self._state["emergency_stop"] or self._encoder_stop_violation:
+            return False
+
+        if self._stop_commanded_at is None:
+            return True
+
+        if self._post_resume_motion_ready:
+            return (
+                self._connected
+                and self._age(now, self._pi_updated_at)
+                <= self._watchdog.pi_timeout_sec
+            )
+
+        return bool(
+            self._stop_confirmation_after_sequence is not None
+            and self._stop_confirmed_locked(now)
+        )
+
+    def motion_safety_context(self) -> dict[str, Any] | None:
+        """Issue current Pi safety identity for an authorized motion command."""
+        with self._lock:
+            now = time.time()
+            if not self._motion_allowed_locked(now):
+                return None
+            if not self._connected:
+                return None
+            if self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec:
+                return None
+            if self._pi_estop_latched is not False:
+                return None
+            if not self._pi_safety_session:
+                return None
+            if type(self._pi_safety_epoch) is not int or self._pi_safety_epoch < 0:
+                return None
+            return {
+                "safety_session": self._pi_safety_session,
+                "safety_epoch": self._pi_safety_epoch,
+                "estop_generation": self._estop_generation,
+            }
+
+    def note_authorized_motion(
+        self, expected_safety: dict[str, Any] | None = None
+    ) -> bool:
+        with self._lock:
+            now = time.time()
+            if not self._motion_allowed_locked(now):
+                return False
+            if expected_safety is not None and (
+                not self._connected
+                or self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec
+                or self._pi_estop_latched is not False
+                or self._pi_safety_session != expected_safety.get("safety_session")
+                or self._pi_safety_epoch != expected_safety.get("safety_epoch")
+                or self._estop_generation != expected_safety.get("estop_generation")
+            ):
+                return False
+
+            self._stop_commanded_at = None
+            self._stop_encoder_ticks = None
+            self._stop_confirmation_after_sequence = None
+            self._post_resume_motion_ready = False
+            return True
+
+    def motion_allowed(self) -> bool:
+        with self._lock:
+            return self._motion_allowed_locked(time.time())
+
+    def _arm_pending_stop_locked(self) -> None:
+        self._post_resume_motion_ready = False
+        self._stop_commanded_at = time.time()
+        self._stop_encoder_ticks = self._encoder_ticks
+        self._stop_confirmation_after_sequence = None
+        self._stop_confirmation_ticks = None
+        self._stop_confirmation_started_at = None
+        self._stop_confirmation_last_at = None
+        self._stop_confirmation_samples = 0
+
+    def motion_requires_ack(self) -> bool:
+        with self._lock:
+            return self._stop_commanded_at is not None
+
+    def _estop_retry_window_due_locked(self, now: float) -> bool:
+        return bool(
+            self._estop_attempts >= self.ESTOP_MAX_ATTEMPTS
+            and not self._estop_command_acknowledged
+            and self._pi_estop_latched is False
+            and self._connected
+            and self._age(now, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+            and self._estop_last_attempt_at is not None
+            and now - self._estop_last_attempt_at >= self.ESTOP_RETRY_WINDOW_SEC
+        )
 
     def _sync_ros_navigation_terminal_locked(
         self,
@@ -519,6 +722,14 @@ class NavigationControlApi:
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
             self._assert_resume_safety_locked(require_estop=False)
+            if not self._motion_allowed_locked(time.time()):
+                raise NavigationControlError(
+                    "STOP_NOT_CONFIRMED",
+                    "Previous stop has not been confirmed.",
+                    409,
+                )
+            admitted_stop_at = self._stop_commanded_at
+            admitted_stop_episode = self._stop_confirmation_episode
             if not goal or not path_ready:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
@@ -529,18 +740,30 @@ class NavigationControlApi:
             progress_pose = None
         progress_started_at = time.time()
         with self._lock:
-            interrupted = self._estop_generation != estop_generation or self._state["emergency_stop"]
+            interrupted = (
+                self._estop_generation != estop_generation
+                or self._state["emergency_stop"]
+                or self._encoder_stop_violation
+                or (
+                    self._stop_commanded_at is not None
+                    and (
+                        self._stop_commanded_at != admitted_stop_at
+                        or self._stop_confirmation_episode != admitted_stop_episode
+                    )
+                )
+            )
             if not interrupted:
                 self._state["navigation_state"] = "NAVIGATING"
                 self._state["last_error"] = None
                 # Only an accepted run supersedes the previous stop baseline.
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
-                self._encoder_stop_violation = False
+                self._stop_confirmation_after_sequence = None
+                self._post_resume_motion_ready = False
                 self._start_navigation_progress_locked(progress_pose, progress_started_at)
                 self._touch_locked()
         if interrupted:
-            await self.emergency_stop("NAVIGATION_START_INTERRUPTED", automatic=True)
+            await self.emergency_stop("NAVIGATION_START_INTERRUPTED", automatic=True, force=True)
             raise NavigationControlError(
                 "NAVIGATION_START_INTERRUPTED",
                 "An emergency stop interrupted navigation startup.",
@@ -549,6 +772,8 @@ class NavigationControlApi:
         return {**self.state_response(), "navigation": result}
 
     async def cancel_goal(self) -> dict[str, Any]:
+        with self._lock:
+            self._arm_pending_stop_locked()
         cancel = None
         cancel_error = None
         try:
@@ -562,6 +787,13 @@ class NavigationControlApi:
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
+            self._stop_confirmation_after_sequence = (
+                self._encoder_sequence if delivered else None
+            )
+            self._stop_confirmation_ticks = None
+            self._stop_confirmation_started_at = None
+            self._stop_confirmation_last_at = None
+            self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
@@ -581,6 +813,7 @@ class NavigationControlApi:
     async def pause_for_manual(self) -> dict[str, Any]:
         """Stop the active ROS action while retaining the goal for manual arrival."""
         with self._lock:
+            self._arm_pending_stop_locked()
             previous_navigation_state = self._state["navigation_state"]
             self._state["navigation_state"] = "PAUSING_FOR_MANUAL"
             self._touch_locked()
@@ -597,6 +830,13 @@ class NavigationControlApi:
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
+            self._stop_confirmation_after_sequence = (
+                self._encoder_sequence if delivered else None
+            )
+            self._stop_confirmation_ticks = None
+            self._stop_confirmation_started_at = None
+            self._stop_confirmation_last_at = None
+            self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
@@ -623,16 +863,39 @@ class NavigationControlApi:
             "goal_retained": self._state["active_goal"] is not None,
         }
 
-    async def emergency_stop(self, reason: str, automatic: bool = False) -> dict[str, Any]:
+    async def emergency_stop(self, reason: str, automatic: bool = False, force: bool = False) -> dict[str, Any]:
         normalized_reason = (str(reason).strip() or "dashboard_emergency_stop")[:96]
         with self._lock:
+            self._post_resume_motion_ready = False
+            if self._encoder_stop_violation:
+                normalized_reason = "ENCODER_MOVEMENT_AFTER_STOP"
+            now = time.time()
+            if self._estop_attempt_reason != normalized_reason:
+                self._estop_attempt_reason = normalized_reason
+                self._estop_attempts = 0
+                self._estop_last_attempt_at = None
+                self._estop_command_acknowledged = False
+            if automatic and self._estop_retry_window_due_locked(now):
+                self._estop_attempts = 0
+            if automatic and not force and self._state["emergency_stop"] and self._state["emergency_reason"] == normalized_reason and (
+                self._estop_command_acknowledged
+                or self._estop_attempts >= self.ESTOP_MAX_ATTEMPTS
+                or (self._estop_last_attempt_at is not None and now - self._estop_last_attempt_at < self.ESTOP_RETRY_INTERVAL_SEC)
+            ):
+                return {**self.state_response(), "cancel": None, "stop_delivered": None, "automatic": True}
+            was_stopped = self._state["emergency_stop"]
+            self._estop_attempts += 1
+            self._estop_last_attempt_at = now
+            self._estop_command_acknowledged = False
             self._state["emergency_stop"] = True
             self._state["emergency_reason"] = normalized_reason
             self._state["navigation_state"] = "EMERGENCY_STOPPED"
-            self._stop_commanded_at = time.time()
-            self._stop_encoder_ticks = self._encoder_ticks
-            self._encoder_stop_violation = False
+            if not was_stopped and not self._encoder_stop_violation:
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
             self._estop_generation += 1
+            self._estop_delivery_token += 1
+            delivery_token = self._estop_delivery_token
             self._touch_locked()
         cancel, delivered = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
@@ -641,6 +904,9 @@ class NavigationControlApi:
                 {"type": "emergency_stop", "reason": normalized_reason, "automatic": automatic},
             ),
         )
+        with self._lock:
+            if self._estop_delivery_token == delivery_token:
+                self._estop_command_acknowledged = bool(delivered)
         return {**self.state_response(), "cancel": cancel, "stop_delivered": delivered, "automatic": automatic}
 
     async def resume_navigation(self) -> dict[str, Any]:
@@ -675,11 +941,64 @@ class NavigationControlApi:
                     "A safe resume path could not be calculated.",
                     422,
                 )
-        delivered = await self._send_robot_command(self._robot_id, {"type": "resume_navigation"})
-        if not delivered:
-            raise NavigationControlError("PI_RESUME_FAILED", "The Pi did not accept the resume command.", 409)
+        prepared = await self._send_robot_command(self._robot_id, {"type": "resume_safety_check"})
+        if not isinstance(prepared, dict) or prepared.get("ok") is not True:
+            raise NavigationControlError("STOP_NOT_CONFIRMED", "The Pi did not confirm a latched safety stop.", 409)
+        try:
+            marker = int(prepared["encoder_sequence"])
+            safety_session = str(prepared["safety_session"]).strip()
+            safety_epoch = int(prepared["safety_epoch"])
+        except (KeyError, TypeError, ValueError):
+            raise NavigationControlError("STOP_NOT_CONFIRMED", "The Pi did not provide encoder and safety generations.", 409) from None
+        if not safety_session or safety_epoch < 0:
+            raise NavigationControlError("STOP_NOT_CONFIRMED", "The Pi safety generation is invalid.", 409)
         with self._lock:
-            if self._estop_generation != estop_generation or not self._state["emergency_stop"]:
+            if (
+                self._estop_generation != estop_generation
+                or not self._state["emergency_stop"]
+                or self._pi_safety_session != safety_session
+                or self._pi_safety_epoch != safety_epoch
+            ):
+                interrupted = True
+            else:
+                interrupted = False
+                self._stop_confirmation_after_sequence = marker
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
+        if interrupted:
+            await self.emergency_stop("RESUME_INTERRUPTED", automatic=True, force=True)
+            raise NavigationControlError("RESUME_INTERRUPTED", "A newer emergency stop interrupted resume.", 409)
+        try:
+            await self._wait_for_stop_confirmation(estop_generation)
+            with self._lock:
+                interrupted = self._estop_generation != estop_generation or not self._stop_confirmed_locked(time.time())
+                confirmation_episode = self._stop_confirmation_episode
+            if interrupted:
+                raise NavigationControlError("RESUME_INTERRUPTED", "A newer stop or encoder movement interrupted resume.", 409)
+            delivered = await self._send_robot_command(self._robot_id, {
+                "type": "resume_navigation",
+                "safety_session": safety_session,
+                "safety_epoch": safety_epoch,
+            })
+            if not delivered:
+                await self.emergency_stop("RESUME_RELEASE_FAILED", automatic=True, force=True)
+                raise NavigationControlError("PI_RESUME_FAILED", "The Pi did not accept the resume command.", 409)
+        except Exception:
+            with self._lock:
+                self._stop_confirmation_after_sequence = None
+            raise
+        with self._lock:
+            if (
+                self._estop_generation != estop_generation
+                or not self._state["emergency_stop"]
+                or self._pi_estop_latched is not False
+                or self._pi_safety_session != safety_session
+                or self._pi_safety_epoch != safety_epoch
+                or self._stop_confirmation_episode != confirmation_episode
+                or not self._stop_confirmed_locked(time.time())
+            ):
                 retry_stop = True
             else:
                 retry_stop = False
@@ -693,19 +1012,23 @@ class NavigationControlApi:
                     else ("READY" if self._state["navigation_mode"] == "DRIVING" else "IDLE")
                 )
                 self._reset_navigation_progress_locked()
-                self._stop_commanded_at = None
-                self._stop_encoder_ticks = None
                 self._encoder_stop_violation = False
+                self._stop_encoder_ticks = self._encoder_ticks
+                self._stop_commanded_at = time.time() - self._watchdog.stop_encoder_grace_sec
                 self._touch_locked()
+            self._stop_confirmation_after_sequence = None
+            self._post_resume_motion_ready = (
+                not retry_stop and not restart_navigation
+            )
         if retry_stop:
-            await self.emergency_stop("RESUME_INTERRUPTED", automatic=True)
+            await self.emergency_stop("RESUME_INTERRUPTED", automatic=True, force=True)
             raise NavigationControlError("RESUME_INTERRUPTED", "A newer emergency stop interrupted resume.", 409)
         if not restart_navigation:
             return {**self.state_response(), "replanned": False}
         try:
             navigation = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
         except Exception:
-            await self.emergency_stop("RESUME_NAVIGATION_FAILED", automatic=True)
+            await self.emergency_stop("RESUME_NAVIGATION_FAILED", automatic=True, force=True)
             raise
         try:
             progress_pose = self._get_live_pose()
@@ -713,19 +1036,49 @@ class NavigationControlApi:
             progress_pose = None
         progress_started_at = time.time()
         with self._lock:
-            interrupted = self._estop_generation != estop_generation or self._state["emergency_stop"]
+            interrupted = (
+                self._estop_generation != estop_generation
+                or self._state["emergency_stop"]
+                or self._encoder_stop_violation
+            )
             if not interrupted:
                 self._state["navigation_state"] = "NAVIGATING"
+                self._stop_commanded_at = None
+                self._stop_encoder_ticks = None
                 self._start_navigation_progress_locked(progress_pose, progress_started_at)
                 self._touch_locked()
         if interrupted:
-            await self.emergency_stop("RESUME_INTERRUPTED", automatic=True)
+            await self.emergency_stop("RESUME_INTERRUPTED", automatic=True, force=True)
             raise NavigationControlError(
                 "RESUME_INTERRUPTED",
                 "A newer emergency stop interrupted navigation restart.",
                 409,
             )
         return {**self.state_response(), "navigation": navigation, "replanned": True}
+
+    def _stop_confirmed_locked(self, now: float) -> bool:
+        started = self._stop_confirmation_started_at
+        last = self._stop_confirmation_last_at
+        return bool(
+            self._connected
+            and started is not None
+            and last is not None
+            and self._stop_confirmation_samples >= 2
+            and last - started >= self.STOP_CONFIRM_STABLE_SEC
+            and 0 <= now - last <= self.STOP_CONFIRM_MAX_AGE_SEC
+            and self._age(now, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+        )
+
+    async def _wait_for_stop_confirmation(self, estop_generation: int) -> None:
+        deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._estop_generation != estop_generation or not self._state["emergency_stop"]:
+                    raise NavigationControlError("RESUME_INTERRUPTED", "A newer emergency stop interrupted resume.", 409)
+                if self._stop_confirmed_locked(time.time()):
+                    return
+            await asyncio.sleep(0.02)
+        raise NavigationControlError("STOP_NOT_CONFIRMED", "Fresh, stable encoder samples were not received after the stop.", 409)
 
     async def beep(self, payload: dict[str, Any]) -> dict[str, Any]:
         duration_ms = self._bounded_int(
@@ -798,14 +1151,36 @@ class NavigationControlApi:
 
         blocked = False
         with self._lock:
-            terminal = self._sync_ros_navigation_terminal_locked(ros_nav, current)
-            if terminal is not None:
-                return None
-            if self._encoder_stop_violation:
+            retry_pending_stop = (
+                self._state["emergency_stop"]
+                and self._state["emergency_reason"] in {
+                    "ENCODER_MOVEMENT_AFTER_STOP", "PI_SAFETY_SESSION_CHANGED"
+                }
+                and not self._estop_command_acknowledged
+                and (
+                    self._estop_retry_window_due_locked(current)
+                    or (
+                        self._estop_attempts < self.ESTOP_MAX_ATTEMPTS
+                        and (self._estop_last_attempt_at is None or current - self._estop_last_attempt_at >= self.ESTOP_RETRY_INTERVAL_SEC)
+                    )
+                )
+            )
+            if self._pi_session_stop_pending:
+                issue = self._pi_session_stop_pending
+                self._pi_session_stop_pending = None
+            elif self._encoder_stop_violation and (retry_pending_stop or not (
+                self._state["emergency_stop"]
+                and self._state["emergency_reason"] == "ENCODER_MOVEMENT_AFTER_STOP"
+            )):
                 issue = "ENCODER_MOVEMENT_AFTER_STOP"
-            elif self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
-                return None
+            elif self._state["emergency_reason"] == "PI_SAFETY_SESSION_CHANGED" and retry_pending_stop:
+                issue = "PI_SAFETY_SESSION_CHANGED"
             else:
+                terminal = self._sync_ros_navigation_terminal_locked(ros_nav, current)
+                if terminal is not None:
+                    return None
+                if self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
+                    return None
                 issue = self._watchdog_issue_locked(current)
                 if issue is None and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES:
                     self._note_rotation_progress_locked(rotation, current)
@@ -1071,6 +1446,11 @@ class NavigationControlApi:
         )
 
     def _assert_resume_safety_locked(self, require_estop: bool) -> None:
+        if self._encoder_stop_violation:
+            raise NavigationControlError(
+                "ENCODER_MOVEMENT_AFTER_STOP",
+                "Unresolved encoder movement after stop blocks navigation.",
+            )
         if self._state["navigation_mode"] != "DRIVING":
             raise NavigationControlError("DRIVING_MODE_REQUIRED", "Navigation requires DRIVING mode.")
         if not self._state["localization_ready"] or not self._state["nav2_ready"]:
