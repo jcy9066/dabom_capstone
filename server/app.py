@@ -671,7 +671,7 @@ class RobotConnectionManager:
             old = self.active.get(robot_id)
             self.active[robot_id] = websocket
             pending = []
-            for command_id, (pending_robot_id, future) in list(self.pending_acks.items()):
+            for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
                 if pending_robot_id == robot_id:
                     pending.append(future)
                     self.pending_acks.pop(command_id, None)
@@ -684,17 +684,21 @@ class RobotConnectionManager:
             except Exception:
                 pass
 
+    async def is_current(self, robot_id, websocket):
+        async with self.lock:
+            return self.active.get(robot_id) is websocket
+
     async def disconnect(self, robot_id, websocket):
         disconnected = False
         async with self.lock:
             if self.active.get(robot_id) is websocket:
                 self.active.pop(robot_id, None)
                 disconnected = True
-                pending = [
-                    future
-                    for pending_robot_id, future in self.pending_acks.values()
-                    if pending_robot_id == robot_id
-                ]
+                pending = []
+                for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
+                    if pending_robot_id == robot_id and pending_socket is websocket:
+                        pending.append(future)
+                        self.pending_acks.pop(command_id, None)
             else:
                 pending = []
         for future in pending:
@@ -707,7 +711,10 @@ class RobotConnectionManager:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        await websocket.send_json(command)
+        async with self.lock:
+            if self.active.get(robot_id) is not websocket:
+                return False
+            await websocket.send_json(command)
         return True
 
     async def send_command_wait_ack(self, robot_id, command):
@@ -721,9 +728,14 @@ class RobotConnectionManager:
             websocket = self.active.get(robot_id)
             if websocket is None:
                 return False
-            self.pending_acks[command_id] = (robot_id, future)
+            if command_id in self.pending_acks:
+                return False
+            self.pending_acks[command_id] = (robot_id, websocket, future)
         try:
-            await websocket.send_json(command)
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+                await websocket.send_json(command)
             ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
             if command.get("type") == "resume_safety_check":
                 return ack if isinstance(ack, dict) else False
@@ -742,18 +754,24 @@ class RobotConnectionManager:
             async with self.lock:
                 self.pending_acks.pop(command_id, None)
 
-    async def receive_ack(self, robot_id, message):
+    async def receive_ack(self, robot_id, websocket, message):
         command_id = str(message.get("command_id") or "")
         if not command_id:
             return False
         async with self.lock:
             pending = self.pending_acks.get(command_id)
-        if pending is None or pending[0] != robot_id:
-            return False
-        future = pending[1]
-        if not future.done():
+            if (
+                self.active.get(robot_id) is not websocket
+                or pending is None
+                or pending[0] != robot_id
+                or pending[1] is not websocket
+            ):
+                return False
+            future = pending[2]
+            if future.done():
+                return False
             future.set_result(dict(message))
-        return True
+            return True
 
     async def is_connected(self, robot_id):
         async with self.lock:
@@ -5272,6 +5290,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
     try:
         while True:
             message = await websocket.receive_json()
+            if not await connections.is_current(robot_id, websocket):
+                break
             if message.get("type") == "status":
                 status_data = message.get("data", {})
                 if not isinstance(status_data, dict):
@@ -5323,7 +5343,7 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                 print(f"[ws] ack from {robot_id}: {message}")
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_pi_status(message)
-                await connections.receive_ack(robot_id, message)
+                await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
     finally:
