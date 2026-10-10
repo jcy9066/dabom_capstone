@@ -200,7 +200,7 @@ global_costmap:
           data_type: "LaserScan"
           clearing: true
           marking: true
-          inf_is_valid: false
+          inf_is_valid: true
           # Keep a dynamic obstacle for one 2 Hz global-planner cycle so a
           # single missing scan does not flip A* between left/right routes.
           # Local costmap intentionally stays at 0 persistence for fast DWB response.
