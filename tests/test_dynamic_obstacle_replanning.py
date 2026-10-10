@@ -12,8 +12,18 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("expected_planner_frequency: 2.0", params)
         self.assertIn("observation_persistence: 0.5", params)
         self.assertIn("allow_unknown: true", params)
+        self.assertIn('plugin: "nav2_theta_star_planner/ThetaStarPlanner"', params)
+        self.assertIn("required_movement_radius: 0.05", params)
+        self.assertIn("movement_time_allowance: 25.0", params)
+        self.assertNotIn("nav2_navfn_planner/NavfnPlanner", params)
         self.assertEqual(params.count("inflation_radius: 0.35"), 2)
         self.assertEqual(params.count("clearing: true"), 2)
+
+    def test_production_navigation_watchdog_thresholds(self):
+        from server.navigation_control_api import NavigationControlApi
+        self.assertEqual(NavigationControlApi.BLOCKED_TIMEOUT_SEC, 15.0)
+        self.assertEqual(NavigationControlApi.PROGRESS_DISTANCE_M, 0.05)
+        self.assertEqual(NavigationControlApi.ROTATION_MAX_CUMULATIVE_SEC, 25.0)
 
     def test_five_second_replanning_bt(self):
         bt = (ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_to_pose_dynamic_replanning.xml").read_text(encoding="utf-8")

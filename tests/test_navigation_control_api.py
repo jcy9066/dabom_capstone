@@ -214,6 +214,11 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             ),
             motor_output_enabled=False,
         )
+        # Legacy timing-focused tests retain their narrow 5s/10cm scenarios.
+        # Production thresholds are verified separately below.
+        self.api.BLOCKED_TIMEOUT_SEC = 5.0
+        self.api.PROGRESS_DISTANCE_M = 0.10
+        self.api.ROTATION_MAX_CUMULATIVE_SEC = 15.0
         self.api.STOP_CONFIRM_STABLE_SEC = 0.1
         self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.8
         now = time.time()
