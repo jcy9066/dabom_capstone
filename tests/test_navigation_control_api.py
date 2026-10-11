@@ -311,6 +311,92 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.api.note_navigation_sample("scan", now=now)
 
+    async def test_dry_run_driving_does_not_change_pi_mode(self):
+        result = await self.api.switch_mode(
+            {
+                "mode": "DRIVING",
+                "source": "existing",
+                "map_name": "test_map",
+                "initial_pose": {
+                    "x": 0,
+                    "y": 0,
+                    "yaw_degrees": 0,
+                },
+            },
+            user="tester",
+        )
+
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        self.assertFalse(result["motor_output_enabled"])
+        self.assertFalse(any(
+            command.get("type") == "navigation_mode"
+            and command.get("mode") == "driving"
+            for _, command in self.commands
+        ))
+
+    async def test_enabled_driving_sends_pi_mode_command(self):
+        self.api._motor_output_enabled = True
+
+        await self.api.switch_mode(
+            {
+                "mode": "DRIVING",
+                "source": "existing",
+                "map_name": "test_map",
+                "initial_pose": {
+                    "x": 0,
+                    "y": 0,
+                    "yaw_degrees": 0,
+                },
+            },
+            user="tester",
+        )
+
+        self.assertTrue(any(
+            command.get("type") == "navigation_mode"
+            and command.get("mode") == "driving"
+            for _, command in self.commands
+        ))
+
+    async def test_pi_driving_report_does_not_override_gpu_mapping(self):
+        self.api.note_pi_status({
+            "mode": "manual",
+            "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+
+        state = self.api.state_response()
+
+        self.assertEqual("MAPPING", state["navigation_mode"])
+        self.assertEqual("DRIVING", state["pi_navigation_mode"])
+
+    async def test_pi_mapping_report_does_not_override_gpu_driving(self):
+        await self.api.switch_mode(
+            {
+                "mode": "DRIVING",
+                "source": "existing",
+                "map_name": "test_map",
+                "initial_pose": {
+                    "x": 0,
+                    "y": 0,
+                    "yaw_degrees": 0,
+                },
+            },
+            user="tester",
+        )
+
+        self.api.note_pi_status({
+            "mode": "manual",
+            "navigation_mode": "mapping",
+            "emergency_stop": False,
+        })
+
+        state = self.api.state_response()
+
+        self.assertEqual("DRIVING", state["navigation_mode"])
+        self.assertEqual("READY", state["navigation_state"])
+        self.assertEqual("MAPPING", state["pi_navigation_mode"])
+        self.assertFalse(state["motor_output_enabled"])
+
     async def test_current_mapping_transitions_directly_to_driving_with_live_pose(self):
         result = await self.api.switch_mode(
             {"mode": "DRIVING", "source": "current"},
