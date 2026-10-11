@@ -1,14 +1,15 @@
 <!--
   Normal global replanning runs at 2 Hz while following the goal.
   If planning/control fails, FollowPath is halted and recovery waits 500 ms
-  before retrying. Ten retries bound planner-side blockage to about five seconds.
-  A server-side pose-progress watchdog applies the same five-second deadline
-  when a path still exists but the RC car cannot make physical progress.
+  before retrying, with at most ten recovery retries.
+  The server-side pose-progress watchdog separately allows 15 seconds
+  without qualifying movement progress, with bounded rotation extensions.
+  These are separate recovery mechanisms, not one shared deadline.
   Spin/BackUp recovery is intentionally excluded.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="10" name="NavigateWithFiveSecondGrace">
+    <RecoveryNode number_of_retries="10" name="NavigateWithBoundedRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <RateController hz="2.0">
           <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
