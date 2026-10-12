@@ -499,6 +499,7 @@ class MotorController:
                 baudrate=self.baudrate,
                 timeout=0.05,
                 write_timeout=self.serial_timeout_sec,
+                exclusive=True,  # Linux pyserial advisory lock; fail closed if held.
             )
 
             # 이전 프로세스가 종료되기 전에 켜 둔 encoder stream을

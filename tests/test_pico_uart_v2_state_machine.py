@@ -200,6 +200,7 @@ def test_host_compiled_state_machine():
             [
                 "gcc",
                 "-std=c11",
+                "-DDABOM_V2_HOST_MODEL_ONLY=1",
                 "-Wall",
                 "-Wextra",
                 "-Werror",

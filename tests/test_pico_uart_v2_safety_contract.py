@@ -92,6 +92,7 @@ def test_host_compiled_emergency_stop_contract():
             [
                 "gcc",
                 "-std=c11",
+                "-DDABOM_V2_HOST_MODEL_ONLY=1",
                 "-Wall",
                 "-Wextra",
                 "-Werror",

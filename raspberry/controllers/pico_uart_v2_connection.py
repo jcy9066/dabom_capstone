@@ -89,8 +89,19 @@ class V2StopOnlyConnection:
             self._ready = False
             self._failure = reason
             router = self._router
+            device = self._serial
+            stop = self._reader_stop
+        # Release the actual UART on fault, including reader-thread failures.
+        # Never join this worker from the reader callback itself.
+        if stop is not None:
+            stop.set()
         if router is not None:
             router.invalidate()
+        if device is not None:
+            try:
+                device.close()
+            except Exception:
+                pass
 
     def _reader_loop(self, device, router: V2AckRouter, stop: threading.Event, generation: int) -> None:
         try:
@@ -187,6 +198,7 @@ class V2StopOnlyConnection:
                 baudrate=self.baudrate,
                 timeout=0.05,
                 write_timeout=self.timeout_sec,
+                exclusive=True,  # Linux pyserial advisory lock; opt-in only.
             )
             if not getattr(device, "is_open", False):
                 raise V2ConnectionError("opened UART is closed")

@@ -1,5 +1,11 @@
 #include "uart_protocol_v2.h"
 
+/* Host-only state-machine prototype. Real experimental firmware uses
+ * uart_v2_stop_only.c and cannot arm motion. Fail accidental inclusion. */
+#ifndef DABOM_V2_HOST_MODEL_ONLY
+#error "uart_protocol_v2.c is a HOST-ONLY model, not Pico firmware"
+#endif
+
 #include <ctype.h>
 #include <stddef.h>
 #include <string.h>

@@ -1,6 +1,9 @@
 #ifndef UART_PROTOCOL_V2_H
 #define UART_PROTOCOL_V2_H
 
+/* HOST-ONLY PROTOTYPE: simulates an ARMED state but is NOT linked into
+ * Pico firmware. Actual STOP-only implementation: uart_v2_stop_only.c. */
+
 #include <stdbool.h>
 #include <stdint.h>
 
