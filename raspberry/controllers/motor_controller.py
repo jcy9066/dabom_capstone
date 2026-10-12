@@ -632,9 +632,13 @@ class MotorController:
             try:
                 self._ensure_connected_locked()
 
-                self._exchange_locked(
+                response = self._exchange_locked(
                     f"STOP,{self._sanitize_reason(reason)}"
                 )
+                if response != "OK,STOP":
+                    raise MotorControllerError(
+                        f"Unexpected Pico STOP acknowledgement: {response!r}"
+                    )
 
             except Exception as exc:
                 error = exc
