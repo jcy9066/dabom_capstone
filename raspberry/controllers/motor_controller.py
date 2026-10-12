@@ -7,6 +7,9 @@ import time
 from collections import deque
 from typing import Optional
 
+from raspberry.controllers.pico_uart_protocol_v2 import RequestSequencer
+from raspberry.controllers.pico_uart_v2_router import V2AckRouter, V2RouterError
+
 try:
     from raspberry.env_config import env_float
 except ModuleNotFoundError:  # Direct robot_command_client.py execution.
@@ -109,6 +112,12 @@ class MotorController:
         # reader thread가 받은 OK/ERR 응답 전달.
         self._response_condition = threading.Condition()
         self._response_queue: deque[str] = deque()
+
+        # V2 is experimental and disabled for normal motor operation.
+        self._v2_router = V2AckRouter()
+        self._v2_sequence = RequestSequencer()
+        self._v2_negotiated = False
+        self._v2_host_test_enabled = False
 
         self._reader_running = False
         self._reader_thread: Optional[threading.Thread] = None
@@ -214,12 +223,18 @@ class MotorController:
             print("[motor] Pico warning LED failsafe off")
             return
 
+        if line.startswith(("ACK,", "READY,")):
+            self._v2_router.feed(line)
+
         if line.startswith("READY,"):
             with self._state_lock:
                 self.current_motion = "stop"
                 self.led_enabled = False
 
             self._pico_reboot_event.set()
+            with self._response_condition:
+                self._response_queue.clear()
+                self._response_condition.notify_all()
             print(f"[motor] Pico reboot detected: {line}")
             return
 
@@ -298,6 +313,9 @@ class MotorController:
             except Exception:
                 pass
 
+        self._v2_router.invalidate()
+        self._v2_negotiated = False
+
         with self._response_condition:
             self._response_queue.clear()
             self._response_condition.notify_all()
@@ -309,6 +327,9 @@ class MotorController:
             reader_thread.join(timeout=0.5)
 
     def _exchange_locked(self, command: str) -> str:
+        # Block legacy commands when Pico reboot is pending.
+        if self._pico_reboot_event.is_set():
+            raise MotorControllerError("Pico reboot detected; V1 exchange blocked")
         serial_device = self._serial_device()
 
         if serial_device is None or not serial_device.is_open:
@@ -338,8 +359,16 @@ class MotorController:
         )
 
         while True:
+            if self._pico_reboot_event.is_set():
+                raise MotorControllerError(
+                    "Pico reboot detected during UART exchange"
+                )
+
             with self._response_condition:
-                while not self._response_queue:
+                while (
+                    not self._response_queue
+                    and not self._pico_reboot_event.is_set()
+                ):
                     remaining = deadline - time.monotonic()
 
                     if remaining <= 0:
@@ -374,6 +403,75 @@ class MotorController:
                     f"Pico W 응답 시간 초과: {command}"
                 )
 
+    def _v2_request_locked(self, command: str, *args: str) -> str:
+        """Only for isolated FakeSerial tests. Never a production motor path."""
+        serial_device = self._serial_device()
+        if serial_device is None or not serial_device.is_open:
+            self._v2_negotiated = False
+            self._v2_router.invalidate()
+            raise MotorControllerError("V2 UART disconnected")
+        if self._pico_reboot_event.is_set():
+            raise MotorControllerError("Pico rebooted; V2 session invalid")
+        try:
+            request_id, frame = self._v2_sequence.build(command, *args)
+            self._v2_router.begin(self._v2_sequence.session, request_id)
+            with self._write_lock:
+                serial_device.write((frame + "\n").encode("ascii"))
+                serial_device.flush()
+            status, payload = self._v2_router.wait(self.serial_timeout_sec)
+            if status != "OK":
+                raise MotorControllerError(f"V2 rejected {command}: {payload}")
+            if self._pico_reboot_event.is_set():
+                raise MotorControllerError("Pico reboot during V2 request")
+            return payload
+        except Exception as exc:
+            self._v2_negotiated = False
+            self._v2_router.invalidate()
+            self._close_serial_locked()
+            raise MotorControllerError(f"V2 exchange failed: {exc}") from exc
+
+    def experimental_v2_negotiate(self) -> str:
+        """FakeSerial/host-test only: DISCOVER boot token then HELLO.
+
+        This does NOT enable production motion, real UART access, or a
+        firmware update. Boot token provides replay freshness, not auth.
+        """
+        if not getattr(self, "_v2_host_test_enabled", False):
+            raise MotorControllerError("V2 is host-test-only and disabled")
+        with self._command_lock:
+            if self._v2_negotiated:
+                raise MotorControllerError("V2 already negotiated")
+            boot = self._v2_request_locked("DISCOVER")
+            if re.fullmatch(r"BOOT_[0-9A-F]{16}", boot) is None:
+                self._v2_router.invalidate()
+                self._close_serial_locked()
+                raise MotorControllerError("Invalid Pico V2 boot token")
+            reply = self._v2_request_locked("HELLO", boot[5:])
+            if reply != "HELLO":
+                self._v2_router.invalidate()
+                self._close_serial_locked()
+                raise MotorControllerError("V2 HELLO acknowledgement mismatch")
+            self._v2_negotiated = True
+            return self._v2_sequence.session
+
+    def experimental_v2_exchange(self, command: str) -> str:
+        """STOP/PING-only host test. Motion and V1 fallback prohibited."""
+        if command not in ("STOP", "PING"):
+            raise MotorControllerError("V2 motion prohibited")
+        if not getattr(self, "_v2_host_test_enabled", False):
+            raise MotorControllerError("V2 is host-test-only and disabled")
+        with self._command_lock:
+            if not self._v2_negotiated:
+                raise MotorControllerError("V2 HELLO negotiation required")
+            payload = self._v2_request_locked(command)
+            expected = "STOP" if command == "STOP" else "PONG"
+            if payload != expected:
+                self._v2_router.invalidate()
+                self._close_serial_locked()
+                self._v2_negotiated = False
+                raise MotorControllerError(f"V2 {command} payload mismatch: {payload}")
+            return payload
+
     def _send_stop_locked(self, reason: str) -> None:
         """Send STOP and require the Pico's exact STOP acknowledgement."""
         response = self._exchange_locked(
@@ -386,6 +484,8 @@ class MotorController:
 
     def _ensure_connected_locked(self) -> None:
         if self.connected:
+            if self._pico_reboot_event.is_set():
+                raise MotorControllerError("Pico reboot pending; explicit recovery required")
             return
 
         if serial is None:
@@ -421,6 +521,13 @@ class MotorController:
 
                 reader_thread = self._reader_thread
 
+            self._v2_router = V2AckRouter()
+            self._v2_sequence = RequestSequencer()
+            self._v2_negotiated = False
+            # A new physical serial connection is the only point where
+            # stale V1 READY state may be cleared. READY received during
+            # startup is still detected by the newly started reader.
+            self._pico_reboot_event.clear()
             reader_thread.start()
 
             # reader thread가 시작될 시간을 준다.
@@ -460,6 +567,10 @@ class MotorController:
         """Pico 재부팅 후 모터 정지와 encoder stream을 복구한다."""
         with self._command_lock:
             try:
+                # 재부팅 전 UART 연결이 아직 열려 있을 때만 폐기.
+                # 이미 끊겼다면 새 연결을 열고 중복 종료하지 않는다.
+                if self._pico_reboot_event.is_set() and self.connected:
+                    self._close_serial_locked()
                 self._ensure_connected_locked()
                 self._send_stop_locked("pico_reboot_recovery")
                 self._exchange_locked("LED,0")

@@ -11,6 +11,7 @@ pico_sdk_init()
 
 add_executable(pico_motor_controller
     main.c
+    uart_v2_stop_only.c
 )
 
 target_link_libraries(pico_motor_controller
@@ -18,7 +19,16 @@ target_link_libraries(pico_motor_controller
     hardware_uart
     hardware_pwm
     hardware_clocks
+    pico_rand
 )
+
+option(DABOM_V2_STOP_ONLY_EXPERIMENTAL
+    "Enable STOP/PING-only UART V2 experiment" OFF)
+
+if(DABOM_V2_STOP_ONLY_EXPERIMENTAL)
+    target_compile_definitions(pico_motor_controller PRIVATE
+        DABOM_V2_STOP_ONLY_EXPERIMENTAL=1)
+endif()
 
 # UART0은 프로그램에서 직접 사용한다.
 pico_enable_stdio_usb(pico_motor_controller 0)
