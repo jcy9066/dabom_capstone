@@ -28,7 +28,11 @@ def motor(monkeypatch):
     controller = MotorController()
     # UART is intercepted: no serial port is opened and no motor is driven.
     controller._ensure_connected_locked = Mock()
-    controller._exchange_locked = Mock(return_value="OK")
+    controller._exchange_locked = Mock(
+        side_effect=lambda command: (
+            "OK,STOP" if command.startswith("STOP,") else "OK"
+        )
+    )
     return controller
 
 
@@ -364,64 +368,189 @@ def test_server_accepts_calibrated_limit_and_rejects_excess(monkeypatch, limit):
 
 
 def test_pico_full_pwm_and_direction_ratios_without_hardware(tmp_path):
+    """Exercise current Pico motor safety logic without hardware."""
+    import re
     import shutil
     import subprocess
 
     compiler = shutil.which("cc")
     if compiler is None:
         pytest.skip("Host C compiler unavailable")
-    source = (ROOT / "raspberry/pico_w_sdk/main.c").read_text()
+
+    source = (ROOT / "raspberry/pico_w_sdk/main.c").read_text(
+        encoding="utf-8"
+    )
+
+    constants = (
+        "PWM_WRAP",
+        "MOTOR_MAX_PWM",
+        "MOTOR_RAMP_STEP",
+        "MOTOR_RAMP_INTERVAL_MS",
+        "MOTOR_REVERSE_DEADTIME_MS",
+        "MOTOR_ZERO_EPSILON",
+        "CURVE_INNER_RATIO",
+    )
+    definitions = []
+    for name in constants:
+        match = re.search(
+            rf"^#define\s+{name}\s+.+$",
+            source,
+            re.MULTILINE,
+        )
+        assert match is not None, f"Missing constant: {name}"
+        definitions.append(match.group())
 
     def function(name):
-        start = source.index("static ", source.rfind("\nstatic ", 0, source.index(name)) + 1)
-        brace = source.index("{", start)
-        depth = 1
-        end = brace + 1
-        while depth:
-            depth += (source[end] == "{") - (source[end] == "}")
-            end += 1
-        return source[start:end]
+        pattern = re.compile(
+            r"\bstatic\s+(?:inline\s+)?[\w\s*]+?\b"
+            + re.escape(name)
+            + r"\s*\("
+        )
+        matches = list(pattern.finditer(source))
+        assert len(matches) == 1, f"Function lookup failed: {name}"
 
-    harness = '''
+        start = matches[0].start()
+        brace = source.index("{", matches[0].end())
+        depth = 0
+        for pos in range(brace, len(source)):
+            if source[pos] == "{":
+                depth += 1
+            elif source[pos] == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[start:pos + 1]
+        raise AssertionError(f"Unclosed function: {name}")
+
+    harness = r"""
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include <math.h>
+#include <stdio.h>
 typedef unsigned int uint;
-#define PWM_WRAP 999U
-#define CURVE_INNER_RATIO 0.35f
-typedef struct { uint pwm_pin, dir_pin, slice, channel; bool forward_dir_level; } motor_channel_t;
-static uint16_t last_level;
-static bool last_direction;
-static void gpio_put(uint pin, bool value) { last_direction = value; }
-static void pwm_set_chan_level(uint slice, uint channel, uint16_t value) { last_level = value; }
-static float clamp_float(float value, float lo, float hi) { return fminf(hi, fmaxf(lo, value)); }
-'''
-    harness += function("motor_set_signed_speed(") + "\n" + function("direction_to_wheel_speeds(")
-    harness += '''
+
+typedef struct {
+    uint pwm_pin, dir_pin, slice, channel;
+    bool forward_dir_level;
+    float current_speed, target_speed;
+    bool direction_forward, reverse_waiting;
+    uint64_t reverse_deadline_ms, last_ramp_ms;
+} motor_channel_t;
+
+static uint16_t last_pwm;
+static unsigned direction_changes;
+
+static void gpio_put(uint pin, bool value) {
+    (void)pin;
+    (void)value;
+    direction_changes++;
+}
+
+static void pwm_set_chan_level(
+    uint slice, uint channel, uint16_t value
+) {
+    (void)slice;
+    (void)channel;
+    last_pwm = value;
+}
+"""
+    harness += "\n".join(definitions) + "\n"
+
+    for name in (
+        "clamp_float",
+        "abs_float",
+        "speed_sign",
+        "ramp_toward",
+        "motor_write_direction",
+        "motor_write_pwm",
+        "motor_force_stop",
+        "motor_request_signed_speed",
+        "motor_tick",
+        "direction_to_wheel_speeds",
+    ):
+        harness += function(name) + "\n"
+
+    harness += r"""
 int main(void) {
-    motor_channel_t motor = {.forward_dir_level = true};
+    motor_channel_t motor = {
+        .forward_dir_level = true,
+        .direction_forward = true,
+        .current_speed = MOTOR_MAX_PWM,
+        .target_speed = -MOTOR_MAX_PWM,
+        .last_ramp_ms = 100
+    };
+
+    unsigned before = direction_changes;
+
+    for (uint64_t t = 120; t <= 220; t += 20) {
+        motor_tick(&motor, t);
+        assert(direction_changes == before);
+        assert(last_pwm <=
+            (uint16_t)(PWM_WRAP * MOTOR_MAX_PWM + 1));
+    }
+
+    assert(motor.reverse_waiting);
+    assert(motor.current_speed == 0.0f);
+    assert(last_pwm == 0);
+    assert(motor.reverse_deadline_ms == 340);
+
+    motor_tick(&motor, 320);
+    assert(direction_changes == before);
+    assert(last_pwm == 0);
+
+    motor_tick(&motor, 340);
+    assert(direction_changes == before + 1);
+    assert(last_pwm == 0);
+    assert(!motor.reverse_waiting);
+    assert(!motor.direction_forward);
+
+    motor_tick(&motor, 360);
+    assert(motor.current_speed < 0.0f);
+    assert(last_pwm > 0);
+
+    motor_force_stop(&motor);
+    assert(motor.current_speed == 0.0f);
+    assert(motor.target_speed == 0.0f);
+    assert(!motor.reverse_waiting);
+    assert(last_pwm == 0);
+
     float left, right;
-    assert(direction_to_wheel_speeds("forward", 1.f, &left, &right));
-    assert(left == 1.f && right == 1.f);
-    motor_set_signed_speed(&motor, left);
-    assert(last_level == PWM_WRAP && last_direction);
-    assert(direction_to_wheel_speeds("backward", 1.f, &left, &right));
-    assert(left == -1.f && right == -1.f);
-    motor_set_signed_speed(&motor, left);
-    assert(last_level == PWM_WRAP && !last_direction);
-    assert(direction_to_wheel_speeds("forward_left", 1.f, &left, &right));
-    assert(left == .35f && right == 1.f);
-    assert(direction_to_wheel_speeds("rotate_left", 1.f, &left, &right));
-    assert(left == -1.f && right == 1.f);
-    motor_set_signed_speed(&motor, 0.f);
-    assert(last_level == 0);
+    assert(direction_to_wheel_speeds(
+        "forward", 1.0f, &left, &right
+    ));
+    assert(left == 1.0f && right == 1.0f);
+
+    assert(direction_to_wheel_speeds(
+        "forward_left", 1.0f, &left, &right
+    ));
+    assert(fabsf(left - CURVE_INNER_RATIO) < 0.0001f);
+    assert(right == 1.0f);
+
+    assert(direction_to_wheel_speeds(
+        "rotate_left", 1.0f, &left, &right
+    ));
+    assert(left == -1.0f && right == 1.0f);
+
+    puts("PICO MOTOR SAFETY TEST PASSED");
     return 0;
 }
-'''
-    file = tmp_path / "pico_speed.c"
-    file.write_text(harness)
-    binary = tmp_path / "pico_speed"
-    subprocess.run([compiler, str(file), "-lm", "-o", str(binary)], check=True, capture_output=True)
-    subprocess.run([str(binary)], check=True, capture_output=True)
+"""
+
+    c_file = tmp_path / "pico_motor_safety.c"
+    binary = tmp_path / "pico_motor_safety"
+    c_file.write_text(harness, encoding="utf-8")
+
+    subprocess.run(
+        [compiler, "-std=c11", "-Wall", "-Wextra",
+         str(c_file), "-lm", "-o", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

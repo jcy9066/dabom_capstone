@@ -374,6 +374,16 @@ class MotorController:
                     f"Pico W 응답 시간 초과: {command}"
                 )
 
+    def _send_stop_locked(self, reason: str) -> None:
+        """Send STOP and require the Pico's exact STOP acknowledgement."""
+        response = self._exchange_locked(
+            f"STOP,{self._sanitize_reason(reason)}"
+        )
+        if response != "OK,STOP":
+            raise MotorControllerError(
+                f"Unexpected Pico STOP acknowledgement: {response!r}"
+            )
+
     def _ensure_connected_locked(self) -> None:
         if self.connected:
             return
@@ -417,7 +427,7 @@ class MotorController:
             time.sleep(0.05)
 
             self._exchange_locked("PING")
-            self._exchange_locked("STOP,pi_connected")
+            self._send_stop_locked("pi_connected")
             self._exchange_locked("LED,0")
             with self._state_lock:
                 self.led_enabled = False
@@ -449,14 +459,19 @@ class MotorController:
     def recover_after_pico_reboot(self) -> None:
         """Pico 재부팅 후 모터 정지와 encoder stream을 복구한다."""
         with self._command_lock:
-            self._ensure_connected_locked()
-            self._exchange_locked("STOP,pico_reboot_recovery")
-            self._exchange_locked("LED,0")
-            with self._state_lock:
-                self.led_enabled = False
-            self._exchange_locked("ENC_STREAM,1")
+            try:
+                self._ensure_connected_locked()
+                self._send_stop_locked("pico_reboot_recovery")
+                self._exchange_locked("LED,0")
+                with self._state_lock:
+                    self.led_enabled = False
+                self._exchange_locked("ENC_STREAM,1")
+            except Exception:
+                self._close_serial_locked()
+                raise
 
-        self._pico_reboot_event.clear()
+            self._pico_reboot_event.clear()
+
         print("[motor] encoder stream recovered after Pico reboot")
 
     def start_encoder_stream(self) -> None:
@@ -632,9 +647,7 @@ class MotorController:
             try:
                 self._ensure_connected_locked()
 
-                self._exchange_locked(
-                    f"STOP,{self._sanitize_reason(reason)}"
-                )
+                self._send_stop_locked(reason)
 
             except Exception as exc:
                 error = exc
@@ -672,11 +685,9 @@ class MotorController:
         with self._command_lock:
             if self.connected:
                 try:
-                    self._exchange_locked(
-                        "STOP,controller_close"
-                    )
-                except Exception:
-                    pass
+                    self._send_stop_locked("controller_close")
+                except Exception as exc:
+                    print(f"[motor] controller close STOP failed: {exc}")
 
                 try:
                     self._exchange_locked(
