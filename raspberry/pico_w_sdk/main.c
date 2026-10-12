@@ -1029,7 +1029,35 @@ static bool parse_enabled_value(
 }
 
 
+#ifdef DABOM_V2_STOP_ONLY_EXPERIMENTAL
+#include "uart_v2_stop_only.h"
+#include "pico/rand.h"
+#endif
+
 static void handle_command(char *line) {
+#ifdef DABOM_V2_STOP_ONLY_EXPERIMENTAL
+    if (strncmp(line, "REQ,", 4) == 0) {
+        char response[128];
+        if (uart_v2_stop_only(line, response, sizeof(response), stop_motors)) {
+            uart_reply(response);
+        } else {
+            uart_reply("ERR,V2_BAD_FRAME");
+        }
+        return;
+    }
+    /* All uncorrelated V1 frames are disabled in this experimental mode.
+     * In particular, leading delimiters/whitespace must never bypass a
+     * MOVE/DRIVE prefix check in the legacy strtok_r parser below.
+     * Allow legacy STOP as an emergency stop-only fallback.
+     */
+    stop_motors();
+    if (strcmp(line, "STOP") == 0 || strncmp(line, "STOP,", 5) == 0) {
+        uart_reply("OK,STOP");
+    } else {
+        uart_reply("ERR,V2_LEGACY_DISABLED");
+    }
+    return;
+#endif
     char *save_pointer = NULL;
 
     char *command = strtok_r(
@@ -1375,6 +1403,10 @@ int main(void) {
     gpio_set_dir(WARNING_LED_PIN, GPIO_OUT);
     set_warning_led(false);
     stop_motors();
+
+#ifdef DABOM_V2_STOP_ONLY_EXPERIMENTAL
+    uart_v2_stop_only_reset(get_rand_64());
+#endif
 
     sleep_ms(100);
 
