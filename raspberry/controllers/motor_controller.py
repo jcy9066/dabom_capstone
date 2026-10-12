@@ -459,14 +459,19 @@ class MotorController:
     def recover_after_pico_reboot(self) -> None:
         """Pico 재부팅 후 모터 정지와 encoder stream을 복구한다."""
         with self._command_lock:
-            self._ensure_connected_locked()
-            self._send_stop_locked("pico_reboot_recovery")
-            self._exchange_locked("LED,0")
-            with self._state_lock:
-                self.led_enabled = False
-            self._exchange_locked("ENC_STREAM,1")
+            try:
+                self._ensure_connected_locked()
+                self._send_stop_locked("pico_reboot_recovery")
+                self._exchange_locked("LED,0")
+                with self._state_lock:
+                    self.led_enabled = False
+                self._exchange_locked("ENC_STREAM,1")
+            except Exception:
+                self._close_serial_locked()
+                raise
 
-        self._pico_reboot_event.clear()
+            self._pico_reboot_event.clear()
+
         print("[motor] encoder stream recovered after Pico reboot")
 
     def start_encoder_stream(self) -> None:
@@ -681,8 +686,8 @@ class MotorController:
             if self.connected:
                 try:
                     self._send_stop_locked("controller_close")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[motor] controller close STOP failed: {exc}")
 
                 try:
                     self._exchange_locked(

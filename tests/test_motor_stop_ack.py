@@ -96,3 +96,49 @@ def test_stop_paths_use_common_ack_validation(method_name, reason):
     ]
 
     assert len(matching_calls) == 1
+
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ["stop", "led", "encoder"],
+)
+def test_reboot_recovery_failure_closes_uart(motor, failure_point):
+    motor._pico_reboot_event.set()
+
+    if failure_point == "stop":
+        motor._exchange_locked = Mock(return_value="OK,PONG")
+    else:
+        def exchange(command):
+            if command == "STOP,pico_reboot_recovery":
+                return "OK,STOP"
+            if failure_point == "led" and command == "LED,0":
+                raise MotorControllerError("LED UART failure")
+            if failure_point == "encoder" and command == "ENC_STREAM,1":
+                raise MotorControllerError("Encoder UART failure")
+            return "OK"
+
+        motor._exchange_locked = Mock(side_effect=exchange)
+
+    with pytest.raises(MotorControllerError):
+        motor.recover_after_pico_reboot()
+
+    motor._close_serial_locked.assert_called_once()
+    assert motor.pico_reboot_pending()
+
+
+def test_reboot_recovery_success_clears_event(motor):
+    motor._pico_reboot_event.set()
+
+    motor._exchange_locked = Mock(
+        side_effect=lambda command: (
+            "OK,STOP"
+            if command == "STOP,pico_reboot_recovery"
+            else "OK"
+        )
+    )
+
+    motor.recover_after_pico_reboot()
+
+    motor._close_serial_locked.assert_not_called()
+    assert not motor.pico_reboot_pending()
