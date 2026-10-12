@@ -54,11 +54,11 @@ class NavigationControlApi:
     MODES = frozenset({"MAPPING", "DRIVING"})
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
     NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
-    BLOCKED_TIMEOUT_SEC = 5.0
-    PROGRESS_DISTANCE_M = 0.10
+    BLOCKED_TIMEOUT_SEC = 15.0
+    PROGRESS_DISTANCE_M = 0.05
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
-    ROTATION_MAX_CUMULATIVE_SEC = 15.0
+    ROTATION_MAX_CUMULATIVE_SEC = 25.0
     STOP_CONFIRM_STABLE_SEC = 0.3
     STOP_CONFIRM_MAX_AGE_SEC = 0.5
     STOP_CONFIRM_TIMEOUT_SEC = 2.0
@@ -261,8 +261,8 @@ class NavigationControlApi:
                 self._robot_mode = reported_mode
             reported_navigation = str(payload.get("navigation_mode", "")).strip().upper()
             if reported_navigation in self.MODES:
+                # Pi telemetry must not overwrite the GPU control mode.
                 self._pi_navigation_mode = reported_navigation
-                self._state["navigation_mode"] = reported_navigation
             if isinstance(payload.get("emergency_stop"), bool):
                 if new_safety_stop or (payload["emergency_stop"] and self._pi_estop_latched is False):
                     self._estop_generation += 1
@@ -666,10 +666,15 @@ class NavigationControlApi:
                 self._state["nav2_ready"] = False
                 self._touch_locked()
             raise
-        delivered = await self._send_robot_command(
-            self._robot_id,
-            {"type": "navigation_mode", "mode": "driving"},
-        )
+        # Dry-run operates GPU Nav2 only; keep Pi out of DRIVING mode.
+        if self._motor_output_enabled:
+            delivered = await self._send_robot_command(
+                self._robot_id,
+                {"type": "navigation_mode", "mode": "driving"},
+            )
+        else:
+            delivered = None
+
         with self._lock:
             self._state.update(
                 {
@@ -685,7 +690,7 @@ class NavigationControlApi:
                     "last_error": None,
                 }
             )
-            if self._connected and not delivered:
+            if self._motor_output_enabled and self._connected and not delivered:
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
             self._touch_locked()
         return self.state_response()

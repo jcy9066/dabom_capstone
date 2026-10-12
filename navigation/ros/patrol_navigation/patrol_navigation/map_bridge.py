@@ -8,7 +8,13 @@ from patrol_navigation.env_config import env_text
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.time import Time
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSProfile,
+    ReliabilityPolicy,
+    DurabilityPolicy,
+    HistoryPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -243,7 +249,12 @@ class MapBridge(Node):
                 OccupancyGrid,
                 self.map_topic,
                 self.on_map,
-                1,
+                QoSProfile(
+                    history=HistoryPolicy.KEEP_LAST,
+                    depth=1,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                ),
             )
         )
 
@@ -552,7 +563,7 @@ def main(args=None):
 
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

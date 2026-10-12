@@ -27,8 +27,8 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.10
-      movement_time_allowance: 15.0
+      required_movement_radius: 0.05
+      movement_time_allowance: 25.0
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -200,7 +200,7 @@ global_costmap:
           data_type: "LaserScan"
           clearing: true
           marking: true
-          inf_is_valid: false
+          inf_is_valid: true
           # Keep a dynamic obstacle for one 2 Hz global-planner cycle so a
           # single missing scan does not flip A* between left/right routes.
           # Local costmap intentionally stays at 0 persistence for fast DWB response.
@@ -228,9 +228,11 @@ planner_server:
     planner_plugins: ["GridBased"]
 
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.15
-      use_astar: true
+      # Direct any-angle paths when line of sight is obstacle-free.
+      plugin: "nav2_theta_star_planner/ThetaStarPlanner"
+      how_many_corners: 8
+      w_euc_cost: 2.0
+      w_traversal_cost: 2.0
       allow_unknown: true
 
 
