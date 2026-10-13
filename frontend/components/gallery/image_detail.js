@@ -240,7 +240,11 @@
         const item = context.item;
         const source = itemSource(item);
         const recordId = itemId(item);
-        if (recordId == null || !confirm('이 이미지를 갤러리에서 삭제하시겠습니까?')) return;
+        if (recordId == null) return;
+    const approved = window.DabomSelectedUI?.confirmDelete
+        ? await window.DabomSelectedUI.confirmDelete('이 이미지를 갤러리에서 삭제하시겠습니까?')
+        : confirm('이 이미지를 갤러리에서 삭제하시겠습니까?');
+    if (!approved) return;
         const previousText = button.textContent;
         button.disabled = true;
         button.textContent = '삭제 중...';
