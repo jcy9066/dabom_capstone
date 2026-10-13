@@ -30,7 +30,7 @@
             <div class="sidebar-item">
                 <span class="sidebar-item-label">다크 모드</span>
 
-                <div class="dark-toggle" id="darkToggle" onclick="toggleDarkMode()">
+                <div class="dark-toggle" id="darkToggle" role="switch" tabindex="0" aria-label="다크 모드" aria-checked="false" onclick="toggleDarkMode()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDarkMode();}">
                     <div class="dark-toggle-slider"></div>
                 </div>
             </div>
@@ -99,7 +99,7 @@
         </button>
 
         <div class="header-center">
-            <div class="live-badge">LIVE</div>
+            <div class="live-badge" id="pi-live-badge" role="status" aria-live="polite"><span class="ui-pi-light" aria-hidden="true"></span><span class="ui-pi-label">PI UNKNOWN</span></div>
             <h1>AI 순찰 로봇 관제 센터</h1>
         </div>
     </header>
@@ -699,5 +699,6 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
+    <script src="static/selected_ui.js?v=20261013-selected-ui-v1"></script>
 </body>
 </html>
