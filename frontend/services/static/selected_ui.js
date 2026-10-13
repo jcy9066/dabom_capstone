@@ -143,7 +143,8 @@
     const root = $('#serverStateCard');
     if (!root) return;
     function update() {
-      root.querySelectorAll('.server-state-field strong').forEach(value => {
+      // Only genuine states: map names, goals and path descriptions are values, not statuses.
+      root.querySelectorAll('#navigation-state-status, #emergency-stop-status').forEach(value => {
         const raw = (value.textContent || '').trim().toUpperCase();
         let status = 'unknown';
         if (value.classList.contains('state-danger') || /\b(FAIL|FAILED|ERROR|OFFLINE|FAULT|EMERGENCY|BLOCKED)\b/.test(raw)) status='error';
