@@ -61,7 +61,7 @@
       badge.classList.toggle('ui-pi-online', online);
       badge.setAttribute('aria-label', online ? 'Raspberry Pi 연결됨' : 'Raspberry Pi 연결되지 않음 또는 상태 확인 불가');
       const label=badge.querySelector('.ui-pi-label');
-      if (label) label.textContent = online ? 'PI ONLINE' : (text === 'OFFLINE' ? 'PI OFFLINE' : 'PI UNKNOWN');
+      if (label) label.textContent = online ? 'ON' : (text === 'OFFLINE' ? 'OFF' : 'UNKNOWN');
     }
     const obs = new MutationObserver(sync);
     obs.observe(state, { childList:true, characterData:true, subtree:true, attributes:true, attributeFilter:['class'] });
@@ -161,7 +161,7 @@
 
   /* Small dot loader is attached to existing loading text, not to new fake states. */
   function installExistingLoaders() {
-    const selector = '.gallery-empty.is-loading,.saved-map-progress,.record-delete-status,.modal-body .record-loading,.modal-body [aria-busy="true"]';
+    const selector = '.gallery-empty.is-loading,.table-empty.is-loading,.saved-map-progress,.record-delete-status,.modal-body .record-loading,.modal-body [aria-busy="true"]';
     function sync(root) {
       if (!root?.querySelectorAll) return;
       root.querySelectorAll(selector).forEach(element => {
