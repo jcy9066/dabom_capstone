@@ -66,6 +66,7 @@
 .ui-dots > i:nth-child(3) { animation-delay:.26s; }
 .ui-dots[hidden] { display:none !important; }
 .table-empty.is-loading { color:var(--text-muted); }
+.table-empty.is-loading::before { content:none; }
 .ui-is-loading::before { content:""; }
 .gallery-empty.is-loading, .ui-is-loading { color:var(--text-muted); }
 .ui-is-loading .ui-dots { color:var(--ui-highlight); }
@@ -175,23 +176,37 @@ body.login-page { background:var(--bg-color); }
   transform:translateY(-1px); box-shadow:4px 6px 12px rgba(0,0,0,.15);
 }
 .login-page .auth-btn:active:not(:disabled),.signup-dialog .auth-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 2px 2px 5px rgba(0,0,0,.12); }
+.login-page .auth-btn.primary,.signup-dialog .auth-btn.primary {
+  background:var(--primary-color); border-color:var(--primary-color); color:#fff;
+}
+.login-page .auth-btn.primary:hover:not(:disabled),
+.signup-dialog .auth-btn.primary:hover:not(:disabled) {
+  background:var(--primary-color); border-color:var(--primary-color); filter:brightness(1.08);
+}
+.login-page .auth-btn.secondary,.signup-dialog .auth-btn.secondary { color:var(--text-muted); background:var(--card-bg2); }
+.login-page .auth-btn.secondary:hover:not(:disabled),
+.signup-dialog .auth-btn.secondary:hover:not(:disabled) { color:var(--ui-highlight); border-color:var(--ui-highlight); }
 .signup-dialog .signup-close:focus-visible { outline:2px solid var(--ui-highlight); }
 .signup-modal.open .signup-dialog { animation:ui-modal-enter .21s var(--ui-ease); }
 
 /* 14 — vinodjangid07 trash button: icon + hover emphasis without changing handlers. */
 button.gallery-delete-btn, .record-delete-actions button[data-action="delete"],
 .saved-map-modal button[data-control-button="danger"] {
-  display:inline-flex; justify-content:center; align-items:center; gap:4px;
-  border-radius:9px; border:1px solid var(--danger-color); color:var(--danger-color);
+  position:relative;
+  border-radius:var(--radius-sm); border:1px solid var(--danger-color); color:var(--danger-color);
   background:var(--card-bg); transition:transform .16s,background .2s,color .2s,box-shadow .2s;
 }
 button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before,
-.saved-map-modal button[data-control-button="danger"]::before { content:""; width:11px; height:12px; flex:none;
+.saved-map-modal button[data-control-button="danger"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
   background:currentColor; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6h18v2H3zm4 3h10l-1 12H8L7 9zm2-6h6l1 2H8l1-2z'/%3E%3C/svg%3E") center/contain no-repeat; }
 button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled),
 .saved-map-modal button[data-control-button="danger"]:hover:not(:disabled) {
-  background:var(--danger-color); color:#fff; transform:translateY(-1px); box-shadow:0 5px 12px var(--danger-glow,rgba(225,29,72,.2));
+  background:var(--danger-color); color:#fff; box-shadow:0 3px 8px var(--danger-glow,rgba(225,29,72,.2));
 }
+button.gallery-delete-btn:hover:not(:disabled) { color:#fff !important; border-color:var(--danger-color) !important; }
+button.gallery-delete-btn:hover:not(:disabled)::before,
+.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before,
+.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled)::before { opacity:.8; }
 button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
 
 /* 15 — Yaya12085 textbox only, not search nor unrelated form/card contents. */
