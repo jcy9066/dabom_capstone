@@ -270,3 +270,17 @@ button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
   .ui-rubber-indicator, .menu-btn span, .dark-toggle .dark-toggle-slider,
   .lidar-display-options input[type="checkbox"] { transition:none !important; }
 }
+
+/* The existing log soft-delete impact preview is the confirmation surface. */
+.record-delete-zone .record-delete-impact {
+  border:1px solid var(--danger-color); border-radius:12px;
+  background:var(--alert-bg); padding:13px 15px;
+  box-shadow:0 5px 18px var(--danger-glow,rgba(225,29,72,.08));
+}
+.record-delete-zone .record-delete-impact::before {
+  content:"!"; display:inline-grid; place-items:center;
+  width:25px; height:25px; margin-right:8px; border-radius:50%;
+  color:var(--danger-color); background:var(--card-bg);
+  border:1px solid var(--danger-color); font-weight:800;
+}
+.record-delete-zone .record-delete-status { color:var(--text-muted); line-height:1.5; }
