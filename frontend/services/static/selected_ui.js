@@ -60,7 +60,8 @@
       const online = state.classList.contains('state-online') && /^(ON|ONLINE|CONNECTED)$/i.test(text);
       badge.classList.toggle('ui-pi-online', online);
       badge.setAttribute('aria-label', online ? 'Raspberry Pi 연결됨' : 'Raspberry Pi 연결되지 않음 또는 상태 확인 불가');
-      badge.querySelector('.ui-pi-label').textContent = online ? 'PI ONLINE' : (text === 'OFFLINE' ? 'PI OFFLINE' : 'PI UNKNOWN');
+      const label=badge.querySelector('.ui-pi-label');
+      if (label) label.textContent = online ? 'PI ONLINE' : (text === 'OFFLINE' ? 'PI OFFLINE' : 'PI UNKNOWN');
     }
     const obs = new MutationObserver(sync);
     obs.observe(state, { childList:true, characterData:true, subtree:true, attributes:true, attributeFilter:['class'] });
