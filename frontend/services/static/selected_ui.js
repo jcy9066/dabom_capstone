@@ -146,9 +146,10 @@
       root.querySelectorAll('.server-state-field strong').forEach(value => {
         const raw = (value.textContent || '').trim().toUpperCase();
         let status = 'unknown';
-        if (/\b(FAIL|FAILED|ERROR|OFFLINE|FAULT|EMERGENCY|BLOCKED)\b/.test(raw)) status='error';
+        if (value.classList.contains('state-danger') || /\b(FAIL|FAILED|ERROR|OFFLINE|FAULT|EMERGENCY|BLOCKED)\b/.test(raw)) status='error';
+        else if (value.classList.contains('state-success') || raw === 'CLEAR') status='success';
         else if (/\b(STARTING|PENDING|LOADING|WAITING|RUNNING)\b/.test(raw)) status='pending';
-        else if (/\b(READY|ONLINE|CONNECTED|ACTIVE|SUCCESS|COMPLETED)\b/.test(raw)) status='success';
+        else if (/\b(READY|ONLINE|CONNECTED|SUCCESS|COMPLETED)\b/.test(raw)) status='success';
         value.classList.add('ui-state-marked');
         value.dataset.uiState = status;
       });
