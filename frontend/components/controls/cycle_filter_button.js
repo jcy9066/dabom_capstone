@@ -36,6 +36,8 @@
             if (!this.element || !option) return;
             this.element.textContent = option.label;
             this.element.dataset.value = option.value == null ? '' : String(option.value);
+            // Styling only: the existing cycle index determines whether the filter is active.
+            this.element.dataset.uiFilterSelected = String(this.index !== 0);
         }
 
         destroy() {

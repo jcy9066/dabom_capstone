@@ -166,10 +166,9 @@ function scheduleCameraStatusPoll(delay = CAMERA_STATUS_POLL_INTERVAL_MS) {
 }
 
 function setLiveBadge(isLive) {
-    const badge = document.querySelector('.live-badge');
-    if (!badge) return;
-    badge.classList.toggle('offline', !isLive);
-    badge.textContent = isLive ? 'LIVE' : 'OFFLINE';
+    // Camera status remains in the camera preview. Header badge shows Pi state only.
+    const camera = document.getElementById('camera-card');
+    if (camera) camera.dataset.cameraLive = isLive ? 'true' : 'false';
 }
 
 function showCameraLive() {
@@ -1960,6 +1959,7 @@ function toggleDarkMode() {
     darkMode = !darkMode;
     document.body.classList.toggle('dark-mode', darkMode);
     document.getElementById('darkToggle').classList.toggle('active', darkMode);
+    document.getElementById('darkToggle').setAttribute('aria-checked', String(darkMode));
     localStorage.setItem('darkMode', darkMode ? '1' : '0');
 }
 

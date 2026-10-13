@@ -1,0 +1,589 @@
+/* Selected Uiverse + ReactBits dashboard visuals.
+ * Scoped on the existing markup; no external React runtime.
+ * References: uiverse.io and reactbits.dev (MIT-style source designs).
+ * Design tokens always flow from the hosting theme.
+ */
+:root {
+  --ui-soft: var(--card-bg2);
+  --ui-edge: var(--border-color);
+  --ui-ink: var(--text-dark);
+  --ui-highlight: var(--accent);
+  --ui-ease: cubic-bezier(.2,.75,.24,1);
+}
+@keyframes ui-dot-bounce {
+  0%,80%,100% { transform: translateY(0) scale(.72); opacity:.38; }
+  40% { transform: translateY(-5px) scale(1); opacity:1; }
+}
+@keyframes ui-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(40,118,88,.40); }
+  70%,100% { box-shadow: 0 0 0 9px rgba(40,118,88,0); }
+}
+@keyframes ui-content-enter {
+  from { opacity:0; transform:translateY(10px); }
+  to { opacity:1; transform:translateY(0); }
+}
+@keyframes ui-modal-enter {
+  from { opacity:0; transform:translateY(12px) scale(.985); }
+  to { opacity:1; transform:translateY(0) scale(1); }
+}
+@keyframes ui-modal-leave {
+  from { opacity:1; transform:translateY(0) scale(1); }
+  to { opacity:0; transform:translateY(9px) scale(.99); }
+}
+
+/* 01 — JustCode14 day/night theme control: kept in the sidebar. */
+.sidebar .dark-toggle {
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  width:44px; min-width:44px; height:24px; box-sizing:border-box; border-radius:30px;
+  padding:0; border:1px solid var(--border-bright);
+  background:linear-gradient(135deg,#D4D4D4,#F5F5F5);
+  box-shadow:inset 0 1px 3px rgba(15,23,42,.15), 0 1px 3px rgba(0,0,0,.09);
+  cursor:pointer; overflow:hidden; transition:background .32s,border .32s;
+}
+.sidebar .dark-toggle .dark-toggle-slider {
+  position:absolute; top:3px; left:3px; width:16px; height:16px;
+  border-radius:50%; background:#fff8d8;
+  box-shadow:0 1px 3px rgba(0,0,0,.19),inset -2px -2px 0 #ffd166;
+  transition:transform .33s var(--ui-ease),background .33s,box-shadow .33s;
+}
+.sidebar .dark-toggle::before {
+  content:""; position:absolute; inset:7px 5px auto auto;
+  width:12px; height:5px; border-radius:20px; background:rgba(255,255,255,.72);
+  box-shadow:-5px 4px 0 -2px rgba(255,255,255,.65);
+}
+.sidebar .dark-toggle.active { background:linear-gradient(135deg,#282323,#5C4E4E); border-color:#988686; }
+.sidebar .dark-toggle.active .dark-toggle-slider {
+  left:3px; transform:translateX(21px); background:#D1D0D0;
+  box-shadow:inset -5px -2px 0 #988686,0 1px 4px rgba(0,0,0,.35);
+}
+.sidebar .dark-toggle.active::before { background:rgba(249,248,221,.9); width:2px; height:2px; border-radius:50%; box-shadow:-15px 7px #f8f2c5,-21px -2px #f8f2c5; }
+.sidebar .dark-toggle:focus-visible { outline:2px solid var(--ui-highlight); outline-offset:3px; }
+
+/* 02 — mobinkakei's staggered bouncing dots, used for existing busy states. */
+.ui-dots { display:inline-flex; gap:4px; align-items:center; vertical-align:middle; margin-right:7px; }
+.ui-dots > i { width:6px; height:6px; border-radius:50%; background:currentColor; animation:ui-dot-bounce 1.05s infinite ease-in-out; }
+.ui-dots > i:nth-child(2) { animation-delay:.13s; }
+.ui-dots > i:nth-child(3) { animation-delay:.26s; }
+.ui-dots[hidden] { display:none !important; }
+.table-empty.is-loading { color:var(--text-muted); }
+.table-empty.is-loading::before { content:none; }
+.ui-is-loading::before { content:""; }
+.gallery-empty.is-loading, .ui-is-loading { color:var(--text-muted); }
+.ui-is-loading .ui-dots { color:var(--ui-highlight); }
+button[aria-busy="true"] { cursor:progress; }
+
+/* 03 — TimTrayler soft round toggles; neutral white in enabled position. */
+.dashboard-model-toggle-track, .dashboard-led-toggle-track {
+  border-radius:999px !important; background:#737b87 !important;
+  border:1px solid var(--border-bright) !important;
+  box-shadow:inset 0 2px 4px rgba(0,0,0,.20) !important;
+  transition:background .23s,border-color .23s !important;
+}
+.dashboard-model-toggle-slider,.dashboard-led-toggle-slider {
+  background:#9ca3af !important; border-radius:50% !important;
+  box-shadow:0 1px 4px rgba(0,0,0,.29) !important;
+  transition:transform .24s var(--ui-ease),left .24s var(--ui-ease) !important;
+}
+.dashboard-model-toggle.active .dashboard-model-toggle-track,
+.dashboard-led-toggle.active .dashboard-led-toggle-track { background:#c2c7cf !important; border-color:#e2e5eb !important; }
+.dashboard-model-toggle.active .dashboard-model-toggle-slider,
+.dashboard-led-toggle.active .dashboard-led-toggle-slider { background:#fff !important; }
+.dashboard-model-toggle.unknown, .dashboard-led-toggle.unknown { opacity:.7; }
+.dashboard-model-toggle.unknown .dashboard-model-toggle-slider,
+.dashboard-led-toggle.unknown .dashboard-led-toggle-slider { background:#9ca3af !important; }
+
+/* 04 — Cevorob hamburger morphing into X. */
+.menu-btn { position:relative; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; }
+.menu-btn span { position:relative; left:auto; top:auto; display:block; width:16px; height:1.5px; border-radius:4px;
+  background:var(--ui-ink); transform-origin:50% 50%; transition:transform .28s var(--ui-ease),opacity .18s !important; }
+.menu-btn.ui-open span:nth-child(1) { transform:translateY(6.5px) rotate(45deg); }
+.menu-btn.ui-open span:nth-child(2) { opacity:0; transform:scaleX(0); }
+.menu-btn.ui-open span:nth-child(3) { transform:translateY(-6.5px) rotate(-45deg); }
+.menu-btn:focus-visible { outline:2px solid var(--ui-highlight); outline-offset:3px; }
+
+/* 07 — Yaya12085 warning confirmation card. Actual deletion flow preserved. */
+.ui-confirm-overlay { position:fixed; z-index:3000; inset:0; display:flex; align-items:center; justify-content:center;
+  padding:18px; background:rgba(0,0,0,.64); backdrop-filter:blur(5px); }
+.ui-confirm-card { max-width:360px; width:min(100%,360px); box-sizing:border-box; border-radius:12px;
+  background:var(--card-bg); border:1px solid var(--ui-edge); box-shadow:0 18px 55px rgba(0,0,0,.28);
+  text-align:center; padding:18px; animation:ui-modal-enter .22s var(--ui-ease); color:var(--ui-ink); }
+.ui-confirm-symbol { margin:0 auto 14px; display:grid; place-items:center; height:34px; width:34px;
+  border-radius:50%; background:var(--danger-glow,rgba(225,29,72,.12)); color:var(--danger-color); font-size:20px; font-weight:bold; }
+.ui-confirm-title { font-size:15px; margin:0 0 8px; font-weight:750; }
+.ui-confirm-message { white-space:pre-line; color:var(--text-muted); line-height:1.5; font-size:13px; }
+.ui-confirm-actions { display:flex; gap:10px; margin-top:20px; justify-content:center; }
+.ui-confirm-actions button { flex:1; min-height:30px; border:1px solid var(--ui-edge); border-radius:7px; padding:5px 10px;
+  background:var(--card-bg2); color:var(--ui-ink); cursor:pointer; font:inherit; }
+.ui-confirm-actions .ui-confirm-delete { border-color:var(--danger-color); background:var(--danger-color); color:#fff; }
+.ui-confirm-actions button:focus-visible { outline:2px solid var(--ui-highlight); outline-offset:2px; }
+
+/* 09 — alexruix minimal rounded search input. */
+.modal input[type="search"], .signup-modal input[type="search"] {
+  background:var(--input-bg); color:var(--ui-ink);
+  border:1px solid var(--ui-edge); border-radius:7px; padding:5px 8px 5px 29px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='17' height='17' viewBox='0 0 24 24' fill='none' stroke='%2396a0ae' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='10.8' cy='10.8' r='6.8'/%3E%3Cpath d='m16 16 5 5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:8px center;
+  box-shadow:0 2px 6px rgba(0,0,0,.045);
+  transition:border-color .2s,box-shadow .2s;
+}
+.modal input[type="search"]:focus, .signup-modal input[type="search"]:focus {
+  border-color:var(--ui-highlight); box-shadow:0 0 0 3px var(--primary-glow,rgba(80,110,140,.12)); outline:none;
+}
+
+/* 10 — 00Kubi-style pill filter states. Existing independent filter controls unchanged. */
+.modal-filter-bar button[data-cycle],.gallery-toolbar .gallery-filter-btn {
+  position:relative; border-radius:999px; padding:5px 14px; border:1px solid var(--ui-edge);
+  color:var(--text-muted); background:var(--card-bg); box-shadow:0 1px 2px rgba(0,0,0,.08);
+  transition:color .2s,background .2s,box-shadow .2s,border-color .2s;
+}
+.modal-filter-bar button[data-cycle]:hover, .gallery-toolbar .gallery-filter-btn:hover {
+  border-color:var(--ui-highlight); color:var(--ui-ink);
+}
+.modal-filter-bar button[data-cycle][data-ui-filter-selected="true"],
+.gallery-toolbar .gallery-filter-btn.active {
+  color:var(--ui-ink); border-color:var(--ui-highlight); background:var(--card-bg2);
+  box-shadow:inset 0 0 0 1px var(--ui-highlight), 0 2px 6px rgba(0,0,0,.07);
+}
+
+/* 11 — gharsh11032000 radio-inspired pagination navigation. */
+.records-pagination button { border-radius:999px !important; min-width:64px; min-height:29px; padding:6px 10px !important;
+  transition:background .2s,transform .2s,box-shadow .2s !important; }
+.records-pagination button:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,.1); }
+.records-pagination span { padding:3px 8px; min-width:48px; text-align:center; border:1px solid var(--ui-edge);
+  border-radius:999px; color:var(--ui-highlight); background:var(--card-bg2); font-weight:750; }
+
+/* 13 — Praashoo7 soft recessed login/signup form; theme tokens preserved. */
+body.login-page { background:var(--bg-color); }
+.login-panel,.signup-dialog {
+  border:1px solid var(--ui-edge); border-radius:10px;
+  background:var(--card-bg); box-shadow:12px 14px 26px rgba(0,0,0,.12),-8px -8px 28px rgba(255,255,255,.045);
+}
+.login-form .auth-field input, .signup-form .auth-field input {
+  box-sizing:border-box; width:100%; border-radius:7px; border:1px solid var(--ui-edge); color:var(--ui-ink);
+  background:var(--input-bg); box-shadow:inset 2px 3px 7px rgba(0,0,0,.09);
+  transition:border-color .2s,box-shadow .2s; padding:0 12px;
+}
+.login-form .auth-field input:focus, .signup-form .auth-field input:focus {
+  outline:none; border-color:var(--ui-highlight);
+  box-shadow:inset 2px 3px 7px rgba(0,0,0,.06),0 0 0 3px var(--primary-glow,rgba(80,110,140,.12));
+}
+.login-page .auth-btn, .signup-dialog .auth-btn, .signup-dialog .email-send-btn {
+  border-radius:7px; border:1px solid var(--ui-edge); background:var(--card-bg2); color:var(--ui-ink);
+  box-shadow:3px 3px 8px rgba(0,0,0,.12),-2px -2px 7px rgba(255,255,255,.12);
+  transition:transform .17s,box-shadow .17s,background .17s;
+}
+.login-page .auth-btn:hover:not(:disabled),.signup-dialog .auth-btn:hover:not(:disabled),.signup-dialog .email-send-btn:hover:not(:disabled) {
+  transform:translateY(-1px); box-shadow:4px 6px 12px rgba(0,0,0,.15);
+}
+.login-page .auth-btn:active:not(:disabled),.signup-dialog .auth-btn:active:not(:disabled) { transform:translateY(1px); box-shadow:inset 2px 2px 5px rgba(0,0,0,.12); }
+.login-page .auth-btn.primary,.signup-dialog .auth-btn.primary {
+  background:var(--primary-color); border-color:var(--primary-color); color:#fff;
+}
+.login-page .auth-btn.primary:hover:not(:disabled),
+.signup-dialog .auth-btn.primary:hover:not(:disabled) {
+  background:var(--primary-color); border-color:var(--primary-color); filter:brightness(1.08);
+}
+.login-page .auth-btn.secondary,.signup-dialog .auth-btn.secondary { color:var(--text-muted); background:var(--card-bg2); }
+.login-page .auth-btn.secondary:hover:not(:disabled),
+.signup-dialog .auth-btn.secondary:hover:not(:disabled) { color:var(--ui-highlight); border-color:var(--ui-highlight); }
+.signup-dialog .signup-close:focus-visible { outline:2px solid var(--ui-highlight); }
+.signup-modal.open .signup-dialog { animation:ui-modal-enter .21s var(--ui-ease); }
+
+/* 14 — vinodjangid07 trash button: icon + hover emphasis without changing handlers. */
+button.gallery-delete-btn, .record-delete-actions button[data-action="delete"],
+.saved-map-modal button[data-control-button="danger"] {
+  position:relative;
+  border-radius:var(--radius-sm); border:1px solid var(--danger-color); color:var(--danger-color);
+  background:var(--card-bg); transition:transform .16s,background .2s,color .2s,box-shadow .2s;
+}
+button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before,
+.saved-map-modal button[data-control-button="danger"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
+  background:currentColor; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6h18v2H3zm4 3h10l-1 12H8L7 9zm2-6h6l1 2H8l1-2z'/%3E%3C/svg%3E") center/contain no-repeat; }
+button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled),
+.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled) {
+  background:var(--danger-color); color:#fff; box-shadow:0 3px 8px var(--danger-glow,rgba(225,29,72,.2));
+}
+button.gallery-delete-btn:hover:not(:disabled) { color:#fff !important; border-color:var(--danger-color) !important; }
+button.gallery-delete-btn:hover:not(:disabled)::before,
+.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before,
+.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled)::before { opacity:.8; }
+button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
+
+/* 15 — Yaya12085 textbox only, not search nor unrelated form/card contents. */
+.modal-body textarea, .modal-body input[type="text"], .modal-body input[type="number"]:not(.confidence-filter) {
+  border:1px solid var(--ui-edge); background:var(--input-bg); color:var(--ui-ink);
+  border-radius:var(--radius-sm); box-shadow:inset 0 1px 3px rgba(0,0,0,.045);
+  transition:border-color .2s,box-shadow .2s;
+}
+.modal-body textarea:focus,.modal-body input[type="text"]:focus,
+.modal-body input[type="number"]:not(.confidence-filter):focus {
+  outline:none; border-color:var(--ui-highlight);
+  box-shadow:0 0 0 3px var(--primary-glow,rgba(80,110,140,.12));
+}
+
+/* 16 — Yaya12085 pulsing online indicator; gray/static for offline and unknown. */
+#pi-live-badge { display:inline-flex; align-items:center; gap:6px; min-width:0;
+  border:1px solid var(--ui-edge); border-radius:999px; padding:4px 8px;
+  background:var(--card-bg2); color:var(--text-muted); box-shadow:none; font-weight:700; font-size:10px;
+}
+#pi-live-badge::before { display:none; }
+#pi-live-badge .ui-pi-light { display:block; width:7px; height:7px; border-radius:50%; background:#9ca3af; flex:none; }
+#pi-live-badge.ui-pi-online { color:var(--success-color); border-color:var(--success-color); }
+#pi-live-badge.ui-pi-online .ui-pi-light { background:var(--success-color); animation:ui-pulse-ring 1.65s infinite; }
+
+/* 18 — Rubber Segment under the existing FREE/TOP/FOLLOW buttons. */
+.lidar-view-controls { position:relative; isolation:isolate; }
+.lidar-view-controls .ui-rubber-indicator {
+  position:absolute; z-index:0; box-sizing:border-box; top:var(--ui-segment-top,0px); left:var(--ui-segment-left,0px);
+  width:var(--ui-segment-width,0px); height:var(--ui-segment-height,0px);
+  border-radius:7px; border:1px solid var(--ui-highlight);
+  background:var(--card-bg2); box-shadow:0 2px 8px rgba(0,0,0,.1);
+  transition:left .32s cubic-bezier(.23,1.65,.44,1),width .3s,top .3s;
+  pointer-events:none;
+}
+.lidar-view-controls button[data-lidar-view] { position:relative; z-index:1; }
+.lidar-view-controls button[data-lidar-view].active { background:transparent !important; color:var(--ui-highlight); }
+.lidar-view-controls button[data-lidar-view]:focus-visible { outline:2px solid var(--ui-highlight); outline-offset:2px; }
+
+/* 19 — Spring Check: no strikethrough even when selected. */
+.lidar-display-options label { text-decoration:none !important; cursor:pointer; }
+.lidar-display-options input[type="checkbox"] { appearance:none; -webkit-appearance:none; width:14px; height:14px; flex:none;
+  border-radius:5px; border:1.5px solid var(--border-bright); background:var(--card-bg2);
+  vertical-align:middle; display:inline-grid; place-content:center;
+  transition:background .18s,border-color .18s,transform .24s cubic-bezier(.2,1.8,.55,1);
+}
+.lidar-display-options input[type="checkbox"]::after {
+  content:""; width:5px; height:8px; transform:rotate(45deg) scale(0);
+  border:solid #fff; border-width:0 2px 2px 0; transition:transform .23s cubic-bezier(.15,1.8,.6,1);
+}
+.lidar-display-options input[type="checkbox"]:checked { background:var(--ui-highlight); border-color:var(--ui-highlight); }
+.lidar-display-options input[type="checkbox"]:checked::after { transform:rotate(45deg) scale(1); }
+.lidar-display-options input[type="checkbox"]:active { transform:scale(.87); }
+.lidar-display-options input[type="checkbox"]:focus-visible { outline:2px solid var(--ui-highlight); outline-offset:2px; }
+
+/* 20 — Animated Content ONLY for freshly inserted alert rows. */
+#alertBox .alert-entry.ui-alert-enter { animation:ui-content-enter .29s var(--ui-ease) both; }
+
+/* 23 — Fade Content only on modal open/close; children are not animated per redraw. */
+#commonModal:not(.ui-modal-exiting) > .modal-content { animation:ui-modal-enter .23s var(--ui-ease); }
+#commonModal.ui-modal-exiting > .modal-content { animation:ui-modal-leave .16s ease-in both; }
+#commonModal.ui-modal-exiting { pointer-events:none; }
+
+/* 25 — Status Mark: status derived from actual server-rendered value only. */
+.server-state-field strong.ui-state-marked { position:relative; }
+.server-state-field strong.ui-state-marked::before { content:""; display:inline-block; position:absolute; left:-10px; top:50%; transform:translateY(-50%); width:6px; height:6px;
+  border-radius:50%; background:var(--text-muted); margin-right:0; }
+.server-state-field strong[data-ui-state="success"]::before { background:var(--success-color); }
+.server-state-field strong[data-ui-state="error"]::before { background:var(--danger-color); }
+.server-state-field strong[data-ui-state="pending"]::before { background:var(--warning-color); }
+.server-state-field strong[data-ui-state="unknown"]::before { background:var(--text-muted); }
+
+/* Keyboard, animation, narrow viewports */
+@media (max-width:720px) {
+  .ui-confirm-card { padding:18px; }
+  #pi-live-badge { padding:4px 8px; gap:5px; min-width:0; }
+  .modal-body input[type="search"] { max-width:100%; box-sizing:border-box; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .ui-dots>i,#pi-live-badge .ui-pi-light, #alertBox .ui-alert-enter,
+  #commonModal .modal-content,.signup-dialog { animation:none !important; }
+  .ui-rubber-indicator, .menu-btn span, .dark-toggle .dark-toggle-slider,
+  .lidar-display-options input[type="checkbox"] { transition:none !important; }
+}
+
+/* The existing log soft-delete impact preview is the confirmation surface. */
+.record-delete-zone .record-delete-impact {
+  border:1px solid var(--danger-color); border-radius:12px;
+  background:var(--alert-bg); padding:13px 15px;
+  box-shadow:0 5px 18px var(--danger-glow,rgba(225,29,72,.08));
+}
+.record-delete-zone .record-delete-impact::before {
+  content:"!"; display:inline-grid; place-items:center;
+  width:25px; height:25px; margin-right:8px; border-radius:50%;
+  color:var(--danger-color); background:var(--card-bg);
+  border:1px solid var(--danger-color); font-weight:800;
+}
+.record-delete-zone .record-delete-status { color:var(--text-muted); line-height:1.5; }
+
+
+/* Status marks for the existing GPU/Pi process rows, with no layout shift. */
+.system-control-switch.state-on,.system-control-switch.state-off,
+.system-control-switch.state-error,.system-control-switch.state-duplicate,
+.system-control-switch.state-unreachable,.system-control-switch.is-pending {
+  position:relative;
+}
+.system-control-switch.state-on::after,.system-control-switch.state-off::after,
+.system-control-switch.state-error::after,.system-control-switch.state-duplicate::after,
+.system-control-switch.state-unreachable::after,.system-control-switch.is-pending::after {
+  content:""; position:absolute; right:4px; top:4px; width:5px; height:5px;
+  border-radius:50%; background:var(--text-muted); pointer-events:none;
+}
+.system-control-switch.state-on::after { background:var(--success-color); }
+.system-control-switch.state-error::after,.system-control-switch.state-unreachable::after { background:var(--danger-color); }
+.system-control-switch.state-duplicate::after,.system-control-switch.is-pending::after { background:var(--warning-color); }
+
+
+/* Compact unified filter treatment: keep the original 29px control height. */
+.record-filter-bar input[type="datetime-local"],
+.record-filter-bar input.confidence-filter {
+  border-radius:var(--radius-sm); border-color:var(--ui-edge);
+  background:var(--input-bg); color:var(--ui-ink);
+  box-shadow:0 1px 2px rgba(0,0,0,.035);
+}
+.record-filter-bar input[type="datetime-local"]:focus-visible,
+.record-filter-bar input.confidence-filter:focus-visible {
+  outline:none; border-color:var(--ui-highlight);
+  box-shadow:0 0 0 2px var(--primary-glow,rgba(80,110,140,.12));
+}
+.record-filter-bar button[data-action="reset"] {
+  border-radius:var(--radius-sm); border-color:var(--ui-edge);
+}
+.gallery-toolbar .gallery-filter-btn { padding:5px 10px; min-height:30px; }
+
+/* Ensure existing state-mark indicators never enlarge their controls. */
+.system-control-switch.state-on::after,.system-control-switch.state-off::after,
+.system-control-switch.state-error::after,.system-control-switch.state-duplicate::after,
+.system-control-switch.state-unreachable::after,.system-control-switch.is-pending::after {
+  width:4px; height:4px; right:2px; top:3px;
+}
+
+
+/* ================================================================
+   Enterprise dashboard visual alignment — presentation only.
+   Original grid, DOM, IDs, handlers, API and robot controls unchanged.
+   All neutral page/card/text/border surfaces are inherited from dev.
+   Only the accent/semantic color roles use the selected Figma palettes.
+================================================================ */
+
+/* Light: Salt & Pepper accents on the original dev light surfaces. */
+:root {
+  --primary-color: #65556B;
+  --accent: #49697B;
+  --success-color: #287658;
+  --warning-color: #9A641F;
+  --danger-color: #B43B4E;
+  --primary-glow: rgba(101,85,107,.15);
+  --success-glow: rgba(40,118,88,.15);
+  --danger-glow: rgba(180,59,78,.15);
+  --ui-elevation: 0 2px 8px rgba(15,23,42,.055);
+  --ui-on-accent: #FFFFFF;
+  --ui-radius-control: 8px;
+  --ui-radius-panel: 11px;
+}
+
+/* Dark: Gothic Noir accents on the original dev dark surfaces. */
+body.dark-mode {
+  --primary-color: #CEB6C7;
+  --accent: #9FBBC9;
+  --success-color: #7ECAA7;
+  --warning-color: #E9B76C;
+  --danger-color: #F1808D;
+  --ui-elevation: 0 3px 12px rgba(0,0,0,.25);
+  --ui-on-accent: #161B22;
+}
+
+/* Shared panel surfaces: retain the dev background and card colors. */
+header {
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: 0 1px 4px rgba(15,23,42,.035);
+}
+.header-center h1 {
+  letter-spacing: -.025em;
+  font-weight: 700;
+}
+.system-status-bar {
+  border-color: var(--border-color);
+  box-shadow: var(--ui-elevation);
+}
+.sidebar {
+  border-right: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+}
+.card {
+  border-color: var(--border-color);
+  border-radius: var(--ui-radius-panel);
+  box-shadow: var(--ui-elevation);
+}
+.card-header {
+  border-color: var(--border-color);
+}
+.card-title {
+  font-weight: 700;
+  letter-spacing: .045em;
+}
+.sidebar-header, .modal-header {
+  border-color: var(--border-color);
+}
+
+/* Current server telemetry: existing six fields, not new status data. */
+.server-state-field {
+  background: var(--card-bg2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--ui-radius-control);
+  box-shadow: none;
+}
+.server-state-field span {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.server-state-field strong {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.server-state-updated, .alert-time {
+  font-variant-numeric: tabular-nums;
+}
+.server-state-field strong:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Status and alert timeline keep their actual values and severity. */
+#alertBox .alert-entry {
+  border-radius: var(--ui-radius-control);
+  border-top: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--card-bg2);
+  box-shadow: 0 1px 2px rgba(15,23,42,.025);
+}
+#alertBox .alert-entry.alert-info { border-left-color: var(--accent); }
+#alertBox .alert-entry.alert-warning { border-left-color: var(--warning-color); }
+#alertBox .alert-entry.alert-danger { border-left-color: var(--danger-color); }
+#alertBox .alert-time { color: var(--text-muted); }
+#alertBox .alert-message { color: var(--text-dark); }
+
+/* One consistent control treatment; preserve button dimensions/handlers. */
+.mb-btn, .action-btn, .filter-btn, .clear-btn,
+.dashboard-mode-button, .dashboard-control-button[data-control-button],
+.navigation-control-row button, .d-btn {
+  border-radius: var(--ui-radius-control);
+  font-weight: 600;
+  transition-property: background-color, border-color, color, box-shadow, transform;
+  transition-duration: .18s;
+  transition-timing-function: ease;
+}
+.mb-btn, .action-btn {
+  box-shadow: 0 1px 3px rgba(15,23,42,.055);
+}
+.mb-btn:hover:not(:disabled), .action-btn:hover:not(:disabled) {
+  box-shadow: 0 2px 7px rgba(15,23,42,.09);
+}
+.mb-btn:focus-visible, .action-btn:focus-visible,
+.filter-btn:focus-visible, .clear-btn:focus-visible,
+.d-btn:focus-visible, .dashboard-control-button[data-control-button]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mb-btn:disabled, .action-btn:disabled,
+.filter-btn:disabled, .dashboard-control-button[data-control-button]:disabled {
+  box-shadow: none;
+}
+
+/* Existing camera and 3D viewer toolbars: styling only. */
+.icon-btn, .lidar-control-overflow-toggle, .lidar-viewer-fullscreen-btn,
+.lidar-map-select-btn, .minimap-expand-btn {
+  border-radius: var(--ui-radius-control);
+}
+.lidar-control-strip, .lidar-layer-drawer-content,
+.lidar-control-overflow-menu, .navigation-control-panel {
+  border-radius: var(--ui-radius-control);
+}
+.lidar-view-controls button[data-lidar-view].active {
+  color: var(--ui-highlight);
+}
+.lidar-view-controls .ui-rubber-indicator {
+  border-color: var(--ui-highlight);
+}
+
+/* Existing modal shells, tabs, records and gallery. */
+.modal-content, #commonModal[data-modal-view] .modal-content {
+  border: 1px solid var(--border-color);
+  border-radius: var(--ui-radius-panel);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+}
+.modal-header h2 {
+  font-weight: 700;
+  letter-spacing: -.015em;
+}
+.modal-table-wrapper {
+  border-radius: var(--ui-radius-control);
+  border: 1px solid var(--border-color);
+}
+.data-table thead th, .record-data-table thead th {
+  background: var(--table-head-bg);
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.data-table tbody tr:hover, .record-data-table tbody tr:hover {
+  background: var(--card-bg2);
+}
+.record-type-badge, .status-badge { border-radius: 999px; font-weight: 700; }
+.gallery-card {
+  border-radius: var(--ui-radius-panel);
+  border-color: var(--border-color);
+  box-shadow: var(--ui-elevation);
+}
+.gallery-card:hover { border-color: var(--accent); }
+.gallery-detail, .gallery-metadata {
+  border-color: var(--border-color);
+}
+.record-filter-bar input[type="search"],
+.record-filter-bar input[type="number"],
+.record-filter-bar input[type="datetime-local"],
+.modal-filter-bar input[type="time"] {
+  border-radius: var(--ui-radius-control);
+}
+.record-filter-bar input:focus-visible,
+.modal-filter-bar input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Existing selected components inherit the shared accent roles. */
+.ui-confirm-card, .login-panel, .signup-dialog {
+  border-color: var(--border-color);
+  box-shadow: var(--ui-elevation);
+}
+.ui-confirm-card { box-shadow: var(--shadow-lg); }
+.record-delete-zone .record-delete-impact {
+  border-color: var(--danger-color);
+}
+#pi-live-badge.ui-pi-online {
+  color: var(--success-color);
+  border-color: var(--success-color);
+}
+#pi-live-badge.ui-pi-online .ui-pi-light {
+  background: var(--success-color);
+}
+.sidebar .dark-toggle:focus-visible,
+.lidar-display-options input[type="checkbox"]:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* Light-on-dark accessibility for the pale Gothic Noir accents. */
+body.dark-mode.login-page .auth-btn.primary,
+body.dark-mode .signup-dialog .auth-btn.primary,
+body.dark-mode .ui-confirm-actions .ui-confirm-delete,
+body.dark-mode .record-delete-actions .filter-btn.danger,
+body.dark-mode .gallery-delete-btn:hover:not(:disabled) {
+  color: var(--ui-on-accent) !important;
+}
+body.dark-mode .lidar-display-options input[type="checkbox"]:checked::after {
+  border-color: var(--ui-on-accent);
+}
+body.dark-mode .ui-confirm-symbol {
+  background: rgba(180,59,78,.2);
+}
+body.dark-mode .sidebar .dark-toggle {
+  border-color: var(--border-bright);
+}
+
+/* Reduced motion never changes operation or state. */
+@media (prefers-reduced-motion: reduce) {
+  .mb-btn, .action-btn, .filter-btn, .clear-btn,
+  .dashboard-control-button[data-control-button], .d-btn {
+    transition: none;
+  }
+}
