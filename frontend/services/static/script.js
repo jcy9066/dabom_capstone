@@ -1960,6 +1960,7 @@ function toggleDarkMode() {
     darkMode = !darkMode;
     document.body.classList.toggle('dark-mode', darkMode);
     document.getElementById('darkToggle').classList.toggle('active', darkMode);
+    document.getElementById('darkToggle').setAttribute('aria-checked', String(darkMode));
     localStorage.setItem('darkMode', darkMode ? '1' : '0');
 }
 
