@@ -447,7 +447,12 @@
 
         async handleDeleteAction() {
             if (!this.selection.count || ['previewing', 'deleting'].includes(this.deleteState)) return;
-            if (this.deletePreview) await this.confirmDelete();
+            if (this.deletePreview) {
+                const approved = window.DabomSelectedUI?.confirmDelete
+                    ? await window.DabomSelectedUI.confirmDelete('확인한 삭제 영향을 적용하시겠습니까?')
+                    : confirm('확인한 삭제 영향을 적용하시겠습니까?');
+                if (approved) await this.confirmDelete();
+            }
             else await this.previewDelete();
         }
 
