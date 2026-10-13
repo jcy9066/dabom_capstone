@@ -95,97 +95,97 @@
 }
 
 .record-event-intrusion {
-    background: #fee2e2;
-    color: #b91c1c;
+    background: #F8E5E9;
+    color: #B43B4E;
 }
 
 .record-event-assault {
-    background: #ffe4e6;
-    color: #9f1239;
+    background: #F8E5E9;
+    color: #B43B4E;
 }
 
 .record-event-system-error,
 .record-action-warning {
-    background: #ffedd5;
-    color: #c2410c;
+    background: #F8ECD9;
+    color: #9A641F;
 }
 
 .record-event-network-loss {
-    background: #fef3c7;
-    color: #92400e;
+    background: #F8ECD9;
+    color: #9A641F;
 }
 
 .record-event-sensor-anomaly {
-    background: #f3e8ff;
-    color: #6b21a8;
+    background: #EAE5ED;
+    color: #65556B;
 }
 
 .record-action-manual-moving {
-    background: #dbeafe;
-    color: #1d4ed8;
+    background: #EAE5ED;
+    color: #65556B;
 }
 
 .record-action-report {
-    background: #fee2e2;
-    color: #b91c1c;
+    background: #F8E5E9;
+    color: #B43B4E;
 }
 
 .record-action-communication {
-    background: #ccfbf1;
-    color: #0f766e;
+    background: #E2EAEE;
+    color: #49697B;
 }
 
 .record-action-note,
 .record-type-unknown {
-    background: #f3f4f6;
-    color: #4b5563;
+    background: #F0F0F0;
+    color: #6B6B6B;
 }
 
 body.dark-mode .record-event-intrusion {
-    background: rgba(127, 29, 29, 0.55);
-    color: #fecaca;
+    background: rgba(180,59,78,0.22);
+    color: #F1808D;
 }
 
 body.dark-mode .record-event-assault {
-    background: rgba(136, 19, 55, 0.55);
-    color: #fecdd3;
+    background: rgba(180,59,78,0.22);
+    color: #F1808D;
 }
 
 body.dark-mode .record-event-system-error,
 body.dark-mode .record-action-warning {
-    background: rgba(124, 45, 18, 0.55);
-    color: #fed7aa;
+    background: rgba(154,100,31,0.22);
+    color: #E9B76C;
 }
 
 body.dark-mode .record-event-network-loss {
-    background: rgba(120, 53, 15, 0.55);
-    color: #fde68a;
+    background: rgba(154,100,31,0.22);
+    color: #E9B76C;
 }
 
 body.dark-mode .record-event-sensor-anomaly {
-    background: rgba(88, 28, 135, 0.55);
-    color: #e9d5ff;
+    background: rgba(101,85,107,0.22);
+    color: #CEB6C7;
 }
 
 body.dark-mode .record-action-manual-moving {
-    background: rgba(30, 64, 175, 0.55);
-    color: #bfdbfe;
+    background: rgba(101,85,107,0.22);
+    color: #CEB6C7;
 }
 
 body.dark-mode .record-action-report {
-    background: rgba(127, 29, 29, 0.55);
-    color: #fecaca;
+    background: rgba(180,59,78,0.22);
+    color: #F1808D;
 }
 
 body.dark-mode .record-action-communication {
-    background: rgba(17, 94, 89, 0.55);
-    color: #99f6e4;
+    background: rgba(73,105,123,0.22);
+    color: #9FBBC9;
 }
 
 body.dark-mode .record-action-note,
 body.dark-mode .record-type-unknown {
-    background: rgba(55, 65, 81, 0.65);
-    color: #e5e7eb;
+    background: rgba(107,107,107,0.2);
+    color: #D1D0D0;
 }
 
 .record-data-table .record-selection-column {
@@ -244,7 +244,7 @@ body.dark-mode .record-type-unknown {
 .records-pagination button:focus-visible {
     border-color: var(--accent);
     color: var(--accent);
-    background: rgba(8, 145, 178, 0.08);
+    background: rgba(73,105,123,0.08);
     outline: none;
 }
 
@@ -333,3 +333,6 @@ body.dark-mode .record-type-unknown {
     .record-data-table th,
     .record-data-table td { font-size: 9px; }
 }
+
+/* High-contrast labels on the light Gothic Noir danger surface. */
+body.dark-mode .record-delete-actions .filter-btn.danger { color: #1B1818; }
