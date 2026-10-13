@@ -321,3 +321,28 @@ button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
 .system-control-switch.state-on::after { background:var(--success-color); }
 .system-control-switch.state-error::after,.system-control-switch.state-unreachable::after { background:var(--danger-color); }
 .system-control-switch.state-duplicate::after,.system-control-switch.is-pending::after { background:var(--warning-color); }
+
+
+/* Compact unified filter treatment: keep the original 29px control height. */
+.record-filter-bar input[type="datetime-local"],
+.record-filter-bar input.confidence-filter {
+  border-radius:var(--radius-sm); border-color:var(--ui-edge);
+  background:var(--input-bg); color:var(--ui-ink);
+  box-shadow:0 1px 2px rgba(0,0,0,.035);
+}
+.record-filter-bar input[type="datetime-local"]:focus-visible,
+.record-filter-bar input.confidence-filter:focus-visible {
+  outline:none; border-color:var(--ui-highlight);
+  box-shadow:0 0 0 2px var(--primary-glow,rgba(80,110,140,.12));
+}
+.record-filter-bar button[data-action="reset"] {
+  border-radius:var(--radius-sm); border-color:var(--ui-edge);
+}
+.gallery-toolbar .gallery-filter-btn { padding:5px 10px; min-height:30px; }
+
+/* Ensure existing state-mark indicators never enlarge their controls. */
+.system-control-switch.state-on::after,.system-control-switch.state-off::after,
+.system-control-switch.state-error::after,.system-control-switch.state-duplicate::after,
+.system-control-switch.state-unreachable::after,.system-control-switch.is-pending::after {
+  width:4px; height:4px; right:2px; top:3px;
+}
