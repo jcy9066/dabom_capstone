@@ -70,8 +70,8 @@
 button[aria-busy="true"] { cursor:progress; }
 
 /* 03 — TimTrayler soft round toggles; neutral white in enabled position. */
-.dashboard-model-toggle-track, .dashboard-led-toggle-track,
-.toggle-switch:not(.dark-toggle), .dashboard-navigation-mode-toggle-track {
+ .dashboard-model-toggle-track, .dashboard-led-toggle-track,
+.toggle-switch:not(.dark-toggle) {
   border-radius:999px !important; background:#737b87 !important;
   border:1px solid var(--border-bright) !important;
   box-shadow:inset 0 2px 4px rgba(0,0,0,.20) !important;
