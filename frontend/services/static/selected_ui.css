@@ -145,12 +145,44 @@ button[aria-busy="true"] { cursor:progress; }
   box-shadow:inset 0 0 0 1px var(--ui-highlight), 0 2px 6px rgba(0,0,0,.07);
 }
 
-/* 11 — gharsh11032000 radio-inspired pagination navigation. */
-.records-pagination button { border-radius:999px !important; min-width:64px; min-height:29px; padding:6px 10px !important;
-  transition:background .2s,transform .2s,box-shadow .2s !important; }
-.records-pagination button:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,.1); }
-.records-pagination span { padding:3px 8px; min-width:48px; text-align:center; border:1px solid var(--ui-edge);
-  border-radius:999px; color:var(--ui-highlight); background:var(--card-bg2); font-weight:750; }
+/* 11 — gharsh11032000 radio-inspired numbered pagination. */
+.records-pagination { gap:8px; }
+.records-pagination .records-page-numbers {
+  display:grid; grid-template-columns:repeat(5,32px); gap:4px; place-items:center;
+  padding:4px; border-radius:999px; background:var(--card-bg2);
+  border:1px solid var(--ui-edge,var(--border-color));
+}
+.records-pagination .records-page-number,
+.records-pagination .records-page-arrow {
+  display:inline-grid; place-items:center; flex:none; box-sizing:border-box;
+  width:32px; min-width:32px; height:32px; min-height:32px; padding:0 !important;
+  border:1px solid transparent; border-radius:50% !important;
+  background:transparent; color:var(--text-dark);
+  font:inherit; font-size:12px; font-weight:700; line-height:1;
+  transition:background .18s,color .18s,transform .18s,box-shadow .18s;
+}
+.records-pagination .records-page-arrow {
+  font-size:22px; border-color:var(--ui-edge,var(--border-color)); background:var(--card-bg2);
+}
+.records-pagination .records-page-empty { display:block; width:32px; height:32px; pointer-events:none; }
+.records-pagination .records-page-number.is-current {
+  background:var(--ui-highlight,var(--accent)); color:#fff; border-color:transparent;
+  box-shadow:0 2px 8px var(--primary-glow,rgba(80,110,140,.16));
+}
+.records-pagination .records-page-number:not(.is-current):hover,
+.records-pagination .records-page-arrow:hover:not(:disabled) {
+  transform:translateY(-1px); background:var(--card-bg);
+  color:var(--ui-highlight,var(--accent)); border-color:var(--ui-highlight,var(--accent));
+  box-shadow:0 2px 8px rgba(0,0,0,.09);
+}
+.records-pagination .records-page-number:focus-visible,
+.records-pagination .records-page-arrow:focus-visible {
+  outline:2px solid var(--ui-highlight,var(--accent)); outline-offset:2px;
+}
+.records-pagination .records-page-arrow:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+@media (prefers-reduced-motion:reduce) {
+  .records-pagination .records-page-number,.records-pagination .records-page-arrow { transition:none; }
+}
 
 /* 13 — Praashoo7 soft recessed login/signup form; theme tokens preserved. */
 body.login-page { background:var(--bg-color); }

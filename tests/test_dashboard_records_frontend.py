@@ -102,8 +102,14 @@ class DashboardRecordsFrontendTests(unittest.TestCase):
                     if (String(endpoint).includes('/api/logs/actions')) return {
                         ok: true, status: 200,
                         json: async () => ({
-                            items: [{ action_id: 3, user_name: '홍길동', user_email: 'hong@example.com', action_type: 'WARNING' }],
-                            page: 2, page_size: 10, total: 77, total_pages: 8,
+                            items: Array.from({
+                                length: Math.max(0, Math.min(50, 77 - (Number(new URLSearchParams(String(endpoint).split('?')[1]).get('page')) - 1) * 50))
+                            }, (_, i) => ({
+                                action_id: (Number(new URLSearchParams(String(endpoint).split('?')[1]).get('page')) - 1) * 50 + i + 1,
+                                user_name: '홍길동', user_email: 'hong@example.com', action_type: 'WARNING'
+                            })),
+                            page: Number(new URLSearchParams(String(endpoint).split('?')[1]).get('page')),
+                            page_size: 50, total: 77, total_pages: 2,
                         }),
                     };
                     return { ok: false, status: 404, json: async () => ({}) };
@@ -118,14 +124,28 @@ class DashboardRecordsFrontendTests(unittest.TestCase):
                     page: 2, sortBy: 'user_name', sortDirection: 'asc', userName: '홍길', actionType: 'WARNING',
                 });
                 const url = requested.find(value => value.includes('/api/logs/actions'));
-                assert(url.includes('page=2'));
-                assert(url.includes('page_size=10'));
+                assert(url.includes('page=1'));
+                assert(url.includes('page_size=50'));
                 assert(url.includes('sort_by=user_name'));
                 assert(url.includes('sort_direction=asc'));
                 assert(url.includes('user_name=%ED%99%8D%EA%B8%B8'));
                 assert(url.includes('action_type=WARNING'));
                 assert.strictEqual(result.total, 77);
+                assert.strictEqual(result.page, 2);
+                assert.strictEqual(result.page_size, 10);
+                assert.strictEqual(result.total_pages, 8);
+                assert.strictEqual(result.rows.length, 10);
+                assert.strictEqual(result.rows[0].action_id, 11);
+                assert.strictEqual(result.rows[9].action_id, 20);
                 assert.strictEqual(result.rows[0].administrator_name, '홍길동 (hong@example.com)');
+                const sixth = await context.DabomDashboardState.fetchLogRows('actionsModal', { page: 6 });
+                assert(requested.some(value => value.includes('page=2') && value.includes('page_size=50')));
+                assert.strictEqual(sixth.rows.length, 10);
+                assert.strictEqual(sixth.rows[0].action_id, 51);
+                const last = await context.DabomDashboardState.fetchLogRows('actionsModal', { page: 8 });
+                assert.strictEqual(last.rows.length, 7);
+                assert.strictEqual(last.rows[0].action_id, 71);
+                assert.strictEqual(last.rows[6].action_id, 77);
             })().catch(error => { console.error(error); process.exitCode = 1; });
             """
         )

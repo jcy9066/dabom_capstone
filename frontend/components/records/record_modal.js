@@ -180,7 +180,7 @@
             this.rows = [];
             this.loadState = 'idle';
             this.message = '';
-            this.metadata = { page: 1, page_size: 50, total: 0, total_pages: 0 };
+            this.metadata = { page: 1, page_size: records.DEFAULT_PAGE_SIZE, total: 0, total_pages: 0 };
             this.requestVersion = 0;
             this.deleteRequestVersion = 0;
             this.deletePreview = null;
@@ -221,7 +221,7 @@
                 this.rows = [];
                 this.loadState = 'idle';
                 this.message = '';
-                this.metadata = { page: 1, page_size: 50, total: 0, total_pages: 0 };
+                this.metadata = { page: 1, page_size: records.DEFAULT_PAGE_SIZE, total: 0, total_pages: 0 };
                 this.resetDeletePreview();
                 this.tableScrollTop = 0;
                 return;

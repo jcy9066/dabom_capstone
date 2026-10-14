@@ -188,16 +188,16 @@ class DashboardUiPolishContract(unittest.TestCase):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ux-refine-v3", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
-        self.assertIn("pagination.js?v=20261014-ten-rows-v17", DASHBOARD)
-        self.assertIn("dashboard_state.js?v=20261014-ten-rows-v17", DASHBOARD)
+        self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
+        self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", DASHBOARD)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", DASHBOARD)
-        self.assertIn("record_modal.js?v=20261014-ux-refine-v3", DASHBOARD)
+        self.assertIn("record_modal.js?v=20261014-numbered-pages-v1", DASHBOARD)
         self.assertIn("system_control.js?v=20261014-hide-managed-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-ux-refine-v4', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-ux-refine-v15', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-ux-refine-v15', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-radio-pages-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-radio-pages-v1', LOGIN)
 
 
 if __name__ == "__main__":

@@ -170,7 +170,8 @@ class CompactUiContracts(unittest.TestCase):
         state = read("frontend/services/static/dashboard_state.js")
         self.assertIn("records.DEFAULT_PAGE_SIZE = 10;", pagination)
         self.assertIn("target.hidden = total <= records.DEFAULT_PAGE_SIZE;", pagination)
-        self.assertIn("Number(filters.pageSize) || 10", state)
+        self.assertIn("const LOG_API_PAGE_SIZE = 50;", state)
+        self.assertIn("query.set('page_size', String(LOG_API_PAGE_SIZE));", state)
         self.assertIn("table :is(th,td) { text-align:center !important;", CSS)
         self.assertIn("record-drive-mode-badge", RECORDS)
         self.assertIn("records.formatBoolean(row.is_autonomous, 'Auto', 'Manual')", RECORDS)
@@ -219,15 +220,16 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-ux-refine-v15", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-ux-refine-v15", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-radio-pages-v1", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-radio-pages-v1", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        for name in ("saved_map_modal.js", "record_modal.js", "current_situation.js"):
+        for name in ("saved_map_modal.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-ux-refine-v3", INDEX)
+        self.assertIn("record_modal.js?v=20261014-numbered-pages-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
-        self.assertIn("pagination.js?v=20261014-ten-rows-v17", INDEX)
-        self.assertIn("dashboard_state.js?v=20261014-ten-rows-v17", INDEX)
-        self.assertIn("system_control.js?v=20261014-ux-refine-v4", INDEX)
+        self.assertIn("pagination.js?v=20261014-numbered-pages-v1", INDEX)
+        self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", INDEX)
+        self.assertIn("system_control.js?v=20261014-hide-managed-v1", INDEX)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", INDEX)
 
 if __name__ == "__main__":

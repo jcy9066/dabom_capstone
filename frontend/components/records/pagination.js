@@ -37,27 +37,59 @@
         };
     };
 
+    // Five fixed number slots: the current page is always the center item.
     records.renderPagination = function renderPagination(target, metadata, onPage) {
         if (!target) return;
-        const page = Math.max(1, Number(metadata?.page) || 1);
         const total = Math.max(0, Number(metadata?.total) || 0);
-        const totalPages = Math.max(0, Number(metadata?.total_pages) || 0);
         target.hidden = total <= records.DEFAULT_PAGE_SIZE;
         if (target.hidden) {
             target.replaceChildren();
             return;
         }
+        const totalPages = Math.max(1, Number(metadata?.total_pages) || Math.ceil(total / records.DEFAULT_PAGE_SIZE));
+        const page = Math.min(totalPages, Math.max(1, Number(metadata?.page) || 1));
         const previous = document.createElement('button');
-        const summary = document.createElement('span');
-        const next = document.createElement('button');
-        previous.type = next.type = 'button';
-        previous.textContent = '이전';
-        next.textContent = '다음';
+        previous.type = 'button';
+        previous.className = 'records-page-arrow';
+        previous.textContent = '‹';
+        previous.setAttribute('aria-label', '이전 페이지');
         previous.disabled = page <= 1;
-        next.disabled = page >= totalPages;
-        summary.textContent = `${page} / ${totalPages}`;
         previous.addEventListener('click', () => onPage?.(page - 1));
+
+        const numbers = document.createElement('div');
+        numbers.className = 'records-page-numbers';
+        numbers.setAttribute('role', 'group');
+        numbers.setAttribute('aria-label', '페이지 번호 선택');
+        for (let offset = -2; offset <= 2; offset++) {
+            const number = page + offset;
+            if (number < 1 || number > totalPages) {
+                const placeholder = document.createElement('span');
+                placeholder.className = 'records-page-empty';
+                placeholder.setAttribute('aria-hidden', 'true');
+                numbers.append(placeholder);
+                continue;
+            }
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'records-page-number';
+            button.textContent = String(number);
+            button.setAttribute('aria-label', `${number}페이지`);
+            if (number === page) {
+                button.classList.add('is-current');
+                button.setAttribute('aria-current', 'page');
+            } else {
+                button.addEventListener('click', () => onPage?.(number));
+            }
+            numbers.append(button);
+        }
+
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.className = 'records-page-arrow';
+        next.textContent = '›';
+        next.setAttribute('aria-label', '다음 페이지');
+        next.disabled = page >= totalPages;
         next.addEventListener('click', () => onPage?.(page + 1));
-        target.replaceChildren(previous, summary, next);
+        target.replaceChildren(previous, numbers, next);
     };
 })(window);
