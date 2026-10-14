@@ -152,7 +152,11 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.gallery-view .gallery-grid::-webkit-scrollbar,', CSS)
         self.assertIn('  display: none;', CSS)
         self.assertIn('  aspect-ratio: auto;', CSS)
-        self.assertIn('  object-fit: contain;', CSS)
+        self.assertIn('  object-fit: cover;', CSS)
+        self.assertIn('  object-position: center;', CSS)
+        self.assertIn('  background: var(--card-bg2);', CSS)
+        # Detail viewer remains uncropped; only gallery thumbnails use cover.
+        self.assertIn('object-fit:contain;transform-origin:50% 50%;', CSS)
         self.assertIn('  height: 0;', CSS)
         self.assertIn('  min-height: 0;', CSS)
         self.assertIn('  flex: 1 1 0;', CSS)
@@ -162,8 +166,8 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('gallery-card-source source-', GALLERY)
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-gallery-scroll-v13", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-gallery-scroll-v13", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-gallery-cover-v14", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-gallery-cover-v14", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)

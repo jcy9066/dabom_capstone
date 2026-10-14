@@ -180,8 +180,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-server-header-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-gallery-scroll-v13', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-gallery-scroll-v13', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-gallery-cover-v14', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-gallery-cover-v14', LOGIN)
 
 
 if __name__ == "__main__":

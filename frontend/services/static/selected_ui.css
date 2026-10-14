@@ -1367,5 +1367,7 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   max-height: none;
   width: 100%;
   aspect-ratio: auto;
-  object-fit: contain;
+  object-fit: cover;
+  object-position: center;
+  background: var(--card-bg2);
 }
