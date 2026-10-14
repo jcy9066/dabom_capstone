@@ -41,7 +41,7 @@
             }
             const active = Boolean(column.sort && sort?.touched && sort.by === column.sort);
             const direction = active ? sort.direction : '';
-            const indicator = active ? (direction === 'desc' ? ' ↓' : ' ↑') : '';
+            const indicator = active ? (direction === 'desc' ? ' ▼' : ' ▲') : '';
             const attributes = column.sort
                 ? ` data-sort-by="${records.escapeHtml(column.sort)}" aria-sort="${active ? (direction === 'desc' ? 'descending' : 'ascending') : 'none'}"`
                 : '';

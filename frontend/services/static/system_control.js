@@ -22,8 +22,8 @@
     const guideViewName = 'dashboard-usage-guide';
 
     const text = {
-        gpu: '\u0047\u0050\u0055 \uc11c\ubc84 \uc81c\uc5b4',
-        pi: '\u0050\u0049 \uc81c\uc5b4',
+        gpu: 'SERVER',
+        pi: 'PI',
         checking: '\ud655\uc778 \uc911',
         unavailable: '\ud655\uc778 \ubd88\uac00',
         processing: '\ucc98\ub9ac \uc911',
@@ -112,6 +112,7 @@
                 pending ? text.processing : unreachable ? 'OFF' : stateLabel(component),
             );
             button.type = 'button';
+            button.setAttribute('aria-label', `${component.label || component.id}: ${button.textContent}`);
             button.title = unreachable ? text.unavailable : component.label || component.id;
             const switchTrack = make('span', 'ui-process-track');
             switchTrack.setAttribute('aria-hidden', 'true');

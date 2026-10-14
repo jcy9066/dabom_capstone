@@ -819,3 +819,179 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 .system-control-switch.state-unreachable .ui-process-track{background:var(--border-bright);}
 .system-control-switch.is-unavailable .ui-process-track::after,
 .system-control-switch.state-unreachable .ui-process-track::after{transform:none;}
+
+
+/* ---------------------------------------------------------
+ * UI polish: 2026-10-14. Presentation only.
+ * Retain dev surfaces, state semantics, handlers and API.
+ * --------------------------------------------------------- */
+
+/* All modal and drawer X controls share the same danger hover affordance. */
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]) {
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:8px;min-width:29px;min-height:29px;
+  transition:background-color .17s ease,box-shadow .17s ease,color .17s ease;
+}
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]):hover {
+  color:#fff!important;background:var(--danger-color)!important;
+  box-shadow:0 3px 10px rgba(180,59,78,.22),inset 0 1px 0 rgba(255,255,255,.1)!important;
+}
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]):focus-visible {
+  outline:2px solid var(--danger-color);outline-offset:2px;
+}
+/* Arrow glyphs are now Unicode triangles, with sortable ARIA unchanged. */
+.record-sort-button [aria-hidden="true"]{display:inline-block;min-width:12px;text-align:center;font-size:9px;vertical-align:middle;}
+
+/* Praashoo7-style inset placeholder treatment using existing theme colors. */
+.login-form .auth-field input::placeholder {color:var(--text-muted);opacity:.68;font-size:12px;letter-spacing:.015em;}
+.login-form .auth-field input:focus::placeholder {opacity:.38;}
+.login-form .auth-field input {box-shadow:inset 2px 3px 7px rgba(0,0,0,.09);}
+
+/* Desktop signup: credential fields on the left, identity fields on the right.
+ * The existing fieldset and its disabled property are retained unchanged. */
+.signup-dialog {width:min(96vw,860px);padding:18px 24px;max-height:calc(100dvh - 28px);overflow-y:auto;}
+.signup-header{margin-bottom:12px;}
+.signup-dialog .auth-dialog-subtitle{margin:-3px 0 8px;font-size:11px;}
+.signup-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 18px;align-items:start;}
+.signup-form>.signup-email-row{grid-column:1;grid-row:1;min-width:0;}
+.signup-form>.signup-verification-row{grid-column:1;grid-row:2;min-width:0;}
+.signup-form>.signup-feedback{grid-column:1;grid-row:3;min-height:14px;margin:0;}
+.signup-form>.auth-protected-fields {
+  grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(3,auto) auto;gap:8px 18px;align-items:start;
+}
+.signup-form>.auth-protected-fields>.signup-field-password {grid-column:1;grid-row:1;}
+.signup-form>.auth-protected-fields>.signup-field-confirm {grid-column:1;grid-row:2;}
+.signup-form>.auth-protected-fields>.signup-field-name {grid-column:2;grid-row:1;}
+.signup-form>.auth-protected-fields>.signup-field-phone {grid-column:2;grid-row:2;}
+.signup-form>.auth-protected-fields>.signup-field-employee {grid-column:2;grid-row:3;}
+.signup-form>.auth-protected-fields>.signup-verified {grid-column:1;grid-row:3;align-self:start;}
+.signup-form>.auth-protected-fields>.signup-submit {
+  grid-column:1/-1;grid-row:4;justify-self:center;width:20%;min-width:142px;margin:0;
+}
+.signup-form .auth-field{gap:4px;min-width:0;}
+.signup-form .auth-field input{min-height:34px;height:34px;padding-inline:9px;}
+.signup-form .auth-field-hint{min-height:0;margin:0;font-size:10px;line-height:1.25;}
+.signup-form .email-send-btn{min-height:34px;padding:4px 8px;font-size:11px;}
+.signup-form .signup-submit{min-height:36px;}
+@media(max-width:680px){
+  .signup-dialog {width:min(100%,520px);max-height:calc(100dvh - 24px);padding:16px;overflow-y:auto;}
+  .signup-form{grid-template-columns:minmax(0,1fr);}
+  .signup-form>.signup-email-row,.signup-form>.signup-verification-row,
+  .signup-form>.signup-feedback{grid-column:1;grid-row:auto;}
+  .signup-form>.auth-protected-fields{grid-column:1;grid-template-columns:1fr;grid-template-rows:none;gap:9px;}
+  .signup-form>.auth-protected-fields>:is(.signup-field-password,.signup-field-confirm,.signup-field-name,
+      .signup-field-phone,.signup-field-employee,.signup-verified){grid-column:1;grid-row:auto;}
+  .signup-form>.auth-protected-fields>.signup-submit {grid-column:1;grid-row:auto;width:100%;max-width:220px;}
+}
+
+/* Server status drawer: no elements are removed from status polling. */
+.server-state-heading-actions{display:inline-flex;gap:8px;align-items:center;min-width:0;}
+.server-state-drawer-toggle{height:24px;width:26px;flex:none;display:grid;place-items:center;cursor:pointer;
+  border:1px solid var(--border-color);border-radius:7px;background:var(--card-bg2);color:var(--text-muted);}
+.server-state-drawer-toggle:hover{color:var(--accent);border-color:var(--accent);}
+.server-state-drawer-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.server-state-drawer-toggle>span{display:block;transition:transform .22s ease;}
+.server-state-card.is-collapsed .server-state-drawer-toggle>span{transform:rotate(180deg);}
+#serverStateGrid{max-height:400px;opacity:1;overflow:hidden;transition:max-height .23s ease,opacity .19s ease;}
+.server-state-card.is-collapsed #serverStateGrid{max-height:0;opacity:0;pointer-events:none;}
+.server-state-card.is-collapsed{padding-bottom:8px;}
+.right-panel .alert-card{transition:flex-basis .23s ease;}
+/* Present enums in title case; preserve DOM text/status values and original map names. */
+#pi-connection-status,#robot-mode-status,
+#navigation-state-status,#emergency-stop-status {display:inline-block;text-transform:lowercase;}
+#pi-connection-status::first-letter,#robot-mode-status::first-letter,
+#navigation-state-status::first-letter,#emergency-stop-status::first-letter{text-transform:uppercase;}
+/* Auto/Manual text has the same font size as Mapping/Driving, no data-mode change. */
+.dashboard-drive-mode-control .mode-text,.navigation-mode-toggle-label{font-size:10px!important;letter-spacing:.1px;}
+.dashboard-drive-mode-control .mode-text{font-weight:700;}
+.dashboard-led-toggle,.dashboard-led-control-mount{justify-content:center;text-align:center;}
+.dashboard-model-toggle{grid-template-columns:auto auto 38px auto;align-items:center;}
+.dashboard-model-toggle .ui-toggle-side{align-self:center;}
+.dashboard-model-toggle .dashboard-model-toggle-label,.dashboard-model-toggle .ui-toggle-side{
+  display:inline-flex;align-items:center;justify-content:center;line-height:1.1;min-height:20px;
+}
+/* Login-button shape/elevation for the three existing actions, retaining semantic colors. */
+.dashboard-action-controls .auth-btn{
+  border-radius:7px;box-shadow:3px 3px 8px rgba(0,0,0,.12),-2px -2px 7px rgba(255,255,255,.12);
+  transition:transform .17s ease,box-shadow .17s ease,border-color .17s ease;
+}
+.dashboard-action-controls .auth-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:4px 6px 12px rgba(0,0,0,.15);}
+.dashboard-action-controls .auth-btn:active:not(:disabled){transform:translateY(1px);box-shadow:inset 2px 2px 5px rgba(0,0,0,.12);}
+/* Settings title, centered theme toggle and left-opening tooltip. */
+.sidebar-header{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.sidebar-header>.sidebar-title{flex:0 0 auto;}
+.sidebar-theme-control{display:flex;align-items:center;justify-content:center;gap:7px;flex:1 1 auto;min-width:0;}
+.sidebar-theme-control>.sidebar-item-label{font-size:10px;white-space:nowrap;}
+.sidebar-header-actions{flex:0 0 auto;}
+.sidebar-guide-trigger::after{
+  top:50%;bottom:auto;right:calc(100% + 8px);transform:translateY(-50%);
+}
+/* Keep username, email and logout in one actual row. */
+.sidebar-account{align-items:center;gap:5px;padding-bottom:0;margin-bottom:0;}
+.sidebar-account-name,.sidebar-account-id{flex:1 1 0;max-width:none;min-width:0;}
+.sidebar-logout-btn{margin-left:auto;}
+/* Process switches: hide plain ON/OFF text, retain other state labels and aria-label. */
+.system-control-switch:is(.state-on,.state-off,.state-unreachable) .ui-process-label{display:none;}
+.system-control-switch:is(.state-on,.state-off){min-width:44px;}
+/* Map modal uses two equally sized panes. Layout only; existing map and GPS IDs remain. */
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-content{
+  width:min(94vw,1120px);max-width:1120px;max-height:calc(100dvh - 30px);
+}
+.saved-map-modal{gap:5px;min-height:0;}
+.saved-map-two-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:12px;min-height:0;}
+.saved-map-primary-column,.saved-map-secondary-column{display:flex;flex-direction:column;gap:9px;min-width:0;
+  border:1px solid var(--border-color);border-radius:9px;padding:10px;box-sizing:border-box;background:var(--card-bg2);}
+.saved-map-primary-column .saved-map-list{max-height:min(23vh,190px);scrollbar-width:none;}
+.saved-map-primary-column .saved-map-list::-webkit-scrollbar{display:none;}
+.saved-map-secondary-column .saved-map-location-panel{min-width:0;}
+.saved-map-title-hint{display:inline-block;margin-left:12px;font-size:10px;font-weight:400;color:var(--text-muted);
+  line-height:1.45;letter-spacing:0;text-transform:none;vertical-align:middle;}
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-header h2{display:flex;align-items:center;min-width:0;flex-wrap:wrap;}
+.saved-map-primary-column .saved-map-pose input{min-height:30px;}
+.saved-map-primary-column .saved-map-mode-actions .dashboard-control-button,
+.saved-map-primary-column .saved-map-actions button,
+.saved-map-secondary-column .saved-map-location-actions button{
+  border-radius:7px;box-shadow:var(--ui-soft-elevation);
+  transition:box-shadow .16s ease,transform .16s ease;
+}
+.saved-map-primary-column button:hover:not(:disabled),
+.saved-map-secondary-column button:hover:not(:disabled){box-shadow:0 3px 9px rgba(0,0,0,.1);}
+@media(max-width:800px){
+  .saved-map-two-column{grid-template-columns:1fr;}
+  .saved-map-primary-column .saved-map-list{max-height:min(25vh,220px);}
+}
+/* Patrol history table: center event type, fit full dates without clipping. */
+.records-view-patrolModal :is(th:nth-child(3),td:nth-child(3)){text-align:center;}
+.records-view .record-filter-bar input[type="datetime-local"]{
+  min-height:26px;height:28px;line-height:1.2;padding:3px 7px;
+  width:max-content;max-width:100%;min-width:174px;box-sizing:border-box;
+}
+/* Details: no black image letterboxing, compact 80%-height action controls. */
+.gallery-detail .gallery-image-viewport,.gallery-detail .gallery-detail-image{background:transparent!important;}
+.gallery-detail .gallery-detail-actions button{
+  min-height:24px;height:24px;padding:2px 8px;line-height:1.1;box-sizing:border-box;
+}
+/* Current situation two panes, original preview and submit controls. */
+#commonModal[data-modal-view="currentSituation"] .modal-content{width:min(92vw,1040px);max-width:1040px;}
+.current-situation-form{width:100%;max-width:100%;gap:0;}
+.current-situation-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch;}
+.current-situation-media-box,.current-situation-entry-box{
+  min-width:0;border:1px solid var(--border-color);border-radius:9px;
+  padding:12px;background:var(--card-bg2);box-sizing:border-box;
+}
+.current-situation-media-box .privacy-preview-frame{height:min(43vh,340px);min-height:200px;}
+.current-situation-media-box .privacy-preview-frame img{width:100%;height:100%;object-fit:contain;}
+.current-situation-entry-box{display:flex;flex-direction:column;gap:8px;}
+.current-situation-entry-box textarea{flex:1 1 auto;min-height:110px;max-height:260px;}
+.current-situation-entry-box .record-form-actions{margin-top:auto;justify-content:center;}
+@media(max-width:720px){
+  .current-situation-layout{grid-template-columns:1fr;}
+  .current-situation-media-box .privacy-preview-frame{height:220px;min-height:150px;}
+}
+/* Connection status text can be read by assistive tech but visually reduce
+ * verbose offline labels; live logic and explicit warning detail remain. */
+#no-camera-msg[data-connection-visual="offline"]{font-size:0;}
+#no-camera-msg[data-connection-visual="offline"]>.ui-loading-visual{font-size:12px;}
+#lidar-stale-overlay.offline .lidar-stale-title{display:none;}
+@media(prefers-reduced-motion:reduce){#serverStateGrid,.server-state-drawer-toggle>span{transition:none;}}

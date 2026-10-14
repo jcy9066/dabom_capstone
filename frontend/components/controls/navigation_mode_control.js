@@ -21,7 +21,7 @@
         const mappingLabel = document.createElement('span');
         mappingLabel.className = 'navigation-mode-toggle-label';
         mappingLabel.dataset.navigationModeTarget = 'MAPPING';
-        mappingLabel.textContent = 'MAPPING';
+        mappingLabel.textContent = 'Mapping';
 
         const track = document.createElement('span');
         track.className = 'navigation-mode-toggle-track';
@@ -34,7 +34,7 @@
         const drivingLabel = document.createElement('span');
         drivingLabel.className = 'navigation-mode-toggle-label';
         drivingLabel.dataset.navigationModeTarget = 'DRIVING';
-        drivingLabel.textContent = 'DRIVING';
+        drivingLabel.textContent = 'Driving';
 
         button.append(mappingLabel, track, drivingLabel);
         root.replaceChildren(button);

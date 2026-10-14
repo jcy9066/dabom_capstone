@@ -206,7 +206,7 @@
                     <button type="button" data-image-zoom="-1" aria-label="축소">−</button>
                     <output data-image-zoom-value>100%</output>
                     <button type="button" data-image-zoom="1" aria-label="확대">+</button>
-                    <button type="button" data-image-zoom-reset aria-label="기본 크기로 복원">원본</button>
+                    <button type="button" data-image-zoom-reset aria-label="기본 크기로 복원">Raw</button>
                 </div>
             </div>
             <dl class="gallery-metadata"><div><dt>기록 시각</dt><dd>${escapeHtml(timestamp(item))}</dd></div>${metadata(item).map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '-')}</dd></div>`).join('')}</dl>

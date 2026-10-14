@@ -5,7 +5,7 @@
     const navigationMaps = components.navigationMaps = components.navigationMaps || {};
     const VIEW_NAME = 'savedNavigationMaps';
     const labels = {
-        title: '\uc800\uc7a5 \uc9c0\ub3c4 \uc120\ud0dd',
+        title: '\uc9c0\ub3c4 \uc120\ud0dd',
         description: '\uc9c0\ub3c4\ub97c \ubd88\ub7ec\uc624\uba74 \ud604\uc7ac localization \uc704\uce58\uac00 \ucd08\uae30\ud654\ub429\ub2c8\ub2e4.',
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
@@ -527,6 +527,12 @@
 
     function renderView(context = {}, snapshot = null) {
         const container = create('div', 'saved-map-modal');
+        // Existing modal header remains the title owner; append only a visual hint.
+        const headerTitle = manager?.title;
+        if (headerTitle && !headerTitle.querySelector('.saved-map-title-hint')) {
+            headerTitle.append(create('span', 'saved-map-title-hint',
+                `${labels.description} ${labels.selectRequired} ${labels.renameHint}`));
+        }
         if (context.error) {
             const progress = create('div', 'saved-map-progress');
             showMessage(progress, `\uc9c0\ub3c4 \ubaa9\ub85d \uc870\ud68c \uc2e4\ud328: ${context.error}`, true);
@@ -536,8 +542,12 @@
 
         const maps = context.maps || [];
         const locationStatus = context.locationStatus || state.locationStatus || locationFallback();
-        container.append(create('p', 'saved-map-description', `${labels.description} ${labels.selectRequired} ${labels.renameHint}`));
-        container.append(renderLocationPanel(locationStatus));
+        const layout = create('div', 'saved-map-two-column');
+        const mapColumn = create('section', 'saved-map-primary-column');
+        const locationColumn = create('section', 'saved-map-secondary-column');
+        layout.append(mapColumn, locationColumn);
+        container.append(layout);
+        locationColumn.append(renderLocationPanel(locationStatus));
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name
@@ -575,7 +585,7 @@
             list.append(option);
         }
         if (!maps.length) list.append(create('div', 'saved-map-details', labels.noMaps));
-        container.append(list);
+        mapColumn.append(list);
 
         const pose = create('div', 'saved-map-pose');
         const poseValues = snapshot?.pose || { x: '', y: '', yaw: '' };
@@ -593,10 +603,10 @@
             field.append(input);
             pose.append(field);
         }
-        container.append(pose);
+        mapColumn.append(pose);
         progress = create('div', 'saved-map-progress', context.feedback || '');
         if (context.feedback) showMessage(progress, context.feedback, context.feedbackIsError);
-        container.append(progress);
+        mapColumn.append(progress);
 
         const mappingActions = create('div', 'saved-map-mode-actions');
 
@@ -618,7 +628,7 @@
         });
 
         mappingActions.append(startMapping, clearCurrentMap);
-        container.append(mappingActions);
+        mapColumn.append(mappingActions);
 
         const actions = create('div', 'saved-map-actions');
 
@@ -642,7 +652,7 @@
         });
 
         actions.append(save, cancel, load);
-        container.append(actions);
+        mapColumn.append(actions);
         return container;
     }
 
