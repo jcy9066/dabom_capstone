@@ -1992,3 +1992,59 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
 @media(max-width:540px){
   .saved-map-location-picker{grid-template-columns:minmax(0,1fr);}
 }
+
+
+/* Dashboard 2026-10-14: center headers on their unsorted/default labels.
+ * Sort arrows float inside the same button box without shifting its text. */
+.records-view .record-data-table thead th .record-sort-button {
+  position:relative;display:flex;align-items:center;justify-content:center;
+  gap:0;text-align:center!important;width:100%;padding:0 12px!important;
+  box-sizing:border-box;
+}
+.records-view .record-data-table thead th .record-sort-button > span[aria-hidden="true"] {
+  position:absolute;right:0;top:50%;transform:translateY(-50%);
+  display:inline-block;width:11px;min-width:0;margin:0;line-height:1;
+  text-align:center;pointer-events:none;
+}
+.records-view .record-data-table thead th .record-sort-button > span[aria-hidden="true"]:empty {
+  display:none!important;width:0!important;min-width:0!important;
+}
+
+/* Image-detail footer: half the old 16px bottom body padding.
+ * Let the inner gallery card fill unused flex height rather than leave a gap. */
+#commonModal[data-modal-view="recordImageDetail"] .modal-body {
+  padding-bottom:8px;
+}
+#commonModal[data-modal-view="recordImageDetail"] .gallery-detail {
+  flex:1 1 auto;min-height:0;margin-bottom:0;
+}
+
+/* The active page is already selected: hovering must not change its appearance. */
+.records-pagination .records-page-number.is-current,
+.records-pagination .records-page-number[aria-current="page"] {
+  pointer-events:none;cursor:default;
+}
+.records-pagination .records-page-number.is-current:hover,
+.records-pagination .records-page-number[aria-current="page"]:hover {
+  background:var(--primary-color)!important;color:#fff!important;
+  border-color:transparent!important;
+  box-shadow:0 2px 7px rgba(0,0,0,.16)!important;
+  transform:none!important;text-decoration:none!important;
+}
+
+/* Header: match the upper spacing to the existing lower spacing, shifting
+ * the absolutely positioned telemetry pill with the rest of the header. */
+header {padding-top:6px;}
+#topSystemStatusBar {top:16px;}
+
+/* Place picker typography matches the 11px '현재 장소' status row. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
+:is(.saved-map-location-new,.saved-map-location-select) {
+  font-family:inherit!important;font-size:11px!important;
+  font-weight:400!important;line-height:1.4!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
+.saved-map-location-new::placeholder {font-size:11px!important;}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker select option {
+  font-size:11px;
+}

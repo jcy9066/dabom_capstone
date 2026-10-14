@@ -5,7 +5,7 @@
     const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 500;
     const DASHBOARD_CLIENT_STORAGE_KEY = 'dabom.dashboardClientId';
     const AUTOMATIC_ESTOP_REASONS = new Set(['window_blur', 'page_hidden']);
-    const SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge']);
+    const SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge', 'lidar_ros']);
 
     const state = {
         status: null,
@@ -72,16 +72,13 @@
         gpu.append(gpuHeading, make('div', 'system-control-list'));
         gpu.lastChild.id = 'gpuSystemControls';
 
-        const divider = make('div', 'sidebar-divider system-control-divider');
-        const pi = make('section', 'system-control-panel');
-        pi.append(make('div', 'system-control-heading', text.pi), make('div', 'system-control-list'));
-        pi.lastChild.id = 'piSystemControls';
-
+        // Pi LiDAR collection is launched by the Pi stack and has no dashboard
+        // control agent; keep its API status but omit the dead PI settings panel.
         const guide = make('button', 'sidebar-guide-trigger', '?');
         guide.type = 'button';
         guide.setAttribute('aria-label', text.guide);
         guide.addEventListener('click', openGuide);
-        wrapper.append(gpu, divider, pi);
+        wrapper.append(gpu);
         (slot || body).append(wrapper);
         const guideMount = document.getElementById('sidebarGuideMount');
         (guideMount || wrapper).append(guide);
@@ -149,7 +146,6 @@
     function render(status, available = true) {
         state.status = available ? status : null;
         renderGroup('gpuSystemControls', status.gpu, 'gpu');
-        renderGroup('piSystemControls', status.pi, 'pi');
         const updated = document.getElementById('systemControlUpdated');
         if (updated) {
             updated.textContent = status.updated_at

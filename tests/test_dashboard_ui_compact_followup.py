@@ -221,8 +221,8 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-detail-overlay-v1", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-detail-overlay-v1", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-final-spacing-v1", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-final-spacing-v1", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         self.assertIn("saved_map_modal.js?v=20261014-location-picker-v1", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)
@@ -230,7 +230,7 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", INDEX)
         self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", INDEX)
-        self.assertIn("system_control.js?v=20261014-hide-managed-v1", INDEX)
+        self.assertIn("system_control.js?v=20261014-hide-pi-service-v1", INDEX)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", INDEX)
 
 if __name__ == "__main__":

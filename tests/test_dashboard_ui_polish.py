@@ -103,13 +103,14 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("pi: 'PI'", SYSTEM)
 
     def test_supervisor_owned_cards_hidden_in_settings_only(self):
-        self.assertIn("SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge'])", SYSTEM)
+        self.assertIn("SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge', 'lidar_ros'])", SYSTEM)
         self.assertIn("for (const component of visibleComponents)", SYSTEM)
         self.assertIn("components.filter(component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id))", SYSTEM)
         self.assertIn("const components = [...piComponents, ...gpuComponents].filter(", SYSTEM)
         self.assertNotIn("const mapBridge = components.find(", SYSTEM)
         self.assertIn("renderGroup('gpuSystemControls', status.gpu, 'gpu')", SYSTEM)
-        self.assertIn("renderGroup('piSystemControls', status.pi, 'pi')", SYSTEM)
+        self.assertNotIn("piSystemControls", SYSTEM)
+        self.assertIn("wrapper.append(gpu);", SYSTEM)
         backend = source("frontend/system_control.py")
         self.assertIn('supervisor_managed_components = frozenset({"wheel_odometry", "map_bridge"})', backend)
         self.assertIn('"gpu": [gpu_status(component_id) for component_id in component_ids]', backend)
@@ -204,6 +205,15 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("mapColumn.append(pose);\n        mapColumn.append(list);", MAP)
         self.assertIn("grid-template-columns:repeat(5,25px)", CSS)
 
+    def test_final_spacing_and_unsorted_alignment(self):
+        self.assertIn('span[aria-hidden="true"]:empty', CSS)
+        self.assertIn("position:absolute;right:0;top:50%", CSS)
+        self.assertIn('data-modal-view="recordImageDetail"] .modal-body', CSS)
+        self.assertIn("padding-bottom:8px;", CSS)
+        self.assertIn(".records-page-number[aria-current=\"page\"]", CSS)
+        self.assertIn("#topSystemStatusBar {top:16px;}", CSS)
+        self.assertIn("font-size:11px!important;", CSS)
+
     def test_asset_versions(self):
         self.assertIn("saved_map_modal.js?v=20261014-location-picker-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
@@ -212,12 +222,12 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", DASHBOARD)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", DASHBOARD)
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", DASHBOARD)
-        self.assertIn("system_control.js?v=20261014-hide-managed-v1", DASHBOARD)
+        self.assertIn("system_control.js?v=20261014-hide-pi-service-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-finish-ui-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-detail-overlay-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-detail-overlay-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-final-spacing-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-final-spacing-v1', LOGIN)
 
 
 if __name__ == "__main__":
