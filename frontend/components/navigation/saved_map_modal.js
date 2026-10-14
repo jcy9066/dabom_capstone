@@ -220,11 +220,22 @@
         }
 
         const locations = Array.isArray(status.locations) ? status.locations : [];
+        const picker = create('div', 'saved-map-location-picker');
+        const newNameInput = create('input', 'saved-map-location-new');
+        newNameInput.type = 'text';
+        newNameInput.placeholder = '새로운 장소 이름 입력';
+        newNameInput.setAttribute('aria-label', '새 장소 이름 입력');
+        const DRAFT_LOCATION_VALUE = '__draft_location__';
+
         const selector = create('select', 'saved-map-location-select');
         selector.id = 'saved-map-location-select';
         const blank = create('option', '', labels.newLocation);
         blank.value = '';
         selector.append(blank);
+        const draftOption = create('option', '', '');
+        draftOption.value = DRAFT_LOCATION_VALUE;
+        draftOption.hidden = true;
+        selector.append(draftOption);
         for (const location of locations) {
             const option = create('option', '', location.name || location.location_id);
             option.value = location.location_id || '';
@@ -255,6 +266,11 @@
         inputs['saved-map-location-radius'].value = '30';
 
         const loadSelectedLocation = () => {
+            if (selector.value === DRAFT_LOCATION_VALUE) {
+                inputs['saved-map-location-name'].value = newNameInput.value.trim();
+                deleteButton.disabled = true;
+                return;
+            }
             const location = locations.find(item => item.location_id === selector.value);
             inputs['saved-map-location-name'].value = location?.name || '';
             inputs['saved-map-location-lat'].value = location?.lat ?? '';
@@ -300,7 +316,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
                     body: JSON.stringify({
-                        location_id: selector.value || null,
+                        location_id: selector.value && selector.value !== DRAFT_LOCATION_VALUE ? selector.value : null,
                         name,
                         lat,
                         lng,
@@ -318,7 +334,7 @@
         const deleteButton = createControlButton(labels.deleteLocation, 'danger');
         deleteButton.disabled = true;
         deleteButton.addEventListener('click', async () => {
-            if (!selector.value) return;
+            if (!selector.value || selector.value === DRAFT_LOCATION_VALUE) return;
             const selected = locations.find(item => item.location_id === selector.value);
             if (!global.confirm(`${selected?.name || selector.value} 장소를 삭제하시겠습니까?`)) return;
             try {
@@ -334,9 +350,24 @@
             }
         });
 
+        newNameInput.addEventListener('input', () => {
+            const draftName = newNameInput.value.trim();
+            draftOption.textContent = draftName;
+            draftOption.hidden = !draftName;
+            if (draftName) {
+                selector.value = DRAFT_LOCATION_VALUE;
+                inputs['saved-map-location-name'].value = draftName;
+                deleteButton.disabled = true;
+            } else if (selector.value === DRAFT_LOCATION_VALUE) {
+                selector.value = '';
+                inputs['saved-map-location-name'].value = '';
+                deleteButton.disabled = true;
+            }
+        });
         selector.addEventListener('change', loadSelectedLocation);
+        picker.append(newNameInput, selector);
         actions.append(useCurrent, saveLocation, deleteButton);
-        panel.append(selector, fields, actions);
+        panel.append(picker, fields, actions);
         loadSelectedLocation();
         return panel;
     }
