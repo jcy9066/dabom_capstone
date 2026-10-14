@@ -55,9 +55,9 @@ class CompactSelectedUIRegressionTests(unittest.TestCase):
         self.assertIn("setLiveBadge(false);", DASHBOARD_JS)
 
     def test_cache_versions_match_changed_assets(self):
-        self.assertIn("selected_ui.css?v=20261014-drawer-overscroll-v2", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-header-drawer-pc-v3", INDEX)
         self.assertIn("selected_ui.js?v=20261014-shared-drawer-v2", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-drawer-overscroll-v2", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-header-drawer-pc-v3", LOGIN)
         self.assertIn("cycle_filter_button.js?v=20261013-selected-ui-v3", INDEX)
 
     def test_no_react_runtime_needed(self):

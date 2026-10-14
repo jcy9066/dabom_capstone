@@ -164,7 +164,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('  opacity: 1;', CSS)
         self.assertIn('.server-state-card:hover .server-state-drawer-toggle', CSS)
         self.assertIn('.server-state-card:focus-within .server-state-drawer-toggle', CSS)
-        self.assertIn('@media (hover: none) { .server-state-drawer-toggle { opacity: 1; } }', CSS)
+        self.assertIn('@media (hover: none) { .server-state-drawer-toggle { opacity: 1; pointer-events: auto; } }', CSS)
         self.assertIn('.server-state-card.is-collapsed .server-state-header .card-title,', CSS)
         self.assertIn('.server-state-card.is-collapsed .server-state-updated', CSS)
         self.assertIn('aria-expanded="true"', DASHBOARD)
@@ -209,7 +209,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('data-modal-view="recordImageDetail"] .modal-body', CSS)
         self.assertIn("padding-bottom:8px;", CSS)
         self.assertIn(".records-page-number[aria-current=\"page\"]", CSS)
-        self.assertIn("#topSystemStatusBar {top:16px;}", CSS)
+        self.assertIn("#topSystemStatusBar { top: 0; }", CSS)
         self.assertIn("font-size:11px!important;", CSS)
 
     def test_latest_map_and_viewer_refinements(self):
@@ -258,6 +258,20 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('padding-top:3px!important;', CSS)
         self.assertIn('padding-bottom:3px!important;', CSS)
 
+    def test_drawer_rollback_and_desktop_wheel_contract(self):
+        controls = source("frontend/components/controls/controls.css")
+        elastic = source("frontend/services/static/elastic_scroll.js")
+        pill = controls.split(".dashboard-drawer-handle-pill {", 1)[1].split("}", 1)[0]
+        self.assertIn("width: 24px;", pill)
+        self.assertIn("height: 26px;", pill)
+        hover = CSS.split(".server-state-drawer-toggle {", 1)[1].split("}", 1)[0]
+        self.assertIn("opacity: 0;", hover)
+        self.assertIn("pointer-events: none;", hover)
+        self.assertIn("body:not(.login-page) { padding-top: 0; }", CSS)
+        self.assertIn("header { padding-top: 0; }", CSS)
+        self.assertIn("#topSystemStatusBar { top: 0; }", CSS)
+        self.assertIn("doc.querySelector?.('.dashboard-container')", elastic)
+
     def test_filter_bar_buttons_share_the_normal_control_radius(self):
         # Filter controls use the same 8px token as ordinary buttons.
         self.assertIn("--ui-radius-control: 8px;", CSS)
@@ -282,8 +296,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-drawer-overscroll-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-drawer-overscroll-v2', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-header-drawer-pc-v3', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-header-drawer-pc-v3', LOGIN)
 
 
 if __name__ == "__main__":

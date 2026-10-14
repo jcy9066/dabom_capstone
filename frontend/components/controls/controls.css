@@ -649,8 +649,8 @@
     box-sizing: border-box;
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
+    width: 24px;
+    height: 26px;
     padding: 0;
     border: 1px solid var(--border-color);
     border-radius: 50%;
@@ -674,7 +674,7 @@
 }
 .dashboard-drawer-handle-pill-icon {
     display: block;
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 700;
     line-height: 1;
     transform: rotate(var(--drawer-icon-open-angle));

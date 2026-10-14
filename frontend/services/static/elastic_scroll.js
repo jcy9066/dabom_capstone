@@ -71,11 +71,18 @@
     }
 
     function visualBoundary(target) {
-        // The desktop dashboard fills 100vh and has body overflow:hidden.
-        // Its non-scrollable panels still need an observable elastic response.
-        // Do not move the viewer itself or an unrelated dialog behind a modal.
+        // The desktop dashboard has a locked body rather than a page scroller.
+        // Keep native inner scroll containers independent and bounce only at edges.
         if (nativePageBounce) return null;
-        return target?.closest?.('.modal-body, .sidebar-body, .signup-dialog, .right-panel, .dashboard-container') || null;
+        const element = target?.nodeType === 1 ? target : target?.parentElement;
+        const scoped = element?.closest?.('.modal-body, .sidebar-body, .signup-dialog');
+        if (scoped) return scoped;
+        const locked = /^(hidden|clip)$/.test(global.getComputedStyle(doc.body)?.overflowY || '');
+        if (!locked) return null;
+        const dashboard = element?.closest?.('.dashboard-container, .right-panel')
+            || (element?.closest?.('header, #topSystemStatusBar')
+                && doc.querySelector?.('.dashboard-container'));
+        return dashboard || null;
     }
 
     function pickBoundary(target, direction) {

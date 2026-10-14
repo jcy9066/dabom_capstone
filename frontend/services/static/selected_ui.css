@@ -949,11 +949,13 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   left: 50%;
   z-index: 2;
   transform: translateX(-50%);
-  opacity: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
 }
 .server-state-card:hover .server-state-drawer-toggle,
 .server-state-card:focus-within .server-state-drawer-toggle,
-.server-state-drawer-toggle:focus-visible { opacity: 1; }
+.server-state-drawer-toggle:focus-visible { opacity: 1; pointer-events: auto; }
 #serverStateGrid { max-height: 400px; opacity: 1; overflow: hidden; transition: max-height .23s ease, opacity .19s ease; }
 .server-state-card.is-collapsed #serverStateGrid { max-height: 0; opacity: 0; pointer-events: none; }
 .server-state-card.is-collapsed { padding-top: 5px; padding-bottom: 5px; }
@@ -962,7 +964,7 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 .server-state-card.is-collapsed .server-state-updated { opacity: 0; visibility: hidden; pointer-events: none; }
 .right-panel .alert-card { transition: flex-basis .23s ease; }
 /* Touchscreen users have no hover: keep the reopen control discoverable. */
-@media (hover: none) { .server-state-drawer-toggle { opacity: 1; } }
+@media (hover: none) { .server-state-drawer-toggle { opacity: 1; pointer-events: auto; } }
 /* Present enums in title case; preserve DOM text/status values and original map names. */
 #pi-connection-status,#robot-mode-status,
 #navigation-state-status,#emergency-stop-status {display:inline-block;text-transform:lowercase;}
@@ -1427,15 +1429,15 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
 }
 #topSystemStatusBar .system-status-items > span{min-width:0;overflow-wrap:anywhere;}
 #topSystemStatusBar .system-status-drawer-handle{
-  position:absolute;right:1px;top:50%;transform:translateY(-50%);
-  width:34px;height:34px;
+  position:absolute;right:3px;top:50%;transform:translateY(-50%);
+  width:24px;height:26px;
 }
 #topSystemStatusBar .system-status-drawer-handle:hover,
 #topSystemStatusBar .system-status-drawer-handle:focus-visible{
   background:var(--card-bg2);box-shadow:0 2px 7px rgba(0,0,0,.09);color:var(--accent);
 }
 #topSystemStatusBar[data-open="false"]{
-  width:38px;max-width:38px;padding:4px 0;min-height:38px;
+  width:32px;max-width:32px;padding:4px 0;min-height:35px;
 }
 #topSystemStatusBar[data-open="false"] .system-status-items{
   opacity:0;visibility:hidden;pointer-events:none;white-space:nowrap;
@@ -2004,10 +2006,10 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   transform:none!important;text-decoration:none!important;
 }
 
-/* Header: match the upper spacing to the existing lower spacing, shifting
- * the absolutely positioned telemetry pill with the rest of the header. */
-header {padding-top:6px;}
-#topSystemStatusBar {top:16px;}
+/* Keep the dashboard flush with the viewport top; preserve login layout. */
+body:not(.login-page) { padding-top: 0; }
+header { padding-top: 0; }
+#topSystemStatusBar { top: 0; }
 
 /* Place picker typography matches the 11px '현재 장소' status row. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker

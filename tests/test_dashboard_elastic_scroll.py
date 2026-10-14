@@ -77,8 +77,8 @@ assert(!list.classList.contains('elastic-scroll-active'));
 def test_elastic_scroll_assets_on_dashboard_and_login():
     for template in ("index.html", "login.html"):
         source = (ROOT / "frontend/templates" / template).read_text(encoding="utf-8")
-        assert '/static/elastic_scroll.css?v=20261014-elastic-v1' in source
-        assert '/static/elastic_scroll.js?v=20261014-boundary-v2' in source
+        assert '/static/elastic_scroll.css?v=20261014-pc-wheel-v3' in source
+        assert '/static/elastic_scroll.js?v=20261014-pc-wheel-v3' in source
     css = (ROOT / "frontend/services/static/elastic_scroll.css").read_text(encoding="utf-8")
     assert "250ms cubic-bezier" in css
     assert "prefers-reduced-motion" in css
