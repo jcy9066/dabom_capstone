@@ -7,7 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@0,400;0,700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css?v=20260814-login">
     <link rel="stylesheet" href="/static/login_auth.css?v=20260814-email-auth">
-    <link rel="stylesheet" href="/static/selected_ui.css?v=20261014-ui-polish-v1">
+    <link rel="stylesheet" href="/static/selected_ui.css?v=20261014-compact-ui-v9">
 </head>
 <body class="login-page">
     <main class="login-shell">
@@ -42,7 +42,6 @@
                 <h2 id="signup-title">회원가입</h2>
                 <button class="signup-close" type="button" id="closeSignupBtn" aria-label="회원가입 닫기">&times;</button>
             </div>
-            <p class="auth-dialog-subtitle">이메일 전체가 로그인 ID입니다. 별도의 ID는 입력하지 않습니다.</p>
 
             <form class="signup-form" id="signupForm" novalidate>
                 <div class="auth-inline-action signup-email-row">
@@ -64,7 +63,7 @@
                 </div>
 
                 <p class="auth-signup-message signup-feedback" id="signupMessage" role="status" aria-live="polite"></p>
-                <fieldset class="auth-protected-fields" id="protectedFields" disabled>
+                <fieldset class="auth-protected-fields" id="protectedFields">
                     <div class="auth-verified-email signup-verified" id="verifiedEmailLabel" hidden></div>
                     <label class="auth-field signup-field-password" for="signupPassword">
                         <span>비밀번호</span>
@@ -95,6 +94,6 @@
         </section>
     </div>
 
-    <script src="/static/login_email_auth.js?v=20260814-email-auth"></script>
+    <script src="/static/login_email_auth.js?v=20261014-signup-input-v1"></script>
 </body>
 </html>

@@ -1,0 +1,102 @@
+"""Static contract for follow-up UI polishing; runtime acceptance still required."""
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8")
+
+LOGIN = read("frontend/templates/login.html")
+AUTH = read("frontend/services/static/login_email_auth.js")
+CSS = read("frontend/services/static/selected_ui.css")
+INDEX = read("frontend/templates/index.html")
+MAP = read("frontend/components/navigation/saved_map_modal.js")
+SYSTEM = read("frontend/services/static/system_control.js")
+RECORDS = read("frontend/components/records/record_modal.js")
+GALLERY = read("frontend/components/gallery/image_detail.js")
+SITUATION = read("frontend/components/current_situation/current_situation.js")
+
+class CompactUiContracts(unittest.TestCase):
+    def test_signup_inputs_are_editable_before_verification(self):
+        self.assertIn('id="protectedFields">', LOGIN)
+        self.assertNotIn('id="protectedFields" disabled', LOGIN)
+        self.assertIn('id="signupSubmit" disabled', LOGIN.replace('type="submit" ', '').replace('class="auth-btn primary signup-submit" ', ''))
+        self.assertIn("protectedFields.disabled = false;", AUTH)
+        self.assertNotIn("protectedFields.disabled = true;", AUTH)
+        self.assertIn("state.verified && state.email === email.value.trim().toLowerCase()", AUTH)
+        self.assertIn("submit.disabled = !canSubmit();", AUTH)
+        self.assertIn("'/api/auth/email/verify'", AUTH)
+        self.assertIn("'/api/auth/register'", AUTH)
+
+    def test_signup_three_rows_and_instructions_removed(self):
+        self.assertNotIn("이메일 전체가 로그인 ID입니다.", LOGIN)
+        for field, col, row in (
+            ("signup-field-name", 2, 1), ("signup-field-password", 1, 2),
+            ("signup-field-phone", 2, 2), ("signup-field-confirm", 1, 3),
+            ("signup-field-employee", 2, 3),
+        ):
+            with self.subTest(field=field):
+                self.assertIn(f".signup-form > .auth-protected-fields > .{field} {{grid-column:{col};grid-row:{row};}}", CSS)
+        self.assertIn(".signup-form > .auth-protected-fields { display:contents; }", CSS)
+
+    def test_server_status_visual_only(self):
+        self.assertIn(".server-state-grid .server-state-field strong::first-letter{text-transform:uppercase;}", CSS)
+        self.assertIn(".server-state-card .server-state-drawer-toggle:hover", CSS)
+        self.assertIn('id="serverStateGrid"', INDEX)
+
+    def test_map_buttons_use_shared_component(self):
+        self.assertIn("createControlButton(labels.startMapping, 'success', 'saved-map-start-mapping')", MAP)
+        self.assertIn("createControlButton(labels.clearCurrentMap, 'secondary', 'saved-map-clear-current')", MAP)
+        self.assertIn("startMappingFromModal(container, progress)", MAP)
+        self.assertIn("loadSelectedMap(container, progress)", MAP)
+        self.assertIn(".saved-map-modal .dashboard-control-button", CSS)
+        self.assertIn("min-height:min(60vh,550px)", CSS)
+
+    def test_description_only_on_error(self):
+        self.assertIn(".system-control-card .system-control-description{display:none;}", CSS)
+        self.assertIn(".system-control-card:is(.has-error,.is-unreachable) .system-control-description{display:block;}", CSS)
+        self.assertIn("component.description || ''", SYSTEM)
+        self.assertIn("button.disabled = pending || unreachable;", SYSTEM)
+        self.assertIn("control(group, component.id, action)", SYSTEM)
+
+    def test_guide_is_two_column_simple_steps(self):
+        self.assertIn("grid-auto-flow:column", CSS)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", CSS)
+        for title in ("1. 연결 확인", "2. 새 지도 만들기", "3. 저장 지도에서 주행",
+                      "4. 위험 알림 대응", "5. 기록 확인", "6. 장비 제어"):
+            self.assertIn(title, SYSTEM)
+        self.assertIn("manager.open(guideViewName", SYSTEM)
+
+    def test_patrol_table_and_filters(self):
+        self.assertIn("records-view-patrolModal .record-data-table :is(th,td)", CSS)
+        self.assertIn('class="record-filter-controls"', RECORDS)
+        self.assertIn(".record-filter-bar [data-action=\"reset\"]", CSS)
+        self.assertIn('data-filter="startAt"', RECORDS)
+        self.assertIn('data-filter="endAt"', RECORDS)
+
+    def test_gallery_back_inside_metadata(self):
+        self.assertNotIn('gallery-detail-header"><strong>이미지 상세', GALLERY)
+        self.assertIn('gallery-metadata-top', GALLERY)
+        self.assertIn('data-detail-back>← 이전 화면', GALLERY)
+        self.assertIn("manager.back()", GALLERY)
+        self.assertIn('data-detail-delete', GALLERY)
+        self.assertIn('data-image-zoom-reset', GALLERY)
+
+    def test_situation_form_can_still_save(self):
+        self.assertIn("current-situation-bottom-row", SITUATION)
+        self.assertIn('id="currentSituationSubmit"', SITUATION)
+        self.assertIn('id="currentSituationIncludeImage"', SITUATION)
+        self.assertIn('placeholder="현재 상황을 입력하세요.&#10;예:', SITUATION)
+        self.assertIn("현재 카메라 이미지를 사용할 수 없습니다.\\n텍스트 기록은 계속할 수 있습니다.", SITUATION)
+        self.assertIn("'/api/logs/current-situation/preview'", SITUATION)
+        self.assertIn(".current-situation-bottom-row{display:flex;", CSS)
+
+    def test_updated_resources_referenced(self):
+        self.assertIn("selected_ui.css?v=20261014-compact-ui-v9", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-compact-ui-v9", LOGIN)
+        self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
+        for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
+            self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)
+
+if __name__ == "__main__":
+    unittest.main()

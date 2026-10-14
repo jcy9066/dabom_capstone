@@ -263,7 +263,7 @@
             const columns = columnsFor(this.type);
             return `<section class="records-view records-view-${this.type}" data-dashboard-modal-view data-record-type="${this.type}">
                 <div class="modal-filter-bar record-filter-bar">
-                    ${this.filterControls()}
+                    <div class="record-filter-controls">${this.filterControls()}</div>
                     <button type="button" class="filter-btn secondary" data-action="reset">초기화</button>
                     <span class="filter-count" data-record-count>총 <span>${Number(this.metadata.total) || 0}</span> 건</span>
                 </div>

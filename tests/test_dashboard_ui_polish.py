@@ -37,7 +37,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('placeholder="비밀번호를 입력하세요"', LOGIN)
         self.assertIn('id="sendEmailBtn"', LOGIN)
         self.assertIn('id="verifyEmailBtn"', LOGIN)
-        self.assertIn('fieldset class="auth-protected-fields" id="protectedFields" disabled', LOGIN)
+        self.assertIn('fieldset class="auth-protected-fields" id="protectedFields">', LOGIN)
+        self.assertNotIn('id="protectedFields" disabled', LOGIN)
         self.assertIn('id="signupSubmit" disabled', LOGIN.replace('type="submit" ', '').replace('class="auth-btn primary signup-submit" ', ''))
 
     def test_no_duplicate_toggle_and_collapsible_server(self):
@@ -171,14 +172,16 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('data-record-view="statusModal"', DASHBOARD)
 
     def test_asset_versions(self):
-        for name in ("saved_map_modal.js",
-                     "record_table.js", "current_situation.js", "navigation_mode_control.js",
-                     "system_control.js", "image_detail.js"):
+        for name in ("saved_map_modal.js", "current_situation.js", "image_detail.js"):
             with self.subTest(asset=name):
-                self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
+                self.assertIn(name + "?v=20261014-compact-ui-v2", DASHBOARD)
+        self.assertIn("record_modal.js?v=20261014-compact-ui-v2", DASHBOARD)
+        self.assertIn("system_control.js?v=20261014-compact-ui-v3", DASHBOARD)
+        self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
+        self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-server-header-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-record-no-focus-v8', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-compact-ui-v9', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-compact-ui-v9', LOGIN)
 
 
 if __name__ == "__main__":

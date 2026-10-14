@@ -610,17 +610,11 @@
 
         const mappingActions = create('div', 'saved-map-mode-actions');
 
-        const startMapping = create('button', 'saved-map-start-mapping', labels.startMapping);
-        startMapping.type = 'button';
-        startMapping.dataset.controlButton = 'success';
-        components.controls?.controlButton?.enhance?.(startMapping);
+        const startMapping = createControlButton(labels.startMapping, 'success', 'saved-map-start-mapping');
         startMapping.addEventListener('click', () => startMappingFromModal(container, progress));
 
-        const clearCurrentMap = create('button', 'saved-map-clear-current', labels.clearCurrentMap);
-        clearCurrentMap.type = 'button';
-        clearCurrentMap.dataset.controlButton = 'secondary';
+        const clearCurrentMap = createControlButton(labels.clearCurrentMap, 'secondary', 'saved-map-clear-current');
         clearCurrentMap.title = '\uc800\uc7a5 \ud30c\uc77c\uc740 \uc720\uc9c0\ud558\uace0 3D Viewer\uc5d0\uc11c \ud604\uc7ac \uc9c0\ub3c4\ub9cc \uc81c\uac70\ud569\ub2c8\ub2e4.';
-        components.controls?.controlButton?.enhance?.(clearCurrentMap);
         clearCurrentMap.disabled = !global.navigationMapView?.snapshot?.()?.map;
         clearCurrentMap.addEventListener('click', () => {
             clearCurrentMapFromViewer(progress);

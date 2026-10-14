@@ -29,16 +29,16 @@
                     </div>
                     <div class="current-situation-entry-box">
                         <label class="record-field-label" for="currentSituationDescription">상황 내용</label>
-                <textarea id="currentSituationDescription" rows="5" placeholder="현재 상황을 입력하세요. 예: 1층 출입구 주변 확인 필요"></textarea>
-                <label class="record-image-option">
-                    <input id="currentSituationIncludeImage" type="checkbox" disabled>
-                    <span>위 이미지를 함께 저장</span>
-                </label>
-                <p class="record-requirement">※ 텍스트 또는 이미지 중 최소 하나는 기록해야 합니다.</p>
+                <textarea id="currentSituationDescription" rows="5" placeholder="현재 상황을 입력하세요.&#10;예: 1층 출입구 주변 확인 필요"></textarea>
+                <div class="current-situation-bottom-row">
+                    <label class="record-image-option">
+                        <input id="currentSituationIncludeImage" type="checkbox" disabled>
+                        <span>위 이미지를 함께 저장</span>
+                    </label>
+                    <p class="record-requirement">※ 텍스트 또는 이미지 중 최소 하나는 기록해야 합니다.</p>
+                    <div class="record-form-actions"><button id="currentSituationSubmit" type="submit" class="filter-btn">기록</button></div>
+                </div>
                 <div id="currentSituationError" class="record-error" role="alert"></div>
-                <div class="record-form-actions">
-                    <button id="currentSituationSubmit" type="submit" class="filter-btn">기록</button>
-                        </div>
                     </div>
                 </div>
             </form>`;
@@ -148,7 +148,7 @@
                 if (!isActive(generation) || error?.name === 'AbortError') return;
                 elements.previewState.className = 'preview-state is-unavailable';
                 elements.previewState.textContent = error.message === 'PREVIEW_UNAVAILABLE'
-                    ? '현재 카메라 이미지를 사용할 수 없습니다. 텍스트 기록은 계속할 수 있습니다.'
+                    ? '현재 카메라 이미지를 사용할 수 없습니다.\n텍스트 기록은 계속할 수 있습니다.'
                     : '미리보기를 불러오지 못했습니다. 텍스트 기록은 계속할 수 있습니다.';
                 resetPreviewOption(elements);
             }

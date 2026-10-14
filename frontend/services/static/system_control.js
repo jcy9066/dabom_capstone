@@ -98,7 +98,7 @@
             const key = `${group}:${component.id}`;
             const pending = state.pending.has(key);
             const unreachable = component.control_available === false || component.state === 'unreachable';
-            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}`);
+            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}${component.state === 'error' ? ' has-error' : ''}`);
             const row = make('div', 'system-control-row');
             const details = make('div');
             details.append(make('div', 'system-control-name', component.label || component.id));
@@ -313,41 +313,34 @@
 
     function renderGuide() {
         const guide = make('div', 'system-control-guide');
-        appendGuideSection(guide, '상태 정보 출처', [
-            '시스템 상태 — CPU / 온도 / RAM / Ping: Pi 상태 정보',
-            '카메라 상태 — LIVE / OFFLINE: Camera Stream 상태',
-            '로봇·주행 상태 — Pi 연결 / 자동·수동 / Mapping·Driving / Navigation / 긴급 정지 / Goal / Path / 활성 지도: Navigation Control 상태',
-            '프로세스 상태 — LiDAR ROS Bridge / Encoder ROS Bridge / Wheel Odometry / SLAM Mapping / Map Bridge: 시스템 제어 상태',
-            '기록 — 기기 상태 / 순찰 기록 / 관리자 조치: 서버 DB 기록',
-        ], false);
-        appendGuideSection(guide, 'Mapping', [
-            '[Mapping] \uc120\ud0dd',
-            '[\uc218\ub3d9] \uc120\ud0dd',
-            'D-Pad \uc774\ub3d9',
-            'LiDAR Mapping \uc218\ud589',
-            '[SAVE] \uc9c0\ub3c4 \uc800\uc7a5',
+        appendGuideSection(guide, '1. 연결 확인', [
+            '설정에서 SERVER·PI 상태를 확인하세요. 연결되지 않았다면 주행을 시작하지 마세요.',
+            '카메라와 LiDAR가 정상 표시되는지 확인하세요.',
         ]);
-        appendGuideSection(guide, 'Driving', [
-            '[Driving] \uc120\ud0dd',
-            '[\uae30\uc874 \uc9c0\ub3c4 \uc120\ud0dd]',
-            'Initial Pose \uc9c0\uc815',
-            'Goal \uc9c0\uc815',
-            '\uacbd\ub85c \ud655인',
-            '[\uc8fc\ud589 \uc2dc\uc791]',
+        appendGuideSection(guide, '2. 새 지도 만들기', [
+            'Mapping을 선택하고 Manual 모드로 전환하세요.',
+            'D-pad로 천천히 이동하며 주변 지도를 만드세요.',
+            '지도 선택에서 현재 지도를 저장하세요.',
         ]);
-        appendGuideSection(guide, '\uc704\ud5d8 \ub300\uc751', [
-            '\uc2e4\uc2dc\uac04 \uc704\ud5d8/\uacbd\uace0 \uc54c\ub9bc \ud655\uc778',
-            '[\uc21c\ucc30 \uae30\ub85d \uc870\ud68c]',
-            '[\uc774\ubbf8\uc9c0 \uac24\ub7ec\ub9ac]',
-            '\ud544\uc694 \uc2dc [\uc2e0\uace0] \ub610\ub294 [\u26a0\ufe0f \uacbd\uace0]',
-            '\ud544\uc694 \uc2dc [\uae34\uae09 \uc815\uc9c0]',
-            '[\ud604\uc7ac \uc0c1\ud669 \uc791\uc131]',
-            '[\uad00\ub9ac\uc790 \uc870\uce58 \uc870\ud68c]',
+        appendGuideSection(guide, '3. 저장 지도에서 주행', [
+            'Driving을 선택하고 저장 지도를 불러오세요.',
+            '지도에서 시작 위치(Initial Pose)와 목표(Goal)를 지정하세요.',
+            '경로를 확인한 뒤 주행을 시작하세요. 필요하면 goal 취소를 누르세요.',
         ]);
-        appendGuideSection(guide, '\uae30\uae30 \uc0c1\ud0dc', [
-            '\uc2dc\uc2a4\ud15c \uc9c4\ub2e8: [\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]',
+        appendGuideSection(guide, '4. 위험 알림 대응', [
+            '실시간 알림과 카메라 화면을 확인하세요.',
+            '필요한 경우 경고·신고를 선택하세요. 긴급 상황이면 STOP을 누르세요.',
         ]);
-        appendGuideSection(guide, '\ud504\ub85c\uc138\uc2a4 \uc2e4\ud589 \uc21c\uc11c', processGuideItems());
+        appendGuideSection(guide, '5. 기록 확인', [
+            '순찰 내역·갤러리에서 탐지 내용과 이미지를 확인하세요.',
+            '상황 기록을 작성하고 조치 내역에서 처리 결과를 확인하세요.',
+            '기기 상태 내역에서 시작·종료 기간을 지정해 조회하세요.',
+        ]);
+        appendGuideSection(guide, '6. 장비 제어', [
+            '설정의 SERVER·PI 토글로 각 프로세스 상태를 확인하세요.',
+            '오류나 중복 실행 표시가 있으면 상태를 먼저 확인하세요.',
+            '프로세스 시작 순서: ' + processGuideItems().join(' → '),
+        ]);
         return guide;
     }
 
