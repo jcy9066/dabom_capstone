@@ -9,11 +9,11 @@
     <link rel="stylesheet" href="static/system_control.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261001-map-modal-controls">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261014-ux-refine-v17">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-gallery-cover-v14">
+    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-ux-refine-v15">
 </head>
 <body>
 
@@ -55,7 +55,8 @@
         </div>
     </div>
 
-    <div class="system-status-bar">
+    <div class="system-status-bar" id="topSystemStatusBar" data-open="true">
+        <div class="system-status-items">
         <span>
             CPU:
             <span id="sys-cpu-usage">--</span>%
@@ -78,7 +79,12 @@
         <span class="system-state-item">
             Mode:
             <span class="state-value state-unknown" id="robot-mode-status">UNKNOWN</span>
-        </span>
+        </span>        </div>
+        <button type="button" class="system-status-drawer-handle"
+            id="topSystemStatusToggle" data-drawer-toggle data-drawer-target="topSystemStatusBar"
+            data-drawer-open-label="시스템 상태 접기" data-drawer-closed-label="시스템 상태 펼치기"
+            aria-controls="topSystemStatusBar" aria-expanded="true"
+            aria-label="시스템 상태 접기"><span aria-hidden="true">❮</span></button>
     </div>
 
     <header>
@@ -418,7 +424,7 @@
                 <div class="card-header server-state-header">
                     <h2 class="card-title">Server status</h2>
                     <div class="server-state-heading-actions">
-                        <span class="server-state-updated" id="server-state-updated">확인 중</span>
+                        <span class="server-state-updated" id="server-state-updated">불러오는 중</span>
                         <button type="button" id="serverStateDrawerToggle" class="server-state-drawer-toggle" aria-controls="serverStateGrid" aria-expanded="true" aria-label="Server status 접기"><span aria-hidden="true">▴</span></button>
                     </div>
                 </div>
@@ -665,11 +671,11 @@
     </div>
 
     <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/navigation/saved_map_modal.js?v=20261014-compact-ui-v2"></script>
+    <script src="/components/navigation/saved_map_modal.js?v=20261014-ux-refine-v3"></script>
     <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/records/record_table.js?v=20261014-ui-polish-v1"></script>
-    <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/records/record_modal.js?v=20261014-compact-ui-v2"></script>
+    <script src="/components/records/pagination.js?v=20261014-ten-rows-v17"></script>
+    <script src="/components/records/record_modal.js?v=20261014-ux-refine-v3"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
@@ -679,7 +685,7 @@
     <script src="/components/controls/drive_mode_control.js?v=20261014-enterprise-ui-v1"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20261014-ui-polish-v1"></script>
     <script src="/components/gallery/image_detail.js?v=20261014-compact-ui-v2"></script>
-    <script src="/components/current_situation/current_situation.js?v=20261014-compact-ui-v2"></script>
+    <script src="/components/current_situation/current_situation.js?v=20261014-ux-refine-v3"></script>
     <script type="importmap">
         {
             "imports": {
@@ -690,10 +696,10 @@
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
     <script src="static/script.js?v=20261014-enterprise-ui-v1"></script>
-    <script src="static/system_control.js?v=20261014-compact-ui-v3"></script>
+    <script src="static/system_control.js?v=20261014-ux-refine-v4"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/dashboard_state.js?v=20261014-ten-rows-v17"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
-    <script src="static/selected_ui.js?v=20261014-server-header-v3"></script>
+    <script src="static/selected_ui.js?v=20261014-ux-refine-v4"></script>
 </body>
 </html>

@@ -10,7 +10,7 @@
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
         saveCurrent: '\ud604\uc7ac \uc9c0\ub3c4 \uc800\uc7a5',
-        startMapping: '\uc0c8 Mapping \uc2dc\uc791',
+        startMapping: '\uc0c8\ub85c\uc6b4 mapping',
         clearCurrentMap: '\ud604\uc7ac \uc9c0\ub3c4 \uc81c\uac70',
         mappingStarting: 'Mapping \ubaa8\ub4dc\ub85c \uc804\ud658 \uc911...',
         mappingStarted: '\uc0c8 Mapping\uc744 \uc2dc\uc791\ud588\uc2b5\ub2c8\ub2e4.',
@@ -622,7 +622,6 @@
         });
 
         mappingActions.append(startMapping, clearCurrentMap);
-        mapColumn.append(mappingActions);
 
         const actions = create('div', 'saved-map-actions');
 
@@ -631,9 +630,6 @@
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });
-
-        const cancel = createControlButton(labels.cancel, 'secondary');
-        cancel.addEventListener('click', () => manager?.close());
 
         const load = createControlButton(labels.load, 'accent', 'saved-map-load');
         load.disabled = !selectedMapName(container);
@@ -645,8 +641,8 @@
             showMessage(progress, '');
         });
 
-        actions.append(save, cancel, load);
-        mapColumn.append(actions);
+        actions.append(save, load);
+        mapColumn.append(actions, mappingActions);
         return container;
     }
 

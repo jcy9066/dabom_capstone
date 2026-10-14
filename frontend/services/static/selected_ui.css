@@ -1371,3 +1371,161 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   object-position: center;
   background: var(--card-bg2);
 }
+
+
+/* 2026-10-14 UI pass: centrally aligned data tables, including sort labels.
+ * Keep sortable <button>, checkboxes, and handlers untouched. */
+table :is(th,td) { text-align:center !important; vertical-align:middle; }
+table th .record-sort-button { text-align:center !important; display:inline-flex;align-items:center;justify-content:center;gap:4px; }
+.record-data-table .record-type-badge { text-align:center; }
+.records-view-statusModal .record-drive-mode-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:58px;padding:4px 7px;border:1px solid currentColor;
+  border-radius:999px;font-weight:750;font-size:10px;line-height:1.2;
+}
+.records-view-statusModal .record-drive-mode-badge.is-auto{color:#17608a;background:rgba(50,147,202,.12);}
+.records-view-statusModal .record-drive-mode-badge.is-manual{color:#8c5a1b;background:rgba(204,148,62,.14);}
+.records-view-statusModal .record-drive-mode-badge.is-unknown{color:var(--text-muted);background:var(--card-bg2);}
+body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-auto{color:#9bd4ee;background:rgba(50,147,202,.22);}
+body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{color:#eec990;background:rgba(204,148,62,.22);}
+
+/* CPU / RAM / PING / Pi / Mode: shared DrawerToggle handles aria and state. */
+#topSystemStatusBar {
+  display:flex; align-items:center; flex-wrap:nowrap;
+  width:max-content; max-width:calc(100% - 40px);
+  min-height:35px; padding:4px 31px 4px 10px; box-sizing:border-box;
+  overflow:hidden; transition:width .25s ease,padding .25s ease,background .2s ease;
+}
+#topSystemStatusBar .system-status-items{
+  display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;
+  gap:6px 16px; min-width:0;overflow:hidden;
+  transition:opacity .18s ease;
+}
+#topSystemStatusBar .system-status-items > span{min-width:0;overflow-wrap:anywhere;}
+#topSystemStatusBar .system-status-drawer-handle{
+  position:absolute;right:3px;top:50%;transform:translateY(-50%);
+  width:24px;height:26px;padding:0;display:grid;place-items:center;
+  border:0;background:transparent;border-radius:8px;color:var(--text-muted);
+  cursor:pointer;transition:background .2s ease,box-shadow .2s ease,color .2s ease;
+}
+#topSystemStatusBar .system-status-drawer-handle:hover,
+#topSystemStatusBar .system-status-drawer-handle:focus-visible{
+  background:var(--card-bg2);box-shadow:0 2px 7px rgba(0,0,0,.09);color:var(--accent);
+}
+#topSystemStatusBar .system-status-drawer-handle span{
+  display:block;transition:transform .25s ease;
+}
+#topSystemStatusBar[data-open="false"]{
+  width:32px;max-width:32px;padding:4px 0;min-height:35px;
+}
+#topSystemStatusBar[data-open="false"] .system-status-items{
+  opacity:0;visibility:hidden;pointer-events:none;white-space:nowrap;
+}
+#topSystemStatusBar[data-open="false"] .system-status-drawer-handle span{transform:rotate(180deg);}
+
+/* Uiverse mobinkakei / grumpy-turtle-41: scaled 3 jumping balls and 3 shadows.
+ * Attribution: https://uiverse.io/mobinkakei/grumpy-turtle-41
+ * Copyright 2026 mobinkakei (Mobeen). MIT-licensed original animation.
+ * Animate only busy states; keep offline/reduced-motion behavior. */
+@keyframes ui-mobinkakei-ball {
+  0%{top:23px;height:3px;border-radius:25px 25px 12px 12px;transform:scaleX(1.7);}
+  40%{height:9px;border-radius:50%;transform:scaleX(1);}
+  100%{top:0;}
+}
+@keyframes ui-mobinkakei-shadow {
+  0%{transform:scaleX(1.5);}
+  40%{transform:scaleX(1);opacity:.7;}
+  100%{transform:scaleX(.2);opacity:.4;}
+}
+.ui-dots{
+  position:relative;display:inline-block;vertical-align:middle;
+  flex:0 0 47px;width:47px;height:30px;margin:0 7px 0 0;
+  color:var(--accent);overflow:visible;pointer-events:none;
+}
+.ui-dots>i{
+  position:absolute;top:0;left:6px;width:9px;height:9px;
+  border-radius:50%;background:currentColor;opacity:1;
+  animation:ui-mobinkakei-ball .5s alternate infinite ease;
+  transform-origin:50% 50%;
+}
+.ui-dots>i:nth-child(2){left:19px;right:auto;top:0;animation-delay:.2s;}
+.ui-dots>i:nth-child(3){left:32px;right:auto;top:0;animation-delay:.3s;}
+.ui-dots>b{
+  position:absolute;top:25px;left:6px;width:9px;height:2px;
+  border-radius:50%;background:color-mix(in srgb, var(--text-dark) 60%, transparent);
+  filter:blur(1px);opacity:.65;
+  animation:ui-mobinkakei-shadow .5s alternate infinite ease;
+  transform-origin:50% 50%;
+}
+.ui-dots>b:nth-child(5){left:19px;animation-delay:.2s;}
+.ui-dots>b:nth-child(6){left:32px;animation-delay:.3s;}
+.ui-loading-visual .ui-dots{margin:0;}
+.ui-loading-visual.is-offline .ui-dots>:is(i,b){animation:none!important;}
+.ui-dots[hidden],.ui-loading-visual[hidden]{display:none!important;}
+@media(prefers-reduced-motion:reduce){
+  .ui-dots>:is(i,b){animation:none!important;}
+}
+/* Avoid injected loading glyphs displacing 4-column model switches. */
+.dashboard-model-toggle>.ui-dots{display:none!important;}
+
+/* Map view: compact paired actions at the bottom of the map column. */
+.saved-map-primary-column .saved-map-mode-actions{
+  display:flex;flex-direction:row;justify-content:center;align-items:center;
+  gap:8px;margin-top:auto;flex-wrap:wrap;padding-block:4px;
+}
+.saved-map-primary-column .saved-map-mode-actions .dashboard-control-button{
+  flex:0 1 auto!important;width:auto!important;min-width:110px;max-width:50%;
+  padding-inline:12px;
+}
+.saved-map-secondary-column .saved-map-location-panel {
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
+  padding-bottom:0;box-sizing:border-box;
+}
+.saved-map-secondary-column .saved-map-location-actions {
+  margin-top:auto;padding-top:10px;padding-bottom:0;
+}
+/* Guide cards share row height even when the content counts differ. */
+.system-control-guide {align-items:stretch;grid-template-rows:repeat(3,minmax(0,1fr));}
+.system-control-guide-section {height:100%;box-sizing:border-box;display:flex;flex-direction:column;}
+.system-control-guide-list {list-style-type:disc;}
+@media(max-width:760px){.system-control-guide{grid-template-rows:none;}}
+
+/* System controls: regular cards only contain a title and switch.
+ * Preserve diagnostic text when unreachable, error, duplicate or pending. */
+.system-control-card .system-control-meta {display:none;}
+.system-control-card:is(.has-error,.is-unreachable,.is-duplicate,.is-pending)
+  .system-control-meta{display:block;}
+.system-control-card .system-control-message{display:none;}
+.system-control-card:is(.has-error,.is-unreachable,.is-duplicate,.is-pending)
+  .system-control-message{display:block;}
+
+/* Gallery detail: 10% each, at least 72px wide, together in the center. */
+.gallery-detail .gallery-detail-actions{
+  width:100%;display:flex;justify-content:center;align-items:center;gap:8px;
+}
+.gallery-detail .gallery-detail-actions>*{flex:0 0 max(10%,72px);min-width:72px;max-width:none;}
+.gallery-detail .gallery-detail-actions button{width:100%;min-width:72px;}
+.gallery-detail .gallery-detail-actions>span{min-width:0;flex:0 0 max(10%,72px);}
+@media(max-width:340px){.gallery-detail .gallery-detail-actions{gap:3px;}}
+
+/* Situation report: symmetric panels, constant 280px textarea, hidden scrollbar. */
+#commonModal[data-modal-view="currentSituation"] .current-situation-layout{
+  min-height:365px;align-items:stretch;
+}
+#commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+#commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{
+  min-height:365px;height:100%;box-sizing:border-box;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+  height:280px!important;min-height:280px;max-height:280px;
+  flex:0 0 280px;resize:none;overflow-y:auto!important;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription::-webkit-scrollbar{
+  display:none;width:0;height:0;
+}
+@media(max-width:720px) {
+  #commonModal[data-modal-view="currentSituation"] .current-situation-layout,
+  #commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+  #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{min-height:0;height:auto;}
+}

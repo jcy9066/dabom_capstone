@@ -172,16 +172,20 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('data-record-view="statusModal"', DASHBOARD)
 
     def test_asset_versions(self):
-        for name in ("saved_map_modal.js", "current_situation.js", "image_detail.js"):
+        for name in ("saved_map_modal.js", "current_situation.js"):
             with self.subTest(asset=name):
-                self.assertIn(name + "?v=20261014-compact-ui-v2", DASHBOARD)
-        self.assertIn("record_modal.js?v=20261014-compact-ui-v2", DASHBOARD)
-        self.assertIn("system_control.js?v=20261014-compact-ui-v3", DASHBOARD)
+                self.assertIn(name + "?v=20261014-ux-refine-v3", DASHBOARD)
+        self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
+        self.assertIn("pagination.js?v=20261014-ten-rows-v17", DASHBOARD)
+        self.assertIn("dashboard_state.js?v=20261014-ten-rows-v17", DASHBOARD)
+        self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", DASHBOARD)
+        self.assertIn("record_modal.js?v=20261014-ux-refine-v3", DASHBOARD)
+        self.assertIn("system_control.js?v=20261014-ux-refine-v4", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn('selected_ui.js?v=20261014-server-header-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-gallery-cover-v14', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-gallery-cover-v14', LOGIN)
+        self.assertIn('selected_ui.js?v=20261014-ux-refine-v4', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-ux-refine-v15', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-ux-refine-v15', LOGIN)
 
 
 if __name__ == "__main__":

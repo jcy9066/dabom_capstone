@@ -165,12 +165,70 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("button.addEventListener('click', () => openDetail", GALLERY)
         self.assertIn('gallery-card-source source-', GALLERY)
 
+    def test_ten_records_per_page_and_centered_tables(self):
+        pagination = read("frontend/components/records/pagination.js")
+        state = read("frontend/services/static/dashboard_state.js")
+        self.assertIn("records.DEFAULT_PAGE_SIZE = 10;", pagination)
+        self.assertIn("target.hidden = total <= records.DEFAULT_PAGE_SIZE;", pagination)
+        self.assertIn("Number(filters.pageSize) || 10", state)
+        self.assertIn("table :is(th,td) { text-align:center !important;", CSS)
+        self.assertIn("record-drive-mode-badge", RECORDS)
+        self.assertIn("records.formatBoolean(row.is_autonomous, 'Auto', 'Manual')", RECORDS)
+
+    def test_header_status_drawer_does_not_break_polling(self):
+        self.assertIn('id="topSystemStatusBar" data-open="true"', INDEX)
+        self.assertIn('data-drawer-target="topSystemStatusBar"', INDEX)
+        self.assertIn('id="sys-cpu-usage"', INDEX)
+        self.assertIn('id="pi-connection-status"', INDEX)
+        self.assertIn('#topSystemStatusBar[data-open="false"]', CSS)
+        state = read("frontend/services/static/dashboard_state.js")
+        self.assertIn("element.textContent = parsed.toLocaleTimeString", state)
+        self.assertNotIn("element.textContent = `확인 ${parsed.", state)
+
+    def test_mobinkakei_loader_animates_three_balls_and_shadows(self):
+        visual = read("frontend/services/static/selected_ui.js")
+        self.assertIn('<i></i><i></i><i></i><b></b><b></b><b></b>', visual)
+        self.assertIn('@keyframes ui-mobinkakei-ball', CSS)
+        self.assertIn('@keyframes ui-mobinkakei-shadow', CSS)
+        self.assertIn('animation:ui-mobinkakei-ball .5s alternate infinite ease;', CSS)
+        self.assertIn('if (element.matches(\'.dashboard-model-toggle\')) return;', visual)
+        self.assertIn('.ui-loading-visual.is-offline .ui-dots>:is(i,b){animation:none!important;}', CSS)
+
+    def test_map_cancel_removed_but_others_remain(self):
+        self.assertNotIn("actions.append(save, cancel, load)", MAP)
+        self.assertIn("actions.append(save, load);", MAP)
+        self.assertIn("mapColumn.append(actions, mappingActions);", MAP)
+        self.assertIn("startMappingFromModal(container, progress)", MAP)
+        self.assertIn("clearCurrentMapFromViewer(progress)", MAP)
+
+    def test_diagnostics_and_bullet_guide_preserved(self):
+        self.assertIn("ordered = false", SYSTEM)
+        self.assertIn(".system-control-guide {align-items:stretch;", CSS)
+        self.assertIn(".system-control-card .system-control-meta {display:none;}", CSS)
+        self.assertIn("component.duplicate || component.state === 'duplicate'", SYSTEM)
+        self.assertIn("button.disabled = pending || unreachable;", SYSTEM)
+        self.assertIn("control(group, component.id, action)", SYSTEM)
+
+    def test_gallery_buttons_and_fixed_report_textarea(self):
+        self.assertIn('flex:0 0 max(10%,72px)', CSS)
+        self.assertIn('min-width:72px', CSS)
+        self.assertIn('id="currentSituationDescription"', SITUATION)
+        self.assertIn("textarea.style.overflowY = 'auto';", SITUATION)
+        self.assertIn("textarea.style.height = '280px';", SITUATION)
+        self.assertIn('scrollbar-width:none;-ms-overflow-style:none;', CSS)
+        self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
+
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-gallery-cover-v14", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-gallery-cover-v14", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-ux-refine-v15", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-ux-refine-v15", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
-            self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)
+        for name in ("saved_map_modal.js", "record_modal.js", "current_situation.js"):
+            self.assertIn(name+"?v=20261014-ux-refine-v3", INDEX)
+        self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
+        self.assertIn("pagination.js?v=20261014-ten-rows-v17", INDEX)
+        self.assertIn("dashboard_state.js?v=20261014-ten-rows-v17", INDEX)
+        self.assertIn("system_control.js?v=20261014-ux-refine-v4", INDEX)
+        self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", INDEX)
 
 if __name__ == "__main__":
     unittest.main()

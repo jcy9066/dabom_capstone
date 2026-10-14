@@ -12,9 +12,9 @@
     function autoGrowTextarea(textarea) {
         if (!textarea) return;
         textarea.style.resize = 'none';
-        textarea.style.overflowY = 'hidden';
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
+        // Keep a fixed, scrollable text area instead of expanding over the camera.
+        textarea.style.overflowY = 'auto';
+        textarea.style.height = '280px';
     }
 
     function renderForm() {

@@ -549,7 +549,7 @@
                 <td class="${valueClass(row.cpu_temperature, 65, 80)}">${records.formatValue(row.cpu_temperature, '°C')}</td>
                 <td class="${valueClass(row.ram_usage, 60, 80)}">${records.formatValue(row.ram_usage, '%')}</td>
                 <td class="${valueClass(row.ping, 100, 150)}">${records.formatValue(row.ping, 'ms')}</td>
-                <td>${records.formatBoolean(row.is_autonomous, 'AUTO', 'MANUAL')}</td>
+                <td><span class="record-drive-mode-badge ${row.is_autonomous === true || row.is_autonomous === 1 || row.is_autonomous === '1' ? 'is-auto' : row.is_autonomous === false || row.is_autonomous === 0 || row.is_autonomous === '0' ? 'is-manual' : 'is-unknown'}">${records.formatBoolean(row.is_autonomous, 'Auto', 'Manual')}</span></td>
                 <td>${records.formatValue(row.speed)}</td>
                 <td class="muted">${gpsPrecision(row.gps_lat)} / ${gpsPrecision(row.gps_lng)} / ${gpsPrecision(row.gps_alt)}</td>
                 <td class="muted">${records.formatValue(row.lidar_x)} / ${records.formatValue(row.lidar_y)}</td>

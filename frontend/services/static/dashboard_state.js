@@ -40,7 +40,7 @@
         const element = byId('server-state-updated');
         if (!element) return;
         const parsed = parseDate(timestamp) || new Date();
-        element.textContent = `확인 ${parsed.toLocaleTimeString('ko-KR', { hour12: false })}`;
+        element.textContent = parsed.toLocaleTimeString('ko-KR', { hour12: false });
     }
 
     function setPiState(value, available = true) {
@@ -287,7 +287,7 @@
         if (filters.startAt) query.set('start_at', filters.startAt);
         if (filters.endAt) query.set('end_at', filters.endAt);
         query.set('page', String(Math.max(1, Number(filters.page) || 1)));
-        query.set('page_size', String(50));
+        query.set('page_size', String(Math.max(1, Number(filters.pageSize) || 10)));
         if (filters.sortBy) query.set('sort_by', filters.sortBy);
         if (filters.sortDirection) query.set('sort_direction', filters.sortDirection);
         if (type === 'patrolModal') {
@@ -348,7 +348,7 @@
                         : normalizeActionRow
             ),
             page: Math.max(1, Number(result.payload?.page) || 1),
-            page_size: Math.max(1, Number(result.payload?.page_size) || 50),
+            page_size: Math.max(1, Number(result.payload?.page_size) || 10),
             total: Math.max(0, Number(result.payload?.total) || 0),
             total_pages: Math.max(0, Number(result.payload?.total_pages) || 0),
             message: ''

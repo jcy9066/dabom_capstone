@@ -98,7 +98,7 @@
             const key = `${group}:${component.id}`;
             const pending = state.pending.has(key);
             const unreachable = component.control_available === false || component.state === 'unreachable';
-            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}${component.state === 'error' ? ' has-error' : ''}`);
+            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}${component.state === 'error' ? ' has-error' : ''}${component.duplicate || component.state === 'duplicate' ? ' is-duplicate' : ''}${pending ? ' is-pending' : ''}`);
             const row = make('div', 'system-control-row');
             const details = make('div');
             details.append(make('div', 'system-control-name', component.label || component.id));
@@ -283,7 +283,7 @@
         }
     }
 
-    function appendGuideSection(container, titleValue, items, ordered = true) {
+    function appendGuideSection(container, titleValue, items, ordered = false) {
         const section = make('section', 'system-control-guide-section');
         section.append(make('h3', 'system-control-guide-heading', titleValue));
         const list = make(

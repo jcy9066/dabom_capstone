@@ -339,9 +339,9 @@ assert.strictEqual(filters.values.reported, null);
 assert.strictEqual(filters.reset().type, 'all');
 
 const pagination = components.records.createPaginationState({ total: 101 });
-assert.strictEqual(pagination.pageSize, 50);
-assert.strictEqual(pagination.totalPages, 3);
-assert.strictEqual(pagination.setPage(99), 3);
+assert.strictEqual(pagination.pageSize, 10);
+assert.strictEqual(pagination.totalPages, 11);
+assert.strictEqual(pagination.setPage(99), 11);
 pagination.setTotal(1);
 assert.strictEqual(pagination.page, 1);
 pagination.setPage(1);

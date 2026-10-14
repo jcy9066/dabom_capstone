@@ -50,8 +50,8 @@ class DashboardRecordsCoreTests(unittest.TestCase):
             assert.strictEqual(patrolFilters.reset().eventType, '');
 
             const pagination = records.createPaginationState({ page: 2, pageSize: 10, total: 101 });
-            assert.strictEqual(pagination.pageSize, 50);
-            assert.strictEqual(pagination.totalPages, 3);
+            assert.strictEqual(pagination.pageSize, 10);
+            assert.strictEqual(pagination.totalPages, 11);
             pagination.reset();
             assert.strictEqual(pagination.page, 1);
 

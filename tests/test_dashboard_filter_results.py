@@ -78,7 +78,7 @@ class DashboardFilterResultTests(unittest.TestCase):
                     return {
                         ok: true,
                         status: 200,
-                        json: async () => ({ items: rows, page: 1, page_size: 50, total: rows.length, total_pages: rows.length ? 1 : 0 }),
+                        json: async () => ({ items: rows, page: 1, page_size: 10, total: rows.length, total_pages: rows.length ? 1 : 0 }),
                     };
                 },
                 setInterval: () => 0,

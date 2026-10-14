@@ -103,7 +103,7 @@ class DashboardRecordsFrontendTests(unittest.TestCase):
                         ok: true, status: 200,
                         json: async () => ({
                             items: [{ action_id: 3, user_name: '홍길동', user_email: 'hong@example.com', action_type: 'WARNING' }],
-                            page: 2, page_size: 50, total: 77, total_pages: 2,
+                            page: 2, page_size: 10, total: 77, total_pages: 8,
                         }),
                     };
                     return { ok: false, status: 404, json: async () => ({}) };
@@ -119,7 +119,7 @@ class DashboardRecordsFrontendTests(unittest.TestCase):
                 });
                 const url = requested.find(value => value.includes('/api/logs/actions'));
                 assert(url.includes('page=2'));
-                assert(url.includes('page_size=50'));
+                assert(url.includes('page_size=10'));
                 assert(url.includes('sort_by=user_name'));
                 assert(url.includes('sort_direction=asc'));
                 assert(url.includes('user_name=%ED%99%8D%EA%B8%B8'));

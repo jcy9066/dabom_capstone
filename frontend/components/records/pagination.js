@@ -4,7 +4,7 @@
     const components = global.DabomDashboardComponents = global.DabomDashboardComponents || {};
     const records = components.records = components.records || {};
 
-    records.DEFAULT_PAGE_SIZE = 50;
+    records.DEFAULT_PAGE_SIZE = 10;
     records.createPaginationState = function createPaginationState(options = {}) {
         let page = Math.max(1, Number(options.page) || 1);
         let total = Math.max(0, Number(options.total) || 0);
