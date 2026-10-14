@@ -52,9 +52,14 @@
             }
             node = node.parentElement;
         }
+        // Fixed desktop dashboards can have scrollHeight > clientHeight while
+        // body overflow:hidden prevents native scrolling. Do not mistake that
+        // inaccessible overflow for a valid scroll-chain ancestor.
+        const bodyOverflow = global.getComputedStyle(doc.body)?.overflowY || '';
+        const pageIsLocked = /^(hidden|clip)$/.test(bodyOverflow);
         // Modals, drawers and dialogs must not scroll the page behind them.
         if (!target?.closest?.('#commonModal, .sidebar, .signup-modal, .ui-confirm-overlay')
-            && !nativePageBounce) {
+            && !nativePageBounce && !pageIsLocked) {
             const page = pageScroll();
             if (page.element && page.max > EPS) chain.push(page);
         }
