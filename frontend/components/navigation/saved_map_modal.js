@@ -642,7 +642,9 @@
         });
 
         actions.append(save, load);
-        mapColumn.append(actions, mappingActions);
+        const primaryActions = create('div', 'saved-map-primary-actions');
+        primaryActions.append(mappingActions, actions);
+        mapColumn.append(primaryActions);
         return container;
     }
 

@@ -220,8 +220,8 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-radio-pages-v1", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-radio-pages-v1", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-layout-followup-v1", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-layout-followup-v1", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-ux-refine-v3", INDEX)

@@ -145,43 +145,57 @@ button[aria-busy="true"] { cursor:progress; }
   box-shadow:inset 0 0 0 1px var(--ui-highlight), 0 2px 6px rgba(0,0,0,.07);
 }
 
-/* 11 — gharsh11032000 radio-inspired numbered pagination. */
-.records-pagination { gap:8px; }
-.records-pagination .records-page-numbers {
-  display:grid; grid-template-columns:repeat(5,32px); gap:4px; place-items:center;
-  padding:4px; border-radius:999px; background:var(--card-bg2);
-  border:1px solid var(--ui-edge,var(--border-color));
+/* 11 — Radio-inspired segmented pagination, adapted from gharsh11032000.
+   https://uiverse.io/gharsh11032000/tiny-falcon-15 (MIT license).
+   Preserve five fixed slots and native button keyboard interaction. */
+.records-pagination{justify-content:center;gap:8px;}
+.records-pagination .records-page-numbers{
+  display:grid;grid-template-columns:repeat(5,minmax(0,36px));align-items:center;
+  justify-items:stretch;gap:3px;padding:4px;border-radius:9px;
+  background:color-mix(in srgb,var(--card-bg2) 88%,var(--text-muted) 12%);
+  border:1px solid var(--border-color);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.035);
 }
-.records-pagination .records-page-number,
-.records-pagination .records-page-arrow {
-  display:inline-grid; place-items:center; flex:none; box-sizing:border-box;
-  width:32px; min-width:32px; height:32px; min-height:32px; padding:0 !important;
-  border:1px solid transparent; border-radius:50% !important;
-  background:transparent; color:var(--text-dark);
-  font:inherit; font-size:12px; font-weight:700; line-height:1;
-  transition:background .18s,color .18s,transform .18s,box-shadow .18s;
+.records-pagination .records-page-number,.records-pagination .records-page-arrow{
+  display:flex;align-items:center;justify-content:center;box-sizing:border-box;
+  flex:0 0 auto;width:36px;min-width:36px;height:34px;min-height:34px;
+  padding:0!important;border:0!important;border-radius:7px!important;
+  background:transparent;color:var(--text-dark);font:inherit;font-size:12px;
+  font-weight:650;line-height:1;cursor:pointer;
+  box-shadow:none;transform:none;
+  transition:background-color .18s ease,color .18s ease,box-shadow .18s ease;
 }
-.records-pagination .records-page-arrow {
-  font-size:22px; border-color:var(--ui-edge,var(--border-color)); background:var(--card-bg2);
-}
-.records-pagination .records-page-empty { display:block; width:32px; height:32px; pointer-events:none; }
-.records-pagination .records-page-number.is-current {
-  background:var(--ui-highlight,var(--accent)); color:#fff; border-color:transparent;
-  box-shadow:0 2px 8px var(--primary-glow,rgba(80,110,140,.16));
+.records-pagination .records-page-number.is-current,
+.records-pagination .records-page-number[aria-current="page"]{
+  background:var(--primary-color);color:#fff;font-weight:800;
+  box-shadow:0 2px 7px rgba(0,0,0,.16);
+  cursor:default;
 }
 .records-pagination .records-page-number:not(.is-current):hover,
-.records-pagination .records-page-arrow:hover:not(:disabled) {
-  transform:translateY(-1px); background:var(--card-bg);
-  color:var(--ui-highlight,var(--accent)); border-color:var(--ui-highlight,var(--accent));
-  box-shadow:0 2px 8px rgba(0,0,0,.09);
+.records-pagination .records-page-arrow:hover:not(:disabled){
+  background:var(--card-bg);color:var(--accent);
+  box-shadow:0 1px 4px rgba(0,0,0,.09);transform:none;
 }
 .records-pagination .records-page-number:focus-visible,
-.records-pagination .records-page-arrow:focus-visible {
-  outline:2px solid var(--ui-highlight,var(--accent)); outline-offset:2px;
+.records-pagination .records-page-arrow:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px;
 }
-.records-pagination .records-page-arrow:disabled { opacity:.4; cursor:not-allowed; transform:none; }
-@media (prefers-reduced-motion:reduce) {
-  .records-pagination .records-page-number,.records-pagination .records-page-arrow { transition:none; }
+.records-pagination .records-page-arrow{
+  border:1px solid var(--border-color)!important;
+  border-radius:9px!important;background:var(--card-bg2);
+  font-size:22px;font-weight:500;
+}
+.records-pagination .records-page-arrow:disabled{opacity:.4;cursor:not-allowed;}
+.records-pagination .records-page-empty{
+  width:36px;height:34px;display:block;pointer-events:none;
+}
+@media(max-width:380px){
+  .records-pagination .records-page-numbers{grid-template-columns:repeat(5,30px);gap:2px;padding:3px;}
+  .records-pagination .records-page-empty,
+  .records-pagination .records-page-number{width:30px;min-width:30px;height:30px;min-height:30px;}
+}
+@media(prefers-reduced-motion:reduce){
+  .records-pagination .records-page-number,.records-pagination .records-page-arrow{transition:none;}
 }
 
 /* 13 — Praashoo7 soft recessed login/signup form; theme tokens preserved. */
@@ -1560,4 +1574,105 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   #commonModal[data-modal-view="currentSituation"] .current-situation-layout,
   #commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
   #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{min-height:0;height:auto;}
+}
+
+/* 2026-10-14 layout follow-up: shared table column centering.
+ * Keep header and body in one fixed-layout table; match their padding boxes.
+ * Sorting buttons fill their cells without an offset from inline content. */
+.records-view .record-data-table{
+  width:100%;table-layout:fixed;border-collapse:collapse;border-spacing:0;
+}
+.records-view .record-data-table :is(thead th,tbody td){
+  box-sizing:border-box;text-align:center!important;vertical-align:middle;
+  padding-inline:6px!important;
+}
+.records-view .record-data-table thead th .record-sort-button{
+  display:flex;width:100%;min-width:0;justify-content:center;align-items:center;
+  text-align:center!important;box-sizing:border-box;padding:0;gap:0;
+}
+.records-view .record-data-table thead th .record-sort-button span[aria-hidden]{
+  flex:none;
+}
+
+/* Map: fill the existing modal body with the two columns, removing the large
+ * empty footer. Both columns keep equal height and inner bottom padding. */
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-body{
+  display:flex;flex-direction:column;min-height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal{
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{
+  flex:1 1 auto;min-height:0;height:100%;align-items:stretch;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
+  height:100%;min-height:0;
+}
+.saved-map-primary-column .saved-map-primary-actions{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  flex-wrap:nowrap;margin-top:auto;padding-block:5px;min-width:0;
+}
+.saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions,
+.saved-map-primary-column .saved-map-primary-actions .saved-map-actions{
+  display:flex;align-items:center;gap:7px;padding:0;margin:0;
+  flex-wrap:nowrap;min-width:0;
+}
+.saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions .dashboard-control-button{
+  min-width:0!important;width:auto!important;max-width:none;
+  flex:0 1 auto!important;margin:0!important;
+}
+.saved-map-primary-column .saved-map-primary-actions .saved-map-actions .saved-map-save-current{
+  margin-right:0;
+}
+.saved-map-primary-column .saved-map-primary-actions .dashboard-control-button{
+  min-height:34px;white-space:nowrap;padding-inline:10px;
+}
+@media(max-width:1150px){
+ .saved-map-primary-column .saved-map-primary-actions{flex-wrap:wrap;row-gap:7px;}
+ .saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions,
+ .saved-map-primary-column .saved-map-primary-actions .saved-map-actions{flex:1 1 auto;justify-content:center;}
+}
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{height:auto;flex:0 0 auto;}
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{height:auto;min-height:0;}
+}
+
+/* The offline (paused) animation presents only one centered row of 3 dots.
+ * Animated jump/shadows remain visible only while genuinely connecting. */
+.ui-loading-visual.is-offline .ui-dots > i{
+  top:11px!important;left:6px!important;width:9px;height:9px;
+  border-radius:50%;animation:none!important;transform:none!important;
+}
+.ui-loading-visual.is-offline .ui-dots > i:nth-child(2){left:19px!important;}
+.ui-loading-visual.is-offline .ui-dots > i:nth-child(3){left:32px!important;}
+.ui-loading-visual.is-offline .ui-dots > b{display:none!important;}
+.ui-loading-visual.is-offline .ui-dots{height:30px;}
+/* All three dots share the same baseline in reduced-motion mode. */
+@media(prefers-reduced-motion:reduce){
+ .ui-dots>i{top:11px!important;transform:none!important;animation:none!important;}
+ .ui-dots>i:nth-child(1){left:6px!important;}
+ .ui-dots>i:nth-child(2){left:19px!important;}
+ .ui-dots>i:nth-child(3){left:32px!important;}
+ .ui-dots>b{display:none!important;}
+}
+
+/* The closed top status drawer must have no wrapped invisible descendants.
+ * Both states have the same 38px outer height. */
+#topSystemStatusBar{
+  height:38px;min-height:38px;max-height:38px;flex-wrap:nowrap;
+}
+#topSystemStatusBar .system-status-items{
+  flex-wrap:nowrap;white-space:nowrap;
+}
+#topSystemStatusBar[data-open="false"]{
+  height:38px;min-height:38px;max-height:38px;
+}
+#topSystemStatusBar[data-open="false"] .system-status-items{
+  position:absolute!important;width:0;height:0;max-height:0;
+  overflow:hidden;flex:none;visibility:hidden;pointer-events:none;
+}
+@media(max-width:800px){
+  #topSystemStatusBar{align-items:center;flex-direction:row;justify-content:flex-end;}
 }

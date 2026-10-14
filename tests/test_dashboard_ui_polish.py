@@ -183,6 +183,15 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('data-record-view="patrolModal"', DASHBOARD)
         self.assertIn('data-record-view="statusModal"', DASHBOARD)
 
+    def test_layout_followup_guards(self):
+        self.assertIn('saved-map-primary-actions', MAP)
+        self.assertIn("primaryActions.append(mappingActions, actions);", MAP)
+        self.assertIn("#topSystemStatusBar[data-open=\"false\"] .system-status-items{", CSS)
+        self.assertIn("position:absolute!important;width:0;height:0;", CSS)
+        self.assertIn(".ui-loading-visual.is-offline .ui-dots > b{display:none!important;}", CSS)
+        self.assertIn(".records-pagination .records-page-number.is-current,", CSS)
+        self.assertIn(".records-view .record-data-table thead th .record-sort-button{", CSS)
+
     def test_asset_versions(self):
         for name in ("saved_map_modal.js", "current_situation.js"):
             with self.subTest(asset=name):
@@ -196,8 +205,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-ux-refine-v4', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-radio-pages-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-radio-pages-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-layout-followup-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-layout-followup-v1', LOGIN)
 
 
 if __name__ == "__main__":
