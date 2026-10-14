@@ -131,8 +131,12 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("return this.handlers.request?.(next);", model)
 
     def test_led_control_is_centered_without_changing_its_hit_area(self):
-        self.assertIn('.dashboard-led-toggle {grid-template-columns:max-content max-content 48px max-content;column-gap:5px;justify-content:center;}', CSS)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) 30px 48px 30px minmax(0, 1fr);', CSS)
         self.assertIn('.dashboard-led-toggle,.dashboard-led-control-mount{justify-content:center;text-align:center;}', CSS)
+        # Equal-length side tracks place LED, Auto and Mapping at the same center X.
+        self.assertIn('column-gap: 4px;', CSS)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);',
+                      source("frontend/services/static/style.css"))
         self.assertIn('button.append(label, offLabel, track, onLabel, stateLabel);', source("frontend/components/controls/led_toggle.js"))
         self.assertIn('return this.handlers.request?.(next);', source("frontend/components/controls/led_toggle.js"))
 
@@ -143,7 +147,7 @@ class DashboardUiPolishContract(unittest.TestCase):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-model-loader-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-led-center-v4', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-aligned-switches-v5', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 

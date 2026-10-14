@@ -773,7 +773,12 @@ body.dark-mode .record-event-sensor-anomaly{background:rgba(126,202,167,.18);col
 .signup-close{display:grid;place-items:center;line-height:1;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;}
 
 /* Four visual columns, label | OFF | thumb | ON, with hidden legacy state text. */
-.dashboard-led-toggle {grid-template-columns:max-content max-content 48px max-content;column-gap:5px;justify-content:center;}
+/* Symmetric columns keep the LED track centered with Auto and Mapping at any row width. */
+.dashboard-led-toggle {
+  grid-template-columns: minmax(0, 1fr) 30px 48px 30px minmax(0, 1fr);
+  column-gap: 4px;
+  justify-content: stretch;
+}
 .dashboard-model-toggle {grid-template-columns:auto auto 38px auto;column-gap:4px;}
 .dashboard-led-toggle .ui-toggle-side,.dashboard-model-toggle .ui-toggle-side{justify-self:center;}
 .dashboard-led-toggle-label{justify-self:end;}
