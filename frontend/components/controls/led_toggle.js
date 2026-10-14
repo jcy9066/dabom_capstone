@@ -48,7 +48,7 @@
             root,
             button,
             handlers,
-            enabled: null,
+            enabled: false,
             connected: null,
             pending: false,
 
@@ -60,9 +60,12 @@
 
             sync(options = {}) {
                 if (Object.prototype.hasOwnProperty.call(options, 'enabled')) {
+                    // The Pi firmware starts with LED OFF. Use OFF for missing
+                    // telemetry until a real boolean state arrives; never send
+                    // an automatic control command from this display fallback.
                     this.enabled = typeof options.enabled === 'boolean'
                         ? options.enabled
-                        : null;
+                        : false;
                 }
                 if (Object.prototype.hasOwnProperty.call(options, 'connected')) {
                     this.connected = options.connected;

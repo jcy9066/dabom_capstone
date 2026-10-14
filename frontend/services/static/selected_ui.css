@@ -2048,3 +2048,128 @@ header {padding-top:6px;}
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker select option {
   font-size:11px;
 }
+
+
+/* Final map / status / viewer refinement: no overscroll shim in this change.
+   Overscroll physics remains a separate discussion and implementation. */
+
+/* Expand/collapse indicator is the same triangle used by the top status pill.
+   From an upright glyph: 90° = open, 270° = collapsed. */
+.server-state-drawer-toggle > span {transform:rotate(90deg);}
+.server-state-card.is-collapsed .server-state-drawer-toggle > span {transform:rotate(270deg);}
+@media(prefers-reduced-motion:reduce){
+ .server-state-drawer-toggle > span{transition:none!important;}
+}
+
+/* The saved-map list takes only the height of its own cards, not the empty
+   space reserved by its parent; the footer stays anchored to both pane bottoms. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
+  flex:0 1 auto!important;height:auto!important;max-height:min(40vh,360px)!important;
+  min-height:0;align-self:stretch;overflow-y:auto;align-content:start;
+  grid-auto-rows:max-content;padding:8px!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions{
+  margin-top:auto!important;
+}
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
+   max-height:min(30vh,240px)!important;
+ }
+}
+
+/* Three pairs: current location, GPS and security occupy one desktop row. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;align-items:center;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-row{
+  display:flex;align-items:baseline;gap:6px;
+  min-width:0;font-size:11px;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-label{
+  flex:0 0 auto;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-value{
+  display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;
+}
+@media(max-width:540px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
+   grid-template-columns:1fr;gap:4px;
+ }
+}
+
+/* Native select remains as a hidden backing value. The visible listbox and
+   options use the same inset surface and hover language as the outer field. */
+.saved-map-location-picker > .saved-map-location-select{
+  display:none!important;
+}
+.saved-map-location-choice{position:relative;min-width:0;z-index:4;}
+.saved-map-location-trigger{
+  position:relative;width:100%;height:34px;min-width:0;padding:7px 27px 7px 9px;
+  border:1px solid var(--border-color);border-radius:7px;
+  background:var(--card-bg);color:var(--text-dark);
+  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
+  overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.saved-map-location-trigger::after{
+  content:"";position:absolute;top:calc(50% - 4px);right:12px;
+  width:7px;height:7px;border-right:1.5px solid currentColor;
+  border-bottom:1.5px solid currentColor;transform:rotate(45deg);
+}
+.saved-map-location-trigger:focus-visible,
+.saved-map-location-trigger[aria-expanded="true"]{
+  outline:none;border-color:var(--accent);
+}
+.saved-map-location-options{
+  position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;
+  display:flex;flex-direction:column;gap:3px;
+  max-height:220px;overflow-y:auto;padding:5px;
+  border:1px solid var(--border-color);border-radius:7px;
+  background:var(--card-bg);box-shadow:var(--shadow-md);
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+.saved-map-location-options[hidden]{display:none!important;}
+.saved-map-location-options::-webkit-scrollbar{display:none;width:0;height:0;}
+.saved-map-location-option{
+  box-sizing:border-box;width:100%;padding:8px 9px;min-height:30px;
+  border:1px solid transparent;border-radius:6px;
+  background:transparent;color:var(--text-dark);
+  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
+  overflow-wrap:anywhere;
+}
+.saved-map-location-option:is(:hover,:focus-visible,[aria-selected="true"]){
+  outline:none;background:var(--card-bg2);border-color:var(--accent);
+}
+.saved-map-location-option[hidden]{display:none!important;}
+
+/* Viewer navigation switches match the 23px action controls in the same strip.
+   Remove only the separate toggle's container frame, not the entire toolbar. */
+.lidar-control-drawer .lidar-control-strip{
+  align-items:center!important;padding-top:3px!important;padding-bottom:3px!important;
+}
+.lidar-control-drawer .navigation-mode-toggle{
+  display:inline-flex!important;align-items:center!important;
+  gap:3px!important;height:23px!important;min-height:23px!important;
+  padding:0 2px!important;margin:0!important;
+  border:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;outline:0!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-label{
+  font:700 9px/1.2 var(--mono)!important;letter-spacing:0!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-track{
+  width:36px!important;height:19px!important;flex-basis:36px!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-slider{
+  width:13px!important;height:13px!important;top:2px!important;left:2px!important;
+}
+.lidar-control-drawer .navigation-mode-toggle.driving .navigation-mode-toggle-slider{
+  left:calc(100% - 15px)!important;
+}
+.lidar-control-drawer .navigation-mode-toggle.unknown .navigation-mode-toggle-slider{
+  left:calc(50% - 6.5px)!important;
+}
+.lidar-control-drawer .lidar-view-controls button[data-control-button]{
+  box-sizing:border-box;height:23px!important;min-height:23px!important;
+  padding:3px 6px!important;line-height:1.2!important;
+}

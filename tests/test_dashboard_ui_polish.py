@@ -214,8 +214,20 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("#topSystemStatusBar {top:16px;}", CSS)
         self.assertIn("font-size:11px!important;", CSS)
 
+    def test_latest_map_and_viewer_refinements(self):
+        self.assertIn("${labels.description}", MAP)
+        self.assertNotIn("${labels.description} ${labels.selectRequired} ${labels.renameHint}", MAP)
+        self.assertIn("const choice = create('div', 'saved-map-location-choice');", MAP)
+        self.assertIn("selector.hidden = true;", MAP)
+        self.assertIn("saved-map-location-option", CSS)
+        self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", CSS)
+        self.assertIn("max-height:min(40vh,360px)!important", CSS)
+        self.assertIn("transform:rotate(90deg);", CSS)
+        self.assertIn("transform:rotate(270deg);", CSS)
+        self.assertIn("border:0!important;border-radius:0!important;", CSS)
+
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261014-location-picker-v1", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
@@ -226,8 +238,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-finish-ui-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-final-spacing-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-final-spacing-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-map-control-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-map-control-v1', LOGIN)
 
 
 if __name__ == "__main__":

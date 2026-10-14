@@ -245,6 +245,97 @@
             selector.value = status.last_location_id;
         }
 
+        // A styled listbox mirrors the existing select (the latter retains its
+        // value/ID for all existing location save, edit and delete operations).
+        selector.hidden = true;
+        selector.tabIndex = -1;
+        selector.setAttribute('aria-hidden', 'true');
+        const choice = create('div', 'saved-map-location-choice');
+        const trigger = create('button', 'saved-map-location-trigger', labels.newLocation);
+        trigger.type = 'button';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        const popup = create('div', 'saved-map-location-options');
+        popup.id = 'saved-map-location-options';
+        popup.setAttribute('role', 'listbox');
+        popup.setAttribute('aria-label', '저장된 장소 선택');
+        popup.hidden = true;
+        trigger.setAttribute('aria-controls', popup.id);
+        const optionButtons = new Map();
+        for (const option of selector.children) {
+            const item = create('button', 'saved-map-location-option', option.textContent);
+            item.type = 'button';
+            item.dataset.locationValue = option.value;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', 'false');
+            item.hidden = Boolean(option.hidden);
+            popup.append(item);
+            optionButtons.set(option.value, item);
+        }
+        const syncPicker = () => {
+            const selected = Array.from(selector.children)
+                .find(option => option.value === selector.value);
+            trigger.textContent = selected?.textContent || labels.newLocation;
+            for (const [value, item] of optionButtons) {
+                const source = Array.from(selector.children).find(option => option.value === value);
+                item.hidden = Boolean(source?.hidden);
+                item.textContent = source?.textContent || '';
+                item.setAttribute('aria-selected', String(selector.value === value));
+            }
+        };
+        const closePicker = () => {
+            popup.hidden = true;
+            trigger.setAttribute('aria-expanded', 'false');
+        };
+        const openPicker = () => {
+            popup.hidden = false;
+            trigger.setAttribute('aria-expanded', 'true');
+        };
+        const pickerItems = () => Array.from(optionButtons.values()).filter(item => !item.hidden);
+        const chooseOption = value => {
+            selector.value = value;
+            loadSelectedLocation();
+            syncPicker();
+            closePicker();
+            trigger.focus?.();
+        };
+        for (const item of optionButtons.values()) {
+            item.addEventListener('click', () => chooseOption(item.dataset.locationValue));
+            item.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closePicker();
+                    trigger.focus?.();
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const items = pickerItems();
+                    const index = items.indexOf(item);
+                    items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus?.();
+                }
+            });
+        }
+        trigger.addEventListener('click', () => {
+            if (popup.hidden) openPicker(); else closePicker();
+        });
+        trigger.addEventListener('keydown', event => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                openPicker();
+                const items = pickerItems();
+                if (items.length) {
+                    const selected = items.find(item => item.dataset.locationValue === selector.value);
+                    (selected || items[0]).focus?.();
+                }
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closePicker();
+            }
+        });
+        choice.addEventListener('focusout', event => {
+            if (!choice.contains?.(event.relatedTarget)) closePicker();
+        });
+        choice.append(trigger, popup);
+
         const fields = create('div', 'saved-map-location-fields');
         const fieldSpecs = [
             ['saved-map-location-name', labels.locationName, 'text'],
@@ -363,12 +454,14 @@
                 inputs['saved-map-location-name'].value = '';
                 deleteButton.disabled = true;
             }
+            syncPicker();
         });
-        selector.addEventListener('change', loadSelectedLocation);
-        picker.append(newNameInput, selector);
+        selector.addEventListener('change', () => { loadSelectedLocation(); syncPicker(); });
+        picker.append(newNameInput, selector, choice);
         actions.append(useCurrent, saveLocation, deleteButton);
         panel.append(picker, fields, actions);
         loadSelectedLocation();
+        syncPicker();
         return panel;
     }
 
@@ -562,7 +655,7 @@
         const headerTitle = manager?.title;
         if (headerTitle && !headerTitle.querySelector('.saved-map-title-hint')) {
             headerTitle.append(create('span', 'saved-map-title-hint',
-                `${labels.description} ${labels.selectRequired} ${labels.renameHint}`));
+                `${labels.description}`));
         }
         if (context.error) {
             const progress = create('div', 'saved-map-progress');
