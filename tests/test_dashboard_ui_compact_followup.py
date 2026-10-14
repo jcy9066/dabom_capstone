@@ -223,8 +223,8 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("selected_ui.css?v=20261014-layout-followup-v1", INDEX)
         self.assertIn("selected_ui.css?v=20261014-layout-followup-v1", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        for name in ("saved_map_modal.js", "current_situation.js"):
-            self.assertIn(name+"?v=20261014-ux-refine-v3", INDEX)
+        self.assertIn("saved_map_modal.js?v=20261014-layout-followup-v1", INDEX)
+        self.assertIn("current_situation.js?v=20261014-ux-refine-v3", INDEX)
         self.assertIn("record_modal.js?v=20261014-numbered-pages-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", INDEX)

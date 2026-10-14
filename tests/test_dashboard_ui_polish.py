@@ -193,9 +193,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn(".records-view .record-data-table thead th .record-sort-button{", CSS)
 
     def test_asset_versions(self):
-        for name in ("saved_map_modal.js", "current_situation.js"):
-            with self.subTest(asset=name):
-                self.assertIn(name + "?v=20261014-ux-refine-v3", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261014-layout-followup-v1", DASHBOARD)
+        self.assertIn("current_situation.js?v=20261014-ux-refine-v3", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
         self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", DASHBOARD)
