@@ -78,7 +78,6 @@
 
         const guide = make('button', 'sidebar-guide-trigger', '?');
         guide.type = 'button';
-        guide.title = text.guide;
         guide.setAttribute('aria-label', text.guide);
         guide.addEventListener('click', openGuide);
         wrapper.append(gpu, divider, pi);
