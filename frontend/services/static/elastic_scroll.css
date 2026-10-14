@@ -1,0 +1,23 @@
+/* Boundary-only visual bounce. Layout and real scroll positions stay unchanged. */
+.elastic-scroll-active:not(body) > :not(script):not(style) {
+  translate: 0 var(--elastic-scroll-offset,0px);
+}
+.elastic-scroll-returning:not(body) > :not(script):not(style) {
+  translate: 0 0;
+  transition:translate 250ms cubic-bezier(.2,.85,.25,1);
+}
+/* Root scrolling moves document content, never fixed overlays. */
+body.elastic-scroll-active > :is(header,.dashboard-container,.login-shell),
+body.elastic-scroll-returning > :is(header,.dashboard-container,.login-shell) {
+  translate: 0 var(--elastic-scroll-offset,0px);
+}
+body.elastic-scroll-returning > :is(header,.dashboard-container,.login-shell) {
+  translate: 0 0;
+  transition:translate 250ms cubic-bezier(.2,.85,.25,1);
+}
+@media(prefers-reduced-motion:reduce) {
+  .elastic-scroll-active:not(body)>*,.elastic-scroll-returning:not(body)>*,
+  body.elastic-scroll-active>*,body.elastic-scroll-returning>* {
+    translate:none!important;transition:none!important;
+  }
+}
