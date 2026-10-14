@@ -91,9 +91,28 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("'/api/logs/current-situation/preview'", SITUATION)
         self.assertIn(".current-situation-bottom-row{display:flex;", CSS)
 
+    def test_hover_boundaries_have_safe_insets(self):
+        # Hover-lift animation stays active; controls have room to paint above.
+        self.assertIn('.gallery-detail .gallery-metadata {', CSS)
+        self.assertIn('  padding: 6px 7px 8px;', CSS)
+        self.assertIn('.gallery-detail .gallery-metadata-top {', CSS)
+        self.assertIn('  padding: 2px 3px 4px;', CSS)
+        self.assertIn('.records-view .record-filter-controls,', CSS)
+        self.assertIn('.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions,.saved-map-location-actions)', CSS)
+        self.assertIn('  padding-block: 5px;', CSS)
+        self.assertIn('transform:translateY(-1px); border-color:var(--accent);', CSS)
+
+    def test_gallery_source_badge_does_not_overlap_image(self):
+        self.assertIn('.gallery-card .gallery-card-source {', CSS)
+        self.assertIn('  position: static;', CSS)
+        self.assertIn('  order: -1;', CSS)
+        self.assertIn('  margin: 8px 10px 0;', CSS)
+        self.assertIn("gallery-card-source source-", GALLERY)
+        self.assertIn("gallery-card-image", GALLERY)
+
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-compact-ui-v9", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-compact-ui-v9", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-hover-safe-v10", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-hover-safe-v10", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)

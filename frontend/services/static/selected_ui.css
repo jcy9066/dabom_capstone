@@ -1230,3 +1230,34 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
  #commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
  #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{height:auto;}
 }
+
+
+/* Hover-safe shared surfaces. Moving a button up 1px or drawing a focus ring
+ * must not let its upper edge collide with the boundary of a scroll panel.
+ * These insets do not change hover/active transitions or click handlers. */
+.gallery-view .gallery-grid,
+.records-view .record-filter-controls,
+.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions,.saved-map-location-actions) {
+  padding-block: 5px;
+  box-sizing: border-box;
+}
+.gallery-detail .gallery-metadata {
+  padding: 6px 7px 8px;
+  box-sizing: border-box;
+}
+.gallery-detail .gallery-metadata-top {
+  padding: 2px 3px 4px;
+}
+/* Gallery source chips were absolutely overlaid on top of image content.
+ * Keep the same source label, but in a dedicated row preceding the image. */
+.gallery-card .gallery-card-source {
+  position: static;
+  order: -1;
+  align-self: flex-start;
+  margin: 8px 10px 0;
+  max-width: calc(100% - 20px);
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.gallery-card { isolation: isolate; }
