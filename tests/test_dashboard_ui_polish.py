@@ -122,12 +122,21 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('  min-width:62px;padding:5px 7px;', CSS)
         self.assertIn("button.disabled = pending || unreachable;", SYSTEM)
 
+    def test_model_toggle_not_augmented_by_global_loader(self):
+        self.assertIn("if (element.matches('.dashboard-model-toggle')) return;", VISUAL)
+        self.assertIn("element.prepend(dots);", VISUAL)
+        model = source("frontend/components/controls/model_pipeline_toggle.js")
+        self.assertIn("button.append(label, offLabel, track, onLabel, stateLabel);", model)
+        self.assertIn("button.disabled = this.connected !== true || this.pending;", model)
+        self.assertIn("return this.handlers.request?.(next);", model)
+
     def test_asset_versions(self):
-        for name in ("selected_ui.js", "saved_map_modal.js",
+        for name in ("saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
                      "system_control.js", "image_detail.js"):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
+        self.assertIn('selected_ui.js?v=20261014-model-loader-v2', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-server-pi-toggle-v3', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 

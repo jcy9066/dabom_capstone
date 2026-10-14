@@ -166,6 +166,8 @@
     function sync(root) {
       if (!root?.querySelectorAll) return;
       root.querySelectorAll(selector).forEach(element => {
+        // MODEL is a four-column toggle; preserve its child count while pending.
+        if (element.matches('.dashboard-model-toggle')) return;
         if (element.dataset.uiLoadingReady !== '1') {
           element.dataset.uiLoadingReady = '1';
           const dots = document.createElement('span');
