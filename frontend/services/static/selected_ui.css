@@ -810,3 +810,12 @@ body.dark-mode .d-center-split .dpad-estop-button,
 body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 .dashboard-led-toggle-label{color:var(--text-muted);}
 .dashboard-led-toggle.active .dashboard-led-toggle-label{color:var(--accent);}
+
+/* Hide only scrollbar chrome: metadata remains wheel/keyboard-scrollable. */
+.gallery-detail .gallery-metadata{scrollbar-width:none;-ms-overflow-style:none;}
+.gallery-detail .gallery-metadata::-webkit-scrollbar{display:none;width:0;height:0;}
+/* Visual unavailable state only — disabled/command rules remain in system_control.js. */
+.system-control-switch.is-unavailable .ui-process-track,
+.system-control-switch.state-unreachable .ui-process-track{background:var(--border-bright);}
+.system-control-switch.is-unavailable .ui-process-track::after,
+.system-control-switch.state-unreachable .ui-process-track::after{transform:none;}

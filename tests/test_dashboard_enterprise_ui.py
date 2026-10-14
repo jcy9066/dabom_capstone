@@ -37,6 +37,12 @@ class EnterpriseDashboardUiTests(unittest.TestCase):
         self.assertIn("control(group, component.id, action)", SYSTEM)
         self.assertIn("control(group, component.id, 'normalize')", SYSTEM)
 
+    def test_gpu_disable_rules_match_the_existing_runtime(self):
+        self.assertIn("component.control_available === false || component.state === 'unreachable'", SYSTEM)
+        self.assertIn("button.disabled = pending || unreachable;", SYSTEM)
+        self.assertIn("normalize.disabled = pending || unreachable;", SYSTEM)
+        self.assertIn("system-control-switch.is-unavailable .ui-process-track", CSS)
+
     def test_control_state_labels_are_visual(self):
         self.assertIn("'PLAY' : 'STOP'", DRIVE)
         self.assertIn("ui-toggle-side-off", MODEL)
