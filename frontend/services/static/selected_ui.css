@@ -1291,3 +1291,32 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   line-height: 16px;
 }
 /* The right panel already assigns all remaining height to .alert-card. */
+
+
+/* Gallery cards: do not vertically compress and clip label/date rows.
+ * The previous footer was a shrinkable flex item with overflow:hidden;
+ * larger thumbnail cards must extend the scrollable gallery instead. */
+.gallery-view .gallery-grid {
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+.gallery-view .gallery-card {
+  height: auto;
+  min-height: max-content;
+}
+.gallery-view .gallery-card > .gallery-card-source,
+.gallery-view .gallery-card > strong,
+.gallery-view .gallery-card > time {
+  flex: 0 0 auto;
+}
+.gallery-view .gallery-card > strong,
+.gallery-view .gallery-card > time {
+  display: block;
+  min-height: 1.45em;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+.gallery-view .gallery-card > img.gallery-card-image {
+  flex: 0 0 auto;
+  height: auto;
+}

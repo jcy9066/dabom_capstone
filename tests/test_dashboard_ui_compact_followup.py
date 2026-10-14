@@ -126,9 +126,22 @@ class CompactUiContracts(unittest.TestCase):
             with self.subTest(field=field_id):
                 self.assertIn(f'id="{field_id}"', INDEX)
 
+    def test_gallery_footer_text_cannot_shrink_or_clip(self):
+        self.assertIn('.gallery-view .gallery-grid {', CSS)
+        self.assertIn('  grid-auto-rows: max-content;', CSS)
+        self.assertIn('.gallery-view .gallery-card > strong,', CSS)
+        self.assertIn('.gallery-view .gallery-card > time {', CSS)
+        self.assertIn('  flex: 0 0 auto;', CSS)
+        self.assertIn('  min-height: 1.45em;', CSS)
+        self.assertIn('.gallery-view .gallery-card > img.gallery-card-image {', CSS)
+        self.assertIn('.gallery-view{overflow-y:auto;min-height:0;}', CSS)
+        self.assertIn('gallery-card-source source-', GALLERY)
+        self.assertIn('<strong>', GALLERY)
+        self.assertIn('<time>', GALLERY)
+
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-server-rows-v11", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-server-rows-v11", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-gallery-footer-v12", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-gallery-footer-v12", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)
