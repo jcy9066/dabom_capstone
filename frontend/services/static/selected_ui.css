@@ -1040,3 +1040,21 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   font-size: 11px;
   box-sizing: border-box;
 }
+
+/* SERVER / PI: the track is the only visible toggle surface.
+   Preserve the original button, clickable area, state and disable behavior. */
+.system-control-panel .system-control-switch {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+.system-control-panel .system-control-switch:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+}
+/* Old status-dot decoration sits outside the slider; the track already
+   communicates process state. No status data or button handlers are changed. */
+.system-control-panel .system-control-switch::after {
+  content: none;
+}

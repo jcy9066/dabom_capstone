@@ -112,13 +112,23 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('grid-row: 1 / 3;', CSS)
         self.assertIn('overflow-wrap: anywhere;', CSS)
 
+    def test_server_pi_switch_has_no_extra_outer_box(self):
+        self.assertIn('.system-control-panel .system-control-switch {', CSS)
+        self.assertIn('  border: 0;', CSS)
+        self.assertIn('  background: transparent;', CSS)
+        self.assertIn('.system-control-panel .system-control-switch::after {', CSS)
+        self.assertIn('  content: none;', CSS)
+        self.assertIn('.system-control-switch .ui-process-track', CSS)
+        self.assertIn('  min-width:62px;padding:5px 7px;', CSS)
+        self.assertIn("button.disabled = pending || unreachable;", SYSTEM)
+
     def test_asset_versions(self):
         for name in ("selected_ui.js", "saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
                      "system_control.js", "image_detail.js"):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-account-visibility-v2', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-server-pi-toggle-v3', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 
