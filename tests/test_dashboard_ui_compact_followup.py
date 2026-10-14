@@ -139,9 +139,31 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('<strong>', GALLERY)
         self.assertIn('<time>', GALLERY)
 
+    def test_gallery_first_row_and_invisible_scrollbar(self):
+        # The scroll container fills available modal height and sizes full rows to it.
+        self.assertIn('#commonModal[data-modal-view="galleryModal"] .modal-body {', CSS)
+        self.assertIn('  overflow-y: hidden;', CSS)
+        self.assertIn('#commonModal[data-modal-view="galleryModal"] .gallery-view {', CSS)
+        self.assertIn('#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-grid {', CSS)
+        self.assertIn('  grid-auto-rows: 100%;', CSS)
+        self.assertIn('  overflow-y: auto;', CSS)
+        self.assertIn('  scrollbar-width: none;', CSS)
+        self.assertIn('  -ms-overflow-style: none;', CSS)
+        self.assertIn('.gallery-view .gallery-grid::-webkit-scrollbar,', CSS)
+        self.assertIn('  display: none;', CSS)
+        self.assertIn('  aspect-ratio: auto;', CSS)
+        self.assertIn('  object-fit: contain;', CSS)
+        self.assertIn('  height: 0;', CSS)
+        self.assertIn('  min-height: 0;', CSS)
+        self.assertIn('  flex: 1 1 0;', CSS)
+        # Existing gallery snapshot restores grid scrollTop and events remain intact.
+        self.assertIn('grid.scrollTop = state.galleryScrollTop;', GALLERY)
+        self.assertIn("button.addEventListener('click', () => openDetail", GALLERY)
+        self.assertIn('gallery-card-source source-', GALLERY)
+
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-gallery-footer-v12", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-gallery-footer-v12", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-gallery-scroll-v13", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-gallery-scroll-v13", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)

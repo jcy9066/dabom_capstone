@@ -1320,3 +1320,52 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   flex: 0 0 auto;
   height: auto;
 }
+
+
+/* Gallery list: keep the first complete image/label/date row in the viewport.
+ * Subsequent rows scroll inside the grid, never behind a visible scrollbar.
+ * The existing 3/2/1-column responsive breakpoints remain unchanged. */
+#commonModal[data-modal-view="galleryModal"] .modal-body {
+  overflow-y: hidden;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-toolbar {
+  flex: 0 0 auto;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  grid-auto-rows: 100%;
+  align-content: start;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-grid::-webkit-scrollbar,
+#commonModal[data-modal-view="galleryModal"] .gallery-view::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-card {
+  height: 100%;
+  min-height: 0;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-card > .gallery-card-image {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  max-height: none;
+  width: 100%;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
