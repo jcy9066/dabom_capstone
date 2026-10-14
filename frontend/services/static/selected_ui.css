@@ -588,3 +588,225 @@ body.dark-mode .signup-dialog .auth-btn.primary {
     transition: none;
   }
 }
+
+
+/* 2026-10-14 enterprise UI. Preserve underlying controls, handlers and layout. */
+:root { --ui-soft-elevation: 0 3px 0 var(--border-color),0 5px 9px rgba(15,23,42,.08); }
+:is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
+.login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
+.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled) {
+  border-radius: 8px; border:1px solid var(--border-bright); background:var(--card-bg2);
+  color:var(--text-dark); box-shadow:var(--ui-soft-elevation);
+  transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;
+}
+:is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
+.login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
+.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled):hover {
+  transform:translateY(-1px); border-color:var(--accent);
+}
+:is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
+.login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
+.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled):active {
+  transform:translateY(2px); box-shadow:0 1px 0 var(--border-color);
+}
+/* Loader component — rotating tile motif, animated exclusively in busy states. */
+@keyframes enterprise-loader-turn { 0%,100% { transform:rotate(0) scale(.82) } 50% { transform:rotate(180deg) scale(1) } }
+@keyframes enterprise-loader-orbit { 0%,100%{transform:translate(0,0)} 25%{transform:translate(5px,-5px)} 50%{transform:translate(0,-9px)} 75%{transform:translate(-5px,-5px)} }
+.ui-dots { position:relative;display:inline-flex;align-items:center;justify-content:center;gap:0;
+  margin:0 8px 0 0; width:18px;height:18px; vertical-align:middle;flex:none; }
+.ui-dots>i { position:absolute;width:7px;height:7px;border-radius:2px;background:var(--accent);
+  animation:enterprise-loader-orbit 1.15s cubic-bezier(.5,.12,.5,.89) infinite;opacity:1; }
+.ui-dots>i:nth-child(1) {top:2px;left:2px; animation-delay:0s;}
+.ui-dots>i:nth-child(2) {top:2px;right:2px;left:auto;animation-delay:-.38s;}
+.ui-dots>i:nth-child(3) {bottom:2px;left:6px;animation-delay:-.76s;}
+.ui-loading-visual {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:18px;}
+.ui-loading-visual[hidden] {display:none!important;}
+.ui-loading-visual .ui-dots {margin:0;}
+.ui-loading-visual.is-offline {opacity:.38;filter:grayscale(1);}
+.ui-loading-visual.is-offline .ui-dots>i {animation:none;}
+@media (prefers-reduced-motion:reduce) { .ui-dots>i{animation:none!important;} }
+/* Scrollbars hidden; scrolling, wheel and keyboard remain operational. */
+:where(.sidebar-body,.signup-dialog,.alert-container,.modal-body,.modal-table-wrapper,
+.gallery-view,.gallery-detail,.record-filter-bar,.system-control-list) {
+  scrollbar-width:none; -ms-overflow-style:none;
+}
+:where(.sidebar-body,.signup-dialog,.alert-container,.modal-body,.modal-table-wrapper,
+.gallery-view,.gallery-detail,.record-filter-bar,.system-control-list)::-webkit-scrollbar {display:none;width:0;height:0;}
+/* Account immediately beneath Settings; same row for identity + sign out. */
+.sidebar-header-actions{display:flex;align-items:center;gap:8px;}
+.sidebar-account{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:2px;}
+.sidebar-account-name,.sidebar-account-id{grid-column:1;min-width:0;overflow-wrap:anywhere;}
+.sidebar-account-name{grid-row:1;}
+.sidebar-account-id{grid-row:2;}
+.sidebar-logout-btn{grid-column:2;grid-row:1/3;align-self:center;}
+.sidebar .dark-toggle{background:var(--card-bg2);border-color:var(--border-bright);box-shadow:inset 0 1px 3px rgba(0,0,0,.12);}
+.sidebar .dark-toggle.active{background:var(--accent);border-color:var(--accent);}
+.sidebar-guide-trigger{display:inline-flex;align-items:center;justify-content:center;position:relative;width:29px;height:29px;
+  border:1px solid var(--border-color);border-radius:50%;background:var(--card-bg2);color:var(--accent);
+  cursor:pointer;font-weight:800;font-size:15px;transition:transform .15s ease,box-shadow .15s;}
+.sidebar-guide-trigger:hover,.sidebar-guide-trigger:focus-visible{transform:translateY(-1px);box-shadow:var(--ui-soft-elevation);}
+.sidebar-guide-trigger::after{content:"사용 안내";position:absolute;bottom:calc(100% + 6px);right:0;
+  background:var(--text-dark);color:var(--card-bg);padding:5px 7px;border-radius:5px;white-space:nowrap;
+  font-size:10px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s;}
+.sidebar-guide-trigger:is(:hover,:focus-visible)::after{opacity:1;}
+/* Keep the original server state values; five compact tiles occupy one row. */
+.server-state-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;}
+.server-state-field-wide{grid-column:auto;}
+.server-state-field{padding:5px 6px;}
+.server-state-field strong.ui-state-marked::before{display:none!important;}
+.server-state-field strong{padding-left:0;}
+#pi-live-badge{min-width:0;width:fit-content;padding:4px 7px;}
+#pi-live-badge .ui-pi-label{display:none!important;}
+#pi-live-badge .ui-pi-light{width:8px;height:8px;}
+.alert-container{overflow-y:auto;}
+.alert-entry{align-items:flex-start;gap:9px;}
+.alert-time{flex:0 0 68px;min-width:68px;border-right:1px solid var(--border-color);padding-right:7px;
+  font-variant-numeric:tabular-nums;}
+.alert-message{flex:1;min-width:0;}
+@media(max-width:1150px) {.server-state-field{padding:4px 5px;}.server-state-field span{font-size:7px;}.server-state-field strong{font-size:9px;}}
+@media(max-width:760px) {.server-state-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+/* Align binary slider visuals across LED, MODEL, AUTO/MANUAL and MAPPING/DRIVING. */
+.dashboard-drive-mode-control .toggle-switch,.navigation-mode-toggle-track,
+.dashboard-led-toggle-track,.dashboard-model-toggle-track{
+  border-radius:999px!important;border:1px solid var(--border-bright)!important;
+  background:var(--card-bg2)!important;box-shadow:inset 0 2px 4px rgba(0,0,0,.13)!important;
+}
+.dashboard-drive-mode-control .toggle-slider,.navigation-mode-toggle-slider,
+.dashboard-led-toggle-slider,.dashboard-model-toggle-slider{
+  border-radius:50%!important;background:var(--text-muted)!important;
+  box-shadow:0 1px 3px rgba(0,0,0,.21)!important;
+}
+.dashboard-model-toggle.active .dashboard-model-toggle-track,
+.dashboard-led-toggle.active .dashboard-led-toggle-track,
+.navigation-mode-toggle.driving .navigation-mode-toggle-track{
+  background:var(--primary-glow)!important;border-color:var(--accent)!important;
+}
+.dashboard-model-toggle.active .dashboard-model-toggle-slider,
+.dashboard-led-toggle.active .dashboard-led-toggle-slider,
+.navigation-mode-toggle.driving .navigation-mode-toggle-slider{background:var(--accent)!important;}
+.dashboard-led-toggle-label,.dashboard-model-toggle-label{white-space:nowrap;}
+.dashboard-led-toggle-state,.dashboard-model-toggle-state{display:none;}
+.ui-toggle-side{font-size:10px;font-weight:650;color:var(--text-muted);white-space:nowrap;}
+.ui-toggle-side.active{color:var(--accent);}
+.dashboard-model-toggle,.dashboard-led-toggle{gap:5px;}
+/* GPU/Pi multi-state process switches, without altering command routing. */
+.system-control-switch{display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  min-width:62px;padding:5px 7px;border-radius:999px;}
+.system-control-switch .ui-process-track{display:inline-block;position:relative;width:25px;height:13px;border-radius:999px;
+  background:var(--border-bright);border:1px solid var(--border-color);flex:none;}
+.system-control-switch .ui-process-track::after{content:"";position:absolute;width:9px;height:9px;
+  top:1px;left:1px;border-radius:50%;background:var(--card-bg);transition:transform .2s ease;}
+.system-control-switch.state-on .ui-process-track{background:var(--success-color);}
+.system-control-switch.state-on .ui-process-track::after{transform:translateX(12px);}
+.system-control-switch.state-duplicate{border-color:var(--warning-color);color:var(--warning-color);}
+.system-control-switch.is-pending{border-color:var(--warning-color);}
+.system-control-switch:is(.state-unreachable,.state-error,.is-unavailable){border-color:var(--border-color);color:var(--text-muted);opacity:.5;}
+/* Records compact toolbar, neutral scroll and selection row. */
+.records-view .record-filter-bar{gap:5px;align-items:center;margin-bottom:3px;padding-bottom:2px;}
+.record-filter-bar label{gap:3px;}
+.record-filter-bar input[type=datetime-local]{max-width:184px;min-height:25px;font-size:10px;}
+.records-view .record-filter-error:empty{min-height:0;padding:0;margin:0;}
+.records-view .modal-table-wrapper{min-height:0;}
+.records-view .record-delete-zone:not([hidden]){display:flex;flex-flow:row wrap;align-items:center;gap:6px;padding:6px 9px;}
+.record-delete-zone .record-delete-selection{flex:1 1 110px;}
+.record-delete-zone .record-delete-actions{margin-left:auto;display:flex;gap:6px;}
+.record-delete-zone [data-record-delete-impact]:not([hidden]){flex:1 1 100%;}
+.record-delete-zone [data-record-delete-status]:not(:empty){flex:1 1 100%;}
+.record-type-badge{font-weight:750;white-space:nowrap;}
+.record-event-intrusion{background:#EEF0FF;color:#354BB0;}
+.record-event-assault{background:#FFE6E8;color:#AE3244;}
+.record-event-system-error{background:#FEEDD9;color:#945918;}
+.record-event-network-loss{background:#E8E8F8;color:#6449A4;}
+.record-event-sensor-anomaly{background:#E3F3EA;color:#27724B;}
+body.dark-mode .record-event-intrusion{background:rgba(100,130,246,.2);color:#B0BDFF;}
+body.dark-mode .record-event-assault{background:rgba(241,128,141,.2);color:#F1808D;}
+body.dark-mode .record-event-system-error{background:rgba(233,183,108,.2);color:#E9B76C;}
+body.dark-mode .record-event-network-loss{background:rgba(164,132,225,.2);color:#D3BFFF;}
+body.dark-mode .record-event-sensor-anomaly{background:rgba(126,202,167,.18);color:#7ECAA7;}
+.records-view-patrolModal th:nth-child(2),.records-view-patrolModal td:nth-child(2),
+.records-view-patrolModal th:nth-child(4),.records-view-patrolModal td:nth-child(4),
+.records-view-patrolModal th:nth-child(5),.records-view-patrolModal td:nth-child(5),
+.records-view-patrolModal th:nth-child(7),.records-view-patrolModal td:nth-child(7),
+.records-view-patrolModal th:nth-child(8),.records-view-patrolModal td:nth-child(8),
+.records-view-patrolModal th:nth-child(9),.records-view-patrolModal td:nth-child(9){text-align:center;padding-inline:4px;}
+.records-view-patrolModal th:nth-child(2){width:8%;}
+.records-view-patrolModal th:nth-child(4){width:7%;}
+.records-view-patrolModal th:nth-child(5){width:9%;}
+.records-view-patrolModal th:nth-child(7),.records-view-patrolModal th:nth-child(8),.records-view-patrolModal th:nth-child(9){width:6%;}
+/* Shared modal title count rendered by record controller; preserve total result count. */
+.modal-header .ui-record-count{margin-right:auto;margin-left:9px;font-size:11px;font-weight:600;color:var(--text-muted);}
+.record-filter-bar .filter-count{display:none;}
+/* Image detail split; full-width actions remain at bottom. */
+.gallery-view{overflow-y:auto;min-height:0;}
+.gallery-detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;gap:10px;}
+.gallery-detail-header{grid-column:1/-1;margin-bottom:0;}
+.gallery-detail .gallery-image-zoom{grid-column:1;grid-row:2;display:flex;flex-direction:column;min-width:0;min-height:0;gap:6px;}
+.gallery-detail .gallery-image-viewport{position:relative;overflow:hidden;min-height:180px;height:100%;max-height:49vh;
+  background:var(--card-bg2);border:1px solid var(--border-color);border-radius:8px;cursor:grab;touch-action:none;}
+.gallery-detail .gallery-image-viewport.is-panning{cursor:grabbing;}
+.gallery-detail .gallery-image-viewport .gallery-detail-image{display:block;width:100%;height:100%;max-height:none;
+  object-fit:contain;transform-origin:50% 50%;transition:transform .1s ease;user-select:none;}
+.gallery-detail .gallery-metadata{grid-column:2;grid-row:2;min-width:0;min-height:0;overflow-y:auto;align-self:start;}
+.gallery-detail .gallery-detail-actions{grid-column:1/-1;grid-row:3;width:100%;display:flex;gap:8px;}
+.gallery-detail .gallery-detail-actions>*{flex:1 1 0;min-width:0;}
+.gallery-zoom-toolbar{display:flex;align-items:center;justify-content:center;gap:5px;}
+.gallery-zoom-toolbar button{height:25px;min-width:30px;border:1px solid var(--border-color);
+  border-radius:6px;background:var(--card-bg2);color:var(--text-dark);cursor:pointer;}
+.gallery-zoom-toolbar button:disabled{opacity:.4;cursor:not-allowed;}
+.gallery-zoom-toolbar output{font-size:10px;color:var(--text-muted);min-width:42px;text-align:center;}
+@media(max-width:680px){.gallery-detail{grid-template-columns:1fr;grid-template-rows:auto auto auto auto;}
+.gallery-detail .gallery-image-zoom{grid-column:1;grid-row:2;}
+.gallery-detail .gallery-metadata{grid-column:1;grid-row:3;max-height:25vh;}
+.gallery-detail .gallery-detail-actions{grid-column:1;grid-row:4;}}
+/* Motor movement buttons and stateful STOP/PLAY, pad size and spacing unchanged. */
+.d-pad .d-btn,.d-center-split .dpad-estop-button{
+  border-radius:7px;border:1px solid var(--border-bright);
+  background:var(--card-bg2);color:var(--text-dark);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 2px 0 var(--border-color);
+  transition:box-shadow .14s,background .14s,transform .14s,color .14s;
+}
+.d-pad .d-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.d-pad .d-btn:active,.d-pad .d-btn.active-key{transform:translateY(1px);box-shadow:inset 0 2px 3px rgba(0,0,0,.15);}
+.d-center-split .dpad-estop-button{background:var(--danger-color);color:#fff;border-color:var(--danger-color);}
+.d-center-split .dpad-estop-button.active{background:var(--success-color);border-color:var(--success-color);color:#fff;}
+/* No button action or listener changes. */
+.signup-close{display:grid;place-items:center;line-height:1;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;}
+
+/* Four visual columns, label | OFF | thumb | ON, with hidden legacy state text. */
+.dashboard-led-toggle {grid-template-columns:minmax(16px,1fr) auto 48px auto;column-gap:4px;}
+.dashboard-model-toggle {grid-template-columns:auto auto 38px auto;column-gap:4px;}
+.dashboard-led-toggle .ui-toggle-side,.dashboard-model-toggle .ui-toggle-side{justify-self:center;}
+.dashboard-led-toggle-label{justify-self:end;}
+/* Preserve all states for the original map/driving mode control. */
+.navigation-mode-toggle .navigation-mode-toggle-label{font-weight:650;}
+/* Existing camera overlay is not mistaken for disconnected just because telemetry is stale. */
+#no-camera-msg>.ui-loading-visual{margin-inline:8px;}
+#lidar-stale-overlay>.ui-loading-visual{margin-inline:auto;}
+
+/* Single-line account identity, with sign-out anchored on the right. */
+.sidebar-account{display:flex;align-items:center;flex-wrap:nowrap;gap:6px;}
+.sidebar-account-name,.sidebar-account-id{min-width:0;max-width:42%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sidebar-account-id{flex:1 1 auto;}
+.sidebar-logout-btn{flex:none;margin-left:auto;}
+
+/* Preserve generic loading on other pre-existing busy indicators without changing click targets. */
+.preview-state.is-loading::before,.saved-map-progress.is-loading::before {
+  content:"";display:inline-block;vertical-align:middle;margin-right:6px;width:11px;height:11px;
+  border:2px solid var(--border-bright);border-top-color:var(--accent);border-radius:3px;
+  animation:enterprise-loader-turn .85s ease-in-out infinite;
+}
+@media (prefers-reduced-motion:reduce){.preview-state.is-loading::before,.saved-map-progress.is-loading::before{animation:none}}
+
+/* Compress record controls without changing their fields or query behavior. */
+.records-view {gap:3px;}
+.records-view .modal-filter-bar.record-filter-bar{padding-top:4px;padding-bottom:3px;}
+.records-view .record-filter-bar input[type="datetime-local"]{min-height:25px;padding-block:3px;}
+/* The five desktop server tiles release vertical space for the existing alert feed. */
+.server-state-card{flex:0 0 auto;}
+.alert-card{flex:1 1 auto;min-height:0;}
+
+/* Keep the thematic dark danger/success controls contrast-compliant. */
+body.dark-mode .d-center-split .dpad-estop-button,
+body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
+.dashboard-led-toggle-label{color:var(--text-muted);}
+.dashboard-led-toggle.active .dashboard-led-toggle-label{color:var(--accent);}
