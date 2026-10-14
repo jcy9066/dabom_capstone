@@ -85,8 +85,8 @@ class EnterpriseDashboardUiTests(unittest.TestCase):
         self.assertNotIn("--bg-color: #000000", CSS)
 
     def test_stylesheet_cache_for_both_pages(self):
-        self.assertIn("selected_ui.css?v=20261014-server-chevron-toggle70-v1", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-server-chevron-toggle70-v1", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-filter-radius-v1", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-filter-radius-v1", LOGIN)
         self.assertIn("selected_ui.js?v=20261014-stable-hydration-v1", INDEX)
 
 if __name__ == "__main__":

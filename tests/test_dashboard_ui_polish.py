@@ -254,6 +254,18 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('width:25.2px!important;height:13.3px!important;flex-basis:25.2px!important;', CSS)
         self.assertIn('width:9.1px!important;height:9.1px!important;top:1.4px!important;left:1.4px!important;', CSS)
 
+    def test_filter_bar_buttons_share_the_normal_control_radius(self):
+        # Filter controls use the same 8px token as ordinary buttons.
+        self.assertIn("--ui-radius-control: 8px;", CSS)
+        selector = ".modal-filter-bar button[data-cycle],.gallery-toolbar .gallery-filter-btn {"
+        self.assertIn(selector, CSS)
+        rule = CSS.split(selector, 1)[1].split("}", 1)[0]
+        self.assertIn("border-radius:var(--ui-radius-control);", rule)
+        self.assertNotIn("border-radius:999px", rule)
+        self.assertIn('class="filter-btn secondary" data-action="reset"', RECORDS)
+        self.assertIn('class="filter-btn secondary" data-cycle="eventType"', RECORDS)
+        self.assertIn("border-radius: var(--ui-radius-control);", CSS)
+
     def test_asset_versions(self):
         self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
@@ -266,8 +278,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-stable-hydration-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-server-chevron-toggle70-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-server-chevron-toggle70-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-filter-radius-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-filter-radius-v1', LOGIN)
 
 
 if __name__ == "__main__":
