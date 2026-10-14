@@ -1202,12 +1202,15 @@ function clearAlerts() {
 let reportPending = false;
 
 async function reportDanger(isAuto = false) {
+    if (reportPending) return false;
     let confirmReport = true;
     if (!isAuto) confirmReport = confirm("신고? - Telegram");
-    if (!confirmReport || reportPending) return false;
+    if (!confirmReport) return false;
     const button = document.querySelector('.action-report');
     reportPending = true;
     if (button) button.disabled = true;
+    window.DabomActionFeedback?.setReportState('sending');
+    const feedbackStartedAt = Date.now();
     try {
         const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'same-origin' });
         const csrf = await csrfResponse.json().catch(() => ({}));
@@ -1225,10 +1228,17 @@ async function reportDanger(isAuto = false) {
         if (!response.ok || data.status !== 'success') {
             throw new Error(data.detail || data.error || '알림 전송에 실패했습니다.');
         }
-        if (!isAuto) alert('긴급 알림이 전송되었습니다.');
+        // Keep the message-send animation visible for 500ms even if the API returns early.
+        if (window.DabomActionFeedback) {
+            const remaining = 500 - (Date.now() - feedbackStartedAt);
+            if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+        }
+        // API acknowledgement, not a simulated click, is the only success condition.
+        window.DabomActionFeedback?.setReportState('success');
         return true;
     } catch (error) {
         console.error('신고 요청 실패:', error);
+        window.DabomActionFeedback?.setReportState('error', error.message);
         if (!isAuto) alert(error.message || '서버 통신 오류로 알림을 보내지 못했습니다.');
         return false;
     } finally {

@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261014-filter-radius-v1">
+    <link rel="stylesheet" href="/static/action_feedback.css?v=20261014-action-v1">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-elastic-v1">
 </head>
 <body>
@@ -590,7 +591,19 @@
                         type="button"
                         onclick="reportDanger()"
                     >
-                        신고
+                        <span class="action-report-content">
+                            <svg class="action-report-mail-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 11a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 1 1 17-4Z"/>
+                                <path d="M12 7v5m0 3h.01"/>
+                            </svg>
+                            <svg class="action-report-success-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 6 9 17l-5-5"/>
+                            </svg>
+                            <svg class="action-report-error-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M18 6 6 18M6 6l12 12"/>
+                            </svg>
+                            <span class="action-report-label" aria-live="polite" aria-atomic="true">신고</span>
+                        </span>
                     </button>
                 </div>
 
@@ -741,6 +754,7 @@
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
     <script src="static/selected_ui.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/static/action_feedback.js?v=20261014-action-v1"></script>
     <script src="/static/elastic_scroll.js?v=20261014-elastic-v1"></script>
     <script>
         window.addEventListener('load', () => {
