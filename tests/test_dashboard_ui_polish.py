@@ -101,12 +101,24 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("gpu: 'SERVER'", SYSTEM)
         self.assertIn("pi: 'PI'", SYSTEM)
 
+    def test_sidebar_account_visible_and_logout_30_percent(self):
+        self.assertIn('id="sidebarAccountName"', DASHBOARD)
+        self.assertIn('id="sidebarAccountLoginId"', DASHBOARD)
+        self.assertIn('id="logoutBtn"', DASHBOARD)
+        self.assertIn('.sidebar-body > .sidebar-account {', CSS)
+        self.assertIn('grid-template-columns: minmax(0, 1fr) 30%;', CSS)
+        self.assertIn('position: static;', CSS)
+        self.assertIn('.sidebar-body > .sidebar-account > .sidebar-logout-btn {', CSS)
+        self.assertIn('grid-row: 1 / 3;', CSS)
+        self.assertIn('overflow-wrap: anywhere;', CSS)
+
     def test_asset_versions(self):
-        for name in ("selected_ui.css", "selected_ui.js", "saved_map_modal.js",
+        for name in ("selected_ui.js", "saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
                      "system_control.js", "image_detail.js"):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-account-visibility-v2', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 

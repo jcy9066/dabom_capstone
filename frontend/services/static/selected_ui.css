@@ -995,3 +995,48 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 #no-camera-msg[data-connection-visual="offline"]>.ui-loading-visual{font-size:12px;}
 #lidar-stale-overlay.offline .lidar-stale-title{display:none;}
 @media(prefers-reduced-motion:reduce){#serverStateGrid,.server-state-drawer-toggle>span{transition:none;}}
+
+/* Account info must appear below Settings. The earlier sticky / auto-margin
+ * and 100%-wide logout styles hid the user's name and login email. */
+.sidebar-body > .sidebar-account {
+  position: static;
+  bottom: auto;
+  z-index: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30%;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 3px 8px;
+  flex: 0 0 auto;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  box-sizing: border-box;
+}
+.sidebar-body > .sidebar-account > .sidebar-account-name,
+.sidebar-body > .sidebar-account > .sidebar-account-id {
+  grid-column: 1;
+  min-width: 0;
+  max-width: none;
+  width: auto;
+  margin: 0;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+.sidebar-body > .sidebar-account > .sidebar-account-name { grid-row: 1; }
+.sidebar-body > .sidebar-account > .sidebar-account-id { grid-row: 2; }
+.sidebar-body > .sidebar-account > .sidebar-logout-btn {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 7px 2px;
+  font-size: 11px;
+  box-sizing: border-box;
+}
