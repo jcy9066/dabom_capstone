@@ -254,7 +254,6 @@
       const collapsed=card.classList.toggle('is-collapsed');
       toggle.setAttribute('aria-expanded', String(!collapsed));
       toggle.setAttribute('aria-label', collapsed ? 'Server status 펼치기' : 'Server status 접기');
-      toggle.title=collapsed ? 'Server status 펼치기' : 'Server status 접기';
       grid.setAttribute('aria-hidden', String(collapsed));
     });
   }

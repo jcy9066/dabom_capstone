@@ -140,14 +140,33 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('button.append(label, offLabel, track, onLabel, stateLabel);', source("frontend/components/controls/led_toggle.js"))
         self.assertIn('return this.handlers.request?.(next);', source("frontend/components/controls/led_toggle.js"))
 
+    def test_server_status_drawer_is_centered_and_hover_only(self):
+        self.assertIn('<h2 class="card-title">Server status</h2>', DASHBOARD)
+        self.assertIn('.server-state-card .card-title { text-transform: none; }', CSS)
+        self.assertIn('  left: 50%;', CSS)
+        self.assertIn('  transform: translateX(-50%);', CSS)
+        self.assertIn('  border: 0;', CSS)
+        self.assertIn('  background: transparent;', CSS)
+        self.assertIn('  opacity: 0;', CSS)
+        self.assertIn('.server-state-card:hover .server-state-drawer-toggle', CSS)
+        self.assertIn('.server-state-card:focus-within .server-state-drawer-toggle', CSS)
+        self.assertIn('@media (hover: none) { .server-state-drawer-toggle { opacity: 1; } }', CSS)
+        self.assertIn('.server-state-card.is-collapsed .server-state-header .card-title,', CSS)
+        self.assertIn('.server-state-card.is-collapsed .server-state-updated', CSS)
+        self.assertIn('aria-expanded="true"', DASHBOARD)
+        self.assertNotIn('title="Server status 접기"', DASHBOARD)
+        self.assertNotIn('toggle.title=', VISUAL)
+        self.assertIn("card.classList.toggle('is-collapsed')", VISUAL)
+        self.assertIn("grid.setAttribute('aria-hidden', String(collapsed));", VISUAL)
+
     def test_asset_versions(self):
         for name in ("saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
                      "system_control.js", "image_detail.js"):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn('selected_ui.js?v=20261014-model-loader-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-aligned-switches-v5', DASHBOARD)
+        self.assertIn('selected_ui.js?v=20261014-server-header-v3', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-server-header-v6', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 
