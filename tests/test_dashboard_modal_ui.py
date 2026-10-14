@@ -134,6 +134,18 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     const select = picker.querySelector('.saved-map-location-select');
     assert.strictEqual(picker.children[0], newName);
     assert.strictEqual(picker.children[1], select);
+    const triggerChoice = picker.querySelector('.saved-map-location-trigger');
+    const customMenu = picker.querySelector('.saved-map-location-options');
+    assert.ok(select.hidden);
+    assert.ok(customMenu.hidden);
+    triggerChoice.listeners.click();
+    assert.strictEqual(customMenu.hidden, false);
+    const existingChoice = customMenu.children.find(node => node.dataset.locationValue === 'existing');
+    assert.ok(existingChoice);
+    existingChoice.listeners.click();
+    assert.strictEqual(select.value, 'existing');
+    assert.strictEqual(triggerChoice.textContent, '기존 장소');
+    assert.ok(customMenu.hidden);
     const draft = select.children.find(node => node.value === '__draft_location__');
     assert.ok(draft.hidden);
     newName.value = '검증 장소';
@@ -141,6 +153,11 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.strictEqual(draft.hidden, false);
     assert.strictEqual(select.value, '__draft_location__');
     assert.strictEqual(draft.textContent, '검증 장소');
+    const draftChoice = customMenu.children.find(node => node.dataset.locationValue === '__draft_location__');
+    assert.ok(draftChoice);
+    assert.strictEqual(draftChoice.hidden, false);
+    assert.strictEqual(draftChoice.textContent, '검증 장소');
+    assert.strictEqual(triggerChoice.textContent, '검증 장소');
     assert.strictEqual(manager.body.querySelector('#saved-map-location-name').value, '검증 장소');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """

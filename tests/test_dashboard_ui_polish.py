@@ -225,6 +225,11 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("transform:rotate(90deg);", CSS)
         self.assertIn("transform:rotate(270deg);", CSS)
         self.assertIn("border:0!important;border-radius:0!important;", CSS)
+        led_source = source("frontend/components/controls/led_toggle.js")
+        self.assertIn("enabled: false,", led_source)
+        self.assertIn("this.enabled = typeof options.enabled === 'boolean'", led_source)
+        self.assertIn("selector.hidden = true;", MAP)
+        self.assertIn("syncPicker();", MAP)
 
     def test_asset_versions(self):
         self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
