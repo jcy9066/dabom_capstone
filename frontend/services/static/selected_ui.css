@@ -1261,3 +1261,33 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   overflow-wrap: anywhere;
 }
 .gallery-card { isolation: isolate; }
+
+/* Five Server status tiles: equal title/value baselines and compact height.
+ * ID-scoped strong display intentionally overrides older inline-block states.
+ * Expanding text may grow a tile; values and update logic are untouched. */
+#serverStateCard:not(.is-collapsed) .server-state-header {
+  margin-bottom: 6px;
+}
+#serverStateGrid .server-state-field {
+  display: grid;
+  grid-template-rows: 14px minmax(16px, auto);
+  align-content: start;
+  row-gap: 4px;
+  min-height: 48px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+}
+#serverStateGrid .server-state-field > span {
+  display: block;
+  align-self: start;
+  margin: 0;
+  line-height: 14px;
+  min-height: 14px;
+}
+#serverStateGrid .server-state-field > strong {
+  display: block;
+  align-self: start;
+  min-height: 16px;
+  line-height: 16px;
+}
+/* The right panel already assigns all remaining height to .alert-card. */

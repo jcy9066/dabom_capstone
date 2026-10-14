@@ -110,9 +110,25 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("gallery-card-source source-", GALLERY)
         self.assertIn("gallery-card-image", GALLERY)
 
+    def test_server_status_fields_share_the_same_rows(self):
+        # Five fixed title/value baselines; no changes to live status IDs.
+        self.assertIn('#serverStateGrid .server-state-field {', CSS)
+        self.assertIn('  grid-template-rows: 14px minmax(16px, auto);', CSS)
+        self.assertIn('  min-height: 48px;', CSS)
+        self.assertIn('#serverStateGrid .server-state-field > span {', CSS)
+        self.assertIn('#serverStateGrid .server-state-field > strong {', CSS)
+        self.assertIn('  display: block;', CSS)
+        self.assertIn('#serverStateCard:not(.is-collapsed) .server-state-header {', CSS)
+        self.assertIn('margin-bottom: 6px;', CSS)
+        self.assertIn('.alert-card{flex:1 1 auto;min-height:0;}', CSS)
+        for field_id in ('active-map-status', 'navigation-state-status',
+                         'emergency-stop-status', 'current-goal-status', 'planned-path-status'):
+            with self.subTest(field=field_id):
+                self.assertIn(f'id="{field_id}"', INDEX)
+
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261014-hover-safe-v10", INDEX)
-        self.assertIn("selected_ui.css?v=20261014-hover-safe-v10", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-server-rows-v11", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-server-rows-v11", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         for name in ("saved_map_modal.js", "record_modal.js", "image_detail.js", "current_situation.js"):
             self.assertIn(name+"?v=20261014-compact-ui-v2", INDEX)
