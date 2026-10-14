@@ -229,9 +229,7 @@
     }
     const camera=$('#no-camera-msg');
     observeStatus(camera,()=>camera?.textContent || '',()=>$('#video-wrapper')?.classList.contains('camera-offline')!==true);
-    const lidar=$('#lidar-stale-overlay');
-    observeStatus(lidar,()=>$('#lidar-stale-title')?.textContent+' '+$('#lidar-stale-detail')?.textContent,
-      ()=>!lidar?.classList.contains('visible'));
+    // The minimap already displays NO SCAN DATA. Do not overlay a redundant loader.
   }
 
   function installNullPlaceholders() {

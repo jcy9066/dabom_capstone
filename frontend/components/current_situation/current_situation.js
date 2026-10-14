@@ -28,7 +28,7 @@
                         </div>
                     </div>
                     <div class="current-situation-entry-box">
-                        <label class="record-field-label" for="currentSituationDescription">상황 내용</label>
+                        <label class="record-field-label" for="currentSituationDescription">상황 기록</label>
                 <textarea id="currentSituationDescription" rows="5" placeholder="현재 상황을 입력하세요.&#10;예: 1층 출입구 주변 확인 필요"></textarea>
                 <div class="current-situation-bottom-row">
                     <label class="record-image-option">

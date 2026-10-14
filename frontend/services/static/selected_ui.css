@@ -1676,3 +1676,160 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
 @media(max-width:800px){
   #topSystemStatusBar{align-items:center;flex-direction:row;justify-content:flex-end;}
 }
+
+
+/* Dashboard UI follow-up, October 14: scope these fixes to their existing views. */
+/* Minimap handles its own disconnected state. Camera loader uses a readable tint. */
+#lidar-stale-overlay > .ui-loading-visual { display:none!important; }
+#no-camera-msg .ui-dots { color:#fffff0!important; }
+#no-camera-msg .ui-dots > :is(i,b) { background:currentColor!important; }
+
+/* Header/cell center axes: the same collapsed table owns all column geometry.
+   Sorting indicators, checkbox cells and inline actions cannot skew alignment. */
+.records-view .record-data-table { table-layout:fixed;border-spacing:0;border-collapse:collapse; }
+.records-view .record-data-table thead th,
+.records-view .record-data-table tbody td {
+  text-align:center!important;vertical-align:middle!important;
+  padding-left:6px!important;padding-right:6px!important;
+}
+.records-view .record-data-table thead th .record-sort-button {
+  display:flex;align-items:center;justify-content:center;gap:2px;
+  width:100%;padding:0;margin:0;text-align:center!important;
+}
+.records-view .record-data-table .record-selection-column {
+  width:34px;padding-left:3px!important;padding-right:3px!important;
+}
+.records-view .record-data-table .record-selection-column input {display:block;margin:auto;}
+.record-false-alarm-controls { display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap; }
+
+/* Action descriptions never determine row height; modal shows complete text. */
+.records-view-actionsModal .record-data-table td.record-description {
+  max-width:0;overflow:hidden;white-space:nowrap;vertical-align:middle;
+}
+.records-view-actionsModal .record-description-open {
+  display:block;width:100%;max-width:100%;min-width:0;border:0;border-radius:4px;
+  padding:4px 0;margin:0;background:transparent;color:var(--text-dark);
+  cursor:pointer;font:inherit;font-size:inherit;text-align:left;
+}
+.records-view-actionsModal .record-description-ellipsis {
+  display:block;min-width:0;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.records-view-actionsModal .record-description-open:hover .record-description-ellipsis {
+  color:var(--accent);
+}
+.records-view-actionsModal .record-description-open:focus-visible {
+  outline:2px solid var(--accent);outline-offset:1px;
+}
+#commonModal[data-modal-view="actionDescriptionDetail"] .modal-content {width:min(92vw,700px);height:auto;max-height:85dvh;}
+#commonModal[data-modal-view="actionDescriptionDetail"] .modal-body {min-height:0;overflow-y:auto;}
+.record-description-detail {display:flex;flex-direction:column;gap:16px;min-height:0;}
+.record-description-detail-text {
+  padding:14px;border-radius:8px;border:1px solid var(--border-color);
+  color:var(--text-dark);background:var(--card-bg2);white-space:pre-wrap;
+  overflow-wrap:anywhere;overflow-y:auto;max-height:60dvh;line-height:1.65;
+}
+.record-description-detail-actions {display:flex;justify-content:flex-end;}
+
+/* Situation entry: footer reaches the panel bottom while textarea absorbs space. */
+#commonModal[data-modal-view="currentSituation"] .current-situation-entry-box {display:flex;flex-direction:column;min-height:365px;}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+  height:auto!important;min-height:280px!important;max-height:none!important;
+  flex:1 1 auto!important;resize:none;margin-bottom:8px;
+}
+#commonModal[data-modal-view="currentSituation"] .current-situation-bottom-row {
+  margin-top:auto!important;margin-bottom:0!important;padding:0;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationError:empty {
+  display:none;min-height:0;margin:0;
+}
+
+/* Map pose fields first, independently scrolling saved-map list second. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-pose {
+  flex:0 0 auto;order:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+  flex:1 1 0;order:1;min-height:0;max-height:none!important;
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list::-webkit-scrollbar {
+  display:none;width:0;height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress {
+  flex:0 0 auto;order:2;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions {
+  flex:0 0 auto;order:3;
+}
+/* Match native 34px dialog controls and identical bottom insets on both panes. */
+#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) {
+  min-height:34px;align-items:center;padding-block:5px!important;margin-bottom:0!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) button {
+  height:34px!important;min-height:34px!important;box-sizing:border-box;
+  border-radius:7px!important;padding:5px 10px!important;
+  font:700 11px var(--mono)!important;line-height:1.2!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-panel {
+  padding-bottom:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
+  padding-top:5px!important;
+}
+
+/* Shrink current pagination controls to about 70%, including fixed center slots. */
+.records-pagination {gap:6px;}
+.records-pagination .records-page-numbers {
+  grid-template-columns:repeat(5,25px);gap:2px;padding:3px;
+}
+.records-pagination .records-page-number,
+.records-pagination .records-page-arrow {
+  width:25px;min-width:25px;height:24px;min-height:24px;
+  font-size:10px;
+}
+.records-pagination .records-page-arrow {font-size:17px;}
+.records-pagination .records-page-empty {width:25px;height:24px;}
+@media(max-width:380px) {
+ .records-pagination .records-page-numbers {grid-template-columns:repeat(5,23px);gap:2px;padding:3px;}
+ .records-pagination .records-page-number,.records-pagination .records-page-arrow {
+   width:23px;min-width:23px;height:23px;min-height:23px;
+ }
+ .records-pagination .records-page-empty {width:23px;height:23px;}
+}
+
+/* No post-click focus outline, underline, or selection ring on mode toggles. */
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle:is(:focus,:focus-visible,:active),
+#dashboard-mode-controls-mount .dashboard-drive-mode-control:is(:focus,:focus-visible,:active),
+#dashboard-mode-controls-mount .dashboard-led-toggle:is(:focus,:focus-visible,:active){
+  outline:0!important;border:0!important;text-decoration:none!important;
+  box-shadow:none!important;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle * {
+  text-decoration:none!important;
+}
+
+/* Shared typography and switch geometry in the main panel and expanded viewer. */
+:where(#dashboard-mode-controls-mount,.lidar-control-drawer)
+:is(.navigation-mode-toggle-label,.dashboard-drive-mode-control .mode-text,
+    .dashboard-led-toggle-label,.dashboard-led-toggle .ui-toggle-side) {
+  font-family:var(--mono)!important;font-size:10px!important;
+  font-weight:700!important;letter-spacing:.1px!important;line-height:1.2!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-label {font-size:10px!important;}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle {
+  gap:5px;min-height:29px;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle-track,
+#dashboard-mode-controls-mount .dashboard-led-toggle-track {
+  width:48px!important;height:26px!important;flex-basis:48px!important;
+  border-radius:999px!important;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle-slider,
+#dashboard-mode-controls-mount .dashboard-led-toggle-slider {
+  width:18px!important;height:18px!important;top:3px!important;
+  border-radius:50%!important;
+}
+.lidar-control-drawer .lidar-view-controls button[data-control-button] {
+  box-sizing:border-box;min-height:27px;padding:5px 8px;
+  border-radius:7px;font:700 10px var(--mono);line-height:1.2;
+}

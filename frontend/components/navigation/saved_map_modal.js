@@ -585,8 +585,6 @@
             list.append(option);
         }
         if (!maps.length) list.append(create('div', 'saved-map-details', labels.noMaps));
-        mapColumn.append(list);
-
         const pose = create('div', 'saved-map-pose');
         const poseValues = snapshot?.pose || { x: '', y: '', yaw: '' };
         for (const [id, label, value] of [
@@ -604,6 +602,7 @@
             pose.append(field);
         }
         mapColumn.append(pose);
+        mapColumn.append(list);
         progress = create('div', 'saved-map-progress', context.feedback || '');
         if (context.feedback) showMessage(progress, context.feedback, context.feedbackIsError);
         mapColumn.append(progress);

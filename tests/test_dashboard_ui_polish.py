@@ -192,20 +192,30 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn(".records-pagination .records-page-number.is-current,", CSS)
         self.assertIn(".records-view .record-data-table thead th .record-sort-button{", CSS)
 
+    def test_latest_ui_feedback(self):
+        self.assertNotIn("observeStatus(lidar,", VISUAL)
+        self.assertIn("#no-camera-msg .ui-dots { color:#fffff0!important; }", CSS)
+        self.assertIn('data-action-description-row=', RECORDS)
+        self.assertIn("manager.register('actionDescriptionDetail'", RECORDS)
+        self.assertIn("manager.back()", RECORDS)
+        self.assertIn('for="currentSituationDescription">상황 기록</label>', SITUATION)
+        self.assertIn("mapColumn.append(pose);\n        mapColumn.append(list);", MAP)
+        self.assertIn("grid-template-columns:repeat(5,25px)", CSS)
+
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261014-layout-followup-v1", DASHBOARD)
-        self.assertIn("current_situation.js?v=20261014-ux-refine-v3", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261014-finish-ui-v1", DASHBOARD)
+        self.assertIn("current_situation.js?v=20261014-finish-ui-v1", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
         self.assertIn("dashboard_state.js?v=20261014-batched-pages-v1", DASHBOARD)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", DASHBOARD)
-        self.assertIn("record_modal.js?v=20261014-numbered-pages-v1", DASHBOARD)
+        self.assertIn("record_modal.js?v=20261014-finish-ui-v1", DASHBOARD)
         self.assertIn("system_control.js?v=20261014-hide-managed-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn('selected_ui.js?v=20261014-ux-refine-v4', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-layout-followup-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-layout-followup-v1', LOGIN)
+        self.assertIn('selected_ui.js?v=20261014-finish-ui-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-finish-ui-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-finish-ui-v1', LOGIN)
 
 
 if __name__ == "__main__":

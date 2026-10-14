@@ -567,7 +567,7 @@
                     <td>${records.formatBoolean(row.is_resolved, '완료', '미조치')}</td>
                     <td>${records.formatBoolean(row.is_reported, '신고', '미신고')}</td>
                     <td>${records.formatBoolean(row.is_alerted, '경고', '미경고')}</td>
-                    <td><span class="false-alarm-state ${row.is_false_alarm ? 'is-active' : ''}">${row.is_false_alarm ? '오탐' : '정상'}</span><button type="button" class="false-alarm-btn" data-false-alarm-row="${index}" ${Number.isFinite(eventId) ? '' : 'disabled'}>${row.is_false_alarm ? '오탐 취소' : '오탐 처리'}</button></td>
+                    <td><div class="record-false-alarm-controls"><span class="false-alarm-state ${row.is_false_alarm ? 'is-active' : ''}">${row.is_false_alarm ? '오탐' : '정상'}</span><button type="button" class="false-alarm-btn" data-false-alarm-row="${index}" ${Number.isFinite(eventId) ? '' : 'disabled'}>${row.is_false_alarm ? '오탐 취소' : '오탐 처리'}</button></div></td>
                     <td>${imageCell(row, 'event', index)}</td>
                 </tr>`;
             }
@@ -577,7 +577,7 @@
                 <td>${records.escapeHtml(row.administrator_name)}</td>
                 <td><span class="status-badge record-type-badge ${records.actionBadgeClass(row.action_type)}">${records.escapeHtml(ACTION_LABELS[row.action_type] || row.action_type)}</span></td>
                 <td>${row.event_id == null ? '-' : records.escapeHtml(row.event_id)}</td>
-                <td class="record-description">${records.escapeHtml(row.description_content)}</td>
+                <td class="record-description"><button type="button" class="record-description-open" data-action-description-row="${index}" aria-label="조치 내용 전체 보기"><span class="record-description-ellipsis">${records.escapeHtml(row.description_content || '-')}</span></button></td>
                 <td>${imageCell(row, 'action', index)}</td>
             </tr>`;
         }
@@ -615,6 +615,15 @@
             });
             root.querySelectorAll('[data-image-row]').forEach(button => {
                 button.addEventListener('click', () => components.gallery?.openRecordDetail?.(this.rows[Number(button.dataset.imageRow)], this.type));
+            });
+            root.querySelectorAll('[data-action-description-row]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const index = Number(button.dataset.actionDescriptionRow);
+                    const description = this.rows[index]?.description_content;
+                    if (Number.isInteger(index) && index >= 0 && description != null) {
+                        void this.manager.open('actionDescriptionDetail', { description: String(description) });
+                    }
+                });
             });
             root.querySelectorAll('[data-false-alarm-row]').forEach(button => {
                 button.addEventListener('click', () => this.toggleFalseAlarm(Number(button.dataset.falseAlarmRow), button));
@@ -743,6 +752,26 @@
                         view.renderRows();
                     },
                 });
+            });
+            manager.register('actionDescriptionDetail', {
+                title: '조치 내용',
+                render: context => {
+                    const panel = document.createElement('section');
+                    panel.className = 'record-description-detail';
+                    const text = document.createElement('div');
+                    text.className = 'record-description-detail-text';
+                    text.textContent = String(context?.description ?? '');
+                    const actions = document.createElement('div');
+                    actions.className = 'record-description-detail-actions';
+                    const back = document.createElement('button');
+                    back.type = 'button';
+                    back.className = 'filter-btn secondary';
+                    back.textContent = '목록으로';
+                    back.addEventListener('click', () => void manager.back());
+                    actions.append(back);
+                    panel.append(text, actions);
+                    return panel;
+                },
             });
             components.gallery?.registerModalViews?.(manager);
         }
