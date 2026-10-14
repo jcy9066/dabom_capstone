@@ -130,6 +130,12 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("button.disabled = this.connected !== true || this.pending;", model)
         self.assertIn("return this.handlers.request?.(next);", model)
 
+    def test_led_control_is_centered_without_changing_its_hit_area(self):
+        self.assertIn('.dashboard-led-toggle {grid-template-columns:max-content max-content 48px max-content;column-gap:5px;justify-content:center;}', CSS)
+        self.assertIn('.dashboard-led-toggle,.dashboard-led-control-mount{justify-content:center;text-align:center;}', CSS)
+        self.assertIn('button.append(label, offLabel, track, onLabel, stateLabel);', source("frontend/components/controls/led_toggle.js"))
+        self.assertIn('return this.handlers.request?.(next);', source("frontend/components/controls/led_toggle.js"))
+
     def test_asset_versions(self):
         for name in ("saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
@@ -137,7 +143,7 @@ class DashboardUiPolishContract(unittest.TestCase):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-model-loader-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-server-pi-toggle-v3', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-led-center-v4', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 
