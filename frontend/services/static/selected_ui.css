@@ -1833,3 +1833,21 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   box-sizing:border-box;min-height:27px;padding:5px 8px;
   border-radius:7px;font:700 10px var(--mono);line-height:1.2;
 }
+
+
+/* Keep the same behavior on narrow screens without forcing a tall form or
+   collapsing the independently scrollable list to zero height. */
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+   flex:0 1 auto;max-height:min(30vh,240px)!important;overflow-y:auto;
+ }
+}
+@media(max-width:720px){
+ #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box {
+   height:auto;min-height:0;
+ }
+ #commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+   height:280px!important;min-height:180px!important;max-height:none!important;
+   flex:0 0 auto!important;
+ }
+}
