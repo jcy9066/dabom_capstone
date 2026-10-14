@@ -243,6 +243,17 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("syncDarkModeSwitch();", source("frontend/services/static/script.js"))
         self.assertNotIn("if (saved === '1') toggleDarkMode();", source("frontend/services/static/script.js"))
 
+    def test_server_chevrons_and_viewer_toggle_size(self):
+        self.assertIn('id="serverStateDrawerToggle"', DASHBOARD)
+        self.assertIn('<span aria-hidden="true">&gt;</span>', DASHBOARD)
+        self.assertIn('transform: rotate(270deg);', CSS)
+        self.assertIn('.server-state-card.is-collapsed .server-state-drawer-toggle > span { transform: rotate(90deg); }', CSS)
+        self.assertNotIn('.server-state-drawer-toggle > span {transform:rotate(90deg);}', CSS)
+        self.assertIn('gap:2.1px!important;height:16.1px!important;min-height:16.1px!important;', CSS)
+        self.assertIn('font:700 6.3px/1.2 var(--mono)!important;', CSS)
+        self.assertIn('width:25.2px!important;height:13.3px!important;flex-basis:25.2px!important;', CSS)
+        self.assertIn('width:9.1px!important;height:9.1px!important;top:1.4px!important;left:1.4px!important;', CSS)
+
     def test_asset_versions(self):
         self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
@@ -255,8 +266,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-stable-hydration-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-stable-hydration-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-stable-hydration-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-server-chevron-toggle70-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-server-chevron-toggle70-v1', LOGIN)
 
 
 if __name__ == "__main__":

@@ -973,8 +973,9 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   box-shadow: none;
 }
 .server-state-drawer-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.server-state-drawer-toggle > span { display: block; transition: transform .22s ease; }
-.server-state-card.is-collapsed .server-state-drawer-toggle > span { transform: rotate(180deg); }
+/* Right-facing ">" glyph: open means collapse/up, closed means expand/down. */
+.server-state-drawer-toggle > span { display: block; transform: rotate(270deg); transition: transform .22s ease; }
+.server-state-card.is-collapsed .server-state-drawer-toggle > span { transform: rotate(90deg); }
 #serverStateGrid { max-height: 400px; opacity: 1; overflow: hidden; transition: max-height .23s ease, opacity .19s ease; }
 .server-state-card.is-collapsed #serverStateGrid { max-height: 0; opacity: 0; pointer-events: none; }
 .server-state-card.is-collapsed { padding-top: 5px; padding-bottom: 5px; }
@@ -2053,10 +2054,7 @@ header {padding-top:6px;}
 /* Final map / status / viewer refinement: no overscroll shim in this change.
    Overscroll physics remains a separate discussion and implementation. */
 
-/* Expand/collapse indicator is the same triangle used by the top status pill.
-   From an upright glyph: 90° = open, 270° = collapsed. */
-.server-state-drawer-toggle > span {transform:rotate(90deg);}
-.server-state-card.is-collapsed .server-state-drawer-toggle > span {transform:rotate(270deg);}
+/* The Server status indicator is defined once beside its base styles. */
 @media(prefers-reduced-motion:reduce){
  .server-state-drawer-toggle > span{transition:none!important;}
 }
@@ -2142,32 +2140,32 @@ header {padding-top:6px;}
 }
 .saved-map-location-option[hidden]{display:none!important;}
 
-/* Viewer navigation switches match the 23px action controls in the same strip.
-   Remove only the separate toggle's container frame, not the entire toolbar. */
+/* Mapping/Driving toggle inside the 3D viewer only: 70% of previous dimensions.
+   Other dashboard toggles and the view/action buttons retain their sizes. */
 .lidar-control-drawer .lidar-control-strip{
   align-items:center!important;padding-top:3px!important;padding-bottom:3px!important;
 }
 .lidar-control-drawer .navigation-mode-toggle{
   display:inline-flex!important;align-items:center!important;
-  gap:3px!important;height:23px!important;min-height:23px!important;
-  padding:0 2px!important;margin:0!important;
+  gap:2.1px!important;height:16.1px!important;min-height:16.1px!important;
+  padding:0 1.4px!important;margin:0!important;
   border:0!important;border-radius:0!important;
   background:transparent!important;box-shadow:none!important;outline:0!important;
 }
 .lidar-control-drawer .navigation-mode-toggle-label{
-  font:700 9px/1.2 var(--mono)!important;letter-spacing:0!important;
+  font:700 6.3px/1.2 var(--mono)!important;letter-spacing:0!important;
 }
 .lidar-control-drawer .navigation-mode-toggle-track{
-  width:36px!important;height:19px!important;flex-basis:36px!important;
+  width:25.2px!important;height:13.3px!important;flex-basis:25.2px!important;
 }
 .lidar-control-drawer .navigation-mode-toggle-slider{
-  width:13px!important;height:13px!important;top:2px!important;left:2px!important;
+  width:9.1px!important;height:9.1px!important;top:1.4px!important;left:1.4px!important;
 }
 .lidar-control-drawer .navigation-mode-toggle.driving .navigation-mode-toggle-slider{
-  left:calc(100% - 15px)!important;
+  left:calc(100% - 10.5px)!important;
 }
 .lidar-control-drawer .navigation-mode-toggle.unknown .navigation-mode-toggle-slider{
-  left:calc(50% - 6.5px)!important;
+  left:calc(50% - 4.55px)!important;
 }
 .lidar-control-drawer .lidar-view-controls button[data-control-button]{
   box-sizing:border-box;height:23px!important;min-height:23px!important;
