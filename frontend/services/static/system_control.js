@@ -76,11 +76,15 @@
         pi.append(make('div', 'system-control-heading', text.pi), make('div', 'system-control-list'));
         pi.lastChild.id = 'piSystemControls';
 
-        const guide = make('button', 'system-control-manual', text.guide);
+        const guide = make('button', 'sidebar-guide-trigger', '?');
         guide.type = 'button';
+        guide.title = text.guide;
+        guide.setAttribute('aria-label', text.guide);
         guide.addEventListener('click', openGuide);
-        wrapper.append(gpu, divider, pi, guide);
+        wrapper.append(gpu, divider, pi);
         (slot || body).append(wrapper);
+        const guideMount = document.getElementById('sidebarGuideMount');
+        (guideMount || wrapper).append(guide);
     }
 
     function renderGroup(targetId, components, group) {
@@ -105,9 +109,14 @@
             const button = make(
                 'button',
                 `system-control-switch state-${component.state || 'error'}${availabilityClass}`,
-                pending ? text.processing : stateLabel(component),
+                pending ? text.processing : unreachable ? 'OFF' : stateLabel(component),
             );
             button.type = 'button';
+            button.title = unreachable ? text.unavailable : component.label || component.id;
+            const switchTrack = make('span', 'ui-process-track');
+            switchTrack.setAttribute('aria-hidden', 'true');
+            const switchLabel = make('span', 'ui-process-label', button.textContent);
+            button.replaceChildren(switchTrack, switchLabel);
             button.disabled = pending || unreachable;
             button.addEventListener('click', () => control(group, component.id, action));
             row.append(details, button);
