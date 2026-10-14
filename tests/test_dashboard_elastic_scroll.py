@@ -50,6 +50,7 @@ flush();
 assert(list.classList.contains('elastic-scroll-returning'));
 flush();
 assert(!list.classList.contains('elastic-scroll-returning'));
+assert(!list.classList.contains('elastic-scroll-active'));
 list.scrollTop=0;html.scrollTop=0;
 assert.equal(wheel(item,-30),true);
 assert(Number.parseFloat(list.style.getPropertyValue('--elastic-scroll-offset'))>0);
@@ -77,8 +78,8 @@ assert(!list.classList.contains('elastic-scroll-active'));
 def test_elastic_scroll_assets_on_dashboard_and_login():
     for template in ("index.html", "login.html"):
         source = (ROOT / "frontend/templates" / template).read_text(encoding="utf-8")
-        assert '/static/elastic_scroll.css?v=20261014-pc-wheel-v3' in source
-        assert '/static/elastic_scroll.js?v=20261014-pc-wheel-v3' in source
+        assert '/static/elastic_scroll.css?v=20261014-return-animation-v4' in source
+        assert '/static/elastic_scroll.js?v=20261014-return-animation-v4' in source
     css = (ROOT / "frontend/services/static/elastic_scroll.css").read_text(encoding="utf-8")
     assert "250ms cubic-bezier" in css
     assert "prefers-reduced-motion" in css

@@ -219,7 +219,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("selector.hidden = true;", MAP)
         self.assertIn("saved-map-location-option", CSS)
         self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", CSS)
-        self.assertIn("max-height:min(40vh,360px)!important", CSS)
+        self.assertIn("flex:1 1 0!important;height:auto!important;max-height:none!important", CSS)
         self.assertIn("dashboard-drawer-handle-pill--vertical", DASHBOARD)
         self.assertIn("data-drawer-target=\"serverStateCard\"", DASHBOARD)
         self.assertIn("border:0!important;border-radius:0!important;", CSS)
@@ -272,6 +272,22 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("#topSystemStatusBar { top: 0; }", CSS)
         self.assertIn("doc.querySelector?.('.dashboard-container')", elastic)
 
+    def test_latest_drawer_process_map_and_elastic_behavior(self):
+        controls = source("frontend/components/controls/controls.css")
+        process = source("frontend/services/static/system_control.css")
+        elastic = source("frontend/services/static/elastic_scroll.js")
+        return_css = source("frontend/services/static/elastic_scroll.css")
+        shared = controls.split(".dashboard-drawer-handle-pill {", 1)[1].split("}", 1)[0]
+        self.assertIn("border: 0;", shared)
+        self.assertIn("background: transparent;", shared)
+        self.assertIn("box-shadow: none;", shared)
+        self.assertIn(".server-state-card.is-collapsed .server-state-drawer-toggle", CSS)
+        self.assertIn("transform: translate(-50%, -50%);", CSS)
+        self.assertIn("align-items: center; justify-content: space-between;", process)
+        self.assertIn("flex:1 1 0!important;height:auto!important;max-height:none!important", CSS)
+        self.assertIn("element.style.setProperty('--elastic-scroll-offset', '0px')", elastic)
+        self.assertIn(".elastic-scroll-active.elastic-scroll-returning:not(body)", return_css)
+
     def test_filter_bar_buttons_share_the_normal_control_radius(self):
         # Filter controls use the same 8px token as ordinary buttons.
         self.assertIn("--ui-radius-control: 8px;", CSS)
@@ -296,8 +312,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-header-drawer-pc-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-header-drawer-pc-v3', LOGIN)
+        self.assertIn('selected_ui.css?v=20261014-map-expand-v4', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-map-expand-v4', LOGIN)
 
 
 if __name__ == "__main__":

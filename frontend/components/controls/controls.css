@@ -652,11 +652,11 @@
     width: 24px;
     height: 26px;
     padding: 0;
-    border: 1px solid var(--border-color);
+    border: 0;
     border-radius: 50%;
-    background: var(--card-bg);
+    background: transparent;
     color: var(--text-muted);
-    box-shadow: 0 3px 12px rgba(15,23,42,.10);
+    box-shadow: none;
     cursor: pointer;
     --drawer-icon-open-angle: 0deg;
     --drawer-icon-closed-angle: 180deg;
@@ -664,9 +664,9 @@
 }
 .dashboard-drawer-handle-pill:hover,
 .dashboard-drawer-handle-pill:focus-visible {
-    background: var(--card-bg2);
+    background: transparent;
     color: var(--accent);
-    box-shadow: 0 4px 13px rgba(15,23,42,.15);
+    box-shadow: none;
 }
 .dashboard-drawer-handle-pill:focus-visible {
     outline: 2px solid var(--accent);

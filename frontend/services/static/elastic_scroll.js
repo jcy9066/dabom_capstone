@@ -115,15 +115,21 @@
         clearEntryTimers(entry);
         const element = entry.element;
         cancelReturnTimer(element);
-        element.classList.remove('elastic-scroll-active');
-        element.style.removeProperty('--elastic-scroll-offset');
         if (immediate || reduced() || !element.isConnected) {
+            element.classList.remove('elastic-scroll-active');
             element.classList.remove('elastic-scroll-returning');
+            element.style.removeProperty('--elastic-scroll-offset');
             return;
         }
+        // Keep the displaced children under .elastic-scroll-active as the
+        // returning class enables transition; forcing layout separates frames.
         element.classList.add('elastic-scroll-returning');
+        void element.offsetHeight;
+        element.style.setProperty('--elastic-scroll-offset', '0px');
         const timer = global.setTimeout(() => {
+            element.classList.remove('elastic-scroll-active');
             element.classList.remove('elastic-scroll-returning');
+            element.style.removeProperty('--elastic-scroll-offset');
             returnTimers.delete(element);
         }, RETURN_MS);
         returnTimers.set(element, timer);
