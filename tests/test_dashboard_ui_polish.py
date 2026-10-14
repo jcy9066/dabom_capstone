@@ -159,6 +159,17 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("card.classList.toggle('is-collapsed')", VISUAL)
         self.assertIn("grid.setAttribute('aria-hidden', String(collapsed));", VISUAL)
 
+    def test_record_toolbar_click_focus_no_dark_outline(self):
+        # The five record-toolbar buttons retain their hover/press animations.
+        self.assertIn('.map-bookmark-panel .mb-btn:focus {', CSS)
+        self.assertIn('  outline: none;', CSS)
+        self.assertIn('.map-bookmark-panel .mb-btn:focus-visible {', CSS)
+        self.assertIn('  text-decoration: underline;', CSS)
+        self.assertIn(':not(:disabled):hover {', CSS)
+        self.assertIn(':not(:disabled):active {', CSS)
+        self.assertIn('data-record-view="patrolModal"', DASHBOARD)
+        self.assertIn('data-record-view="statusModal"', DASHBOARD)
+
     def test_asset_versions(self):
         for name in ("saved_map_modal.js",
                      "record_table.js", "current_situation.js", "navigation_mode_control.js",
@@ -166,7 +177,7 @@ class DashboardUiPolishContract(unittest.TestCase):
             with self.subTest(asset=name):
                 self.assertIn(name + "?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-server-header-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-server-header-v6', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-record-focus-v7', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261014-ui-polish-v1', LOGIN)
 
 

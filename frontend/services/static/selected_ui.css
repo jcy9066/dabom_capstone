@@ -1099,3 +1099,14 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 .system-control-panel .system-control-switch::after {
   content: none;
 }
+
+/* Record toolbar: mouse clicks must not leave a dark focus ring.
+   Keep all existing hover/active transform and shadow animations intact. */
+.map-bookmark-panel .mb-btn:focus {
+  outline: none;
+}
+/* Keyboard users retain a focus cue without an outer border. */
+.map-bookmark-panel .mb-btn:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
