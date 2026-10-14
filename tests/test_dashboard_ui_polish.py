@@ -102,6 +102,18 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("gpu: 'SERVER'", SYSTEM)
         self.assertIn("pi: 'PI'", SYSTEM)
 
+    def test_supervisor_owned_cards_hidden_in_settings_only(self):
+        self.assertIn("SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge'])", SYSTEM)
+        self.assertIn("for (const component of visibleComponents)", SYSTEM)
+        self.assertIn("components.filter(component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id))", SYSTEM)
+        self.assertIn("const components = [...piComponents, ...gpuComponents].filter(", SYSTEM)
+        self.assertNotIn("const mapBridge = components.find(", SYSTEM)
+        self.assertIn("renderGroup('gpuSystemControls', status.gpu, 'gpu')", SYSTEM)
+        self.assertIn("renderGroup('piSystemControls', status.pi, 'pi')", SYSTEM)
+        backend = source("frontend/system_control.py")
+        self.assertIn('supervisor_managed_components = frozenset({"wheel_odometry", "map_bridge"})', backend)
+        self.assertIn('"gpu": [gpu_status(component_id) for component_id in component_ids]', backend)
+
     def test_sidebar_account_visible_and_logout_30_percent(self):
         self.assertIn('id="sidebarAccountName"', DASHBOARD)
         self.assertIn('id="sidebarAccountLoginId"', DASHBOARD)
@@ -180,7 +192,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("dashboard_state.js?v=20261014-ten-rows-v17", DASHBOARD)
         self.assertIn("lidar_3d_viewer.css?v=20261014-ux-refine-v17", DASHBOARD)
         self.assertIn("record_modal.js?v=20261014-ux-refine-v3", DASHBOARD)
-        self.assertIn("system_control.js?v=20261014-ux-refine-v4", DASHBOARD)
+        self.assertIn("system_control.js?v=20261014-hide-managed-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-ux-refine-v4', DASHBOARD)
