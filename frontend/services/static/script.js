@@ -1954,21 +1954,26 @@ function closeSidebar() {
 // ===================================================
 // 다크 모드 (요구사항 7)
 // ===================================================
-let darkMode = false;
+let darkMode = document.body.classList.contains('dark-mode');
+function syncDarkModeSwitch() {
+    document.getElementById('darkToggle')?.classList.toggle('active', darkMode);
+    document.getElementById('darkToggle')?.setAttribute('aria-checked', String(darkMode));
+}
 function toggleDarkMode() {
     darkMode = !darkMode;
     document.body.classList.toggle('dark-mode', darkMode);
-    document.getElementById('darkToggle').classList.toggle('active', darkMode);
-    document.getElementById('darkToggle').setAttribute('aria-checked', String(darkMode));
-    localStorage.setItem('darkMode', darkMode ? '1' : '0');
+    syncDarkModeSwitch();
+    try { localStorage.setItem('darkMode', darkMode ? '1' : '0'); }
+    catch (_) { /* Keep the selected theme even when persistence is blocked. */ }
 }
 
 // 저장된 다크모드 설정 복원
 window.addEventListener('DOMContentLoaded', () => {
     initializeDashboardComponentFoundation();
 
-    const saved = localStorage.getItem('darkMode');
-    if (saved === '1') toggleDarkMode();
+    // The saved theme has already been painted. Do not toggle it a second time.
+    darkMode = document.body.classList.contains('dark-mode');
+    syncDarkModeSwitch();
 
     // Pi가 보고한 실제 모드로 초기 UI 동기화
     refreshTelemetryStatusPolling();

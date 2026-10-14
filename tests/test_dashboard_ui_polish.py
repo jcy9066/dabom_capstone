@@ -231,6 +231,18 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("selector.hidden = true;", MAP)
         self.assertIn("syncPicker();", MAP)
 
+    def test_legacy_first_paint_is_removed(self):
+        self.assertIn('class="dashboard-model-toggle unknown"', DASHBOARD)
+        self.assertIn('class="dashboard-led-toggle"', DASHBOARD)
+        self.assertEqual(DASHBOARD.count('class="navigation-mode-toggle unknown"'), 2)
+        self.assertIn("document.body.classList.add('dark-mode')", DASHBOARD)
+        self.assertIn('id="dashboardUiStartupError"', DASHBOARD)
+        self.assertIn("root.querySelector('.navigation-mode-toggle')", NAV_MODE)
+        self.assertIn("root.querySelector('.dashboard-led-toggle')", source("frontend/components/controls/led_toggle.js"))
+        self.assertIn("root.querySelector('.dashboard-model-toggle')", source("frontend/components/controls/model_pipeline_toggle.js"))
+        self.assertIn("syncDarkModeSwitch();", source("frontend/services/static/script.js"))
+        self.assertNotIn("if (saved === '1') toggleDarkMode();", source("frontend/services/static/script.js"))
+
     def test_asset_versions(self):
         self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
@@ -241,10 +253,10 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", DASHBOARD)
         self.assertIn("system_control.js?v=20261014-hide-pi-service-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn("navigation_mode_control.js?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn('selected_ui.js?v=20261014-finish-ui-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-map-control-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-map-control-v1', LOGIN)
+        self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
+        self.assertIn('selected_ui.js?v=20261014-stable-hydration-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-stable-hydration-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-stable-hydration-v1', LOGIN)
 
 
 if __name__ == "__main__":

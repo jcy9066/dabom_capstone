@@ -2173,3 +2173,22 @@ header {padding-top:6px;}
   box-sizing:border-box;height:23px!important;min-height:23px!important;
   padding:3px 6px!important;line-height:1.2!important;
 }
+
+/* Final controls are rendered once in HTML and adopted by their controllers. */
+body.dark-mode #darkToggle { background:var(--accent);border-color:var(--accent); }
+body.dark-mode #darkToggle .dark-toggle-slider { left:calc(100% - 19px); }
+.dashboard-ui-startup-error[hidden] { display:none!important; }
+.dashboard-ui-startup-error {
+  position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+  z-index:3000;display:flex;gap:12px;align-items:center;
+  padding:12px 14px;border:1px solid var(--danger-color);
+  border-radius:10px;background:var(--card-bg);color:var(--text-dark);
+  box-shadow:var(--shadow-lg);font-size:12px;
+}
+.dashboard-ui-startup-error button {
+  cursor:pointer;color:var(--accent);background:var(--card-bg2);
+  border:1px solid var(--border-color);padding:6px 10px;border-radius:7px;
+}
+@media(max-width:540px){
+  .dashboard-ui-startup-error{width:calc(100% - 32px);box-sizing:border-box;}
+}

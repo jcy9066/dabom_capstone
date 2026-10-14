@@ -13,9 +13,15 @@
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-map-control-v1">
+    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-stable-hydration-v1">
 </head>
 <body>
+    <script>
+        // Apply the persisted theme before any dashboard controls are painted.
+        try {
+            if (localStorage.getItem('darkMode') === '1') document.body.classList.add('dark-mode');
+        } catch (_) { /* Storage access is optional; use the light theme. */ }
+    </script>
 
     <!-- 사이드 메뉴 오버레이 -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
@@ -117,7 +123,15 @@
                     class="dashboard-model-control-mount"
                     data-dashboard-mount="model-pipeline-toggle"
                     aria-label="Model pipeline control"
-                ></div>
+                >
+                    <button type="button" class="dashboard-model-toggle unknown" aria-label="Model pipeline ON / OFF" aria-pressed="false" aria-busy="false" disabled>
+                        <span class="dashboard-model-toggle-label">MODEL</span>
+                        <span class="ui-toggle-side ui-toggle-side-off">OFF</span>
+                        <span class="dashboard-model-toggle-track" aria-hidden="true"><span class="dashboard-model-toggle-slider"></span></span>
+                        <span class="ui-toggle-side ui-toggle-side-on">ON</span>
+                        <span class="dashboard-model-toggle-state">--</span>
+                    </button>
+                </div>
             </div>
 
             <div class="screen-content" id="video-wrapper">
@@ -195,7 +209,13 @@
                                                 class="viewer-navigation-mode-controls"
                                                 data-dashboard-mount="navigation-viewer-mode-controls"
                                                 aria-label="Navigation mode"
-                                            ></div>
+                                            >
+                                                <button type="button" class="navigation-mode-toggle unknown" aria-label="Navigation mode 선택" aria-busy="false" disabled>
+                                                    <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Mapping</span>
+                                                    <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                                                    <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Driving</span>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div class="navigation-control-row">
                                             <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
@@ -494,6 +514,7 @@
                         data-dashboard-control="drive-mode"
                         type="button"
                         onclick="togglePatrolMode()"
+                        disabled aria-busy="false"
                     >
                         <span
                             id="label-auto"
@@ -522,14 +543,28 @@
                         class="dashboard-navigation-mode-controls"
                         data-dashboard-mount="navigation-mode-controls"
                         aria-label="Navigation mode"
-                    ></div>
+                    >
+                        <button type="button" class="navigation-mode-toggle unknown" aria-label="Navigation mode 선택" aria-busy="false" disabled>
+                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Mapping</span>
+                            <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Driving</span>
+                        </button>
+                    </div>
 
                     <div
                         id="dashboard-led-control-mount"
                         class="dashboard-led-control-mount"
                         data-dashboard-mount="dashboard-led-control"
                         aria-label="LED control"
-                    ></div>
+                    >
+                        <button type="button" class="dashboard-led-toggle" aria-label="LED ON / OFF" aria-pressed="false" aria-busy="false" disabled>
+                            <span class="dashboard-led-toggle-label">LED</span>
+                            <span class="ui-toggle-side ui-toggle-side-off active">OFF</span>
+                            <span class="dashboard-led-toggle-track" aria-hidden="true"><span class="dashboard-led-toggle-slider"></span></span>
+                            <span class="ui-toggle-side ui-toggle-side-on">ON</span>
+                            <span class="dashboard-led-toggle-state">OFF</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="split-btn-container dashboard-action-controls">
@@ -670,6 +705,10 @@
         </div>
     </div>
 
+    <div id="dashboardUiStartupError" class="dashboard-ui-startup-error" role="alert" hidden>
+        대시보드 UI 초기화에 실패했습니다.
+        <button type="button" onclick="window.location.reload()">다시 시도</button>
+    </div>
     <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/navigation/saved_map_modal.js?v=20261014-custom-list-v1"></script>
     <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v16"></script>
@@ -679,11 +718,11 @@
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/led_toggle.js?v=20261014-initial-off-v1"></script>
-    <script src="/components/controls/model_pipeline_toggle.js?v=20261014-enterprise-ui-v1"></script>
+    <script src="/components/controls/led_toggle.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/controls/model_pipeline_toggle.js?v=20261014-stable-hydration-v1"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20261013-selected-ui-v3"></script>
-    <script src="/components/controls/drive_mode_control.js?v=20261014-enterprise-ui-v1"></script>
-    <script src="/components/controls/navigation_mode_control.js?v=20261014-ui-polish-v1"></script>
+    <script src="/components/controls/drive_mode_control.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/controls/navigation_mode_control.js?v=20261014-stable-hydration-v1"></script>
     <script src="/components/gallery/image_detail.js?v=20261014-compact-ui-v2"></script>
     <script src="/components/current_situation/current_situation.js?v=20261014-finish-ui-v2"></script>
     <script type="importmap">
@@ -695,11 +734,32 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
-    <script src="static/script.js?v=20261014-enterprise-ui-v1"></script>
+    <script src="static/script.js?v=20261014-stable-hydration-v1"></script>
     <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
-    <script src="static/selected_ui.js?v=20261014-finish-ui-v2"></script>
+    <script src="static/selected_ui.js?v=20261014-stable-hydration-v1"></script>
+    <script>
+        window.addEventListener('load', () => {
+            const ready = [
+                'dashboard-mode-controls-mount',
+                'dashboard-navigation-mode-controls-mount',
+                'navigation-viewer-mode-controls-mount',
+                'dashboard-led-control-mount',
+                'model-pipeline-toggle-mount',
+            ].every(id => {
+                const mount = document.getElementById(id);
+                return mount && (
+                    mount._dabomDriveModeController ||
+                    mount._dabomNavigationModeController ||
+                    mount._dabomLedToggleController ||
+                    mount._dabomModelPipelineToggleController
+                );
+            });
+            document.body.dataset.dashboardUiReady = String(Boolean(ready));
+            if (!ready) document.getElementById('dashboardUiStartupError').hidden = false;
+        }, { once: true });
+    </script>
 </body>
 </html>

@@ -14,35 +14,47 @@
         }
 
         const document = root.ownerDocument;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'dashboard-model-toggle';
-        button.setAttribute('aria-label', 'Model pipeline ON / OFF');
+        // Preserve the initially rendered UI; attach behavior without DOM swap.
+        let button = root.querySelector('.dashboard-model-toggle');
+        let label = button?.querySelector('.dashboard-model-toggle-label');
+        let track = button?.querySelector('.dashboard-model-toggle-track');
+        let slider = track?.querySelector('.dashboard-model-toggle-slider');
+        let stateLabel = button?.querySelector('.dashboard-model-toggle-state');
+        let offLabel = button?.querySelector('.ui-toggle-side-off');
+        let onLabel = button?.querySelector('.ui-toggle-side-on');
+        if (!button || !label || !track || !slider || !stateLabel || !offLabel || !onLabel) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'dashboard-model-toggle';
+            button.setAttribute('aria-label', 'Model pipeline ON / OFF');
 
-        const label = document.createElement('span');
-        label.className = 'dashboard-model-toggle-label';
-        label.textContent = 'MODEL';
+            label = document.createElement('span');
+            label.className = 'dashboard-model-toggle-label';
+            label.textContent = 'MODEL';
 
-        const track = document.createElement('span');
-        track.className = 'dashboard-model-toggle-track';
-        track.setAttribute('aria-hidden', 'true');
+            track = document.createElement('span');
+            track.className = 'dashboard-model-toggle-track';
+            track.setAttribute('aria-hidden', 'true');
 
-        const slider = document.createElement('span');
-        slider.className = 'dashboard-model-toggle-slider';
-        track.append(slider);
+            slider = document.createElement('span');
+            slider.className = 'dashboard-model-toggle-slider';
+            track.append(slider);
 
-        const stateLabel = document.createElement('span');
-        stateLabel.className = 'dashboard-model-toggle-state';
-        stateLabel.textContent = '--';
+            stateLabel = document.createElement('span');
+            stateLabel.className = 'dashboard-model-toggle-state';
+            stateLabel.textContent = '--';
 
-        const offLabel = document.createElement('span');
-        offLabel.className = 'ui-toggle-side ui-toggle-side-off';
-        offLabel.textContent = 'OFF';
-        const onLabel = document.createElement('span');
-        onLabel.className = 'ui-toggle-side ui-toggle-side-on';
-        onLabel.textContent = 'ON';
-        button.append(label, offLabel, track, onLabel, stateLabel);
-        root.replaceChildren(button);
+            offLabel = document.createElement('span');
+            offLabel.className = 'ui-toggle-side ui-toggle-side-off';
+            offLabel.textContent = 'OFF';
+            onLabel = document.createElement('span');
+            onLabel.className = 'ui-toggle-side ui-toggle-side-on';
+            onLabel.textContent = 'ON';
+            button.append(label, offLabel, track, onLabel, stateLabel);
+            root.replaceChildren(button);
+
+
+        }
 
         const controller = {
             root,
