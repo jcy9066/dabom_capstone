@@ -642,3 +642,52 @@
     left: calc(50% - 7px);
     background: #64748b;
 }
+
+/* Shared circular drawer handle (status pill + vertically rotated Server status).
+   Component state is managed by drawer_toggle.js. */
+.dashboard-drawer-handle-pill {
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--card-bg);
+    color: var(--text-muted);
+    box-shadow: 0 3px 12px rgba(15,23,42,.10);
+    cursor: pointer;
+    --drawer-icon-open-angle: 0deg;
+    --drawer-icon-closed-angle: 180deg;
+    transition: color .18s ease, background-color .18s ease, box-shadow .18s ease;
+}
+.dashboard-drawer-handle-pill:hover,
+.dashboard-drawer-handle-pill:focus-visible {
+    background: var(--card-bg2);
+    color: var(--accent);
+    box-shadow: 0 4px 13px rgba(15,23,42,.15);
+}
+.dashboard-drawer-handle-pill:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.dashboard-drawer-handle-pill-icon {
+    display: block;
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    transform: rotate(var(--drawer-icon-open-angle));
+    transition: transform .2s ease;
+}
+.dashboard-drawer-handle-pill[aria-expanded="false"] .dashboard-drawer-handle-pill-icon {
+    transform: rotate(var(--drawer-icon-closed-angle));
+}
+.dashboard-drawer-handle-pill--vertical {
+    --drawer-icon-open-angle: 90deg;
+    --drawer-icon-closed-angle: 270deg;
+}
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-drawer-handle-pill,
+    .dashboard-drawer-handle-pill-icon { transition: none; }
+}

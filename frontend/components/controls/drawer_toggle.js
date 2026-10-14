@@ -9,15 +9,30 @@
         return id ? global.document.getElementById(id) : null;
     }
 
+    function isOpen(button, target) {
+        const collapseClass = button?.dataset?.drawerCollapseClass;
+        return collapseClass
+            ? !target.classList.contains(collapseClass)
+            : target.dataset.open !== 'false';
+    }
+
     function setOpen(button, open, options = {}) {
         const target = resolveTarget(button);
         if (!button || !target) return false;
 
-        const isOpen = Boolean(open);
-        target.dataset.open = isOpen ? 'true' : 'false';
-        button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        const expanded = Boolean(open);
+        const collapseClass = button.dataset.drawerCollapseClass;
+        if (collapseClass) {
+            target.classList.toggle(collapseClass, !expanded);
+            const panelId = button.dataset.drawerPanel;
+            const panel = panelId && global.document.getElementById(panelId);
+            panel?.setAttribute('aria-hidden', String(!expanded));
+        } else {
+            target.dataset.open = expanded ? 'true' : 'false';
+        }
+        button.setAttribute('aria-expanded', String(expanded));
 
-        const label = isOpen
+        const label = expanded
             ? (button.dataset.drawerOpenLabel || '패널 접기')
             : (button.dataset.drawerClosedLabel || '패널 펼치기');
 
@@ -29,12 +44,12 @@
                 detail: {
                     targetId: target.id,
                     buttonId: button.id || null,
-                    open: isOpen,
+                    open: expanded,
                 },
             }));
         }
 
-        return isOpen;
+        return expanded;
     }
 
     function enhance(button) {
@@ -43,12 +58,12 @@
         if (!target) return button;
 
         button.dataset.drawerToggleReady = 'true';
-        const initialOpen = target.dataset.open !== 'false';
+        const initialOpen = isOpen(button, target);
         setOpen(button, initialOpen, { emit: false });
 
         button.addEventListener('click', event => {
             event.preventDefault();
-            const open = target.dataset.open !== 'true';
+            const open = !isOpen(button, target);
             setOpen(button, open);
         });
 

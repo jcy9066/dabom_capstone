@@ -244,20 +244,6 @@
     update();
   }
 
-  /* Collapse only the visible Server status card. All status polling continues. */
-  function installServerStatusDrawer() {
-    const card=$('#serverStateCard');
-    const toggle=$('#serverStateDrawerToggle');
-    const grid=$('#serverStateGrid');
-    if (!card || !toggle || !grid) return;
-    toggle.addEventListener('click', () => {
-      const collapsed=card.classList.toggle('is-collapsed');
-      toggle.setAttribute('aria-expanded', String(!collapsed));
-      toggle.setAttribute('aria-label', collapsed ? 'Server status 펼치기' : 'Server status 접기');
-      grid.setAttribute('aria-hidden', String(collapsed));
-    });
-  }
-
   function installModalEscape() {
     document.addEventListener('keydown',event => {
       if (event.key !== 'Escape' || $('.ui-confirm-overlay')) return;
@@ -278,7 +264,6 @@
     installExistingLoaders();
     installConnectionVisuals();
     installNullPlaceholders();
-    installServerStatusDrawer();
     installModalEscape();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',boot,{once:true});

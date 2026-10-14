@@ -78,7 +78,42 @@ def test_elastic_scroll_assets_on_dashboard_and_login():
     for template in ("index.html", "login.html"):
         source = (ROOT / "frontend/templates" / template).read_text(encoding="utf-8")
         assert '/static/elastic_scroll.css?v=20261014-elastic-v1' in source
-        assert '/static/elastic_scroll.js?v=20261014-elastic-v1' in source
+        assert '/static/elastic_scroll.js?v=20261014-boundary-v2' in source
     css = (ROOT / "frontend/services/static/elastic_scroll.css").read_text(encoding="utf-8")
     assert "250ms cubic-bezier" in css
     assert "prefers-reduced-motion" in css
+
+def test_fixed_dashboard_without_native_scroll_still_bounces():
+    # Main dashboard uses body overflow:hidden; scrollHeight == clientHeight.
+    # A gesture above its right panel must animate without moving the page.
+    source = r"""
+const assert=require('node:assert/strict'),fs=require('fs'),vm=require('vm');
+const listeners={};
+const cls=()=>{const x=new Set();return {add:n=>x.add(n),remove:n=>x.delete(n),contains:n=>x.has(n)}};
+const style=()=>{const x=new Map();return {setProperty:(k,v)=>x.set(k,v),
+    removeProperty:k=>x.delete(k),getPropertyValue:k=>x.get(k)||''}};
+const html={nodeType:1,scrollHeight:800,clientHeight:800,scrollTop:0};
+const body={nodeType:1,scrollHeight:800,clientHeight:800,scrollTop:0,parentElement:html};
+const panel={nodeType:1,parentElement:body,scrollHeight:300,clientHeight:300,
+    scrollTop:0,classList:cls(),style:style(),isConnected:true};
+const item={nodeType:1,parentElement:panel,closest:q=>
+    q.includes('.right-panel')?panel:null};
+const doc={scrollingElement:html,documentElement:html,body,hidden:false,
+    addEventListener:(name,fn)=>{listeners[name]=fn;}};
+const timers=new Map();let next=0;
+const win={document:doc,innerHeight:800,navigator:{userAgent:'Desktop'},
+    CSS:{supports:()=>true},getComputedStyle:()=>({overflowY:'visible',overscrollBehaviorY:''}),
+    matchMedia:()=>({matches:false,addEventListener(){}}),
+    setTimeout:fn=>{const n=++next;timers.set(n,fn);return n},
+    clearTimeout:n=>timers.delete(n),addEventListener(){}};
+vm.runInNewContext(fs.readFileSync('frontend/services/static/elastic_scroll.js','utf8'),{window:win,document:doc});
+let prevented=false;
+listeners.wheel({target:item,deltaY:70,deltaX:0,deltaMode:0,cancelable:true,
+    preventDefault(){prevented=true;}});
+assert(prevented,'non-scrollable dashboard area must visually bounce');
+assert(panel.classList.contains('elastic-scroll-active'));
+assert(Number.parseFloat(panel.style.getPropertyValue('--elastic-scroll-offset'))<0);
+assert.equal(html.scrollTop,0,'native page scroll stays unchanged');
+"""
+    result = subprocess.run(["node","-e",source], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout

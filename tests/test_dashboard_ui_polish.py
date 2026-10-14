@@ -46,8 +46,9 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('id="serverStateDrawerToggle"', DASHBOARD)
         self.assertIn('id="serverStateGrid"', DASHBOARD)
         self.assertIn('aria-expanded="true"', DASHBOARD)
-        self.assertIn('function installServerStatusDrawer()', VISUAL)
-        self.assertIn('card.classList.toggle(\'is-collapsed\')', VISUAL)
+        self.assertIn('data-drawer-collapse-class="is-collapsed"', DASHBOARD)
+        self.assertIn("target.classList.toggle(collapseClass, !expanded)", source("frontend/components/controls/drawer_toggle.js"))
+        self.assertNotIn('function installServerStatusDrawer()', VISUAL)
 
     def test_status_values_are_css_only(self):
         self.assertIn('#pi-connection-status::first-letter', CSS)
@@ -159,19 +160,16 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('.server-state-card .card-title { text-transform: none; }', CSS)
         self.assertIn('  left: 50%;', CSS)
         self.assertIn('  transform: translateX(-50%);', CSS)
-        self.assertIn('  border: 0;', CSS)
-        self.assertIn('  background: transparent;', CSS)
-        self.assertIn('  opacity: 0;', CSS)
+        self.assertIn('.dashboard-drawer-handle-pill', source("frontend/components/controls/controls.css"))
+        self.assertIn('  opacity: 1;', CSS)
         self.assertIn('.server-state-card:hover .server-state-drawer-toggle', CSS)
         self.assertIn('.server-state-card:focus-within .server-state-drawer-toggle', CSS)
         self.assertIn('@media (hover: none) { .server-state-drawer-toggle { opacity: 1; } }', CSS)
         self.assertIn('.server-state-card.is-collapsed .server-state-header .card-title,', CSS)
         self.assertIn('.server-state-card.is-collapsed .server-state-updated', CSS)
         self.assertIn('aria-expanded="true"', DASHBOARD)
-        self.assertNotIn('title="Server status 접기"', DASHBOARD)
-        self.assertNotIn('toggle.title=', VISUAL)
-        self.assertIn("card.classList.toggle('is-collapsed')", VISUAL)
-        self.assertIn("grid.setAttribute('aria-hidden', String(collapsed));", VISUAL)
+        self.assertIn('title="Server status 접기"', DASHBOARD)
+        self.assertIn("panel?.setAttribute('aria-hidden', String(!expanded))", source("frontend/components/controls/drawer_toggle.js"))
 
     def test_record_toolbar_click_focus_has_no_indicator(self):
         # Keep click/hover animation, remove the post-click ring and underline.
@@ -222,8 +220,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("saved-map-location-option", CSS)
         self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", CSS)
         self.assertIn("max-height:min(40vh,360px)!important", CSS)
-        self.assertIn(".server-state-drawer-toggle > span { display: block; transform: rotate(270deg);", CSS)
-        self.assertIn(".server-state-card.is-collapsed .server-state-drawer-toggle > span { transform: rotate(90deg); }", CSS)
+        self.assertIn("dashboard-drawer-handle-pill--vertical", DASHBOARD)
+        self.assertIn("data-drawer-target=\"serverStateCard\"", DASHBOARD)
         self.assertIn("border:0!important;border-radius:0!important;", CSS)
         led_source = source("frontend/components/controls/led_toggle.js")
         self.assertIn("enabled: false,", led_source)
@@ -243,16 +241,22 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("syncDarkModeSwitch();", source("frontend/services/static/script.js"))
         self.assertNotIn("if (saved === '1') toggleDarkMode();", source("frontend/services/static/script.js"))
 
-    def test_server_chevrons_and_viewer_toggle_size(self):
-        self.assertIn('id="serverStateDrawerToggle"', DASHBOARD)
-        self.assertIn('<span aria-hidden="true">&gt;</span>', DASHBOARD)
-        self.assertIn('transform: rotate(270deg);', CSS)
-        self.assertIn('.server-state-card.is-collapsed .server-state-drawer-toggle > span { transform: rotate(90deg); }', CSS)
-        self.assertNotIn('.server-state-drawer-toggle > span {transform:rotate(90deg);}', CSS)
-        self.assertIn('gap:2.1px!important;height:16.1px!important;min-height:16.1px!important;', CSS)
-        self.assertIn('font:700 6.3px/1.2 var(--mono)!important;', CSS)
-        self.assertIn('width:25.2px!important;height:13.3px!important;flex-basis:25.2px!important;', CSS)
-        self.assertIn('width:9.1px!important;height:9.1px!important;top:1.4px!important;left:1.4px!important;', CSS)
+    def test_shared_drawer_and_real_viewer_switch_dimensions(self):
+        controls = source("frontend/components/controls/controls.css")
+        drawer = source("frontend/components/controls/drawer_toggle.js")
+        self.assertEqual(DASHBOARD.count('data-drawer-target="serverStateCard"'), 1)
+        self.assertEqual(DASHBOARD.count('dashboard-drawer-handle-pill-icon'), 2)
+        self.assertIn('--drawer-icon-open-angle: 90deg;', controls)
+        self.assertIn('--drawer-icon-closed-angle: 270deg;', controls)
+        self.assertIn('data-drawer-collapse-class="is-collapsed"', DASHBOARD)
+        self.assertIn('target.classList.toggle(collapseClass, !expanded)', drawer)
+        self.assertIn("panel?.setAttribute('aria-hidden', String(!expanded))", drawer)
+        self.assertNotIn("installServerStatusDrawer()", VISUAL)
+        self.assertIn('width:33.6px!important;height:18.2px!important;flex:0 0 33.6px!important;', CSS)
+        self.assertIn('width:12.6px!important;height:12.6px!important;top:2px!important;', CSS)
+        self.assertIn('font:700 9px/1.2 var(--mono)!important;', CSS)
+        self.assertIn('padding-top:3px!important;', CSS)
+        self.assertIn('padding-bottom:3px!important;', CSS)
 
     def test_filter_bar_buttons_share_the_normal_control_radius(self):
         # Filter controls use the same 8px token as ordinary buttons.
@@ -277,9 +281,9 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("system_control.js?v=20261014-hide-pi-service-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
-        self.assertIn('selected_ui.js?v=20261014-stable-hydration-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-filter-radius-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-filter-radius-v1', LOGIN)
+        self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-drawer-overscroll-v2', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261014-drawer-overscroll-v2', LOGIN)
 
 
 if __name__ == "__main__":

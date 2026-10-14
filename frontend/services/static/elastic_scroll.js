@@ -22,6 +22,7 @@
     const preference = global.matchMedia?.('(prefers-reduced-motion: reduce)');
     let active = null;
     let gesture = null;
+    const returnTimers = new WeakMap();
 
     const reduced = () => Boolean(preference?.matches);
     function ignored(target) {
@@ -64,9 +65,17 @@
         return direction < 0 ? item.position <= EPS : item.position >= item.max - EPS;
     }
 
+    function visualBoundary(target) {
+        // The desktop dashboard fills 100vh and has body overflow:hidden.
+        // Its non-scrollable panels still need an observable elastic response.
+        // Do not move the viewer itself or an unrelated dialog behind a modal.
+        if (nativePageBounce) return null;
+        return target?.closest?.('.modal-body, .sidebar-body, .signup-dialog, .right-panel, .dashboard-container') || null;
+    }
+
     function pickBoundary(target, direction) {
         const chain = scrollChain(target);
-        if (!chain.length) return null;
+        if (!chain.length) return visualBoundary(target);
         for (const item of chain) {
             if (!atEdge(item, direction)) return null;
             if (item.contain) return item.element;
@@ -81,12 +90,19 @@
         if (entry) { entry.idle = null; entry.reset = null; }
     }
 
+    function cancelReturnTimer(element) {
+        const timer = returnTimers.get(element);
+        if (timer != null) global.clearTimeout(timer);
+        returnTimers.delete(element);
+    }
+
     function release(immediate = false) {
         if (!active) return;
         const entry = active;
         active = null;
         clearEntryTimers(entry);
         const element = entry.element;
+        cancelReturnTimer(element);
         element.classList.remove('elastic-scroll-active');
         element.style.removeProperty('--elastic-scroll-offset');
         if (immediate || reduced() || !element.isConnected) {
@@ -94,12 +110,17 @@
             return;
         }
         element.classList.add('elastic-scroll-returning');
-        global.setTimeout(() => element.classList.remove('elastic-scroll-returning'), RETURN_MS);
+        const timer = global.setTimeout(() => {
+            element.classList.remove('elastic-scroll-returning');
+            returnTimers.delete(element);
+        }, RETURN_MS);
+        returnTimers.set(element, timer);
     }
 
     function stretch(element, change, kind) {
         if (active?.element !== element) release(true);
         if (!active) {
+            cancelReturnTimer(element);
             element.classList.remove('elastic-scroll-returning');
             active = { element, distance: 0, idle: null, reset: null };
         }

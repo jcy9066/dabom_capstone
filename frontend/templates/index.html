@@ -12,8 +12,8 @@
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261014-ux-refine-v17">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-filter-radius-v1">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-shared-drawer-v2">
+    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-drawer-overscroll-v2">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261014-action-v1">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-elastic-v1">
 </head>
@@ -88,11 +88,11 @@
             Mode:
             <span class="state-value state-unknown" id="robot-mode-status">UNKNOWN</span>
         </span>        </div>
-        <button type="button" class="system-status-drawer-handle"
+        <button type="button" class="system-status-drawer-handle dashboard-drawer-handle-pill"
             id="topSystemStatusToggle" data-drawer-toggle data-drawer-target="topSystemStatusBar"
             data-drawer-open-label="시스템 상태 접기" data-drawer-closed-label="시스템 상태 펼치기"
             aria-controls="topSystemStatusBar" aria-expanded="true"
-            aria-label="시스템 상태 접기"><span aria-hidden="true">❮</span></button>
+            aria-label="시스템 상태 접기"><span class="dashboard-drawer-handle-pill-icon" aria-hidden="true">❮</span></button>
     </div>
 
     <header>
@@ -447,7 +447,13 @@
                     <h2 class="card-title">Server status</h2>
                     <div class="server-state-heading-actions">
                         <span class="server-state-updated" id="server-state-updated">불러오는 중</span>
-                        <button type="button" id="serverStateDrawerToggle" class="server-state-drawer-toggle" aria-controls="serverStateGrid" aria-expanded="true" aria-label="Server status 접기"><span aria-hidden="true">&gt;</span></button>
+                        <button type="button" id="serverStateDrawerToggle"
+                            class="server-state-drawer-toggle dashboard-drawer-handle-pill dashboard-drawer-handle-pill--vertical"
+                            data-drawer-toggle data-drawer-target="serverStateCard"
+                            data-drawer-collapse-class="is-collapsed" data-drawer-panel="serverStateGrid"
+                            data-drawer-open-label="Server status 접기" data-drawer-closed-label="Server status 펼치기"
+                            aria-controls="serverStateGrid" aria-expanded="true" aria-label="Server status 접기"
+                            title="Server status 접기"><span class="dashboard-drawer-handle-pill-icon" aria-hidden="true">❮</span></button>
                     </div>
                 </div>
                 <div class="server-state-grid" id="serverStateGrid">
@@ -730,7 +736,7 @@
     <script src="/components/records/pagination.js?v=20261014-numbered-pages-v1"></script>
     <script src="/components/records/record_modal.js?v=20261014-detail-overlay-v1"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drawer_toggle.js?v=20261014-shared-drawer-v2"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/led_toggle.js?v=20261014-stable-hydration-v1"></script>
     <script src="/components/controls/model_pipeline_toggle.js?v=20261014-stable-hydration-v1"></script>
@@ -753,9 +759,9 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
-    <script src="static/selected_ui.js?v=20261014-stable-hydration-v1"></script>
+    <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261014-action-v1"></script>
-    <script src="/static/elastic_scroll.js?v=20261014-elastic-v1"></script>
+    <script src="/static/elastic_scroll.js?v=20261014-boundary-v2"></script>
     <script>
         window.addEventListener('load', () => {
             const ready = [
