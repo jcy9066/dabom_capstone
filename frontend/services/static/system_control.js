@@ -5,6 +5,7 @@
     const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 500;
     const DASHBOARD_CLIENT_STORAGE_KEY = 'dabom.dashboardClientId';
     const AUTOMATIC_ESTOP_REASONS = new Set(['window_blur', 'page_hidden']);
+    const SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge']);
 
     const state = {
         status: null,
@@ -90,11 +91,14 @@
         const target = document.getElementById(targetId);
         if (!target) return;
         target.replaceChildren();
-        if (!Array.isArray(components) || !components.length) {
+        const visibleComponents = Array.isArray(components)
+            ? components.filter(component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id))
+            : [];
+        if (!visibleComponents.length) {
             target.append(make('div', 'system-control-message', text.noStatus));
             return;
         }
-        for (const component of components) {
+        for (const component of visibleComponents) {
             const key = `${group}:${component.id}`;
             const pending = state.pending.has(key);
             const unreachable = component.control_available === false || component.state === 'unreachable';
@@ -299,16 +303,11 @@
         if (!state.status) return [text.processUnavailable];
         const piComponents = Array.isArray(state.status.pi) ? state.status.pi : [];
         const gpuComponents = Array.isArray(state.status.gpu) ? state.status.gpu : [];
-        const components = [...piComponents, ...gpuComponents];
+        const components = [...piComponents, ...gpuComponents].filter(
+            component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id),
+        );
         if (!components.length) return [text.processUnavailable];
-        const normalStartOrder = components.filter(component => component.id !== 'map_bridge');
-        const items = normalStartOrder.map(component => component.label || component.id).filter(Boolean);
-        const mapBridge = components.find(component => component.id === 'map_bridge');
-        if (mapBridge) {
-            const label = mapBridge.label || mapBridge.id;
-            items.push(`\ucc38\uace0: SLAM Mapping\uc740 ${label}\ub97c \ud568\uaed8 \uc2dc\uc791. ${label}\ub294 \ubcf5\uad6c\u00b7\ub3c5\ub9bd \uc2e4\ud589 \uc2dc\uc5d0\ub9cc \uc0ac\uc6a9`);
-        }
-        return items;
+        return components.map(component => component.label || component.id).filter(Boolean);
     }
 
     function renderGuide() {
