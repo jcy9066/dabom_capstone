@@ -2011,10 +2011,10 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   transform:none!important;text-decoration:none!important;
 }
 
-/* Keep the dashboard flush with the viewport top; preserve login layout. */
+/* Top inset is half of the original 6px header bottom padding. */
 body:not(.login-page) { padding-top: 0; }
-header { padding-top: 0; }
-#topSystemStatusBar { top: 0; }
+header { padding-top: 3px; }
+#topSystemStatusBar { top: 3px; }
 
 /* Place picker typography matches the 11px '현재 장소' status row. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
@@ -2150,6 +2150,54 @@ header { padding-top: 0; }
 .lidar-control-drawer .lidar-view-controls button[data-control-button]{
   box-sizing:border-box;height:23px!important;min-height:23px!important;
   padding:3px 6px!important;line-height:1.2!important;
+}
+
+
+/* Saved map geometry: the left list fills down to its action row with equal
+   vertical insets; the right-side location editor ends after its contents. */
+@media (min-width: 801px) {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
+    height:100%;min-height:0;padding-top:10px;padding-bottom:10px;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+    flex:1 1 0!important;min-height:0;max-height:none!important;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column {
+    height:max-content!important;min-height:0;align-self:start;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-panel {
+    flex:0 0 auto;min-height:0;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
+    margin-top:8px;padding-top:5px;
+  }
+}
+
+/* A single compact row for the radio, map name, timestamp and resolution.
+   Truncate long text rather than force a second row or resize the list. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option {
+  align-items:center;padding-top:8px;padding-bottom:8px;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option > input {
+  margin-top:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option > div {
+  display:flex;flex-direction:row;flex-wrap:nowrap;
+  align-items:center;gap:12px;min-width:0;overflow:hidden;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-name-row {
+  display:flex;flex:0 1 auto;min-width:0;align-items:center;gap:5px;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-name {
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-details {
+  flex:1 1 auto;min-width:0;margin-top:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-location-meta {
+  flex:0 1 auto;min-width:0;margin-top:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 
 /* Final controls are rendered once in HTML and adopted by their controllers. */

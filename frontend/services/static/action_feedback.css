@@ -7,9 +7,17 @@
 }
 .dashboard-action-controls .action-beep {
     --action-ripple-color: color-mix(in srgb, var(--accent) 42%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border-color));
 }
 .dashboard-action-controls .action-warning {
     --action-ripple-color: color-mix(in srgb, var(--warning-color) 42%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warning-color) 40%, var(--border-color));
+}
+.dashboard-action-controls .action-beep:hover:not(:disabled) {
+    border-color: var(--accent);
+}
+.dashboard-action-controls .action-warning:hover:not(:disabled) {
+    border-color: var(--warning-color);
 }
 .dashboard-action-controls :is(.action-beep,.action-warning)::after {
     content: '';

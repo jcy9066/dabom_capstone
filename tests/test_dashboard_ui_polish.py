@@ -288,6 +288,20 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("element.style.setProperty('--elastic-scroll-offset', '0px')", elastic)
         self.assertIn(".elastic-scroll-active.elastic-scroll-returning:not(body)", return_css)
 
+    def test_october_15_dashboard_compact_actions_and_location_layout(self):
+        feedback = source("frontend/services/static/action_feedback.css")
+        self.assertIn("header { padding-top: 3px; }", CSS)
+        self.assertIn("#topSystemStatusBar { top: 3px; }", CSS)
+        self.assertIn("                        Beep", DASHBOARD)
+        self.assertIn("border: 1px solid color-mix(in srgb, var(--accent) 40%", feedback)
+        self.assertIn("border: 1px solid color-mix(in srgb, var(--warning-color) 40%", feedback)
+        self.assertIn('height:max-content!important;min-height:0;align-self:start;', CSS)
+        self.assertIn('flex:1 1 0!important;min-height:0;max-height:none!important;', CSS)
+        self.assertIn("display:flex;flex-direction:row;flex-wrap:nowrap;", CSS)
+        self.assertNotIn("panel.append(create('div', 'saved-map-section-title', labels.locationTitle));", MAP)
+        self.assertIn("const newNameInput = create('input', 'saved-map-location-new');", MAP)
+        self.assertIn("inputs['saved-map-location-name'].value = draftName;", MAP)
+
     def test_filter_bar_buttons_share_the_normal_control_radius(self):
         # Filter controls use the same 8px token as ordinary buttons.
         self.assertIn("--ui-radius-control: 8px;", CSS)
@@ -301,7 +315,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("border-radius: var(--ui-radius-control);", CSS)
 
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261014-custom-list-v1", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261015-location-layout-v1", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
@@ -312,8 +326,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-map-expand-v4', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261014-map-expand-v4', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-map-layout-v1', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-map-layout-v1', LOGIN)
 
 
 if __name__ == "__main__":

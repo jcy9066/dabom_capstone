@@ -32,7 +32,6 @@
         renameSuccess: '\uc9c0\ub3c4 \uc774\ub984\uc744 \ubcc0\uacbd\ud588\uc2b5\ub2c8\ub2e4.',
         selectRequired: '\uc800\uc7a5 \uc9c0\ub3c4\ub97c \uc9c1\uc811 \uc120\ud0dd\ud558\uc138\uc694.',
         mapPrefix: 'MAP: ',
-        locationTitle: '장소 / GPS',
         currentLocation: '현재 장소',
         gpsStatus: 'GPS',
         securityStatus: '보안 구역',
@@ -187,7 +186,6 @@
 
     function renderLocationPanel(status = locationFallback()) {
         const panel = create('section', 'saved-map-location-panel');
-        panel.append(create('div', 'saved-map-section-title', labels.locationTitle));
 
         const gps = status?.gps || { fix: false };
         const liveName = gps.matched_location_name;
