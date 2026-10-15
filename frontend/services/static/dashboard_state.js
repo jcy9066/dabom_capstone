@@ -384,6 +384,13 @@
         applyControlState(event.detail);
     });
 
+    document.addEventListener('dabom:navigation-control-unavailable', () => {
+        setPiState(null, false);
+        setRobotMode(null);
+        setText('operation-mode-status', 'UNKNOWN');
+        setText('navigation-state-status', 'UNKNOWN');
+    });
+
     document.addEventListener('dabom:alerts-cleared', event => {
         const clearedAt = Number(event.detail?.clearedAt);
         alertClearCutoffMs = Number.isFinite(clearedAt) ? clearedAt : Date.now();
