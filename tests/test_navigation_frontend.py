@@ -272,7 +272,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn('id="lidarMapSaveBtn"', template)
         self.assertIn("saved-map-save-current", self.map_control)
         self.assertIn("create('button', 'mb-btn saved-map-save-current', labels.saveCurrent)", self.map_control)
-        self.assertNotIn("create('button', 'mb-btn', labels.deleteLocation)", self.map_control)
+        self.assertIn("create('button', 'mb-btn saved-map-delete-location', labels.deleteLocation)", self.map_control)
         self.assertIn("saved-map-start-mapping", self.map_control)
         self.assertIn("saved-map-clear-current", self.map_control)
         self.assertIn("request('MAPPING', { restart: true })", self.map_control)
@@ -372,7 +372,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "map.location",
             "gps.matched_location_name",
             "last_location_name",
-            "components.controls?.controlButton?.enhance?.(button)",
+            "create('button', 'mb-btn saved-map-use-current', labels.useCurrentGps)",
+            "create('button', 'mb-btn saved-map-save-location', labels.saveLocation)",
+            "create('button', 'mb-btn saved-map-delete-location', labels.deleteLocation)",
         ):
             self.assertIn(contract, self.map_control)
         self.assertIn(".saved-map-location-panel", self.map_control_css)
