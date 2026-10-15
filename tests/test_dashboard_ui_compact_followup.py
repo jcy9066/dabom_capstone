@@ -46,6 +46,7 @@ class CompactUiContracts(unittest.TestCase):
 
     def test_map_buttons_use_shared_component(self):
         self.assertIn("create('button', 'mb-btn saved-map-start-mapping', labels.startMapping)", MAP)
+        self.assertIn("startMapping: '\\uc0c8 \\uc9c0\\ub3c4 \\uc0dd\\uc131'", MAP)
         self.assertIn("create('button', 'mb-btn saved-map-clear-current', labels.clearCurrentMap)", MAP)
         self.assertIn("startMappingFromModal(container, progress)", MAP)
         self.assertIn("loadSelectedMap(container, progress)", MAP)
@@ -226,7 +227,7 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", INDEX)
         self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        self.assertIn("saved_map_modal.js?v=20261015-bookmark-buttons-v4", INDEX)
+        self.assertIn("saved_map_modal.js?v=20261016-new-map-label-v5", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
