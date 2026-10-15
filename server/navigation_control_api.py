@@ -392,6 +392,13 @@ class NavigationControlApi:
             now = time.time()
             if not self._motion_allowed_locked(now):
                 return None
+            # No Nav2 auto-drive command is authorized once its Goal has
+            # FAILED, CANCELED or SUCCEEDED. Manual mode stays independent.
+            if (
+                self._robot_mode == "auto"
+                and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+            ):
+                return None
             if not self._connected:
                 return None
             if self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec:
