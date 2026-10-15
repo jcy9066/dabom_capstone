@@ -1,0 +1,11 @@
+<library path="segmented_rpp_controller">
+  <class
+    name="patrol_navigation_controller::SegmentedRPPController"
+    type="patrol_navigation_controller::SegmentedRPPController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      Forward/reverse RPP segments and collision-checked in-place lattice pivots.
+      The outer Nav2 RotationShimController retains final-goal yaw handling.
+    </description>
+  </class>
+</library>
