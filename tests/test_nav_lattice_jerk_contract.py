@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "navigation/ros/patrol_navigation/config"
 
 
+def test_lattice_asset_is_installed_with_python_nav_package():
+    setup_py = (ROOT / "navigation/ros/patrol_navigation/setup.py").read_text()
+    assert 'glob("config/*.json")' in setup_py
+    assert (CONFIG / "lattice_diff32.json").exists()
+
+
 def test_lattice_has_uniform_32_headings_and_diff_motion():
     lattice = json.loads((CONFIG / "lattice_diff32.json").read_text())
     meta = lattice["lattice_metadata"]
