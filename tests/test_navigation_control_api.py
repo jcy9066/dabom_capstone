@@ -360,6 +360,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with self.api._lock:
             self.api._state["navigation_state"] = "NAVIGATING"
         self.map_api.ros_control.state = "SUCCEEDED"
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        self.assertIsNotNone(pending["active_goal"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
         succeeded = self.api.state_response()
         self.assertEqual("SUCCEEDED", succeeded["navigation_state"])
         self.assertIsNone(succeeded["active_goal"])
@@ -712,7 +719,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         issue = await self.api.evaluate_watchdog(now=base + 5.1)
 
         self.assertIsNone(issue)
-        current = self.api.state_response(now=base + 5.1)
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
+        current = self.api.state_response()
         self.assertEqual("SUCCEEDED", current["navigation_state"])
         self.assertIsNone(current["active_goal"])
         self.assertFalse(current["emergency_stop"])
@@ -801,13 +814,57 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.map_api.ros_control.state = "SUCCEEDED"
 
-        issue = await self.api.evaluate_watchdog(now=base + 5.1)
-
-        self.assertIsNone(issue)
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
         self.map_api.ros_control.state = "NAVIGATING"
-        current = self.api.state_response(now=base + 5.1)
+        current = self.api.state_response()
         self.assertEqual("SUCCEEDED", current["navigation_state"])
         self.assertIsNone(current["active_goal"])
+
+    async def test_ros_success_never_reports_success_without_fresh_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.10
+        self.map_api.ros_control.state = "SUCCEEDED"
+
+        interim = self.api.state_response()
+        self.assertEqual("NAVIGATING", interim["navigation_state"])
+        self.assertIsNotNone(interim["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertFalse(result["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_ros_success_stop_delivery_failure_is_not_success(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original = self.api._send_robot_command
+
+        async def deny_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = deny_stop
+        self.map_api.ros_control.state = "SUCCEEDED"
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", result["last_error"])
+        self.assertTrue(result["active_goal"])
+        self.assertFalse(result["emergency_stop"])
 
     async def test_pi_loss_while_navigating_triggers_automatic_estop(self):
         await self.driving_ready()
@@ -1335,11 +1392,17 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.map_api.ros_control.cancel_navigation = completes_before_cancel
 
         result = await self.api.cancel_goal()
-
-        self.assertEqual("SUCCEEDED", result["navigation_state"])
-        self.assertIsNone(result["active_goal"])
-        self.assertEqual([], result["planned_path"])
+        self.assertEqual("NAVIGATING", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
         self.assertFalse(result["emergency_stop"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
+        complete = self.api.state_response()
+        self.assertEqual("SUCCEEDED", complete["navigation_state"])
+        self.assertIsNone(complete["active_goal"])
+        self.assertEqual([], complete["planned_path"])
 
     async def test_manual_takeover_does_not_retain_terminal_canceled_goal(self):
         await self.driving_ready()
