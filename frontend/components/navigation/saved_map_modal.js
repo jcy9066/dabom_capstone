@@ -361,7 +361,7 @@
         };
 
         const actions = create('div', 'saved-map-location-actions');
-        const useCurrent = create('button', 'mb-btn', labels.useCurrentGps);
+        const useCurrent = create('button', 'mb-btn saved-map-use-current', labels.useCurrentGps);
         useCurrent.type = 'button';
         useCurrent.dataset.requiresGps = 'true';
         useCurrent.disabled = gps.fix !== true;
@@ -374,7 +374,7 @@
             }
         });
 
-        const saveLocation = create('button', 'mb-btn', labels.saveLocation);
+        const saveLocation = create('button', 'mb-btn saved-map-save-location', labels.saveLocation);
         saveLocation.type = 'button';
         saveLocation.addEventListener('click', async () => {
             const name = inputs['saved-map-location-name'].value.trim();
@@ -414,7 +414,7 @@
             }
         });
 
-        const deleteButton = create('button', 'mb-btn', labels.deleteLocation);
+        const deleteButton = create('button', 'mb-btn saved-map-delete-location', labels.deleteLocation);
         deleteButton.type = 'button';
         deleteButton.disabled = true;
         deleteButton.addEventListener('click', async () => {
