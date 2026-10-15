@@ -1496,6 +1496,8 @@ class NavigationControlApi:
                     self._sensor_recovery is not recovery
                     or self._state["emergency_stop"]
                     or self._state["navigation_state"] != "RESUMING"
+                    or time.time() - recovery["started_at"] >= 5.0
+                    or self._watchdog_issue_locked(time.time()) is not None
                 )
                 if not interrupted:
                     self._sensor_recovery = None
@@ -1510,9 +1512,20 @@ class NavigationControlApi:
                     )
                     self._touch_locked()
             if interrupted:
-                # Cancellation or E-STOP may have won after NavigateToPose
-                # accepted its action. Never leave this late goal running.
+                # Cancellation, timeout or new sensor failure may have won
+                # after NavigateToPose accepted its action.
                 await asyncio.to_thread(self._ros.cancel_navigation)
+                with self._lock:
+                    if (
+                        self._sensor_recovery is recovery
+                        and not self._state["emergency_stop"]
+                        and self._state["navigation_state"] == "RESUMING"
+                    ):
+                        recovery["replanning"] = False
+                        recovery["stable_since"] = None
+                        self._state["navigation_state"] = "NAVIGATING"
+                        self._arm_pending_stop_locked()
+                        self._touch_locked()
 
     async def _deliver_terminal_stop(self) -> bool:
         """Best-effort physical STOP after Nav2 fails or cancels itself.
