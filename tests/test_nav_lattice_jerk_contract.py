@@ -42,6 +42,33 @@ def test_lattice_has_uniform_32_headings_and_diff_motion():
                    and p["trajectory_length"] > 0 for p in group)
 
 
+
+def test_lattice_primitives_start_and_finish_in_declared_heading_bins():
+    """Reject primitive data that loads but cannot produce a valid 32-bin path."""
+    payload = json.loads((CONFIG / "lattice_diff32.json").read_text())
+    headings = payload["lattice_metadata"]["heading_angles"]
+    for primitive in payload["primitives"]:
+        start, end = primitive["poses"][0], primitive["poses"][-1]
+        expected_start = headings[primitive["start_angle_index"]]
+        expected_end = headings[primitive["end_angle_index"]]
+        deviation_start = math.atan2(
+            math.sin(start[2] - expected_start),
+            math.cos(start[2] - expected_start),
+        )
+        deviation_end = math.atan2(
+            math.sin(end[2] - expected_end),
+            math.cos(end[2] - expected_end),
+        )
+        assert abs(deviation_start) < 1e-6
+        assert abs(deviation_end) < 1e-6
+        assert math.hypot(start[0], start[1]) < 1e-6
+        assert primitive["trajectory_length"] >= 0
+        if primitive["trajectory_length"] == 0:
+            assert all(math.hypot(x, y) < 1e-6
+                       for x, y, _ in primitive["poses"])
+        else:
+            assert math.hypot(end[0], end[1]) >= 0.05
+
 def test_chassis_footprint_matches_both_costmaps():
     params = yaml.safe_load((CONFIG / "nav2_params.yaml").read_text())
     for name in ("local_costmap", "global_costmap"):
