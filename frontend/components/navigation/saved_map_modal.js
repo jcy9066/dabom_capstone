@@ -10,7 +10,7 @@
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
         saveCurrent: '\ud604\uc7ac \uc9c0\ub3c4 \uc800\uc7a5',
-        startMapping: '\uc0c8\ub85c\uc6b4 mapping',
+        startMapping: '\uc0c8 \uc9c0\ub3c4 \uc0dd\uc131',
         clearCurrentMap: '\ud604\uc7ac \uc9c0\ub3c4 \uc81c\uac70',
         mappingStarting: 'Mapping \ubaa8\ub4dc\ub85c \uc804\ud658 \uc911...',
         mappingStarted: '\uc0c8 Mapping\uc744 \uc2dc\uc791\ud588\uc2b5\ub2c8\ub2e4.',
