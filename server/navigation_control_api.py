@@ -370,6 +370,8 @@ class NavigationControlApi:
             return False
         if self._sensor_recovery is not None:
             return False
+        if self._state["navigation_state"] == "REPLACING_GOAL":
+            return False
 
         if self._stop_commanded_at is None:
             return True
