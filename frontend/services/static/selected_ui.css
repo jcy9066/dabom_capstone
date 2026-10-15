@@ -236,23 +236,19 @@ body.login-page { background:var(--bg-color); }
 .signup-modal.open .signup-dialog { animation:ui-modal-enter .21s var(--ui-ease); }
 
 /* 14 — vinodjangid07 trash button: icon + hover emphasis without changing handlers. */
-button.gallery-delete-btn, .record-delete-actions button[data-action="delete"],
-.saved-map-modal button[data-control-button="danger"] {
+button.gallery-delete-btn, .record-delete-actions button[data-action="delete"] {
   position:relative;
   border-radius:var(--radius-sm); border:1px solid var(--danger-color); color:var(--danger-color);
   background:var(--card-bg); transition:transform .16s,background .2s,color .2s,box-shadow .2s;
 }
-button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before,
-.saved-map-modal button[data-control-button="danger"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
+button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
   background:currentColor; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6h18v2H3zm4 3h10l-1 12H8L7 9zm2-6h6l1 2H8l1-2z'/%3E%3C/svg%3E") center/contain no-repeat; }
-button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled),
-.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled) {
+button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled) {
   background:var(--danger-color); color:#fff; box-shadow:0 3px 8px var(--danger-glow,rgba(225,29,72,.2));
 }
 button.gallery-delete-btn:hover:not(:disabled) { color:#fff !important; border-color:var(--danger-color) !important; }
 button.gallery-delete-btn:hover:not(:disabled)::before,
-.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before,
-.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled)::before { opacity:.8; }
+.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before { opacity:.8; }
 button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
 
 /* 15 — Yaya12085 textbox only, not search nor unrelated form/card contents. */
@@ -1584,11 +1580,13 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   display:flex;align-items:center;gap:7px;padding:0;margin:0;
   flex-wrap:nowrap;min-width:0;
 }
-.saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions .dashboard-control-button{
-  min-width:0!important;width:auto!important;max-width:none;
-  flex:0 1 auto!important;margin:0!important;
+/* Bookmark buttons share the record toolbar's visual class; only their flex geometry differs. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn {
+  flex:0 1 auto;min-width:0;margin:0;
 }
-
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:disabled {
+  background:var(--card-bg2);cursor:not-allowed;opacity:.55;
+}
 
 @media(max-width:1150px){
  .saved-map-primary-column .saved-map-primary-actions{flex-wrap:wrap;row-gap:7px;}
