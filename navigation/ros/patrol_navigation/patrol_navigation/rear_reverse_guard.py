@@ -106,6 +106,17 @@ class RearReverseGuard:
                     self._odom_valid = False
                 elif projected < 0.0:
                     self._blind_distance_m += -projected
+        # Recover from a lost odometry interval only with both continuous
+        # fresh odometry and complete rear observation. Never re-arm a blind
+        # segment merely because an odometry stream started publishing again.
+        if (
+            self._observed
+            and self._scan_at is not None
+            and 0 <= now - self._scan_at <= self.SCAN_MAX_AGE_SEC
+            and old_time is not None
+            and 0 < now - old_time <= self.ODOM_MAX_AGE_SEC
+        ):
+            self._odom_valid = True
         self._last_pose = (x, y, yaw)
         self._odom_at = now
 
