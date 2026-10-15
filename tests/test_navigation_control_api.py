@@ -1452,6 +1452,26 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["planned_path"])
         self.assertTrue(result["goal_retained"])
 
+    async def test_cancel_pi_stop_failure_retains_goal_and_fails_safely(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_physical_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_physical_stop
+        canceled = await self.api.cancel_goal()
+        self.assertFalse(canceled["stop_delivered"])
+        self.assertEqual("FAILED", canceled["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", canceled["last_error"])
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertFalse(canceled["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
     async def test_cancel_failure_still_sends_stop(self):
         await self.driving_ready()
 
