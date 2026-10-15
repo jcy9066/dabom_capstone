@@ -67,7 +67,7 @@ private:
     const geometry_msgs::msg::PoseStamped & pose) const;
 
   pluginlib::ClassLoader<nav2_core::Controller> rpp_loader_;
-  std::unique_ptr<nav2_core::Controller> rpp_;
+  nav2_core::Controller::Ptr rpp_;
   rclcpp_lifecycle::LifecycleNode::WeakPtr parent_;
   std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_;
