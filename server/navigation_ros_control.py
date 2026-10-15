@@ -825,12 +825,38 @@ class NavigationRosControl:
             self._condition.notify_all()
 
     def _on_global_path(self, message: Any) -> None:
-        path: list[dict[str, float]] = []
+        """Retain heading and per-segment motion for direction-aware 3D paths."""
+        path: list[dict[str, Any]] = []
         for item in list(message.poses)[:5000]:
             x = float(item.pose.position.x)
             y = float(item.pose.position.y)
-            if math.isfinite(x) and math.isfinite(y):
-                path.append({"x": x, "y": y})
+            yaw = self._yaw_from_orientation(item.pose.orientation)
+            if not all(math.isfinite(value) for value in (x, y, yaw)):
+                continue
+            current: dict[str, Any] = {"x": x, "y": y, "yaw": yaw}
+            if path:
+                previous = path[-1]
+                dx = x - previous["x"]
+                dy = y - previous["y"]
+                distance = math.hypot(dx, dy)
+                if distance < 1e-4:
+                    delta_yaw = math.atan2(
+                        math.sin(yaw - previous["yaw"]),
+                        math.cos(yaw - previous["yaw"]),
+                    )
+                    previous["motion"] = (
+                        "rotate_left" if delta_yaw > 0.001 else
+                        "rotate_right" if delta_yaw < -0.001 else "hold"
+                    )
+                else:
+                    along_heading = (
+                        dx * math.cos(previous["yaw"])
+                        + dy * math.sin(previous["yaw"])
+                    )
+                    previous["motion"] = (
+                        "reverse" if along_heading < -1e-4 else "forward"
+                    )
+            path.append(current)
         self._publish_visualization(
             {"type": "global_path", "path": path, "received_at": time.time()}
         )
