@@ -68,14 +68,6 @@
         return element;
     };
 
-    function createControlButton(value, variant = 'secondary', className = '') {
-        const button = create('button', className, value);
-        button.type = 'button';
-        button.dataset.controlButton = variant;
-        components.controls?.controlButton?.enhance?.(button);
-        return button;
-    }
-
     const formatSavedAt = value => {
         if (!value) return '--';
         const date = new Date(value);
@@ -369,7 +361,8 @@
         };
 
         const actions = create('div', 'saved-map-location-actions');
-        const useCurrent = createControlButton(labels.useCurrentGps, 'secondary');
+        const useCurrent = create('button', 'mb-btn', labels.useCurrentGps);
+        useCurrent.type = 'button';
         useCurrent.dataset.requiresGps = 'true';
         useCurrent.disabled = gps.fix !== true;
         useCurrent.addEventListener('click', () => {
@@ -381,7 +374,8 @@
             }
         });
 
-        const saveLocation = createControlButton(labels.saveLocation, 'accent');
+        const saveLocation = create('button', 'mb-btn', labels.saveLocation);
+        saveLocation.type = 'button';
         saveLocation.addEventListener('click', async () => {
             const name = inputs['saved-map-location-name'].value.trim();
             const latText = inputs['saved-map-location-lat'].value.trim();
@@ -420,7 +414,8 @@
             }
         });
 
-        const deleteButton = createControlButton(labels.deleteLocation, 'danger');
+        const deleteButton = create('button', 'mb-btn', labels.deleteLocation);
+        deleteButton.type = 'button';
         deleteButton.disabled = true;
         deleteButton.addEventListener('click', async () => {
             if (!selector.value || selector.value === DRAFT_LOCATION_VALUE) return;
@@ -736,10 +731,12 @@
 
         const mappingActions = create('div', 'saved-map-mode-actions');
 
-        const startMapping = createControlButton(labels.startMapping, 'success', 'saved-map-start-mapping');
+        const startMapping = create('button', 'mb-btn saved-map-start-mapping', labels.startMapping);
+        startMapping.type = 'button';
         startMapping.addEventListener('click', () => startMappingFromModal(container, progress));
 
-        const clearCurrentMap = createControlButton(labels.clearCurrentMap, 'secondary', 'saved-map-clear-current');
+        const clearCurrentMap = create('button', 'mb-btn saved-map-clear-current', labels.clearCurrentMap);
+        clearCurrentMap.type = 'button';
         clearCurrentMap.title = '\uc800\uc7a5 \ud30c\uc77c\uc740 \uc720\uc9c0\ud558\uace0 3D Viewer\uc5d0\uc11c \ud604\uc7ac \uc9c0\ub3c4\ub9cc \uc81c\uac70\ud569\ub2c8\ub2e4.';
         clearCurrentMap.disabled = !global.navigationMapView?.snapshot?.()?.map;
         clearCurrentMap.addEventListener('click', () => {
@@ -751,13 +748,15 @@
 
         const actions = create('div', 'saved-map-actions');
 
-        const save = createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current');
+        const save = create('button', 'mb-btn saved-map-save-current', labels.saveCurrent);
+        save.type = 'button';
         save.addEventListener('click', async () => {
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });
 
-        const load = createControlButton(labels.load, 'accent', 'saved-map-load');
+        const load = create('button', 'mb-btn saved-map-load', labels.load);
+        load.type = 'button';
         load.disabled = !selectedMapName(container);
         load.addEventListener('click', () => loadSelectedMap(container, progress));
 

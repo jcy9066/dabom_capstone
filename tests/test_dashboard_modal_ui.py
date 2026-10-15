@@ -136,6 +136,16 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.strictEqual(secondary.children[1], locationActions);
     assert.strictEqual(locationCard.querySelector('.saved-map-location-actions'), null);
     assert.strictEqual(locationActions.children.length, 3);
+    const bookmarkButtons = [...primary.querySelectorAll('.mb-btn'), ...locationActions.querySelectorAll('.mb-btn')];
+    assert.strictEqual(bookmarkButtons.length, 7);
+    for (const button of bookmarkButtons) {
+        assert.strictEqual(button.tagName, 'BUTTON');
+        assert.strictEqual(button.type, 'button');
+        assert.strictEqual(button.dataset.controlButton, undefined);
+        assert.ok(button.className.split(/\s+/).includes('mb-btn'));
+    }
+    assert.strictEqual(locationActions.children[0].disabled, true); // GPS without fix
+    assert.strictEqual(locationActions.children[2].disabled, true); // no place selected
     const picker = manager.body.querySelector('.saved-map-location-picker');
     assert.ok(picker);
     const newName = picker.querySelector('.saved-map-location-new');
