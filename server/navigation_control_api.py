@@ -805,16 +805,19 @@ class NavigationControlApi:
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
             self._arm_pending_stop_locked()
-        cancel = None
-        cancel_error = None
-        try:
-            cancel = await asyncio.to_thread(self._ros.cancel_navigation)
-        except Exception as exc:
-            cancel_error = exc
-        delivered = await self._send_robot_command(
-            self._robot_id,
-            {"type": "stop", "reason": "navigation_goal_cancel"},
+        # Nav2 action cancellation and physical STOP must proceed concurrently.
+        # Pending-stop is armed before either call to gate late motor commands.
+        cancel_result, stop_result = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": "navigation_goal_cancel"},
+            ),
+            return_exceptions=True,
         )
+        cancel_error = cancel_result if isinstance(cancel_result, BaseException) else None
+        cancel = None if cancel_error is not None else cancel_result
+        delivered = bool(stop_result) if not isinstance(stop_result, BaseException) else False
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
