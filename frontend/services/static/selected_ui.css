@@ -1582,11 +1582,11 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
 }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{
-  flex:1 1 auto;min-height:0;height:100%;align-items:stretch;
+  flex:1 1 auto;min-height:0;align-items:stretch;
 }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
-  height:100%;min-height:0;
+  height:auto;min-height:0;
 }
 .saved-map-primary-column .saved-map-primary-actions{
   display:flex;justify-content:space-between;align-items:center;gap:8px;
@@ -2153,23 +2153,28 @@ header { padding-top: 3px; }
 }
 
 
-/* Saved map geometry: both panes share the same height; the left list fills
-   remaining space and the right-side actions stay anchored to the bottom. */
+/* A definite, single desktop grid track controls BOTH map panes.
+   Do not use height:100% on grid children when the containing track is auto. */
 @media (min-width: 801px) {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column {
+    height:auto!important;flex:1 1 0!important;min-height:0;
+    grid-template-rows:minmax(0,1fr);align-items:stretch;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column {
+    height:auto!important;min-height:0;align-self:stretch;
+  }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
-    height:100%;min-height:0;padding-top:10px;padding-bottom:10px;
+    padding-top:10px;padding-bottom:10px;
   }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
     flex:1 1 0!important;min-height:0;max-height:none!important;
   }
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column {
-    height:100%!important;min-height:0;align-self:stretch;
-  }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-panel {
-    flex:1 1 auto;min-height:0;
+    flex:1 1 0;min-height:0;
   }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
-    margin-top:auto;padding-top:5px;
+    margin-top:auto!important;padding-top:5px;
   }
 }
 
