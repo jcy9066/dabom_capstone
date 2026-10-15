@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-flat-drawer-v4">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261015-footer-alignment-v5">
+    <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-volume-v1">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-return-animation-v4">
 </head>
@@ -120,7 +121,22 @@
                 <h2 class="card-title">
                     실시간 카메라 (RTMO-M + BotSORT + X3D-M)
                 </h2>
-                <div
+                <div class="camera-header-actions">
+                    <div class="speaker-volume-control" id="speaker-volume-control"
+                         data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
+                        <label class="speaker-volume-slider">
+                            <input id="speaker-volume-slider" class="speaker-volume-level"
+                                   type="range" min="0" max="100" step="1" value="20"
+                                   aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
+                            <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
+                                 viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
+                            </svg>
+                        </label>
+                        <output class="speaker-volume-value" id="speaker-volume-value"
+                                for="speaker-volume-slider">20%</output>
+                    </div>
+                    <div
                     id="model-pipeline-toggle-mount"
                     class="dashboard-model-control-mount"
                     data-dashboard-mount="model-pipeline-toggle"
@@ -133,6 +149,7 @@
                         <span class="ui-toggle-side ui-toggle-side-on">ON</span>
                         <span class="dashboard-model-toggle-state">--</span>
                     </button>
+                    </div>
                 </div>
             </div>
 
@@ -759,6 +776,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
+    <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261014-action-v1"></script>
     <script src="/static/elastic_scroll.js?v=20261014-return-animation-v4"></script>

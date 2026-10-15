@@ -59,7 +59,7 @@
 #define COMMAND_TIMEOUT_MS 350U
 #define BEEP_FREQUENCY_HZ 440.0f
 #define BEEP_PWM_WRAP 4095U
-#define BEEP_VOLUME_PERCENT 20U
+#define BEEP_DEFAULT_VOLUME_PERCENT 20U
 #define BEEP_MIN_DURATION_MS 50U
 #define BEEP_MAX_DURATION_MS 2000U
 #define CURVE_INNER_RATIO 0.35f
@@ -133,6 +133,7 @@ static bool warning_led_enabled = false;
 static uint speaker_pwm_slice = 0;
 static uint speaker_pwm_channel = 0;
 static bool speaker_beep_active = false;
+static uint8_t speaker_volume_percent = BEEP_DEFAULT_VOLUME_PERCENT;
 static uint64_t speaker_beep_until_ms = 0;
 
 
@@ -211,7 +212,7 @@ static void speaker_start_beep(uint32_t duration_ms) {
     pwm_set_chan_level(
         speaker_pwm_slice,
         speaker_pwm_channel,
-        ((uint32_t)BEEP_PWM_WRAP * BEEP_VOLUME_PERCENT) / 200U
+        ((uint32_t)BEEP_PWM_WRAP * speaker_volume_percent) / 200U
     );
     speaker_beep_active = true;
     speaker_beep_until_ms =
@@ -1104,6 +1105,45 @@ static void handle_command(char *line) {
                 : "OK,ENC_STREAM,0"
         );
 
+        return;
+    }
+
+    if (strcmp(command, "VOLUME_GET") == 0) {
+        if (strtok_r(NULL, ",", &save_pointer) != NULL) {
+            uart_reply("ERR,VOLUME_GET takes no arguments");
+            return;
+        }
+        char response[24];
+        snprintf(response, sizeof(response), "OK,VOLUME,%u", speaker_volume_percent);
+        uart_reply(response);
+        return;
+    }
+
+    if (strcmp(command, "VOLUME") == 0) {
+        char *percent_text = strtok_r(NULL, ",", &save_pointer);
+        char *extra_argument = strtok_r(NULL, ",", &save_pointer);
+        if (percent_text == NULL || extra_argument != NULL ||
+            *percent_text == '\0') {
+            uart_reply("ERR,VOLUME requires percent");
+            return;
+        }
+        for (const char *digit = percent_text; *digit != '\0'; ++digit) {
+            if (*digit < '0' || *digit > '9') {
+                uart_reply("ERR,VOLUME must be 0..100");
+                return;
+            }
+        }
+        const unsigned long percent = strtoul(percent_text, NULL, 10);
+        if (percent > 100U) {
+            uart_reply("ERR,VOLUME must be 0..100");
+            return;
+        }
+        speaker_volume_percent = (uint8_t)percent;
+        // Running tones finish at their original level; new beep phases use
+        // the new setting. Warning LED timing is unaffected by mute.
+        char response[24];
+        snprintf(response, sizeof(response), "OK,VOLUME,%u", speaker_volume_percent);
+        uart_reply(response);
         return;
     }
 

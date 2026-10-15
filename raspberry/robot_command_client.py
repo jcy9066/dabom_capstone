@@ -196,6 +196,12 @@ class RobotCommandClient:
                 return round(value, 1)
         return None
 
+    def _current_speaker_volume(self) -> int | None:
+        if not self.motor.connected or self.motor.pico_reboot_pending():
+            return None
+        volume = getattr(self.motor, "volume_percent", None)
+        return volume if type(volume) is int and 0 <= volume <= 100 else None
+
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
         with self._safety_lock:
@@ -235,6 +241,7 @@ class RobotCommandClient:
             "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
+            "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
         }
@@ -582,6 +589,12 @@ class RobotCommandClient:
                     str(message.get("text", ""))
                 )
 
+            elif command_type == "set_volume":
+                volume = message.get("volume_percent")
+                if type(volume) is not int or not 0 <= volume <= 100:
+                    raise RuntimeError("volume_percent must be an integer between 0 and 100")
+                await asyncio.to_thread(self.motor.set_volume, volume)
+
             elif command_type == "beep":
                 duration_ms = self._duration_ms(
                     message.get("duration_ms", 350)
@@ -663,6 +676,7 @@ class RobotCommandClient:
                     "motor_connected": (
                         self.motor.connected
                     ),
+                    "speaker_volume_percent": self._current_speaker_volume(),
                 }
             )
         )
