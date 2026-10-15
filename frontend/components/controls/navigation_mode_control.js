@@ -46,7 +46,7 @@
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
-            if (controller.pending) return;
+            if (controller.pending || !controller.available) return;
 
             const current = controller.mode;
             const explicitTarget = event.target?.closest?.(
@@ -75,13 +75,14 @@
             handlers,
             mode: '',
             pending: false,
+            available: false,
             button: null,
             mappingLabel: null,
             drivingLabel: null,
 
             request(mode) {
                 const normalized = String(mode || '').toUpperCase();
-                if (!['MAPPING', 'DRIVING'].includes(normalized)) return false;
+                if (this.pending || !this.available || !['MAPPING', 'DRIVING'].includes(normalized)) return false;
                 const request = this.handlers.request || global.navigationControl?.requestNavigationMode;
                 return request?.(normalized);
             },
@@ -89,6 +90,7 @@
             sync(mode, options = {}) {
                 this.mode = String(mode || '').toUpperCase();
                 this.pending = Boolean(options.pending);
+                this.available = options.available !== false;
                 root.dataset.navigationMode = this.mode;
 
                 const isMapping = this.mode === 'MAPPING';
@@ -98,7 +100,7 @@
                 this.button?.classList.toggle('driving', isDriving);
                 this.button?.classList.toggle('unknown', !isMapping && !isDriving);
                 if (this.button) {
-                    this.button.disabled = this.pending;
+                    this.button.disabled = this.pending || !this.available || (!isMapping && !isDriving);
                     this.button.setAttribute('aria-busy', String(this.pending));
                     this.button.setAttribute(
                         'aria-label',
@@ -120,7 +122,7 @@
         root._dabomNavigationModeController = controller;
         instances.push(controller);
         controls.navigationMode = controller;
-        controller.sync('', { pending: false });
+        controller.sync('', { pending: false, available: false });
         return controller;
     };
 
