@@ -842,6 +842,7 @@ class NavigationControlApi:
             self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
+                self._reset_navigation_progress_locked()
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
                 elif terminal is not None:
@@ -850,7 +851,6 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "READY"
                     self._state["active_goal"] = None
                     self._state["planned_path"] = []
-                self._reset_navigation_progress_locked()
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
@@ -1449,8 +1449,15 @@ class NavigationControlApi:
         return terminal if terminal in {"SUCCEEDED", "FAILED", "CANCELED"} else None
 
     def _apply_cancel_terminal_locked(self, terminal: str) -> None:
+        if terminal == "SUCCEEDED":
+            # A cancel/success race cannot bypass physical-stop verification.
+            if self._pending_nav_success is None:
+                self._pending_nav_success = {
+                    "started_at": time.time(), "processing": False,
+                }
+            return
         self._state["navigation_state"] = terminal
-        if terminal in {"SUCCEEDED", "CANCELED"}:
+        if terminal == "CANCELED":
             self._state["active_goal"] = None
             self._state["planned_path"] = []
 
