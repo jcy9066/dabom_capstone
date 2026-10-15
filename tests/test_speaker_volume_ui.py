@@ -25,10 +25,12 @@ class SharedSpeakerVolumeUiTests(unittest.TestCase):
         self.assertLess(camera_header.index('id="speaker-volume-control"'), camera_header.index('id="model-pipeline-toggle-mount"'))
         self.assertIn('id="speaker-volume-slider"', camera_header)
         self.assertIn('type="range" min="0" max="100" step="1" value="20"', camera_header)
-        self.assertIn("speaker_volume.css?v=20261015-volume-v1", html)
+        self.assertIn("speaker_volume.css?v=20261015-border-v2", html)
         self.assertIn("speaker_volume.js?v=20261015-volume-v1", html)
         styles = (ROOT / "frontend/services/static/speaker_volume.css").read_text(encoding="utf-8")
         self.assertIn("height:calc(var(--slider-height) * 2)", styles)
+        self.assertIn("border:1pt solid var(--text-muted);", styles)
+        self.assertIn("box-sizing:border-box;", styles)
 
     def test_keyboard_commits_final_volume_and_mouse_keeps_one_percent_resolution(self):
         test = r'''

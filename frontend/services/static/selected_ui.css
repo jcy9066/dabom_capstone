@@ -1737,6 +1737,11 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress {
   flex:0 0 auto;order:2;
 }
+/* Do not reserve the 20px feedback row when there is no message.
+   Active, error and loading feedback remain visible above the buttons. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress:empty:not(.is-loading) {
+  display:none;min-height:0;
+}
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions {
   flex:0 0 auto;order:3;
 }
@@ -2179,11 +2184,8 @@ header { padding-top: 3px; }
 }
 
 /* Place location buttons in the GREY column footer, not inside the white
-   form card. The 20px spacer mirrors the left map progress row so both white
-   content surfaces end together and their button footers share a baseline. */
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-footer-spacer {
-  flex:0 0 20px;min-height:20px;
-}
+   form card. Without placeholder rows, both white surfaces fill the space
+   down to a single 9px column gap above the aligned action footers. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-actions {
   /* 34px buttons + 5px vertical padding on each side = 44px, matching the
      intrinsic height of the left .saved-map-primary-actions footer. */
