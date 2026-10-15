@@ -102,6 +102,26 @@ def test_stale_odometry_blocks_blind_reverse():
     )
 
 
+def test_rear_odom_recovery_requires_fresh_clear_observation():
+    guard = _guard_with_odom()
+    assert guard.limit_reverse(
+        -0.1, max_wheel_mps=0.212, now=0.01,
+    )[2] is None
+    guard.update_odometry(-0.02, 0.0, 0.0, 0.5)
+    assert guard.limit_reverse(
+        -0.1, max_wheel_mps=0.212, now=0.51,
+    )[2] == "rear_reverse_odom_unavailable"
+    guard.update_odometry(-0.03, 0.0, 0.0, 0.6)
+    assert guard.limit_reverse(
+        -0.1, max_wheel_mps=0.212, now=0.61,
+    )[2] == "rear_reverse_odom_unavailable"
+    _rear_scan(guard, now=0.62)
+    guard.update_odometry(-0.03, 0.0, 0.0, 0.65)
+    assert guard.limit_reverse(
+        -0.1, max_wheel_mps=0.212, now=0.66,
+    ) == (-0.1, False, None)
+
+
 def test_pi_pwm_output_never_exceeds_30_percent_when_blind():
     motor = MotorController.__new__(MotorController)
     motor.max_wheel_mps = 0.212
