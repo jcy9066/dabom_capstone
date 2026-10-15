@@ -11,10 +11,12 @@ from urllib.request import Request, urlopen
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 from patrol_navigation.env_config import env_bool, env_float, env_text
+from patrol_navigation.rear_reverse_guard import RearReverseGuard
 
 
 class Nav2CommandBridge(Node):
@@ -195,6 +197,7 @@ class Nav2CommandBridge(Node):
         self.last_server_log_at = 0.0
         self.last_error_log_at = 0.0
         self.latest_odom: Odometry | None = None
+        self.rear_reverse_guard = RearReverseGuard()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(
@@ -230,6 +233,12 @@ class Nav2CommandBridge(Node):
             self.odom_topic,
             self.on_odom,
             20,
+        )
+        self.create_subscription(
+            LaserScan,
+            "/scan",
+            self.on_scan,
+            10,
         )
 
         self.create_timer(
@@ -433,6 +442,37 @@ class Nav2CommandBridge(Node):
         msg: Odometry,
     ) -> None:
         self.latest_odom = msg
+        pose = msg.pose.pose
+        self.rear_reverse_guard.update_odometry(
+            float(pose.position.x),
+            float(pose.position.y),
+            self._yaw_from_quaternion(pose.orientation),
+            time.monotonic(),
+        )
+
+    def on_scan(self, msg: LaserScan) -> None:
+        frame_id = str(msg.header.frame_id or "").lstrip("/")
+        base_frame = self.base_frame.lstrip("/")
+        laser_yaw = None
+        if frame_id == base_frame:
+            laser_yaw = 0.0
+        elif frame_id:
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    base_frame, frame_id, Time(),
+                )
+                laser_yaw = self._yaw_from_quaternion(transform.transform.rotation)
+            except TransformException:
+                pass
+        self.rear_reverse_guard.update_scan(
+            msg.ranges,
+            angle_min=float(msg.angle_min),
+            angle_increment=float(msg.angle_increment),
+            range_min=float(msg.range_min),
+            range_max=float(msg.range_max),
+            laser_yaw=laser_yaw,
+            now=time.monotonic(),
+        )
 
     def _estimate_pwm(
         self,
@@ -584,6 +624,19 @@ class Nav2CommandBridge(Node):
             )
             return
 
+        now = time.monotonic()
+        rear_blind_limited = False
+        if linear_x < 0.0:
+            linear_x, rear_blind_limited, rear_stop_reason = (
+                self.rear_reverse_guard.limit_reverse(
+                    linear_x, max_wheel_mps=self.max_wheel_mps, now=now,
+                )
+            )
+            if rear_stop_reason is not None:
+                self.last_twist_at = now
+                self._queue_stop(rear_stop_reason)
+                return
+
         half_track = (
             self.wheel_track_m / 2.0
         )
@@ -613,8 +666,14 @@ class Nav2CommandBridge(Node):
 
         left_mps = left_raw * scale
         right_mps = right_raw * scale
-
-        now = time.monotonic()
+        if rear_blind_limited:
+            # Angular steering can enlarge individual wheel speeds after the
+            # linear_x cap. Enforce the 30% limit on both wheels.
+            rear_limit = self.max_wheel_mps * 0.30
+            rear_peak = max(abs(left_mps), abs(right_mps))
+            if rear_peak > rear_limit:
+                left_mps *= rear_limit / rear_peak
+                right_mps *= rear_limit / rear_peak
 
         self.last_twist_at = now
         self.timed_out = False
@@ -633,6 +692,7 @@ class Nav2CommandBridge(Node):
                     "type": "auto_drive",
                     "left_mps": left_mps,
                     "right_mps": right_mps,
+                    "rear_blind_limited": rear_blind_limited,
                 }
             )
 
