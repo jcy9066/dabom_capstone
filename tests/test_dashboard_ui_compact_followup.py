@@ -55,6 +55,28 @@ class CompactUiContracts(unittest.TestCase):
         self.assertNotIn("function createControlButton(", MAP)
         self.assertIn("min-height:min(60vh,550px)", CSS)
 
+    def test_map_action_semantic_backgrounds(self):
+        # Each map action uses the shared bookmark button while receiving a
+        # semantic background within the saved-map modal only.
+        roles = {
+            "saved-map-start-mapping": ("#E7F1EB", "#21372D"),
+            "saved-map-clear-current": ("#F3EBE0", "#3B332A"),
+            "saved-map-save-current": ("#E7EDF5", "#283748"),
+            "saved-map-load": ("#ECE9F3", "#353246"),
+            "saved-map-use-current": ("#E8F1F3", "#283841"),
+            "saved-map-save-location": ("#E2F0ED", "#203934"),
+            "saved-map-delete-location": ("#F5E5E8", "#432C34"),
+        }
+        for role, (light, dark) in roles.items():
+            with self.subTest(role=role):
+                self.assertIn(f"#commonModal[data-modal-view=\"savedNavigationMaps\"] .{role} {{ --saved-map-action-bg:{light}; }}", CSS)
+                self.assertIn(f"body.dark-mode #commonModal[data-modal-view=\"savedNavigationMaps\"] .{role} {{ --saved-map-action-bg:{dark}; }}", CSS)
+                self.assertIn(role, MAP)
+        self.assertIn('.saved-map-modal .mb-btn:not(:disabled) {', CSS)
+        self.assertIn('.saved-map-modal .mb-btn:disabled {', CSS)
+        self.assertIn('background:var(--card-bg2);border-color:var(--border-color);', CSS)
+        self.assertNotIn("function createControlButton(", MAP)
+
     def test_description_only_on_error(self):
         self.assertIn(".system-control-card .system-control-description{display:none;}", CSS)
         self.assertIn(".system-control-card:is(.has-error,.is-unreachable) .system-control-description{display:block;}", CSS)
@@ -224,10 +246,10 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", INDEX)
-        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", LOGIN)
+        self.assertIn("selected_ui.css?v=20261016-map-action-semantic-v10", INDEX)
+        self.assertIn("selected_ui.css?v=20261016-map-action-semantic-v10", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        self.assertIn("saved_map_modal.js?v=20261016-new-map-label-v5", INDEX)
+        self.assertIn("saved_map_modal.js?v=20261016-map-action-roles-v6", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
