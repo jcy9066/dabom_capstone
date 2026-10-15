@@ -759,6 +759,106 @@ class NavigationControlApi:
         async with self._operation_lock:
             return await self.switch_mode(request, user=user)
 
+    async def _stop_for_goal_replacement(self) -> None:
+        """Cancel the prior Nav2 Goal and verify Pi STOP before replanning.
+
+        Called only by plan_goal while the API operation lock serializes
+        dashboard mutations. Changing a Goal never bypasses a pending
+        emergency stop or reuses encoder samples recorded before STOP.
+        """
+        with self._lock:
+            self._sensor_recovery = None
+            self._pending_nav_success = None
+            self._pending_terminal_stop = None
+            self._arm_pending_stop_locked()
+            self._state["navigation_state"] = "REPLACING_GOAL"
+            self._touch_locked()
+
+        cancel_result, stop_result = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": "navigation_goal_replace"},
+            ),
+            return_exceptions=True,
+        )
+        delivered = (
+            bool(stop_result.get("ok")) and bool(stop_result.get("delivered", True))
+            if isinstance(stop_result, dict)
+            else bool(stop_result) if not isinstance(stop_result, BaseException)
+            else False
+        )
+        cancel_ok = (
+            isinstance(cancel_result, dict)
+            and cancel_result.get("confirmed") is True
+        )
+        error_code = (
+            "GOAL_REPLACEMENT_STOP_NOT_DELIVERED" if not delivered
+            else "GOAL_REPLACEMENT_CANCEL_FAILED" if not cancel_ok
+            else None
+        )
+        with self._lock:
+            if self._state["emergency_stop"] or self._encoder_stop_violation:
+                raise NavigationControlError(
+                    "EMERGENCY_STOP_ACTIVE",
+                    "Emergency stop interrupted Goal replacement.", 409,
+                )
+            if self._state["navigation_state"] != "REPLACING_GOAL":
+                raise NavigationControlError(
+                    "GOAL_REPLACEMENT_INTERRUPTED",
+                    "Goal replacement was interrupted.", 409,
+                )
+            self._stop_commanded_at = time.time()
+            self._stop_encoder_ticks = self._encoder_ticks
+            self._stop_confirmation_after_sequence = (
+                (self._encoder_sequence or 0) if delivered else None
+            )
+            self._stop_confirmation_ticks = None
+            self._stop_confirmation_started_at = None
+            self._stop_confirmation_last_at = None
+            self._stop_confirmation_samples = 0
+            if error_code is not None:
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = error_code
+                self._reset_navigation_progress_locked()
+                self._touch_locked()
+                raise NavigationControlError(
+                    error_code, "Previous Goal could not be safely stopped.", 409,
+                )
+
+        deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._state["emergency_stop"] or self._encoder_stop_violation:
+                    raise NavigationControlError(
+                        "EMERGENCY_STOP_ACTIVE",
+                        "Emergency stop interrupted Goal replacement.", 409,
+                    )
+                if self._state["navigation_state"] != "REPLACING_GOAL":
+                    raise NavigationControlError(
+                        "GOAL_REPLACEMENT_INTERRUPTED",
+                        "Goal replacement was interrupted.", 409,
+                    )
+                if self._stop_confirmed_locked(time.time()):
+                    # Reuse the existing post-stop motion permit only after
+                    # proven stationary encoders. A later Start still checks
+                    # fresh Pi safety identity and watchdog health.
+                    self._post_resume_motion_ready = True
+                    return
+            await asyncio.sleep(0.02)
+
+        with self._lock:
+            if self._state["navigation_state"] == "REPLACING_GOAL":
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = "GOAL_REPLACEMENT_STOP_NOT_CONFIRMED"
+                self._reset_navigation_progress_locked()
+                self._touch_locked()
+        raise NavigationControlError(
+            "GOAL_REPLACEMENT_STOP_NOT_CONFIRMED",
+            "Fresh encoder STOP confirmation was not received within 3 seconds.",
+            409,
+        )
+
     async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal = self._validated_goal(payload.get("goal", payload))
         with self._lock:
@@ -768,17 +868,48 @@ class NavigationControlApi:
                 raise NavigationControlError("NAVIGATION_NOT_READY", "Localization and Nav2 must be ready.")
             if self._state["emergency_stop"]:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Resume before planning a new goal.")
+            replacing = self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+
+        # Reject an invalid destination before interrupting an existing Goal.
         self._validate_goal_in_active_map(goal)
-        path = await asyncio.to_thread(self._ros.compute_path, goal)
-        normalized_path = self._normalized_path(path)
-        if len(normalized_path) < 2:
-            raise NavigationControlError("PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422)
+        if replacing:
+            await self._stop_for_goal_replacement()
+
+        try:
+            # Nav2's ComputePathToPose(use_start=False) starts at the latest
+            # robot pose, not the old Goal or the old planned path origin.
+            path = await asyncio.to_thread(self._ros.compute_path, goal)
+            normalized_path = self._normalized_path(path)
+            if len(normalized_path) < 2:
+                raise NavigationControlError(
+                    "PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422,
+                )
+        except Exception as exc:
+            if replacing:
+                with self._lock:
+                    if (
+                        self._state["navigation_state"] == "REPLACING_GOAL"
+                        and not self._state["emergency_stop"]
+                    ):
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = (
+                            "GOAL_REPLACEMENT_PLAN_FAILED"
+                        )
+                        self._touch_locked()
+            raise
+
         with self._lock:
+            if self._state["emergency_stop"] or self._encoder_stop_violation:
+                raise NavigationControlError(
+                    "EMERGENCY_STOP_ACTIVE", "Emergency stop interrupted Goal planning.", 409,
+                )
+            if replacing and self._state["navigation_state"] != "REPLACING_GOAL":
+                raise NavigationControlError(
+                    "GOAL_REPLACEMENT_INTERRUPTED", "Goal replacement was interrupted.", 409,
+                )
             self._state["active_goal"] = goal
             self._state["planned_path"] = normalized_path
-            self._state["navigation_state"] = (
-                "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "PATH_READY"
-            )
+            self._state["navigation_state"] = "PATH_READY"
             self._state["last_error"] = None
             self._touch_locked()
         return self.state_response()
