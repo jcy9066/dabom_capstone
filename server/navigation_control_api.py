@@ -878,6 +878,10 @@ class NavigationControlApi:
             await self._stop_for_goal_replacement()
 
         try:
+            if replacing:
+                # Destination validation occurred before cancel; confirm the
+                # live sensor and Pi health again after the physical STOP.
+                self._assert_watchdogs_healthy()
             # Nav2's ComputePathToPose(use_start=False) starts at the latest
             # robot pose, not the old Goal or the old planned path origin.
             path = await asyncio.to_thread(self._ros.compute_path, goal)
