@@ -314,6 +314,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('.saved-map-secondary-column > .saved-map-location-actions', CSS)
         self.assertIn('flex:0 0 auto;min-height:44px;align-items:center;', CSS)
         self.assertIn('margin-top:0!important;padding-block:5px!important;', CSS)
+        self.assertNotIn('.saved-map-modal .dashboard-control-button{', CSS)
+        self.assertNotIn('#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) button {', CSS)
         self.assertIn('panel.append(picker, fields);', MAP)
         self.assertNotIn('panel.append(picker, fields, actions);', MAP)
         self.assertNotIn('height:100%!important;min-height:0;align-self:stretch;', CSS)
@@ -348,8 +350,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-left-border-align-v7', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-left-border-align-v7', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-shared-map-buttons-v8', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-shared-map-buttons-v8', LOGIN)
 
 
 if __name__ == "__main__":
