@@ -1523,7 +1523,11 @@ class NavigationControlApi:
                     ):
                         recovery["replanning"] = False
                         recovery["stable_since"] = None
+                        recovery["stop_delivered"] = False
+                        recovery["stop_attempt_at"] = None
                         self._state["navigation_state"] = "NAVIGATING"
+                        # A canceled late action must be followed by a fresh
+                        # Pi STOP before retrying any subsequent Goal.
                         self._arm_pending_stop_locked()
                         self._touch_locked()
 
