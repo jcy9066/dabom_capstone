@@ -845,6 +845,11 @@ class NavigationControlApi:
                 self._reset_navigation_progress_locked()
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif not delivered:
+                    # A canceled Nav2 action does not prove that the Pi has
+                    # stopped the wheels. Retain the Goal for operator Retry.
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal is not None:
                     self._apply_cancel_terminal_locked(terminal)
                 else:
