@@ -1480,6 +1480,14 @@ if (root && canvas) {
             hash = Math.imul(hash, 16777619);
             hash ^= y;
             hash = Math.imul(hash, 16777619);
+            // Distinguish paths with identical XY but different yaw/motion
+            // (reverse and in-place rotation are visible path changes).
+            hash ^= Math.round((Number(point?.yaw) || 0) * 1000);
+            hash = Math.imul(hash, 16777619);
+            for (const letter of String(point?.motion || '')) {
+                hash ^= letter.charCodeAt(0);
+                hash = Math.imul(hash, 16777619);
+            }
         }
         return `${path.length}:${hash >>> 0}`;
     }
@@ -1537,6 +1545,83 @@ if (root && canvas) {
         points.frustumCulled = false;
         points.renderOrder = 101;
         pathRoot.add(line, points);
+
+        // Arrowheads show the motion direction; reverse segments are amber.
+        // Rotation-only segments receive a compact circular marker.
+        const valid = path.filter(point =>
+            Number.isFinite(Number(point?.x))
+            && Number.isFinite(Number(point?.y))
+        );
+        const height = Math.max(
+            0.18, obstacleHeightM + 0.055, DYNAMIC_OBSTACLE_HEIGHT_M + 0.055,
+        );
+        let distanceSinceArrow = 0;
+        let lastRotationAt = null;
+        for (let i = 0; i + 1 < valid.length; i += 1) {
+            const from = valid[i];
+            const to = valid[i + 1];
+            const dx = Number(to.x) - Number(from.x);
+            const dy = Number(to.y) - Number(from.y);
+            const length = Math.hypot(dx, dy);
+            const motion = String(from.motion || '');
+            if (motion.startsWith('rotate_') && length < 0.003) {
+                const center = new THREE.Vector3(Number(from.x), Number(from.y), height);
+                if (lastRotationAt && center.distanceTo(lastRotationAt) < 0.08) continue;
+                lastRotationAt = center.clone();
+                const ring = new THREE.Mesh(
+                    new THREE.RingGeometry(0.045, 0.06, 20),
+                    new THREE.MeshBasicMaterial({
+                        color: COLORS.globalPath,
+                        side: THREE.DoubleSide,
+                        depthTest: false,
+                        depthWrite: false,
+                    }),
+                );
+                ring.position.copy(center);
+                ring.renderOrder = 102;
+                pathRoot.add(ring);
+                const left = motion === 'rotate_left';
+                const tangent = new THREE.Vector3(left ? -1 : 1, 0, 0);
+                const rotationArrow = new THREE.ArrowHelper(
+                    tangent,
+                    new THREE.Vector3(center.x, center.y + 0.06, height),
+                    0.085, COLORS.globalPath, 0.045, 0.035,
+                );
+                rotationArrow.traverse(part => {
+                    if (part.material) {
+                        part.material.depthTest = false;
+                        part.material.depthWrite = false;
+                    }
+                    part.renderOrder = 103;
+                });
+                pathRoot.add(rotationArrow);
+                continue;
+            }
+            if (length < 0.001) continue;
+            distanceSinceArrow += length;
+            if (distanceSinceArrow < 0.28) continue;
+            distanceSinceArrow = 0;
+            const forward = motion !== 'reverse';
+            const direction = new THREE.Vector3(dx / length, dy / length, 0);
+            const position = new THREE.Vector3(
+                (Number(from.x) + Number(to.x)) / 2,
+                (Number(from.y) + Number(to.y)) / 2,
+                height,
+            );
+            const arrow = new THREE.ArrowHelper(
+                direction, position, 0.14,
+                forward ? COLORS.globalPath : COLORS.trajectory,
+                0.06, 0.035,
+            );
+            arrow.traverse(part => {
+                if (part.material) {
+                    part.material.depthTest = false;
+                    part.material.depthWrite = false;
+                }
+                part.renderOrder = 102;
+            });
+            pathRoot.add(arrow);
+        }
     }
 
     function createGoalMarker(goal, color) {
