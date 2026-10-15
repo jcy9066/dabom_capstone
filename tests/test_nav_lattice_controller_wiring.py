@@ -56,7 +56,8 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "checkRotationCollision(pose, remaining)" in source
     assert "collision_->footprintCostAtPose(" in source
     assert "nav2_costmap_2d::NO_INFORMATION" in source
-    assert "nav2_core::NoValidControl" in source
+    assert "std::runtime_error" in source  # Humble exception path
+    assert "nav2_core::NoValidControl" not in source
     assert "std::abs(velocity.linear.x) >= transfer_linear_stop_" in source
     assert "inControllerFrame(" in source
     assert "nav2_util::transformPoseInTargetFrame(" in source
