@@ -138,6 +138,7 @@ class NavigationControlApi:
         self._rotation_last_verified_yaw: float | None = None
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
+        self._pending_nav_success: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
@@ -468,8 +469,18 @@ class NavigationControlApi:
         terminal = str(ros_nav.get("state", "")).upper()
         if terminal not in {"SUCCEEDED", "FAILED", "CANCELED"}:
             return None
+        if terminal == "SUCCEEDED":
+            # Nav2 success proves the pose/yaw goal, not physical motor STOP.
+            # Gate any late velocity commands until fresh encoder samples
+            # establish a stable STOP for the configured confirmation window.
+            if self._pending_nav_success is None:
+                self._arm_pending_stop_locked()
+                self._pending_nav_success = {"started_at": current, "processing": False}
+                self._touch_locked(current)
+            return None
+        self._pending_nav_success = None
         self._state["navigation_state"] = terminal
-        if terminal in {"SUCCEEDED", "CANCELED"}:
+        if terminal == "CANCELED":
             self._state["active_goal"] = None
             self._state["planned_path"] = []
         self._reset_navigation_progress_locked()
@@ -804,6 +815,7 @@ class NavigationControlApi:
 
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
+            self._pending_nav_success = None
             self._arm_pending_stop_locked()
         # Nav2 action cancellation and physical STOP must proceed concurrently.
         # Pending-stop is armed before either call to gate late motor commands.
@@ -1216,10 +1228,18 @@ class NavigationControlApi:
                 if self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
                     return None
                 issue = self._watchdog_issue_locked(current)
-                if issue is None and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES:
+                # A terminal Nav2 success may still have moving wheels.
+                # Treat the ensuing bounded STOP confirmation as navigation,
+                # not as another no-progress / blockage recovery attempt.
+                waiting_for_stop = self._pending_nav_success is not None
+                if (
+                    issue is None and not waiting_for_stop
+                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
+                ):
                     self._note_rotation_progress_locked(rotation, current)
                 blocked = (
                     issue is None
+                    and not waiting_for_stop
                     and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
                     and self._navigation_progress_timed_out_locked(current)
                 )
@@ -1228,6 +1248,8 @@ class NavigationControlApi:
         if issue:
             await self.emergency_stop(issue, automatic=True)
             return issue
+        if not blocked:
+            await self._resolve_pending_nav_success()
         if blocked:
             # User navigation mutations (Cancel / Manual / Resume) use the same
             # operation lock. If one wins the race, re-checking inside
@@ -1236,6 +1258,76 @@ class NavigationControlApi:
                 failed = await self._fail_blocked_navigation()
             return "BLOCKED_TIMEOUT" if failed else None
         return None
+
+    async def _resolve_pending_nav_success(self) -> None:
+        """Finalize Nav2 success only after STOP delivery and stable encoders."""
+        with self._lock:
+            pending = self._pending_nav_success
+            if (
+                pending is None
+                or pending["processing"]
+                or self._state["navigation_state"] != "NAVIGATING"
+                or self._state["emergency_stop"]
+                or self._encoder_stop_violation
+            ):
+                return
+            pending["processing"] = True
+
+        delivered = False
+        try:
+            try:
+                delivered = bool(await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "navigation_goal_succeeded"},
+                ))
+            except Exception:
+                delivered = False
+
+            with self._lock:
+                if self._pending_nav_success is not pending:
+                    return
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                # A success requires ACK delivery followed by *new*
+                # encoder samples. Never accept pre-STOP telemetry.
+                self._stop_confirmation_after_sequence = (
+                    (self._encoder_sequence or 0) if delivered else None
+                )
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
+
+            deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
+            while delivered and time.monotonic() < deadline:
+                with self._lock:
+                    if self._pending_nav_success is not pending:
+                        return
+                    if self._state["emergency_stop"] or self._encoder_stop_violation:
+                        return
+                    if self._stop_confirmed_locked(time.time()):
+                        self._state["navigation_state"] = "SUCCEEDED"
+                        self._state["active_goal"] = None
+                        self._state["planned_path"] = []
+                        self._state["last_error"] = None
+                        self._reset_navigation_progress_locked()
+                        self._touch_locked()
+                        return
+                await asyncio.sleep(0.02)
+
+            with self._lock:
+                if self._pending_nav_success is pending and not self._state["emergency_stop"]:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = (
+                        "STOP_NOT_CONFIRMED" if delivered else "STOP_NOT_DELIVERED"
+                    )
+                    # Preserve the active Goal for an explicit operator Retry.
+                    self._reset_navigation_progress_locked()
+                    self._touch_locked()
+        finally:
+            with self._lock:
+                if self._pending_nav_success is pending:
+                    self._pending_nav_success = None
 
     async def _fail_blocked_navigation(self) -> bool:
         try:
@@ -1363,6 +1455,7 @@ class NavigationControlApi:
             self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
+        self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
         self._rotation_extension_sec = 0.0
