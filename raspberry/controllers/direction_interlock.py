@@ -51,6 +51,17 @@ class DriveDirectionInterlock:
     def reset(self) -> None:
         self.__init__()
 
+    def abort_pending(self) -> None:
+        """External STOP does not prove physical standstill.
+
+        Discard a pending switch without erasing the last moving segment,
+        so the next opposite command must still earn post-STOP confirmation.
+        """
+        self.pending_mode = None
+        self._stop_sent_at = None
+        self._last_ticks = None
+        self._stationary_since = None
+
     def request(self, mode: str, now: float, snapshot: dict[str, Any] | None) -> str:
         if not math.isfinite(now):
             raise ValueError("non-finite timestamp")
