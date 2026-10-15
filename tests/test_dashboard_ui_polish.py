@@ -305,6 +305,11 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('flex:1 1 0;min-height:0;', CSS)
         self.assertIn('margin-top:auto!important;padding-top:5px;', CSS)
         self.assertIn('.saved-map-primary-column > .saved-map-progress:empty:not(.is-loading)', CSS)
+        self.assertIn('.saved-map-primary-column > .saved-map-progress {\n    position:absolute;', CSS)
+        self.assertIn('bottom:calc(10px + 44px + 9px + 7px);', CSS)
+        self.assertIn('max-height:min(96px,18vh);', CSS)
+        # The new alignment patch may reference the left column only.
+        self.assertNotIn('.saved-map-secondary-column', CSS.split('/* Saved maps: the left progress message', 1)[1])
         self.assertNotIn('.saved-map-secondary-column > .saved-map-location-footer-spacer', CSS)
         self.assertIn('.saved-map-secondary-column > .saved-map-location-actions', CSS)
         self.assertIn('flex:0 0 auto;min-height:44px;align-items:center;', CSS)
@@ -343,8 +348,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-map-footer-tight-v6', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-map-footer-tight-v6', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-left-border-align-v7', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-left-border-align-v7', LOGIN)
 
 
 if __name__ == "__main__":

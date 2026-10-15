@@ -2239,3 +2239,29 @@ body.dark-mode #darkToggle .dark-toggle-slider { left:calc(100% - 19px); }
 @media(max-width:540px){
   .dashboard-ui-startup-error{width:calc(100% - 32px);box-sizing:border-box;}
 }
+
+/* Saved maps: the left progress message must not reserve a row between the
+   white scrollable list and its button footer. The right form/card/footer
+   remain untouched; active feedback overlays the left list's lower edge. */
+@media (min-width:801px) {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
+    position:relative;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress {
+    position:absolute;
+    z-index:2;
+    left:18px;
+    right:18px;
+    bottom:calc(10px + 44px + 9px + 7px);
+    width:auto;
+    box-sizing:border-box;
+    max-height:min(96px,18vh);
+    overflow-y:auto;
+    padding:4px 6px;
+    border-radius:6px;
+    background:var(--card-bg);
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress:empty:not(.is-loading) {
+    display:none;
+  }
+}
