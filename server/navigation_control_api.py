@@ -141,6 +141,7 @@ class NavigationControlApi:
         self._blocked_failure_in_progress = False
         self._pending_nav_success: dict[str, Any] | None = None
         self._pending_terminal_stop: dict[str, Any] | None = None
+        self._sensor_recovery: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
@@ -465,6 +466,9 @@ class NavigationControlApi:
         allow_during_blocked_failure: bool = False,
     ) -> str | None:
         if self._state["navigation_state"] != "NAVIGATING":
+            return None
+        # A fault-triggered Nav2 cancel must not become a user Goal cancel.
+        if self._sensor_recovery is not None:
             return None
         if self._blocked_failure_in_progress and not allow_during_blocked_failure:
             return None
@@ -828,6 +832,7 @@ class NavigationControlApi:
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
             self._pending_nav_success = None
+            self._sensor_recovery = None
             self._arm_pending_stop_locked()
         # Nav2 action cancellation and physical STOP must proceed concurrently.
         # Pending-stop is armed before either call to gate late motor commands.
@@ -1219,8 +1224,12 @@ class NavigationControlApi:
             self._sync_ros_navigation_terminal_locked(ros_nav, current)
             pending_terminal_stop = self._pending_terminal_stop is not None
             hard_fault = bool(self._encoder_stop_violation or self._pi_session_stop_pending)
+            recovering = self._sensor_recovery is not None
         if pending_terminal_stop and not hard_fault:
             await self._deliver_terminal_stop()
+        if recovering and not hard_fault:
+            await self._advance_sensor_recovery(current)
+            return None
 
         blocked = False
         with self._lock:
@@ -1273,7 +1282,10 @@ class NavigationControlApi:
                 if blocked:
                     self._blocked_failure_in_progress = True
         if issue:
-            await self.emergency_stop(issue, automatic=True)
+            if issue in {"ENCODER_MOVEMENT_AFTER_STOP", "PI_SAFETY_SESSION_CHANGED"}:
+                await self.emergency_stop(issue, automatic=True)
+            else:
+                await self._begin_sensor_recovery(issue, current)
             return issue
         if not blocked:
             await self._resolve_pending_nav_success()
@@ -1285,6 +1297,185 @@ class NavigationControlApi:
                 failed = await self._fail_blocked_navigation()
             return "BLOCKED_TIMEOUT" if failed else None
         return None
+
+    async def _begin_sensor_recovery(self, issue: str, current: float) -> None:
+        """STOP immediately and allow a bounded 5s sensor recovery episode.
+
+        Ordinary data/communication loss is not a hardware E-STOP. Cancelling
+        the old ROS action and arming the Pi STOP gate prevents stale driving.
+        """
+        with self._lock:
+            if (
+                self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                or self._state["emergency_stop"]
+                or self._sensor_recovery is not None
+            ):
+                return
+            self._arm_pending_stop_locked()
+            recovery = {
+                "reason": issue, "started_at": current, "stable_since": None,
+                "stop_delivered": False, "stop_attempt_at": None,
+                "replanning": False,
+                "goal": dict(self._state["active_goal"] or {}),
+            }
+            self._sensor_recovery = recovery
+            self._reset_navigation_progress_locked()
+            self._touch_locked(current)
+        cancel, stop = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": f"navigation_sensor_{issue.lower()}"},
+            ),
+            return_exceptions=True,
+        )
+        with self._lock:
+            if self._sensor_recovery is not recovery:
+                return
+            if isinstance(cancel, BaseException):
+                recovery["cancel_error"] = str(cancel)
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = "SENSOR_RECOVERY_CANCEL_FAILED"
+                self._sensor_recovery = None
+                self._touch_locked()
+                return
+            recovery["stop_attempt_at"] = time.monotonic()
+            delivered = (
+                bool(stop.get("ok")) and bool(stop.get("delivered", True))
+                if isinstance(stop, dict) else
+                bool(stop) if not isinstance(stop, BaseException) else False
+            )
+            if delivered:
+                self._record_sensor_stop_ack_locked(recovery)
+            self._touch_locked()
+
+    def _record_sensor_stop_ack_locked(self, recovery: dict[str, Any]) -> None:
+        recovery["stop_delivered"] = True
+        self._stop_commanded_at = time.time()
+        self._stop_encoder_ticks = self._encoder_ticks
+        self._stop_confirmation_after_sequence = self._encoder_sequence
+        self._stop_confirmation_ticks = None
+        self._stop_confirmation_started_at = None
+        self._stop_confirmation_last_at = None
+        self._stop_confirmation_samples = 0
+
+    async def _advance_sensor_recovery(self, current: float) -> None:
+        with self._lock:
+            recovery = self._sensor_recovery
+            if recovery is None or self._state["emergency_stop"]:
+                return
+            if current - recovery["started_at"] >= 5.0:
+                self._sensor_recovery = None
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = f"SENSOR_RECOVERY_TIMEOUT:{recovery['reason']}"
+                self._arm_pending_stop_locked()
+                self._touch_locked(current)
+                return
+            if recovery["replanning"]:
+                return
+            issue = self._watchdog_issue_locked(current)
+            healthy = issue is None and self._pi_estop_latched is False
+            if healthy:
+                if recovery["stable_since"] is None:
+                    recovery["stable_since"] = current
+            else:
+                recovery["stable_since"] = None
+            ready = bool(
+                healthy and recovery["stop_delivered"]
+                and recovery["stable_since"] is not None
+                and current - recovery["stable_since"] >= 1.0
+                and self._stop_confirmed_locked(time.time())
+                and recovery["goal"]
+            )
+            retry_stop = bool(
+                not recovery["stop_delivered"]
+                and (
+                    recovery["stop_attempt_at"] is None
+                    or time.monotonic() - recovery["stop_attempt_at"] >= 1.0
+                )
+            )
+            if retry_stop:
+                recovery["stop_attempt_at"] = time.monotonic()
+            if ready:
+                recovery["replanning"] = True
+        if retry_stop:
+            try:
+                stop = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "navigation_sensor_recovery_retry"},
+                )
+                delivered = (
+                    bool(stop.get("ok")) and bool(stop.get("delivered", True))
+                    if isinstance(stop, dict) else bool(stop)
+                )
+            except Exception:
+                delivered = False
+            with self._lock:
+                if self._sensor_recovery is recovery and delivered:
+                    self._record_sensor_stop_ack_locked(recovery)
+        if not ready:
+            return
+
+        # Do not hold the thread lock during ROS actions. The identity of
+        # the episode is checked again after each asynchronous boundary.
+        async with self._operation_lock:
+            with self._lock:
+                if (
+                    self._sensor_recovery is not recovery
+                    or self._state["emergency_stop"]
+                    or self._state["navigation_state"] != "NAVIGATING"
+                ):
+                    return
+                self._state["navigation_state"] = "RESUMING"
+                self._touch_locked()
+            try:
+                path = self._normalized_path(
+                    await asyncio.to_thread(self._ros.compute_path, recovery["goal"])
+                )
+                if len(path) < 2:
+                    raise NavigationControlError(
+                        "PATH_NOT_FOUND", "Recovery planner found no safe path.",
+                    )
+                with self._lock:
+                    if (
+                        self._sensor_recovery is not recovery
+                        or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "RESUMING"
+                        or self._watchdog_issue_locked(time.time()) is not None
+                    ):
+                        return
+                await asyncio.to_thread(self._ros.navigate_to_pose, recovery["goal"])
+            except Exception:
+                with self._lock:
+                    if self._sensor_recovery is recovery:
+                        self._sensor_recovery = None
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = "SENSOR_RECOVERY_REPLAN_FAILED"
+                        self._arm_pending_stop_locked()
+                        self._touch_locked()
+                return
+            with self._lock:
+                interrupted = (
+                    self._sensor_recovery is not recovery
+                    or self._state["emergency_stop"]
+                    or self._state["navigation_state"] != "RESUMING"
+                )
+                if not interrupted:
+                    self._sensor_recovery = None
+                    self._state["planned_path"] = path
+                    self._state["navigation_state"] = "NAVIGATING"
+                    self._state["last_error"] = None
+                    self._stop_commanded_at = None
+                    self._stop_encoder_ticks = None
+                    self._stop_confirmation_after_sequence = None
+                    self._start_navigation_progress_locked(
+                        self._get_live_pose(), time.time(),
+                    )
+                    self._touch_locked()
+            if interrupted:
+                # Cancellation or E-STOP may have won after NavigateToPose
+                # accepted its action. Never leave this late goal running.
+                await asyncio.to_thread(self._ros.cancel_navigation)
 
     async def _deliver_terminal_stop(self) -> bool:
         """Best-effort physical STOP after Nav2 fails or cancels itself.
