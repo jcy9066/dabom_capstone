@@ -1,25 +1,35 @@
 <!--
-  Replan only when the untraversed portion of the Global Path becomes invalid.
-  Humble PlannerServer IsPathValid starts its lethal check at the closest path
-  point to the robot. The 10 Hz guard never republishes a valid Global Path.
-  Invalidity must persist 300 ms before replanning; RPP handles immediate
-  collision avoidance independently. Do not run Spin/BackUp recovery.
-  The backend still owns the 5-second no-progress and STOP watchdog.
+  ROS2 Humble / BehaviorTree.CPP v3:
+  - Compute the initial path immediately, before IsPathValid can inspect it.
+  - On 10Hz ticks reuse a valid path without re-publishing/re-planning.
+  - During a sustained invalid path, a ReactiveSequence continuously checks
+    invalidity and halts the Delay whenever validity is restored.
+  - Only if invalidity continues for >=300ms is ComputePathToPose re-run.
+  - The controller is responsible for immediate local collision-stop behavior.
+  - Recovery is bounded; no blind Spin/BackUp recovery is authorized.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="5" name="NavigateWithBoundedRecovery">
-      <PipelineSequence name="NavigateOnValidatedPath">
-        <RateController hz="10.0">
-          <Fallback name="ReuseValidPath">
-            <IsPathValid path="{path}" server_timeout="100"/>
-            <Delay delay_msec="300">
-              <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-            </Delay>
-          </Fallback>
-        </RateController>
-        <FollowPath path="{path}" controller_id="FollowPath"/>
-      </PipelineSequence>
+      <Sequence name="NavigateWithInitialPlan">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        <PipelineSequence name="NavigateOnValidatedPath">
+          <RateController hz="10.0">
+            <Fallback name="ReuseOrReplanPath">
+              <IsPathValid path="{path}" server_timeout="100"/>
+              <ReactiveSequence name="WaitForSustainedInvalidPath">
+                <Inverter>
+                  <IsPathValid path="{path}" server_timeout="100"/>
+                </Inverter>
+                <Delay delay_msec="300">
+                  <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+                </Delay>
+              </ReactiveSequence>
+            </Fallback>
+          </RateController>
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+        </PipelineSequence>
+      </Sequence>
       <Delay delay_msec="500">
         <AlwaysSuccess/>
       </Delay>
