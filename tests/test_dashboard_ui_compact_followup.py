@@ -45,11 +45,13 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('id="serverStateGrid"', INDEX)
 
     def test_map_buttons_use_shared_component(self):
-        self.assertIn("createControlButton(labels.startMapping, 'success', 'saved-map-start-mapping')", MAP)
-        self.assertIn("createControlButton(labels.clearCurrentMap, 'secondary', 'saved-map-clear-current')", MAP)
+        self.assertIn("create('button', 'mb-btn saved-map-start-mapping', labels.startMapping)", MAP)
+        self.assertIn("create('button', 'mb-btn saved-map-clear-current', labels.clearCurrentMap)", MAP)
         self.assertIn("startMappingFromModal(container, progress)", MAP)
         self.assertIn("loadSelectedMap(container, progress)", MAP)
         self.assertNotIn(".saved-map-modal .dashboard-control-button", CSS)
+        self.assertIn(".saved-map-modal .mb-btn {", CSS)
+        self.assertNotIn("function createControlButton(", MAP)
         self.assertIn("min-height:min(60vh,550px)", CSS)
 
     def test_description_only_on_error(self):
@@ -221,10 +223,10 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", INDEX)
-        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", LOGIN)
+        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", INDEX)
+        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        self.assertIn("saved_map_modal.js?v=20261015-map-footer-tight-v3", INDEX)
+        self.assertIn("saved_map_modal.js?v=20261015-bookmark-buttons-v4", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
