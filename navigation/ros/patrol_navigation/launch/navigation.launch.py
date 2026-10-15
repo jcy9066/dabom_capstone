@@ -61,9 +61,8 @@ def generate_launch_description():
     max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
     wheel_track_m = env_float("WHEEL_TRACK_M", minimum=0.01)
     # Differential-drive in-place rotation at left=-max, right=+max.
-    max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
-    # Physical motor breakaway floor. Apply only after a non-zero wheel command;
-    # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
+    max_angular_rps = min(1.05, (2.0 * max_wheel_mps) / wheel_track_m)
+    # Physical motor breakaway floor. Do not apply it to zero-velocity STOP.
     min_auto_drive_pwm = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0)
     pkg_share = FindPackageShare(
         "patrol_navigation"
@@ -163,11 +162,7 @@ def generate_launch_description():
         parameters=[
             nav2_params,
             {
-                "FollowPath.min_vel_x": 0.0,
-                "FollowPath.min_speed_xy": 0.0,
-                "FollowPath.max_vel_x": max_wheel_mps,
-                "FollowPath.max_speed_xy": max_wheel_mps,
-                "FollowPath.max_vel_theta": max_angular_rps,
+                "FollowPath.desired_linear_vel": max_wheel_mps,
                 "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
             },
         ],
@@ -205,7 +200,12 @@ def generate_launch_description():
         name="planner_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "GridBased.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32.json"]
+                ),
+            },
         ],
         remappings=common_remappings,
     )
