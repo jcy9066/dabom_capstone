@@ -356,6 +356,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         failed = self.api.state_response()
         self.assertEqual("FAILED", failed["navigation_state"])
         self.assertIsNotNone(failed["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        await self.api.evaluate_watchdog()
+        await self.confirm_pending_stop_for_test()
 
         with self.api._lock:
             self.api._state["navigation_state"] = "NAVIGATING"
@@ -952,6 +956,34 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             c.get("reason") == "nav2_failed" for _, c in self.commands
         ))
         self.assertFalse(self.api.state_response()["emergency_stop"])
+
+    async def test_sensor_recovery_rejected_when_pi_stop_undeliverable(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6)
+        self.assertEqual(
+            "LIDAR_DATA_LOSS", await self.api.evaluate_watchdog(now=base),
+        )
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.2))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        failed = self.api.state_response()
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertFalse(failed["emergency_stop"])
+        self.assertIsNone(self.api.motion_safety_context())
 
     async def test_encoder_motion_after_stop_updates_estop_reason(self):
         await self.driving_ready()
