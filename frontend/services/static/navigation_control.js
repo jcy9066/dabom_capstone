@@ -3,7 +3,7 @@
 
     const POLL_MS = 750;
     const HIDDEN_POLL_MS = 2000;
-    const CONTROL_REFRESH_TIMEOUT_MS = 700;
+    const CONTROL_REFRESH_TIMEOUT_MS = 2000;
     const DRIVE_MODE_CONFIRM_TIMEOUT_MS = 5000;
     const MAX_HAZARD_ENTRIES = 50;
     const state = {
@@ -29,6 +29,7 @@
         hazardSequence: 0,
         hazardObserver: null,
         hazardReconcileScheduled: false,
+        controlRevision: 0,
         controlRefreshPromise: null,
         controlPollTimer: null,
     };
@@ -242,6 +243,7 @@
             pending: state.drivePending,
         });
         controls?.syncNavigationMode?.(payload.navigation_mode, {
+            available: state.control !== null,
             pending: state.navigationPending,
         });
         controls?.emergencyStop?.sync({
@@ -294,6 +296,8 @@
     }
 
     function applyControlState(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        state.controlRevision += 1;
         state.control = payload;
         window.setDashboardRobotConnection?.(payload?.connected === true);
         window.applyServerPatrolMode?.(payload?.robot_mode);
@@ -315,8 +319,30 @@
         window.navigationMapView?.requestRender();
     }
 
+    function markControlUnavailable() {
+        if (!state.control) return;
+        const previous = state.control;
+        state.control = null;
+        state.controlRevision += 1;
+        state.lastViewerStateText = '';
+        window.dabomNavigationControlState = null;
+        // An unreachable state endpoint is not evidence of any robot mode.
+        window.setDashboardRobotConnection?.(false);
+        window.applyServerPatrolMode?.(null);
+        syncControlComponents({
+            ...previous,
+            connected: false,
+            robot_mode: null,
+            navigation_mode: null,
+        });
+        if ($('navigation-start')) $('navigation-start').hidden = true;
+        if ($('navigation-cancel')) $('navigation-cancel').hidden = true;
+        document.dispatchEvent(new CustomEvent('dabom:navigation-control-unavailable'));
+    }
+
     function refreshState() {
         if (state.controlRefreshPromise) return state.controlRefreshPromise;
+        const issuedAtRevision = state.controlRevision;
         const controller = new AbortController();
         const timeoutId = window.setTimeout(
             () => controller.abort(),
@@ -327,10 +353,20 @@
             { signal: controller.signal },
         )
             .then(payload => {
+                // A command or newer state application supersedes an in-flight GET.
+                if (issuedAtRevision !== state.controlRevision) return state.control;
+                if (
+                    typeof payload?.connected !== 'boolean'
+                    || !['MAPPING', 'DRIVING'].includes(String(payload?.navigation_mode || '').toUpperCase())
+                ) {
+                    throw new Error('Navigation 상태 응답 형식이 올바르지 않습니다.');
+                }
                 applyControlState(payload);
                 return payload;
             })
             .catch(error => {
+                if (issuedAtRevision !== state.controlRevision) return state.control;
+                markControlUnavailable();
                 setFeedback(`상태 조회 실패: ${error.message}`, true);
                 return null;
             })
@@ -582,6 +618,10 @@
     }
 
     async function requestNavigationMode(mode, options = {}) {
+        if (!state.control) {
+            setFeedback('Navigation Control 상태를 확인하지 못했습니다.', true);
+            return false;
+        }
         const target = String(mode || '').toUpperCase();
         if (target === 'MAPPING') return setMappingMode(options);
         if (
