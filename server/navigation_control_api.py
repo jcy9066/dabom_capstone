@@ -368,6 +368,8 @@ class NavigationControlApi:
     def _motion_allowed_locked(self, now: float) -> bool:
         if self._state["emergency_stop"] or self._encoder_stop_violation:
             return False
+        if self._sensor_recovery is not None:
+            return False
 
         if self._stop_commanded_at is None:
             return True
@@ -881,6 +883,7 @@ class NavigationControlApi:
     async def pause_for_manual(self) -> dict[str, Any]:
         """Stop the active ROS action while retaining the goal for manual arrival."""
         with self._lock:
+            self._sensor_recovery = None
             self._arm_pending_stop_locked()
             previous_navigation_state = self._state["navigation_state"]
             self._state["navigation_state"] = "PAUSING_FOR_MANUAL"
@@ -958,6 +961,8 @@ class NavigationControlApi:
             self._state["emergency_stop"] = True
             self._state["emergency_reason"] = normalized_reason
             self._state["navigation_state"] = "EMERGENCY_STOPPED"
+            self._sensor_recovery = None
+            self._pending_terminal_stop = None
             if not was_stopped and not self._encoder_stop_violation:
                 self._stop_commanded_at = time.time()
                 self._stop_encoder_ticks = self._encoder_ticks
@@ -1359,6 +1364,12 @@ class NavigationControlApi:
         self._stop_confirmation_last_at = None
         self._stop_confirmation_samples = 0
 
+    def _safe_live_pose(self) -> dict[str, Any] | None:
+        try:
+            return self._get_live_pose()
+        except Exception:
+            return None
+
     async def _advance_sensor_recovery(self, current: float) -> None:
         with self._lock:
             recovery = self._sensor_recovery
@@ -1469,7 +1480,7 @@ class NavigationControlApi:
                     self._stop_encoder_ticks = None
                     self._stop_confirmation_after_sequence = None
                     self._start_navigation_progress_locked(
-                        self._get_live_pose(), time.time(),
+                        self._safe_live_pose(), time.time(),
                     )
                     self._touch_locked()
             if interrupted:
