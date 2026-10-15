@@ -196,6 +196,12 @@ class RobotCommandClient:
                 return round(value, 1)
         return None
 
+    def _current_speaker_volume(self) -> int | None:
+        if not self.motor.connected or self.motor.pico_reboot_pending():
+            return None
+        volume = getattr(self.motor, "volume_percent", None)
+        return volume if type(volume) is int and 0 <= volume <= 100 else None
+
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
         with self._safety_lock:
@@ -235,11 +241,7 @@ class RobotCommandClient:
             "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
-            "speaker_volume_percent": (
-                getattr(self.motor, "volume_percent", None)
-                if self.motor.connected and not self.motor.pico_reboot_pending()
-                else None
-            ),
+            "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
         }
@@ -674,11 +676,7 @@ class RobotCommandClient:
                     "motor_connected": (
                         self.motor.connected
                     ),
-                    "speaker_volume_percent": (
-                        getattr(self.motor, "volume_percent", None)
-                        if self.motor.connected and not self.motor.pico_reboot_pending()
-                        else None
-                    ),
+                    "speaker_volume_percent": self._current_speaker_volume(),
                 }
             )
         )
