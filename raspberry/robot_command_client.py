@@ -235,6 +235,11 @@ class RobotCommandClient:
             "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
+            "speaker_volume_percent": (
+                getattr(self.motor, "volume_percent", None)
+                if self.motor.connected and not self.motor.pico_reboot_pending()
+                else None
+            ),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
         }
@@ -582,6 +587,12 @@ class RobotCommandClient:
                     str(message.get("text", ""))
                 )
 
+            elif command_type == "set_volume":
+                volume = message.get("volume_percent")
+                if type(volume) is not int or not 0 <= volume <= 100:
+                    raise RuntimeError("volume_percent must be an integer between 0 and 100")
+                await asyncio.to_thread(self.motor.set_volume, volume)
+
             elif command_type == "beep":
                 duration_ms = self._duration_ms(
                     message.get("duration_ms", 350)
@@ -662,6 +673,11 @@ class RobotCommandClient:
                     "motion": self.motor.current_motion,
                     "motor_connected": (
                         self.motor.connected
+                    ),
+                    "speaker_volume_percent": (
+                        getattr(self.motor, "volume_percent", None)
+                        if self.motor.connected and not self.motor.pico_reboot_pending()
+                        else None
                     ),
                 }
             )
