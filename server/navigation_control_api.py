@@ -1712,7 +1712,15 @@ class NavigationControlApi:
                     )
                 if superseded:
                     return False
-                await self.emergency_stop("BLOCKED_TIMEOUT", automatic=True)
+                # A Nav2 cancellation exception does not establish a
+                # physically blocked route. The Pi STOP was already sent;
+                # keep its command gate armed and report FAILED, not E-STOP.
+                with self._lock:
+                    self._arm_pending_stop_locked()
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "NAV_CANCEL_FAILED"
+                    self._reset_navigation_progress_locked()
+                    self._touch_locked()
                 return True
             if not delivered:
                 # Nav2 is canceled, so the route is no longer producing commands.
