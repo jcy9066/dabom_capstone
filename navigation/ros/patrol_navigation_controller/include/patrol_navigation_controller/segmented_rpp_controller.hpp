@@ -55,6 +55,9 @@ private:
   static double distance(
     const geometry_msgs::msg::PoseStamped & first,
     const geometry_msgs::msg::PoseStamped & second);
+  geometry_msgs::msg::PoseStamped inControllerFrame(
+    const geometry_msgs::msg::PoseStamped & target,
+    const std::string & target_frame) const;
   void buildStages();
   void activateStage();
   void checkRotationCollision(
@@ -66,6 +69,7 @@ private:
   pluginlib::ClassLoader<nav2_core::Controller> rpp_loader_;
   std::unique_ptr<nav2_core::Controller> rpp_;
   rclcpp_lifecycle::LifecycleNode::WeakPtr parent_;
+  std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_;
   std::unique_ptr<nav2_costmap_2d::FootprintCollisionChecker<
     nav2_costmap_2d::Costmap2D *>> collision_;
