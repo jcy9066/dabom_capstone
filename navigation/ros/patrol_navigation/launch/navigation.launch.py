@@ -164,6 +164,7 @@ def generate_launch_description():
             {
                 "FollowPath.desired_linear_vel": max_wheel_mps,
                 "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
+                "FollowPath.segment_pivot_max_angular": max_angular_rps,
             },
         ],
         remappings=(
