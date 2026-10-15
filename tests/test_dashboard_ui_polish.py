@@ -305,7 +305,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('margin-top:auto!important;padding-top:5px;', CSS)
         self.assertIn('.saved-map-secondary-column > .saved-map-location-footer-spacer', CSS)
         self.assertIn('.saved-map-secondary-column > .saved-map-location-actions', CSS)
-        self.assertIn('flex:0 0 auto;min-height:52px;align-items:center;', CSS)
+        self.assertIn('flex:0 0 auto;min-height:44px;align-items:center;', CSS)
         self.assertIn('margin-top:0!important;padding-block:5px!important;', CSS)
         self.assertIn('panel.append(picker, fields);', MAP)
         self.assertNotIn('panel.append(picker, fields, actions);', MAP)
@@ -341,8 +341,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-location-footer-v4', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-location-footer-v4', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-footer-alignment-v5', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-footer-alignment-v5', LOGIN)
 
 
 if __name__ == "__main__":

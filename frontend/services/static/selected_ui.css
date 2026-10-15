@@ -2185,7 +2185,9 @@ header { padding-top: 3px; }
   flex:0 0 20px;min-height:20px;
 }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-actions {
-  flex:0 0 auto;min-height:52px;align-items:center;
+  /* 34px buttons + 5px vertical padding on each side = 44px, matching the
+     intrinsic height of the left .saved-map-primary-actions footer. */
+  flex:0 0 auto;min-height:44px;align-items:center;
   margin-top:0!important;padding-block:5px!important;
   justify-content:flex-end;
 }
