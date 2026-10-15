@@ -85,8 +85,8 @@ class EnterpriseDashboardUiTests(unittest.TestCase):
         self.assertNotIn("--bg-color: #000000", CSS)
 
     def test_stylesheet_cache_for_both_pages(self):
-        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", INDEX)
-        self.assertIn("selected_ui.css?v=20261015-bookmark-map-buttons-v9", LOGIN)
+        self.assertIn("selected_ui.css?v=20261016-map-action-semantic-v10", INDEX)
+        self.assertIn("selected_ui.css?v=20261016-map-action-semantic-v10", LOGIN)
         self.assertIn("selected_ui.js?v=20261014-shared-drawer-v2", INDEX)
 
 if __name__ == "__main__":
