@@ -13,6 +13,11 @@ except ModuleNotFoundError:  # Direct robot_command_client.py execution.
     from env_config import env_float
 
 try:
+    from raspberry.controllers.jerk_limiter import WheelJerkLimiter
+except ModuleNotFoundError:
+    from controllers.jerk_limiter import WheelJerkLimiter
+
+try:
     import serial
 except ImportError:
     serial = None
@@ -91,6 +96,12 @@ class MotorController:
                 "max_wheel_mps must match MAX_WHEEL_MPS; update the shared calibration"
             )
 
+        # Profile operates on final normalized wheel PWM, after breakaway
+        # scaling. Emergency/STOP commands bypass the profile entirely.
+        self._jerk_limiter = WheelJerkLimiter(
+            max_accel=0.50 / self.max_wheel_mps,
+            max_jerk=2.0 / self.max_wheel_mps,
+        )
         self.last_command_at = 0.0
         self.current_motion = "stop"
         self.led_enabled = False
@@ -536,7 +547,9 @@ class MotorController:
 
         with self._command_lock:
             self._ensure_connected_locked()
-
+            # Manual MOVE remains independent from the autonomous velocity
+            # profile. Resume auto drive from zero after manual takeover.
+            self._jerk_limiter.reset()
             self._exchange_locked(
                 f"MOVE,{direction},{normalized_speed:.3f}"
             )
@@ -605,11 +618,18 @@ class MotorController:
         with self._command_lock:
             self._ensure_connected_locked()
 
-            self._exchange_locked(
-                "DRIVE,"
-                f"{left_normalized:.3f},"
-                f"{right_normalized:.3f}"
+            limited_left, limited_right = self._jerk_limiter.step(
+                left_normalized, right_normalized, time.monotonic(),
             )
+            try:
+                self._exchange_locked(
+                    "DRIVE,"
+                    f"{limited_left:.3f},"
+                    f"{limited_right:.3f}"
+                )
+            except Exception:
+                self._jerk_limiter.reset()
+                raise
 
             with self._state_lock:
                 self.last_command_at = time.monotonic()
@@ -625,6 +645,8 @@ class MotorController:
         error: Optional[Exception] = None
 
         with self._command_lock:
+            # STOP, failsafe and E-STOP have no acceleration/jerk delay.
+            self._jerk_limiter.reset()
             with self._state_lock:
                 self.current_motion = "stop"
                 self.last_command_at = time.monotonic()
