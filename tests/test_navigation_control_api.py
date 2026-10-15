@@ -473,6 +473,42 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("EMERGENCY_STOPPED", state["navigation_state"])
         self.assertEqual(1.0, state["active_goal"]["x"])
 
+    async def test_new_goal_while_path_ready_does_not_send_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        result = await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.2})
+        self.assertEqual("PATH_READY", result["navigation_state"])
+        self.assertEqual(1.5, result["active_goal"]["x"])
+        self.assertEqual(2, self.map_api.ros_control.plan_calls)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertFalse(any(
+            c.get("reason") == "navigation_goal_replace" for _, c in self.commands
+        ))
+
+    async def test_replacement_plan_error_keeps_old_goal_after_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        old_goal = dict(self.api.state_response()["active_goal"])
+
+        def unavailable_plan(_goal):
+            raise RuntimeError("Nav2 planner unavailable")
+
+        task = asyncio.create_task(
+            self.api.plan_goal({"x": 1.5, "y": 1.5, "yaw": 0.0})
+        )
+        await asyncio.sleep(0.03)
+        self.map_api.ros_control.compute_path = unavailable_plan
+        await self.confirm_pending_stop_for_test()
+        with self.assertRaises(RuntimeError):
+            await task
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("GOAL_REPLACEMENT_PLAN_FAILED", current["last_error"])
+        self.assertEqual(old_goal, current["active_goal"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertIsNone(self.api.motion_safety_context())
+
     async def test_goal_terminal_and_manual_tolerance_rules(self):
         await self.driving_ready()
         await self.api.plan_goal({"goal": {"x": 1.0, "y": 1.0, "yaw": 0.0}})
