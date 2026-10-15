@@ -50,8 +50,8 @@ class DashboardRecordsCoreTests(unittest.TestCase):
             assert.strictEqual(patrolFilters.reset().eventType, '');
 
             const pagination = records.createPaginationState({ page: 2, pageSize: 10, total: 101 });
-            assert.strictEqual(pagination.pageSize, 50);
-            assert.strictEqual(pagination.totalPages, 3);
+            assert.strictEqual(pagination.pageSize, 10);
+            assert.strictEqual(pagination.totalPages, 11);
             pagination.reset();
             assert.strictEqual(pagination.page, 1);
 
@@ -93,6 +93,51 @@ class DashboardRecordsCoreTests(unittest.TestCase):
             selection.replace([21, 22]);
             selection.clear();
             assert.deepStrictEqual(plain(selection.selectedKeys), []);
+            """
+        )
+
+    def test_five_number_buttons_with_centered_current_page(self):
+        self.run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const assert = require('assert');
+            const element = tag => ({
+                tag, children: [], attributes: {}, listeners: {}, className: '', textContent: '',
+                classList: { add(_) {} },
+                setAttribute(key, value) { this.attributes[key] = value; },
+                addEventListener(key, fn) { this.listeners[key] = fn; },
+                append(...children) { this.children.push(...children); },
+                replaceChildren(...children) { this.children = children; },
+            });
+            const context = { console, document: { createElement: element } };
+            context.window = context;
+            vm.createContext(context);
+            vm.runInContext(fs.readFileSync('frontend/components/records/pagination.js','utf8'), context);
+            const render = context.DabomDashboardComponents.records.renderPagination;
+            const root = element('nav'), clicked = [];
+            function page(number,total) {
+                render(root, { page: number, total, total_pages: Math.ceil(total/10) }, n => clicked.push(n));
+                return root.children[1].children;
+            }
+            let buttons = page(1,123);
+            assert.deepStrictEqual(buttons.map(x => x.textContent), ['', '', '1','2','3']);
+            assert.strictEqual(buttons[2].attributes['aria-current'], 'page');
+            assert.strictEqual(root.children[0].disabled, true);
+            buttons[3].listeners.click();
+            assert.strictEqual(clicked.pop(),2);
+            buttons = page(5,123);
+            assert.deepStrictEqual(buttons.map(x => x.textContent), ['3','4','5','6','7']);
+            assert.strictEqual(buttons[2].attributes['aria-current'], 'page');
+            buttons[4].listeners.click();
+            assert.strictEqual(clicked.pop(),7);
+            buttons = page(13,123);
+            assert.deepStrictEqual(buttons.map(x => x.textContent), ['11','12','13','','']);
+            assert.strictEqual(buttons[2].attributes['aria-current'], 'page');
+            assert.strictEqual(root.children[2].disabled,true);
+            render(root, {page:1,total:10,total_pages:1}, () => {});
+            assert.strictEqual(root.hidden,true);
+            assert.strictEqual(root.children.length,0);
             """
         )
 

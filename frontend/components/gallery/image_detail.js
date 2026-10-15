@@ -197,7 +197,6 @@
         const listLength = Number(context.listLength) || 1;
         const allowNavigation = context.origin === 'gallery';
         return `<section class="gallery-detail" data-dashboard-modal-view aria-label="이미지 상세">
-            <div class="gallery-detail-header"><strong>이미지 상세</strong><button type="button" class="gallery-detail-back" data-detail-back>← 이전 화면</button></div>
             <div class="gallery-image-zoom">
                 <div class="gallery-image-viewport" data-image-viewport tabindex="0" aria-label="이미지 확대 및 이동">
                     ${imageMarkup(item, 'gallery-detail-image', `${sourceLabel(item)} detail image`)}
@@ -206,10 +205,13 @@
                     <button type="button" data-image-zoom="-1" aria-label="축소">−</button>
                     <output data-image-zoom-value>100%</output>
                     <button type="button" data-image-zoom="1" aria-label="확대">+</button>
-                    <button type="button" data-image-zoom-reset aria-label="기본 크기로 복원">원본</button>
+                    <button type="button" data-image-zoom-reset aria-label="기본 크기로 복원">Raw</button>
                 </div>
             </div>
-            <dl class="gallery-metadata"><div><dt>기록 시각</dt><dd>${escapeHtml(timestamp(item))}</dd></div>${metadata(item).map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '-')}</dd></div>`).join('')}</dl>
+            <section class="gallery-metadata">
+                <div class="gallery-metadata-top"><button type="button" class="gallery-detail-back" data-detail-back>← 이전 화면</button></div>
+                <dl class="gallery-metadata-fields"><div><dt>기록 시각</dt><dd>${escapeHtml(timestamp(item))}</dd></div>${metadata(item).map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '-')}</dd></div>`).join('')}</dl>
+            </section>
             <div class="gallery-detail-actions">
                 ${allowNavigation ? `<button type="button" data-detail-change="-1" ${index <= 0 ? 'disabled' : ''}>← 이전</button>` : '<span></span>'}
                 <button type="button" class="gallery-delete-btn" data-detail-delete>삭제</button>

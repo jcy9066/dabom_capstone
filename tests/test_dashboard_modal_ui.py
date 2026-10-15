@@ -37,6 +37,7 @@ class FakeElement {
     }
     append(...children) { this.children.push(...children); }
     addEventListener(name, handler) { this.listeners[name] = handler; }
+    setAttribute(name, value) { this[name] = value; }
     removeAttribute(name) { if (name === 'onclick') this.onclick = null; }
     descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
     matches(selector) {
@@ -87,6 +88,11 @@ const responses = {
         ok: true,
         maps: [{ map_name: 'alpha', saved_at: '2026-08-28T10:00:00Z', width: 10, height: 20, resolution: 0.05 }],
     },
+    '/api/navigation/locations': {
+        ok: true, gps: { fix: false }, locations: [
+            { location_id: 'existing', name: '기존 장소', lat: 37.1, lng: 127.1, radius_m: 30 }
+        ],
+    },
 };
 const context = {
     console,
@@ -116,7 +122,138 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
     assert.strictEqual(manager.body.querySelector('#saved-map-pose-x').value, '');
     assert.strictEqual(manager.body.querySelector('.saved-map-active').textContent, 'ACTIVE');
+    const primary = manager.body.querySelector('.saved-map-primary-column');
+    const pose = primary.querySelector('.saved-map-pose');
+    const list = primary.querySelector('.saved-map-list');
+    assert.ok(primary.children.indexOf(pose) < primary.children.indexOf(list));
+    assert.strictEqual(list.children.length, 1);
+    assert.ok(list.children.every(node => node.className === 'saved-map-option'));
+    const secondary = manager.body.querySelector('.saved-map-secondary-column');
+    const locationCard = secondary.querySelector('.saved-map-location-panel');
+    const locationActions = secondary.querySelector('.saved-map-location-actions');
+    assert.strictEqual(secondary.children[0], locationCard);
+    assert.strictEqual(secondary.children.length, 2);
+    assert.strictEqual(secondary.children[1], locationActions);
+    assert.strictEqual(locationCard.querySelector('.saved-map-location-actions'), null);
+    assert.strictEqual(locationActions.children.length, 3);
+    const bookmarkButtons = [...primary.querySelectorAll('.mb-btn'), ...locationActions.querySelectorAll('.mb-btn')];
+    assert.strictEqual(bookmarkButtons.length, 7);
+    for (const button of bookmarkButtons) {
+        assert.strictEqual(button.tagName, 'BUTTON');
+        assert.strictEqual(button.type, 'button');
+        assert.strictEqual(button.dataset.controlButton, undefined);
+        assert.ok(button.className.split(/\s+/).includes('mb-btn'));
+    }
+    assert.strictEqual(locationActions.children[0].disabled, true); // GPS without fix
+    assert.strictEqual(locationActions.children[2].disabled, true); // no place selected
+    const picker = manager.body.querySelector('.saved-map-location-picker');
+    assert.ok(picker);
+    const newName = picker.querySelector('.saved-map-location-new');
+    const select = picker.querySelector('.saved-map-location-select');
+    assert.strictEqual(picker.children[0], newName);
+    assert.strictEqual(picker.children[1], select);
+    const triggerChoice = picker.querySelector('.saved-map-location-trigger');
+    const customMenu = picker.querySelector('.saved-map-location-options');
+    assert.ok(select.hidden);
+    assert.ok(customMenu.hidden);
+    triggerChoice.listeners.click();
+    assert.strictEqual(customMenu.hidden, false);
+    const existingChoice = customMenu.children.find(node => node.dataset.locationValue === 'existing');
+    assert.ok(existingChoice);
+    existingChoice.listeners.click();
+    assert.strictEqual(select.value, 'existing');
+    assert.strictEqual(triggerChoice.textContent, '기존 장소');
+    assert.ok(customMenu.hidden);
+    const draft = select.children.find(node => node.value === '__draft_location__');
+    assert.ok(draft.hidden);
+    newName.value = '검증 장소';
+    newName.listeners.input();
+    assert.strictEqual(draft.hidden, false);
+    assert.strictEqual(select.value, '__draft_location__');
+    assert.strictEqual(draft.textContent, '검증 장소');
+    const draftChoice = customMenu.children.find(node => node.dataset.locationValue === '__draft_location__');
+    assert.ok(draftChoice);
+    assert.strictEqual(draftChoice.hidden, false);
+    assert.strictEqual(draftChoice.textContent, '검증 장소');
+    assert.strictEqual(triggerChoice.textContent, '검증 장소');
+    assert.strictEqual(manager.body.querySelector('#saved-map-location-name').value, '검증 장소');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(
+            ["node", "-e", source], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+    def test_action_description_overlay_does_not_replace_records_modal(self):
+        source = r"""
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+
+class FakeElement {
+    constructor(tag = 'div') {
+        this.tagName = tag.toUpperCase();
+        this.children = [];
+        this.listeners = {};
+        this.attrs = {};
+        this.className = '';
+        this.dataset = {};
+        this.textContent = '';
+        this.inert = false;
+        this.isConnected = true;
+    }
+    append(...children) {
+        children.forEach(child => { child.parent = this; this.children.push(child); });
+    }
+    remove() {
+        this.isConnected = false;
+        if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+    }
+    setAttribute(key, value) { this.attrs[key] = value; }
+    addEventListener(name, fn) { this.listeners[name] = fn; }
+    focus() { document.activeElement = this; }
+    matches(name) { return name === '.modal-content' && this.className === 'modal-content'; }
+    querySelector(selector) {
+        return selector === ':scope > .modal-content'
+            ? this.children.find(child => child.matches('.modal-content')) || null
+            : null;
+    }
+}
+const document = {
+    activeElement: null,
+    handlers: {},
+    createElement: tag => new FakeElement(tag),
+    addEventListener(name, fn) { this.handlers[name] = fn; },
+    removeEventListener(name, fn) { if (this.handlers[name] === fn) delete this.handlers[name]; },
+};
+const host = new FakeElement();
+const parent = new FakeElement();
+parent.className = 'modal-content';
+host.append(parent);
+const manager = { root: host, activeView: { name: 'actionsModal' } };
+const context = { console, document };
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync('frontend/components/records/record_modal.js', 'utf8'), context);
+const records = context.DabomDashboardComponents.records;
+const trigger = new FakeElement('button');
+trigger.focus();
+const text = '<script>alert(1)</script>\nLong description';
+const child = records.openActionDescriptionDetail(manager, text, trigger);
+assert.strictEqual(manager.activeView.name, 'actionsModal');
+assert.strictEqual(parent.inert, true);
+assert.strictEqual(host.children.length, 2);
+assert.strictEqual(child.dialog.children[1].children[0].textContent, text);
+const escape = { key: 'Escape', preventDefault() {}, stopImmediatePropagation() {} };
+document.handlers.keydown(escape);
+assert.strictEqual(host.children.length, 1);
+assert.strictEqual(parent.inert, false);
+assert.strictEqual(document.activeElement, trigger);
+assert.strictEqual(manager.activeView.name, 'actionsModal');
+const child2 = records.openActionDescriptionDetail(manager, 'Again', trigger);
+child2.dialog.children[2].children[0].listeners.click();
+assert.strictEqual(parent.inert, false);
+assert.strictEqual(host.children.length, 1);
 """
         completed = subprocess.run(
             ["node", "-e", source], cwd=ROOT, capture_output=True, text=True, check=False

@@ -130,9 +130,9 @@ button[aria-busy="true"] { cursor:progress; }
   border-color:var(--ui-highlight); box-shadow:0 0 0 3px var(--primary-glow,rgba(80,110,140,.12)); outline:none;
 }
 
-/* 10 — 00Kubi-style pill filter states. Existing independent filter controls unchanged. */
+/* Filter Bar: share the normal button radius; keep filter states and controls. */
 .modal-filter-bar button[data-cycle],.gallery-toolbar .gallery-filter-btn {
-  position:relative; border-radius:999px; padding:5px 14px; border:1px solid var(--ui-edge);
+  position:relative; border-radius:var(--ui-radius-control); padding:5px 14px; border:1px solid var(--ui-edge);
   color:var(--text-muted); background:var(--card-bg); box-shadow:0 1px 2px rgba(0,0,0,.08);
   transition:color .2s,background .2s,box-shadow .2s,border-color .2s;
 }
@@ -145,12 +145,58 @@ button[aria-busy="true"] { cursor:progress; }
   box-shadow:inset 0 0 0 1px var(--ui-highlight), 0 2px 6px rgba(0,0,0,.07);
 }
 
-/* 11 — gharsh11032000 radio-inspired pagination navigation. */
-.records-pagination button { border-radius:999px !important; min-width:64px; min-height:29px; padding:6px 10px !important;
-  transition:background .2s,transform .2s,box-shadow .2s !important; }
-.records-pagination button:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,.1); }
-.records-pagination span { padding:3px 8px; min-width:48px; text-align:center; border:1px solid var(--ui-edge);
-  border-radius:999px; color:var(--ui-highlight); background:var(--card-bg2); font-weight:750; }
+/* 11 — Radio-inspired segmented pagination, adapted from gharsh11032000.
+   https://uiverse.io/gharsh11032000/tiny-falcon-15 (MIT license).
+   Preserve five fixed slots and native button keyboard interaction. */
+.records-pagination{justify-content:center;gap:8px;}
+.records-pagination .records-page-numbers{
+  display:grid;grid-template-columns:repeat(5,minmax(0,36px));align-items:center;
+  justify-items:stretch;gap:3px;padding:4px;border-radius:9px;
+  background:color-mix(in srgb,var(--card-bg2) 88%,var(--text-muted) 12%);
+  border:1px solid var(--border-color);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.035);
+}
+.records-pagination .records-page-number,.records-pagination .records-page-arrow{
+  display:flex;align-items:center;justify-content:center;box-sizing:border-box;
+  flex:0 0 auto;width:36px;min-width:36px;height:34px;min-height:34px;
+  padding:0!important;border:0!important;border-radius:7px!important;
+  background:transparent;color:var(--text-dark);font:inherit;font-size:12px;
+  font-weight:650;line-height:1;cursor:pointer;
+  box-shadow:none;transform:none;
+  transition:background-color .18s ease,color .18s ease,box-shadow .18s ease;
+}
+.records-pagination .records-page-number.is-current,
+.records-pagination .records-page-number[aria-current="page"]{
+  background:var(--primary-color);color:#fff;font-weight:800;
+  box-shadow:0 2px 7px rgba(0,0,0,.16);
+  cursor:default;
+}
+.records-pagination .records-page-number:not(.is-current):hover,
+.records-pagination .records-page-arrow:hover:not(:disabled){
+  background:var(--card-bg);color:var(--accent);
+  box-shadow:0 1px 4px rgba(0,0,0,.09);transform:none;
+}
+.records-pagination .records-page-number:focus-visible,
+.records-pagination .records-page-arrow:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px;
+}
+.records-pagination .records-page-arrow{
+  border:1px solid var(--border-color)!important;
+  border-radius:9px!important;background:var(--card-bg2);
+  font-size:22px;font-weight:500;
+}
+.records-pagination .records-page-arrow:disabled{opacity:.4;cursor:not-allowed;}
+.records-pagination .records-page-empty{
+  width:36px;height:34px;display:block;pointer-events:none;
+}
+@media(max-width:380px){
+  .records-pagination .records-page-numbers{grid-template-columns:repeat(5,30px);gap:2px;padding:3px;}
+  .records-pagination .records-page-empty,
+  .records-pagination .records-page-number{width:30px;min-width:30px;height:30px;min-height:30px;}
+}
+@media(prefers-reduced-motion:reduce){
+  .records-pagination .records-page-number,.records-pagination .records-page-arrow{transition:none;}
+}
 
 /* 13 — Praashoo7 soft recessed login/signup form; theme tokens preserved. */
 body.login-page { background:var(--bg-color); }
@@ -190,23 +236,19 @@ body.login-page { background:var(--bg-color); }
 .signup-modal.open .signup-dialog { animation:ui-modal-enter .21s var(--ui-ease); }
 
 /* 14 — vinodjangid07 trash button: icon + hover emphasis without changing handlers. */
-button.gallery-delete-btn, .record-delete-actions button[data-action="delete"],
-.saved-map-modal button[data-control-button="danger"] {
+button.gallery-delete-btn, .record-delete-actions button[data-action="delete"] {
   position:relative;
   border-radius:var(--radius-sm); border:1px solid var(--danger-color); color:var(--danger-color);
   background:var(--card-bg); transition:transform .16s,background .2s,color .2s,box-shadow .2s;
 }
-button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before,
-.saved-map-modal button[data-control-button="danger"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
+button.gallery-delete-btn::before,.record-delete-actions button[data-action="delete"]::before { content:""; position:absolute; right:4px; top:1px; width:10px; height:10px; opacity:0; pointer-events:none;
   background:currentColor; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6h18v2H3zm4 3h10l-1 12H8L7 9zm2-6h6l1 2H8l1-2z'/%3E%3C/svg%3E") center/contain no-repeat; }
-button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled),
-.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled) {
+button.gallery-delete-btn:hover:not(:disabled),.record-delete-actions button[data-action="delete"]:hover:not(:disabled) {
   background:var(--danger-color); color:#fff; box-shadow:0 3px 8px var(--danger-glow,rgba(225,29,72,.2));
 }
 button.gallery-delete-btn:hover:not(:disabled) { color:#fff !important; border-color:var(--danger-color) !important; }
 button.gallery-delete-btn:hover:not(:disabled)::before,
-.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before,
-.saved-map-modal button[data-control-button="danger"]:hover:not(:disabled)::before { opacity:.8; }
+.record-delete-actions button[data-action="delete"]:hover:not(:disabled)::before { opacity:.8; }
 button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
 
 /* 15 — Yaya12085 textbox only, not search nor unrelated form/card contents. */
@@ -773,7 +815,12 @@ body.dark-mode .record-event-sensor-anomaly{background:rgba(126,202,167,.18);col
 .signup-close{display:grid;place-items:center;line-height:1;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;}
 
 /* Four visual columns, label | OFF | thumb | ON, with hidden legacy state text. */
-.dashboard-led-toggle {grid-template-columns:minmax(16px,1fr) auto 48px auto;column-gap:4px;}
+/* Symmetric columns keep the LED track centered with Auto and Mapping at any row width. */
+.dashboard-led-toggle {
+  grid-template-columns: minmax(0, 1fr) 30px 48px 30px minmax(0, 1fr);
+  column-gap: 4px;
+  justify-content: stretch;
+}
 .dashboard-model-toggle {grid-template-columns:auto auto 38px auto;column-gap:4px;}
 .dashboard-led-toggle .ui-toggle-side,.dashboard-model-toggle .ui-toggle-side{justify-self:center;}
 .dashboard-led-toggle-label{justify-self:end;}
@@ -819,3 +866,1406 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 .system-control-switch.state-unreachable .ui-process-track{background:var(--border-bright);}
 .system-control-switch.is-unavailable .ui-process-track::after,
 .system-control-switch.state-unreachable .ui-process-track::after{transform:none;}
+
+
+/* ---------------------------------------------------------
+ * UI polish: 2026-10-14. Presentation only.
+ * Retain dev surfaces, state semantics, handlers and API.
+ * --------------------------------------------------------- */
+
+/* All modal and drawer X controls share the same danger hover affordance. */
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]) {
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:8px;min-width:29px;min-height:29px;
+  transition:background-color .17s ease,box-shadow .17s ease,color .17s ease;
+}
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]):hover {
+  color:#fff!important;background:var(--danger-color)!important;
+  box-shadow:0 3px 10px rgba(180,59,78,.22),inset 0 1px 0 rgba(255,255,255,.1)!important;
+}
+:is(.sidebar-close,.signup-close,.close-btn,button[data-modal-close]):focus-visible {
+  outline:2px solid var(--danger-color);outline-offset:2px;
+}
+/* Arrow glyphs are now Unicode triangles, with sortable ARIA unchanged. */
+.record-sort-button [aria-hidden="true"]{display:inline-block;min-width:12px;text-align:center;font-size:9px;vertical-align:middle;}
+
+/* Praashoo7-style inset placeholder treatment using existing theme colors. */
+.login-form .auth-field input::placeholder {color:var(--text-muted);opacity:.68;font-size:12px;letter-spacing:.015em;}
+.login-form .auth-field input:focus::placeholder {opacity:.38;}
+.login-form .auth-field input {box-shadow:inset 2px 3px 7px rgba(0,0,0,.09);}
+
+/* Desktop signup: credential fields on the left, identity fields on the right.
+ * The existing fieldset and its disabled property are retained unchanged. */
+.signup-dialog {width:min(96vw,860px);padding:18px 24px;max-height:calc(100dvh - 28px);overflow-y:auto;}
+.signup-header{margin-bottom:12px;}
+.signup-dialog .auth-dialog-subtitle{margin:-3px 0 8px;font-size:11px;}
+.signup-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 18px;align-items:start;}
+.signup-form>.signup-email-row{grid-column:1;grid-row:1;min-width:0;}
+.signup-form>.signup-verification-row{grid-column:1;grid-row:2;min-width:0;}
+.signup-form>.signup-feedback{grid-column:1;grid-row:3;min-height:14px;margin:0;}
+.signup-form>.auth-protected-fields {
+  grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(3,auto) auto;gap:8px 18px;align-items:start;
+}
+.signup-form>.auth-protected-fields>.signup-field-password {grid-column:1;grid-row:1;}
+.signup-form>.auth-protected-fields>.signup-field-confirm {grid-column:1;grid-row:2;}
+.signup-form>.auth-protected-fields>.signup-field-name {grid-column:2;grid-row:1;}
+.signup-form>.auth-protected-fields>.signup-field-phone {grid-column:2;grid-row:2;}
+.signup-form>.auth-protected-fields>.signup-field-employee {grid-column:2;grid-row:3;}
+.signup-form>.auth-protected-fields>.signup-verified {grid-column:1;grid-row:3;align-self:start;}
+.signup-form>.auth-protected-fields>.signup-submit {
+  grid-column:1/-1;grid-row:4;justify-self:center;width:20%;min-width:142px;margin:0;
+}
+.signup-form .auth-field{gap:4px;min-width:0;}
+.signup-form .auth-field input{min-height:34px;height:34px;padding-inline:9px;}
+.signup-form .auth-field-hint{min-height:0;margin:0;font-size:10px;line-height:1.25;}
+.signup-form .email-send-btn{min-height:34px;padding:4px 8px;font-size:11px;}
+.signup-form .signup-submit{min-height:36px;}
+@media(max-width:680px){
+  .signup-dialog {width:min(100%,520px);max-height:calc(100dvh - 24px);padding:16px;overflow-y:auto;}
+  .signup-form{grid-template-columns:minmax(0,1fr);}
+  .signup-form>.signup-email-row,.signup-form>.signup-verification-row,
+  .signup-form>.signup-feedback{grid-column:1;grid-row:auto;}
+  .signup-form>.auth-protected-fields{grid-column:1;grid-template-columns:1fr;grid-template-rows:none;gap:9px;}
+  .signup-form>.auth-protected-fields>:is(.signup-field-password,.signup-field-confirm,.signup-field-name,
+      .signup-field-phone,.signup-field-employee,.signup-verified){grid-column:1;grid-row:auto;}
+  .signup-form>.auth-protected-fields>.signup-submit {grid-column:1;grid-row:auto;width:100%;max-width:220px;}
+}
+
+/* Server status drawer: appearance only, status updates continue while collapsed. */
+.server-state-card {
+  position: relative;
+  transition: padding-top .23s ease, padding-bottom .23s ease;
+}
+.server-state-card .card-title { text-transform: none; }
+.server-state-heading-actions { display: inline-flex; gap: 8px; align-items: center; min-width: 0; }
+.server-state-drawer-toggle {
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
+}
+.server-state-card:hover .server-state-drawer-toggle,
+.server-state-card:focus-within .server-state-drawer-toggle,
+.server-state-drawer-toggle:focus-visible { opacity: 1; pointer-events: auto; }
+#serverStateGrid { max-height: 400px; opacity: 1; overflow: hidden; transition: max-height .23s ease, opacity .19s ease; }
+.server-state-card.is-collapsed #serverStateGrid { max-height: 0; opacity: 0; pointer-events: none; }
+/* Keep the arrow inside the collapsed card instead of protruding below it. */
+.server-state-card.is-collapsed { padding-top: 5px; padding-bottom: 5px; }
+.server-state-card.is-collapsed .server-state-drawer-toggle {
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.server-state-card.is-collapsed .server-state-header { height: 14px; min-height: 14px; margin-bottom: 0; }
+.server-state-card.is-collapsed .server-state-header .card-title,
+.server-state-card.is-collapsed .server-state-updated { opacity: 0; visibility: hidden; pointer-events: none; }
+.right-panel .alert-card { transition: flex-basis .23s ease; }
+/* Touchscreen users have no hover: keep the reopen control discoverable. */
+@media (hover: none) { .server-state-drawer-toggle { opacity: 1; pointer-events: auto; } }
+/* Present enums in title case; preserve DOM text/status values and original map names. */
+#pi-connection-status,#robot-mode-status,
+#navigation-state-status,#emergency-stop-status {display:inline-block;text-transform:lowercase;}
+#pi-connection-status::first-letter,#robot-mode-status::first-letter,
+#navigation-state-status::first-letter,#emergency-stop-status::first-letter{text-transform:uppercase;}
+/* Auto/Manual text has the same font size as Mapping/Driving, no data-mode change. */
+.dashboard-drive-mode-control .mode-text,.navigation-mode-toggle-label{font-size:10px!important;letter-spacing:.1px;}
+.dashboard-drive-mode-control .mode-text{font-weight:700;}
+.dashboard-led-toggle,.dashboard-led-control-mount{justify-content:center;text-align:center;}
+.dashboard-model-toggle{grid-template-columns:auto auto 38px auto;align-items:center;}
+.dashboard-model-toggle .ui-toggle-side{align-self:center;}
+.dashboard-model-toggle .dashboard-model-toggle-label,.dashboard-model-toggle .ui-toggle-side{
+  display:inline-flex;align-items:center;justify-content:center;line-height:1.1;min-height:20px;
+}
+/* Login-button shape/elevation for the three existing actions, retaining semantic colors. */
+.dashboard-action-controls .auth-btn{
+  border-radius:7px;box-shadow:3px 3px 8px rgba(0,0,0,.12),-2px -2px 7px rgba(255,255,255,.12);
+  transition:transform .17s ease,box-shadow .17s ease,border-color .17s ease;
+}
+.dashboard-action-controls .auth-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:4px 6px 12px rgba(0,0,0,.15);}
+.dashboard-action-controls .auth-btn:active:not(:disabled){transform:translateY(1px);box-shadow:inset 2px 2px 5px rgba(0,0,0,.12);}
+/* Settings title, centered theme toggle and left-opening tooltip. */
+.sidebar-header{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.sidebar-header>.sidebar-title{flex:0 0 auto;}
+.sidebar-theme-control{display:flex;align-items:center;justify-content:center;gap:7px;flex:1 1 auto;min-width:0;}
+.sidebar-theme-control>.sidebar-item-label{font-size:10px;white-space:nowrap;}
+.sidebar-header-actions{flex:0 0 auto;}
+.sidebar-guide-trigger::after{
+  top:50%;bottom:auto;right:calc(100% + 8px);transform:translateY(-50%);
+}
+/* Keep username, email and logout in one actual row. */
+.sidebar-account{align-items:center;gap:5px;padding-bottom:0;margin-bottom:0;}
+.sidebar-account-name,.sidebar-account-id{flex:1 1 0;max-width:none;min-width:0;}
+.sidebar-logout-btn{margin-left:auto;}
+/* Process switches: hide plain ON/OFF text, retain other state labels and aria-label. */
+.system-control-switch:is(.state-on,.state-off,.state-unreachable) .ui-process-label{display:none;}
+.system-control-switch:is(.state-on,.state-off){min-width:44px;}
+/* Map modal uses two equally sized panes. Layout only; existing map and GPS IDs remain. */
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-content{
+  width:min(94vw,1120px);max-width:1120px;max-height:calc(100dvh - 30px);
+}
+.saved-map-modal{gap:5px;min-height:0;}
+.saved-map-two-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:12px;min-height:0;}
+.saved-map-primary-column,.saved-map-secondary-column{display:flex;flex-direction:column;gap:9px;min-width:0;
+  border:1px solid var(--border-color);border-radius:9px;padding:10px;box-sizing:border-box;background:var(--card-bg2);}
+.saved-map-primary-column .saved-map-list{max-height:min(23vh,190px);scrollbar-width:none;}
+.saved-map-primary-column .saved-map-list::-webkit-scrollbar{display:none;}
+.saved-map-secondary-column .saved-map-location-panel{min-width:0;}
+.saved-map-title-hint{display:inline-block;margin-left:12px;font-size:10px;font-weight:400;color:var(--text-muted);
+  line-height:1.45;letter-spacing:0;text-transform:none;vertical-align:middle;}
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-header h2{display:flex;align-items:center;min-width:0;flex-wrap:wrap;}
+.saved-map-primary-column .saved-map-pose input{min-height:30px;}
+
+
+@media(max-width:800px){
+  .saved-map-two-column{grid-template-columns:1fr;}
+  .saved-map-primary-column .saved-map-list{max-height:min(25vh,220px);}
+}
+/* Patrol history table: center event type, fit full dates without clipping. */
+.records-view-patrolModal :is(th:nth-child(3),td:nth-child(3)){text-align:center;}
+.records-view .record-filter-bar input[type="datetime-local"]{
+  min-height:26px;height:28px;line-height:1.2;padding:3px 7px;
+  width:max-content;max-width:100%;min-width:174px;box-sizing:border-box;
+}
+/* Details: no black image letterboxing, compact 80%-height action controls. */
+.gallery-detail .gallery-image-viewport,.gallery-detail .gallery-detail-image{background:transparent!important;}
+.gallery-detail .gallery-detail-actions button{
+  min-height:24px;height:24px;padding:2px 8px;line-height:1.1;box-sizing:border-box;
+}
+/* Current situation two panes, original preview and submit controls. */
+#commonModal[data-modal-view="currentSituation"] .modal-content{width:min(92vw,1040px);max-width:1040px;}
+.current-situation-form{width:100%;max-width:100%;gap:0;}
+.current-situation-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:stretch;}
+.current-situation-media-box,.current-situation-entry-box{
+  min-width:0;border:1px solid var(--border-color);border-radius:9px;
+  padding:12px;background:var(--card-bg2);box-sizing:border-box;
+}
+.current-situation-media-box .privacy-preview-frame{height:min(43vh,340px);min-height:200px;}
+.current-situation-media-box .privacy-preview-frame img{width:100%;height:100%;object-fit:contain;}
+.current-situation-entry-box{display:flex;flex-direction:column;gap:8px;}
+.current-situation-entry-box textarea{flex:1 1 auto;min-height:110px;max-height:260px;}
+.current-situation-entry-box .record-form-actions{margin-top:auto;justify-content:center;}
+@media(max-width:720px){
+  .current-situation-layout{grid-template-columns:1fr;}
+  .current-situation-media-box .privacy-preview-frame{height:220px;min-height:150px;}
+}
+/* Connection status text can be read by assistive tech but visually reduce
+ * verbose offline labels; live logic and explicit warning detail remain. */
+#no-camera-msg[data-connection-visual="offline"]{font-size:0;}
+#no-camera-msg[data-connection-visual="offline"]>.ui-loading-visual{font-size:12px;}
+#lidar-stale-overlay.offline .lidar-stale-title{display:none;}
+@media(prefers-reduced-motion:reduce){#serverStateGrid,.server-state-drawer-toggle>span{transition:none;}}
+
+/* Account info must appear below Settings. The earlier sticky / auto-margin
+ * and 100%-wide logout styles hid the user's name and login email. */
+.sidebar-body > .sidebar-account {
+  position: static;
+  bottom: auto;
+  z-index: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30%;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 3px 8px;
+  flex: 0 0 auto;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  box-sizing: border-box;
+}
+.sidebar-body > .sidebar-account > .sidebar-account-name,
+.sidebar-body > .sidebar-account > .sidebar-account-id {
+  grid-column: 1;
+  min-width: 0;
+  max-width: none;
+  width: auto;
+  margin: 0;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+.sidebar-body > .sidebar-account > .sidebar-account-name { grid-row: 1; }
+.sidebar-body > .sidebar-account > .sidebar-account-id { grid-row: 2; }
+.sidebar-body > .sidebar-account > .sidebar-logout-btn {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 7px 2px;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+
+/* SERVER / PI: the track is the only visible toggle surface.
+   Preserve the original button, clickable area, state and disable behavior. */
+.system-control-panel .system-control-switch {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+.system-control-panel .system-control-switch:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+}
+/* Old status-dot decoration sits outside the slider; the track already
+   communicates process state. No status data or button handlers are changed. */
+.system-control-panel .system-control-switch::after {
+  content: none;
+}
+
+/* Record toolbar: no persistent focus border or underline.
+   Keep all existing hover/active transform and shadow animations intact. */
+.map-bookmark-panel .mb-btn:focus,
+.map-bookmark-panel .mb-btn:focus-visible {
+  outline: none;
+  text-decoration: none;
+}
+
+
+/* October 14 follow-up: UX-only alignment and responsive layout. */
+/* Credentials and identity fields share the same three desktop rows. */
+.signup-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 18px;align-items:start; }
+.signup-form > .auth-protected-fields { display:contents; }
+.signup-form > .signup-email-row {grid-column:1;grid-row:1;}
+.signup-form > .auth-protected-fields > .signup-field-name {grid-column:2;grid-row:1;}
+.signup-form > .auth-protected-fields > .signup-field-password {grid-column:1;grid-row:2;}
+.signup-form > .auth-protected-fields > .signup-field-phone {grid-column:2;grid-row:2;}
+.signup-form > .auth-protected-fields > .signup-field-confirm {grid-column:1;grid-row:3;}
+.signup-form > .auth-protected-fields > .signup-field-employee {grid-column:2;grid-row:3;}
+.signup-form > .signup-verification-row {grid-column:1;grid-row:4;align-self:center;}
+.signup-form > .auth-protected-fields > .signup-verified {grid-column:2;grid-row:4;align-self:center;}
+.signup-form > .signup-feedback {grid-column:1/-1;grid-row:5;min-height:14px;}
+.signup-form > .auth-protected-fields > .signup-submit {grid-column:1/-1;grid-row:6;justify-self:center;width:20%;min-width:142px;}
+.signup-dialog .signup-form > .auth-protected-fields > :is(.signup-field-password,.signup-field-confirm,.signup-field-name,.signup-field-phone,.signup-field-employee){align-self:start;}
+.signup-form > .signup-verification-row[hidden],.signup-form > .auth-protected-fields > .signup-verified[hidden]{display:none!important;}
+@media(max-width:680px){
+ .signup-form{grid-template-columns:minmax(0,1fr);}
+ .signup-form > .signup-email-row,.signup-form > .signup-verification-row,.signup-form > .signup-feedback,
+ .signup-form > .auth-protected-fields > :is(.signup-field-password,.signup-field-confirm,.signup-field-name,.signup-field-phone,.signup-field-employee,.signup-verified,.signup-submit)
+ {grid-column:1;grid-row:auto;}
+ .signup-form > .auth-protected-fields > .signup-submit{width:100%;max-width:220px;}
+}
+
+/* Display sentence case while leaving the live server/ROS status text unchanged. */
+.server-state-grid .server-state-field{justify-content:center;text-align:left;min-width:0;}
+.server-state-grid .server-state-field strong{display:block;text-transform:lowercase;line-height:1.35;min-height:1.35em;overflow-wrap:anywhere;}
+.server-state-grid .server-state-field strong::first-letter{text-transform:uppercase;}
+.server-state-grid .server-state-field span{display:block;margin-bottom:5px;line-height:1.3;}
+.server-state-card .server-state-drawer-toggle:hover {
+  border-radius:50%;background:transparent!important;
+  box-shadow:none!important;
+}
+
+/* The map and GPS panels extend together to utilize the available modal height. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{align-items:stretch;}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
+  min-height:min(60vh,550px);box-sizing:border-box;
+}
+
+
+
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{min-height:0;}
+}
+
+/* Normal state explanations are redundant; error/unreachable details stay. */
+.system-control-card .system-control-description{display:none;}
+.system-control-card:is(.has-error,.is-unreachable) .system-control-description{display:block;}
+
+/* Quick-start manual: first read left column top-down, then right. */
+#commonModal[data-modal-view="dashboard-usage-guide"] .modal-content{width:min(95vw,1060px);max-width:1060px;max-height:calc(100dvh - 28px);}
+.system-control-guide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,auto));grid-auto-flow:column;gap:10px 18px;align-items:start;}
+.system-control-guide-section{padding:9px 12px;border:1px solid var(--border-color);border-radius:9px;background:var(--card-bg2);}
+.system-control-guide-heading{margin:0 0 5px;font-size:12px;}
+.system-control-guide-list{padding-left:17px;font-size:10px;line-height:1.48;overflow-wrap:anywhere;}
+.system-control-guide-list li{padding-left:0;margin:0 0 2px;}
+@media(max-width:760px){.system-control-guide{grid-template-columns:1fr;grid-template-rows:none;grid-auto-flow:row;}}
+/* Normal desktop gets a full manual; scrolling remains available on short screens. */
+
+/* Patrol log: center every header/cell and center filters independently of Reset. */
+.records-view-patrolModal .record-data-table :is(th,td){text-align:center!important;vertical-align:middle;}
+.records-view-patrolModal .record-data-table :is(th,td) :is(button,span){vertical-align:middle;}
+.records-view-patrolModal .record-filter-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto) minmax(76px,1fr);align-items:center;gap:6px;}
+.records-view-patrolModal .record-filter-bar::before{content:"";grid-column:1;}
+.records-view-patrolModal .record-filter-controls{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;min-width:0;}
+.records-view-patrolModal .record-filter-bar [data-action="reset"]{grid-column:3;justify-self:end;margin-left:0;}
+@media(max-width:1020px){
+ .records-view-patrolModal .record-filter-bar{display:flex;flex-wrap:wrap;justify-content:center;}
+ .records-view-patrolModal .record-filter-bar::before{display:none;}
+ .records-view-patrolModal .record-filter-controls{flex:1 1 100%;justify-content:center;}
+ .records-view-patrolModal .record-filter-bar [data-action="reset"]{margin-left:auto;}
+}
+
+/* Image detail: remove the redundant inner title row, keep Back at top-right
+ * of metadata, preserve full-width navigation/delete footer. */
+.gallery-detail{grid-template-rows:minmax(0,1fr) auto;}
+.gallery-detail .gallery-image-zoom{grid-row:1;}
+.gallery-detail .gallery-metadata{grid-row:1;display:flex;flex-direction:column;gap:7px;min-height:0;}
+.gallery-detail .gallery-metadata-top{display:flex;justify-content:flex-end;align-items:center;padding:0;border:0;}
+.gallery-detail .gallery-metadata-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;min-width:0;}
+.gallery-detail .gallery-metadata-fields>div{padding:8px;border-bottom:1px solid var(--border-color);}
+.gallery-detail .gallery-detail-actions{grid-row:2;}
+.gallery-detail .gallery-image-viewport{max-height:55vh;}
+@media(max-width:680px){
+ .gallery-detail{grid-template-rows:auto auto auto;}
+ .gallery-detail .gallery-image-zoom{grid-row:1;}
+ .gallery-detail .gallery-metadata{grid-row:2;}
+ .gallery-detail .gallery-detail-actions{grid-row:3;}
+ .gallery-detail .gallery-metadata-fields{grid-template-columns:1fr;}
+}
+
+/* Situation form: taller paired cards; preview unavailable message is two lines.
+ * Store-image checkbox, requirement note and Save action share one desktop row. */
+#commonModal[data-modal-view="currentSituation"] .current-situation-layout{align-items:stretch;min-height:min(58vh,510px);}
+#commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+#commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{height:100%;box-sizing:border-box;}
+.current-situation-media-box{display:flex;flex-direction:column;}
+.current-situation-media-box .privacy-preview-frame{flex:1 1 auto;height:auto;min-height:230px;max-height:none;}
+.current-situation-media-box .preview-state{white-space:pre-line;text-align:center;}
+.current-situation-bottom-row{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;}
+.current-situation-bottom-row .record-image-option{flex:none;margin:0;}
+.current-situation-bottom-row .record-requirement{flex:1 1 auto;margin:0;font-size:10px;min-width:0;}
+.current-situation-entry-box .current-situation-bottom-row .record-form-actions{flex:none;margin:0 0 0 auto;padding:0;}
+.current-situation-bottom-row #currentSituationSubmit{min-width:64px;}
+@media(max-width:800px){
+ .current-situation-bottom-row{flex-wrap:wrap;}
+ .current-situation-bottom-row .record-form-actions{margin-left:auto;}
+}
+@media(max-width:720px){
+ #commonModal[data-modal-view="currentSituation"] .current-situation-layout{min-height:0;}
+ #commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+ #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{height:auto;}
+}
+
+
+/* Hover-safe shared surfaces. Moving a button up 1px or drawing a focus ring
+ * must not let its upper edge collide with the boundary of a scroll panel.
+ * These insets do not change hover/active transitions or click handlers. */
+.gallery-view .gallery-grid,
+.records-view .record-filter-controls,
+.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions,.saved-map-location-actions) {
+  padding-block: 5px;
+  box-sizing: border-box;
+}
+.gallery-detail .gallery-metadata {
+  padding: 6px 7px 8px;
+  box-sizing: border-box;
+}
+.gallery-detail .gallery-metadata-top {
+  padding: 2px 3px 4px;
+}
+/* Gallery source chips were absolutely overlaid on top of image content.
+ * Keep the same source label, but in a dedicated row preceding the image. */
+.gallery-card .gallery-card-source {
+  position: static;
+  order: -1;
+  align-self: flex-start;
+  margin: 8px 10px 0;
+  max-width: calc(100% - 20px);
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.gallery-card { isolation: isolate; }
+
+/* Five Server status tiles: equal title/value baselines and compact height.
+ * ID-scoped strong display intentionally overrides older inline-block states.
+ * Expanding text may grow a tile; values and update logic are untouched. */
+#serverStateCard:not(.is-collapsed) .server-state-header {
+  margin-bottom: 6px;
+}
+#serverStateGrid .server-state-field {
+  display: grid;
+  grid-template-rows: 14px minmax(16px, auto);
+  align-content: start;
+  row-gap: 4px;
+  min-height: 48px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+}
+#serverStateGrid .server-state-field > span {
+  display: block;
+  align-self: start;
+  margin: 0;
+  line-height: 14px;
+  min-height: 14px;
+}
+#serverStateGrid .server-state-field > strong {
+  display: block;
+  align-self: start;
+  min-height: 16px;
+  line-height: 16px;
+}
+/* The right panel already assigns all remaining height to .alert-card. */
+
+
+/* Gallery cards: do not vertically compress and clip label/date rows.
+ * The previous footer was a shrinkable flex item with overflow:hidden;
+ * larger thumbnail cards must extend the scrollable gallery instead. */
+.gallery-view .gallery-grid {
+  grid-auto-rows: max-content;
+  align-content: start;
+}
+.gallery-view .gallery-card {
+  height: auto;
+  min-height: max-content;
+}
+.gallery-view .gallery-card > .gallery-card-source,
+.gallery-view .gallery-card > strong,
+.gallery-view .gallery-card > time {
+  flex: 0 0 auto;
+}
+.gallery-view .gallery-card > strong,
+.gallery-view .gallery-card > time {
+  display: block;
+  min-height: 1.45em;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+.gallery-view .gallery-card > img.gallery-card-image {
+  flex: 0 0 auto;
+  height: auto;
+}
+
+
+/* Gallery list: keep the first complete image/label/date row in the viewport.
+ * Subsequent rows scroll inside the grid, never behind a visible scrollbar.
+ * The existing 3/2/1-column responsive breakpoints remain unchanged. */
+#commonModal[data-modal-view="galleryModal"] .modal-body {
+  overflow-y: hidden;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-toolbar {
+  flex: 0 0 auto;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  grid-auto-rows: 100%;
+  align-content: start;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-view .gallery-grid::-webkit-scrollbar,
+#commonModal[data-modal-view="galleryModal"] .gallery-view::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-card {
+  height: 100%;
+  min-height: 0;
+}
+#commonModal[data-modal-view="galleryModal"] .gallery-card > .gallery-card-image {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  max-height: none;
+  width: 100%;
+  aspect-ratio: auto;
+  object-fit: cover;
+  object-position: center;
+  background: var(--card-bg2);
+}
+
+
+/* 2026-10-14 UI pass: centrally aligned data tables, including sort labels.
+ * Keep sortable <button>, checkboxes, and handlers untouched. */
+table :is(th,td) { text-align:center !important; vertical-align:middle; }
+table th .record-sort-button { text-align:center !important; display:inline-flex;align-items:center;justify-content:center;gap:4px; }
+.record-data-table .record-type-badge { text-align:center; }
+.records-view-statusModal .record-drive-mode-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-width:58px;padding:4px 7px;border:1px solid currentColor;
+  border-radius:999px;font-weight:750;font-size:10px;line-height:1.2;
+}
+.records-view-statusModal .record-drive-mode-badge.is-auto{color:#17608a;background:rgba(50,147,202,.12);}
+.records-view-statusModal .record-drive-mode-badge.is-manual{color:#8c5a1b;background:rgba(204,148,62,.14);}
+.records-view-statusModal .record-drive-mode-badge.is-unknown{color:var(--text-muted);background:var(--card-bg2);}
+body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-auto{color:#9bd4ee;background:rgba(50,147,202,.22);}
+body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{color:#eec990;background:rgba(204,148,62,.22);}
+
+/* CPU / RAM / PING / Pi / Mode: shared DrawerToggle handles aria and state. */
+#topSystemStatusBar {
+  display:flex; align-items:center; flex-wrap:nowrap;
+  width:max-content; max-width:calc(100% - 40px);
+  min-height:35px; padding:4px 31px 4px 10px; box-sizing:border-box;
+  overflow:hidden; transition:width .25s ease,padding .25s ease,background .2s ease;
+}
+#topSystemStatusBar .system-status-items{
+  display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;
+  gap:6px 16px; min-width:0;overflow:hidden;
+  transition:opacity .18s ease;
+}
+#topSystemStatusBar .system-status-items > span{min-width:0;overflow-wrap:anywhere;}
+#topSystemStatusBar .system-status-drawer-handle{
+  position:absolute;right:3px;top:50%;transform:translateY(-50%);
+  width:24px;height:26px;
+}
+#topSystemStatusBar .system-status-drawer-handle:hover,
+#topSystemStatusBar .system-status-drawer-handle:focus-visible{
+  background:transparent;box-shadow:none;color:var(--accent);
+}
+#topSystemStatusBar[data-open="false"]{
+  width:32px;max-width:32px;padding:4px 0;min-height:35px;
+}
+#topSystemStatusBar[data-open="false"] .system-status-items{
+  opacity:0;visibility:hidden;pointer-events:none;white-space:nowrap;
+}
+
+/* Uiverse mobinkakei / grumpy-turtle-41: scaled 3 jumping balls and 3 shadows.
+ * Attribution: https://uiverse.io/mobinkakei/grumpy-turtle-41
+ * Copyright 2026 mobinkakei (Mobeen). MIT-licensed original animation.
+ * Animate only busy states; keep offline/reduced-motion behavior. */
+@keyframes ui-mobinkakei-ball {
+  0%{top:23px;height:3px;border-radius:25px 25px 12px 12px;transform:scaleX(1.7);}
+  40%{height:9px;border-radius:50%;transform:scaleX(1);}
+  100%{top:0;}
+}
+@keyframes ui-mobinkakei-shadow {
+  0%{transform:scaleX(1.5);}
+  40%{transform:scaleX(1);opacity:.7;}
+  100%{transform:scaleX(.2);opacity:.4;}
+}
+.ui-dots{
+  position:relative;display:inline-block;vertical-align:middle;
+  flex:0 0 47px;width:47px;height:30px;margin:0 7px 0 0;
+  color:var(--accent);overflow:visible;pointer-events:none;
+}
+.ui-dots>i{
+  position:absolute;top:0;left:6px;width:9px;height:9px;
+  border-radius:50%;background:currentColor;opacity:1;
+  animation:ui-mobinkakei-ball .5s alternate infinite ease;
+  transform-origin:50% 50%;
+}
+.ui-dots>i:nth-child(2){left:19px;right:auto;top:0;animation-delay:.2s;}
+.ui-dots>i:nth-child(3){left:32px;right:auto;top:0;animation-delay:.3s;}
+.ui-dots>b{
+  position:absolute;top:25px;left:6px;width:9px;height:2px;
+  border-radius:50%;background:color-mix(in srgb, var(--text-dark) 60%, transparent);
+  filter:blur(1px);opacity:.65;
+  animation:ui-mobinkakei-shadow .5s alternate infinite ease;
+  transform-origin:50% 50%;
+}
+.ui-dots>b:nth-child(5){left:19px;animation-delay:.2s;}
+.ui-dots>b:nth-child(6){left:32px;animation-delay:.3s;}
+.ui-loading-visual .ui-dots{margin:0;}
+.ui-loading-visual.is-offline .ui-dots>:is(i,b){animation:none!important;}
+.ui-dots[hidden],.ui-loading-visual[hidden]{display:none!important;}
+@media(prefers-reduced-motion:reduce){
+  .ui-dots>:is(i,b){animation:none!important;}
+}
+/* Avoid injected loading glyphs displacing 4-column model switches. */
+.dashboard-model-toggle>.ui-dots{display:none!important;}
+
+/* Map view: compact paired actions at the bottom of the map column. */
+.saved-map-primary-column .saved-map-mode-actions{
+  display:flex;flex-direction:row;justify-content:center;align-items:center;
+  gap:8px;margin-top:auto;flex-wrap:wrap;padding-block:4px;
+}
+
+.saved-map-secondary-column .saved-map-location-panel {
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
+  padding-bottom:0;box-sizing:border-box;
+}
+.saved-map-secondary-column .saved-map-location-actions {
+  margin-top:auto;padding-top:10px;padding-bottom:0;
+}
+/* Guide cards share row height even when the content counts differ. */
+.system-control-guide {align-items:stretch;grid-template-rows:repeat(3,minmax(0,1fr));}
+.system-control-guide-section {height:100%;box-sizing:border-box;display:flex;flex-direction:column;}
+.system-control-guide-list {list-style-type:disc;}
+@media(max-width:760px){.system-control-guide{grid-template-rows:none;}}
+
+/* System controls: regular cards only contain a title and switch.
+ * Preserve diagnostic text when unreachable, error, duplicate or pending. */
+.system-control-card .system-control-meta {display:none;}
+.system-control-card:is(.has-error,.is-unreachable,.is-duplicate,.is-pending)
+  .system-control-meta{display:block;}
+.system-control-card .system-control-message{display:none;}
+.system-control-card:is(.has-error,.is-unreachable,.is-duplicate,.is-pending)
+  .system-control-message{display:block;}
+
+/* Gallery detail: 10% each, at least 72px wide, together in the center. */
+.gallery-detail .gallery-detail-actions{
+  width:100%;display:flex;justify-content:center;align-items:center;gap:8px;
+}
+.gallery-detail .gallery-detail-actions>*{flex:0 0 max(10%,72px);min-width:72px;max-width:none;}
+.gallery-detail .gallery-detail-actions button{width:100%;min-width:72px;}
+.gallery-detail .gallery-detail-actions>span{min-width:0;flex:0 0 max(10%,72px);}
+@media(max-width:340px){.gallery-detail .gallery-detail-actions{gap:3px;}}
+
+/* Situation report: symmetric panels, constant 280px textarea, hidden scrollbar. */
+#commonModal[data-modal-view="currentSituation"] .current-situation-layout{
+  min-height:365px;align-items:stretch;
+}
+#commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+#commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{
+  min-height:365px;height:100%;box-sizing:border-box;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+  height:280px!important;min-height:280px;max-height:280px;
+  flex:0 0 280px;resize:none;overflow-y:auto!important;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription::-webkit-scrollbar{
+  display:none;width:0;height:0;
+}
+@media(max-width:720px) {
+  #commonModal[data-modal-view="currentSituation"] .current-situation-layout,
+  #commonModal[data-modal-view="currentSituation"] .current-situation-media-box,
+  #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box{min-height:0;height:auto;}
+}
+
+/* 2026-10-14 layout follow-up: shared table column centering.
+ * Keep header and body in one fixed-layout table; match their padding boxes.
+ * Sorting buttons fill their cells without an offset from inline content. */
+.records-view .record-data-table{
+  width:100%;table-layout:fixed;border-collapse:collapse;border-spacing:0;
+}
+.records-view .record-data-table :is(thead th,tbody td){
+  box-sizing:border-box;text-align:center!important;vertical-align:middle;
+  padding-inline:6px!important;
+}
+.records-view .record-data-table thead th .record-sort-button{
+  display:flex;width:100%;min-width:0;justify-content:center;align-items:center;
+  text-align:center!important;box-sizing:border-box;padding:0;gap:0;
+}
+.records-view .record-data-table thead th .record-sort-button span[aria-hidden]{
+  flex:none;
+}
+
+/* Map: fill the existing modal body with the two columns, removing the large
+ * empty footer. Both columns keep equal height and inner bottom padding. */
+#commonModal[data-modal-view="savedNavigationMaps"] .modal-body{
+  display:flex;flex-direction:column;min-height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal{
+  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{
+  flex:1 1 auto;min-height:0;align-items:stretch;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
+  height:auto;min-height:0;
+}
+.saved-map-primary-column .saved-map-primary-actions{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  flex-wrap:nowrap;margin-top:auto;padding-block:5px;min-width:0;
+}
+.saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions,
+.saved-map-primary-column .saved-map-primary-actions .saved-map-actions{
+  display:flex;align-items:center;gap:7px;padding:0;margin:0;
+  flex-wrap:nowrap;min-width:0;
+}
+/* Bookmark buttons share the record toolbar's visual class; only their flex geometry differs. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn {
+  flex:0 1 auto;min-width:0;margin:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:disabled {
+  background:var(--card-bg2);border-color:var(--border-color);
+  color:var(--text-muted);cursor:not-allowed;opacity:.55;transform:none;
+}
+
+/* Functional background tints for saved-map actions.
+   Reuse the record toolbar's .mb-btn dimensions, border, typography and motion.
+   The existing :disabled rule above keeps unavailable actions neutral. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-start-mapping { --saved-map-action-bg:#E7F1EB; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#F3EBE0; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#E7EDF5; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#ECE9F3; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#E8F1F3; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#E2F0ED; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#F5E5E8; }
+
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-start-mapping { --saved-map-action-bg:#21372D; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#3B332A; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#283748; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#353246; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#283841; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#203934; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#432C34; }
+
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:not(:disabled) {
+  background-color:var(--saved-map-action-bg,var(--card-bg2));
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:not(:disabled):hover {
+  background-color:color-mix(in srgb,var(--saved-map-action-bg,var(--card-bg2)) 90%,var(--accent));
+}
+
+@media(max-width:1150px){
+ .saved-map-primary-column .saved-map-primary-actions{flex-wrap:wrap;row-gap:7px;}
+ .saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions,
+ .saved-map-primary-column .saved-map-primary-actions .saved-map-actions{flex:1 1 auto;justify-content:center;}
+}
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{height:auto;flex:0 0 auto;}
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{height:auto;min-height:0;}
+}
+
+/* The offline (paused) animation presents only one centered row of 3 dots.
+ * Animated jump/shadows remain visible only while genuinely connecting. */
+.ui-loading-visual.is-offline .ui-dots > i{
+  top:11px!important;left:6px!important;width:9px;height:9px;
+  border-radius:50%;animation:none!important;transform:none!important;
+}
+.ui-loading-visual.is-offline .ui-dots > i:nth-child(2){left:19px!important;}
+.ui-loading-visual.is-offline .ui-dots > i:nth-child(3){left:32px!important;}
+.ui-loading-visual.is-offline .ui-dots > b{display:none!important;}
+.ui-loading-visual.is-offline .ui-dots{height:30px;}
+/* All three dots share the same baseline in reduced-motion mode. */
+@media(prefers-reduced-motion:reduce){
+ .ui-dots>i{top:11px!important;transform:none!important;animation:none!important;}
+ .ui-dots>i:nth-child(1){left:6px!important;}
+ .ui-dots>i:nth-child(2){left:19px!important;}
+ .ui-dots>i:nth-child(3){left:32px!important;}
+ .ui-dots>b{display:none!important;}
+}
+
+/* The closed top status drawer must have no wrapped invisible descendants.
+ * Both states have the same 38px outer height. */
+#topSystemStatusBar{
+  height:38px;min-height:38px;max-height:38px;flex-wrap:nowrap;
+}
+#topSystemStatusBar .system-status-items{
+  flex-wrap:nowrap;white-space:nowrap;
+}
+#topSystemStatusBar[data-open="false"]{
+  height:38px;min-height:38px;max-height:38px;
+}
+#topSystemStatusBar[data-open="false"] .system-status-items{
+  position:absolute!important;width:0;height:0;max-height:0;
+  overflow:hidden;flex:none;visibility:hidden;pointer-events:none;
+}
+@media(max-width:800px){
+  #topSystemStatusBar{align-items:center;flex-direction:row;justify-content:flex-end;}
+}
+
+
+/* Dashboard UI follow-up, October 14: scope these fixes to their existing views. */
+/* Minimap handles its own disconnected state. Camera loader uses a readable tint. */
+#lidar-stale-overlay > .ui-loading-visual { display:none!important; }
+#no-camera-msg .ui-dots { color:#fffff0!important; }
+#no-camera-msg .ui-dots > :is(i,b) { background:currentColor!important; }
+
+/* Header/cell center axes: the same collapsed table owns all column geometry.
+   Sorting indicators, checkbox cells and inline actions cannot skew alignment. */
+.records-view .record-data-table { table-layout:fixed;border-spacing:0;border-collapse:collapse; }
+.records-view .record-data-table thead th,
+.records-view .record-data-table tbody td {
+  text-align:center!important;vertical-align:middle!important;
+  padding-left:6px!important;padding-right:6px!important;
+}
+.records-view .record-data-table thead th .record-sort-button {
+  display:flex;align-items:center;justify-content:center;gap:2px;
+  width:100%;padding:0;margin:0;text-align:center!important;
+}
+.records-view .record-data-table .record-selection-column {
+  width:34px;padding-left:3px!important;padding-right:3px!important;
+}
+.records-view .record-data-table .record-selection-column input {display:block;margin:auto;}
+.record-false-alarm-controls { display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap; }
+
+/* Action descriptions never determine row height; modal shows complete text. */
+.records-view-actionsModal .record-data-table td.record-description {
+  max-width:0;overflow:hidden;white-space:nowrap;vertical-align:middle;
+}
+.records-view-actionsModal .record-description-open {
+  display:block;width:100%;max-width:100%;min-width:0;border:0;border-radius:4px;
+  padding:4px 0;margin:0;background:transparent;color:var(--text-dark);
+  cursor:pointer;font:inherit;font-size:inherit;text-align:left;
+}
+.records-view-actionsModal .record-description-ellipsis {
+  display:block;min-width:0;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.records-view-actionsModal .record-description-open:hover .record-description-ellipsis {
+  color:var(--accent);
+}
+.records-view-actionsModal .record-description-open:focus-visible {
+  outline:2px solid var(--accent);outline-offset:1px;
+}
+#commonModal[data-modal-view="actionDescriptionDetail"] .modal-content {width:min(92vw,700px);height:auto;max-height:85dvh;}
+#commonModal[data-modal-view="actionDescriptionDetail"] .modal-body {min-height:0;overflow-y:auto;}
+.record-description-detail {display:flex;flex-direction:column;gap:16px;min-height:0;}
+.record-description-detail-text {
+  padding:14px;border-radius:8px;border:1px solid var(--border-color);
+  color:var(--text-dark);background:var(--card-bg2);white-space:pre-wrap;
+  overflow-wrap:anywhere;overflow-y:auto;max-height:60dvh;line-height:1.65;
+}
+.record-description-detail-actions {display:flex;justify-content:flex-end;}
+
+/* Situation entry: footer reaches the panel bottom while textarea absorbs space. */
+#commonModal[data-modal-view="currentSituation"] .current-situation-entry-box {display:flex;flex-direction:column;min-height:365px;}
+#commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+  height:auto!important;min-height:280px!important;max-height:none!important;
+  flex:1 1 auto!important;resize:none;margin-bottom:8px;
+}
+#commonModal[data-modal-view="currentSituation"] .current-situation-bottom-row {
+  margin-top:auto!important;margin-bottom:0!important;padding:0;
+}
+#commonModal[data-modal-view="currentSituation"] #currentSituationError:empty {
+  display:none;min-height:0;margin:0;
+}
+
+/* Map pose fields first, independently scrolling saved-map list second. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-pose {
+  flex:0 0 auto;order:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+  flex:1 1 0;order:1;min-height:0;max-height:none!important;
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list::-webkit-scrollbar {
+  display:none;width:0;height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress {
+  flex:0 0 auto;order:2;
+}
+/* Do not reserve the 20px feedback row when there is no message.
+   Active, error and loading feedback remain visible above the buttons. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress:empty:not(.is-loading) {
+  display:none;min-height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions {
+  flex:0 0 auto;order:3;
+}
+/* Keep both footer rows aligned while buttons use the shared control component. */
+#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) {
+  min-height:34px;align-items:center;padding-block:5px!important;margin-bottom:0!important;
+}
+
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-panel {
+  padding-bottom:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
+  padding-top:5px!important;
+}
+
+/* Shrink current pagination controls to about 70%, including fixed center slots. */
+.records-pagination {gap:6px;}
+.records-pagination .records-page-numbers {
+  grid-template-columns:repeat(5,25px);gap:2px;padding:3px;
+}
+.records-pagination .records-page-number,
+.records-pagination .records-page-arrow {
+  width:25px;min-width:25px;height:24px;min-height:24px;
+  font-size:10px;
+}
+.records-pagination .records-page-arrow {font-size:17px;}
+.records-pagination .records-page-empty {width:25px;height:24px;}
+@media(max-width:380px) {
+ .records-pagination .records-page-numbers {grid-template-columns:repeat(5,23px);gap:2px;padding:3px;}
+ .records-pagination .records-page-number,.records-pagination .records-page-arrow {
+   width:23px;min-width:23px;height:23px;min-height:23px;
+ }
+ .records-pagination .records-page-empty {width:23px;height:23px;}
+}
+
+/* No post-click focus outline, underline, or selection ring on mode toggles. */
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle:is(:focus,:focus-visible,:active),
+#dashboard-mode-controls-mount .dashboard-drive-mode-control:is(:focus,:focus-visible,:active),
+#dashboard-mode-controls-mount .dashboard-led-toggle:is(:focus,:focus-visible,:active){
+  outline:0!important;border:0!important;text-decoration:none!important;
+  box-shadow:none!important;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle * {
+  text-decoration:none!important;
+}
+
+/* Shared typography and switch geometry in the main panel and expanded viewer. */
+:where(#dashboard-mode-controls-mount,.lidar-control-drawer)
+:is(.navigation-mode-toggle-label,.dashboard-drive-mode-control .mode-text,
+    .dashboard-led-toggle-label,.dashboard-led-toggle .ui-toggle-side) {
+  font-family:var(--mono)!important;font-size:10px!important;
+  font-weight:700!important;letter-spacing:.1px!important;line-height:1.2!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-label {font-size:10px!important;}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle {
+  gap:5px;min-height:29px;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle-track,
+#dashboard-mode-controls-mount .dashboard-led-toggle-track {
+  width:48px!important;height:26px!important;flex-basis:48px!important;
+  border-radius:999px!important;
+}
+:is(#dashboard-mode-controls-mount,.lidar-control-drawer) .navigation-mode-toggle-slider,
+#dashboard-mode-controls-mount .dashboard-led-toggle-slider {
+  width:18px!important;height:18px!important;top:3px!important;
+  border-radius:50%!important;
+}
+.lidar-control-drawer .lidar-view-controls button[data-control-button] {
+  box-sizing:border-box;min-height:27px;padding:5px 8px;
+  border-radius:7px;font:700 10px var(--mono);line-height:1.2;
+}
+
+
+/* Keep the same behavior on narrow screens without forcing a tall form or
+   collapsing the independently scrollable list to zero height. */
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+   flex:0 1 auto;max-height:min(30vh,240px)!important;overflow-y:auto;
+ }
+}
+@media(max-width:720px){
+ #commonModal[data-modal-view="currentSituation"] .current-situation-entry-box {
+   height:auto;min-height:0;
+ }
+ #commonModal[data-modal-view="currentSituation"] #currentSituationDescription {
+   height:280px!important;min-height:180px!important;max-height:none!important;
+   flex:0 0 auto!important;
+ }
+}
+
+
+/* Dashboard follow-up: compact LiDAR controls (four pixels smaller). */
+.lidar-control-drawer .lidar-control-strip {
+  gap:4px;padding-top:2px;padding-bottom:2px;
+}
+.lidar-control-drawer .navigation-mode-toggle{
+  gap:4px!important;min-height:25px!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-track{
+  width:44px!important;flex-basis:44px!important;height:22px!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-slider{
+  width:14px!important;height:14px!important;top:3px!important;left:3px;
+}
+.lidar-control-drawer .navigation-mode-toggle.driving .navigation-mode-toggle-slider{
+  left:calc(100% - 17px)!important;
+}
+.lidar-control-drawer .navigation-mode-toggle.unknown .navigation-mode-toggle-slider{
+  left:calc(50% - 7px)!important;
+}
+.lidar-control-drawer .navigation-mode-toggle-label{
+  font-size:9px!important;
+}
+.lidar-control-drawer .lidar-view-controls button[data-control-button]{
+  height:23px!important;min-height:23px!important;
+  padding:3px 6px!important;font-size:9px!important;border-radius:6px!important;
+}
+
+/* Destructive action info icon belongs immediately to the right of its title.
+   Keep the existing confirmation counts and irreversible-effects explanation. */
+.record-delete-zone .record-delete-impact::before{content:none!important;display:none!important;}
+.record-delete-impact-heading{
+  display:flex;justify-content:center;align-items:center;gap:8px;line-height:1.3;
+}
+.record-delete-tooltip-wrap{position:relative;display:inline-flex;align-items:center;}
+.record-delete-tooltip-trigger{
+  display:grid;place-items:center;width:20px;height:20px;padding:0;
+  border:1px solid var(--danger-color);border-radius:50%;
+  background:var(--card-bg);color:var(--danger-color);
+  font:800 12px var(--mono);cursor:help;
+}
+.record-delete-tooltip{
+  position:absolute;bottom:calc(100% + 8px);left:50%;z-index:12;
+  width:min(300px,60vw);max-width:300px;padding:9px 10px;border-radius:8px;
+  border:1px solid var(--border-color);background:var(--card-bg);
+  color:var(--text-dark);box-shadow:var(--shadow-md);
+  font:500 11px/1.5 var(--mono);text-align:left;white-space:normal;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translateX(-50%) translateY(3px);
+  transition:opacity .15s ease,transform .15s ease;
+}
+.record-delete-tooltip-wrap:is(:hover,:focus-within) .record-delete-tooltip{
+  opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);
+}
+
+/* Nested action-detail dialog overlays rather than replaces the records modal.
+   The previous table, filters, pagination, selection and scroll stay mounted. */
+#commonModal .record-description-overlay{
+  position:fixed;inset:0;z-index:1200;
+  display:flex;align-items:center;justify-content:center;
+  box-sizing:border-box;padding:20px;
+  background:rgba(6,12,24,.58);backdrop-filter:blur(3px);
+}
+#commonModal .record-description-dialog{
+  display:flex;flex-direction:column;overflow:hidden;
+  width:min(92vw,700px);max-height:min(82dvh,720px);
+  min-width:0;border:1px solid var(--border-color);
+  border-radius:13px;background:var(--card-bg);
+  box-shadow:var(--shadow-lg);
+}
+#commonModal .record-description-dialog-header{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  flex:0 0 auto;padding:15px 19px;border-bottom:1px solid var(--border-color);
+}
+#commonModal .record-description-dialog-header h2{
+  margin:0;color:var(--accent);font:700 13px var(--mono);
+}
+#commonModal .record-description-dialog-close{
+  padding:0;width:24px;height:24px;border:0;
+  background:transparent;color:var(--text-muted);
+  cursor:pointer;font-size:24px;line-height:1;
+}
+#commonModal .record-description-dialog-body{
+  padding:16px 19px;min-height:0;overflow-y:auto;
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal .record-description-dialog-body::-webkit-scrollbar,
+#commonModal .record-description-detail-text::-webkit-scrollbar{
+  display:none;width:0;height:0;
+}
+#commonModal .record-description-dialog-body .record-description-detail-text {
+  max-height:none;overflow:visible;
+}
+#commonModal .record-description-detail-actions{
+  flex:0 0 auto;padding:0 19px 16px;justify-content:flex-end;
+}
+
+/* The filter layout is unchanged except Reset is anchored to the right edge. */
+.records-view-actionsModal .record-filter-bar [data-action="reset"],
+.records-view-statusModal .record-filter-bar [data-action="reset"]{
+  margin-left:auto!important;flex:0 0 auto;
+}
+
+/* Saved maps: an independently scrollable outer container and fixed-height
+   individual radio cards. Hover/selected color applies to a card, not the list. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
+  display:grid;grid-auto-flow:row;grid-auto-rows:max-content;
+  align-content:start;align-items:start;gap:8px;
+  padding:8px;min-width:0;border:1px solid var(--border-color);
+  border-radius:9px;background:var(--card-bg);
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list::-webkit-scrollbar{
+  display:none;width:0;height:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option{
+  width:100%;min-height:0;height:auto;align-self:start;
+  box-sizing:border-box;margin:0;background:var(--card-bg2);
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option:is(:hover,:has(input:checked)){
+  background:var(--primary-glow);border-color:var(--accent);
+}
+
+/* New-place textbox on the left, saved-place dropdown on the right. */
+.saved-map-location-picker{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:8px;align-items:center;min-width:0;
+}
+.saved-map-location-picker :is(.saved-map-location-new,.saved-map-location-select){
+  display:block;width:100%;min-width:0;min-height:34px;
+  box-sizing:border-box;padding:7px 9px;border:1px solid var(--border-color);
+  border-radius:7px;background:var(--card-bg);color:var(--text-dark);
+  font:inherit;
+}
+.saved-map-location-picker .saved-map-location-new::placeholder{
+  color:var(--text-muted);opacity:1;
+}
+@media(max-width:540px){
+  .saved-map-location-picker{grid-template-columns:minmax(0,1fr);}
+}
+
+
+/* Dashboard 2026-10-14: center headers on their unsorted/default labels.
+ * Sort arrows float inside the same button box without shifting its text. */
+.records-view .record-data-table thead th .record-sort-button {
+  position:relative;display:flex;align-items:center;justify-content:center;
+  gap:0;text-align:center!important;width:100%;padding:0 12px!important;
+  box-sizing:border-box;
+}
+.records-view .record-data-table thead th .record-sort-button > span[aria-hidden="true"] {
+  position:absolute;right:0;top:50%;transform:translateY(-50%);
+  display:inline-block;width:11px;min-width:0;margin:0;line-height:1;
+  text-align:center;pointer-events:none;
+}
+.records-view .record-data-table thead th .record-sort-button > span[aria-hidden="true"]:empty {
+  display:none!important;width:0!important;min-width:0!important;
+}
+
+/* Image-detail footer: half the old 16px bottom body padding.
+ * Let the inner gallery card fill unused flex height rather than leave a gap. */
+#commonModal[data-modal-view="recordImageDetail"] .modal-body {
+  padding-bottom:8px;
+}
+#commonModal[data-modal-view="recordImageDetail"] .gallery-detail {
+  flex:1 1 auto;min-height:0;margin-bottom:0;
+}
+
+/* The active page is already selected: hovering must not change its appearance. */
+.records-pagination .records-page-number.is-current,
+.records-pagination .records-page-number[aria-current="page"] {
+  pointer-events:none;cursor:default;
+}
+.records-pagination .records-page-number.is-current:hover,
+.records-pagination .records-page-number[aria-current="page"]:hover {
+  background:var(--primary-color)!important;color:#fff!important;
+  border-color:transparent!important;
+  box-shadow:0 2px 7px rgba(0,0,0,.16)!important;
+  transform:none!important;text-decoration:none!important;
+}
+
+/* Top inset is half of the original 6px header bottom padding. */
+body:not(.login-page) { padding-top: 0; }
+header { padding-top: 3px; }
+#topSystemStatusBar { top: 3px; }
+
+/* Place picker typography matches the 11px '현재 장소' status row. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
+:is(.saved-map-location-new,.saved-map-location-select) {
+  font-family:inherit!important;font-size:11px!important;
+  font-weight:400!important;line-height:1.4!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
+.saved-map-location-new::placeholder {font-size:11px!important;}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker select option {
+  font-size:11px;
+}
+
+
+/* Server status now reuses the circular drawer-handle component. */
+
+/* Fill the remaining left pane until its action row, regardless of map count.
+   Radio cards keep their intrinsic height and the list scrolls independently. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
+  flex:1 1 0!important;height:auto!important;max-height:none!important;
+  min-height:0;align-self:stretch;overflow-y:auto;align-content:start;
+  grid-auto-rows:max-content;padding:8px!important;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions{
+  margin-top:0!important;
+}
+@media(max-width:800px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
+   flex:0 0 auto!important;
+   height:min(30vh,240px)!important;
+   min-height:160px;
+   max-height:none!important;
+ }
+}
+
+/* Three pairs: current location, GPS and security occupy one desktop row. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;align-items:center;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-row{
+  display:flex;align-items:baseline;gap:6px;
+  min-width:0;font-size:11px;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-label{
+  flex:0 0 auto;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-value{
+  display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;
+}
+@media(max-width:540px){
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
+   grid-template-columns:1fr;gap:4px;
+ }
+}
+
+/* Native select remains as a hidden backing value. The visible listbox and
+   options use the same inset surface and hover language as the outer field. */
+.saved-map-location-picker > .saved-map-location-select{
+  display:none!important;
+}
+.saved-map-location-choice{position:relative;min-width:0;z-index:4;}
+.saved-map-location-trigger{
+  position:relative;width:100%;height:34px;min-width:0;padding:7px 27px 7px 9px;
+  border:1px solid var(--border-color);border-radius:7px;
+  background:var(--card-bg);color:var(--text-dark);
+  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
+  overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.saved-map-location-trigger::after{
+  content:"";position:absolute;top:calc(50% - 4px);right:12px;
+  width:7px;height:7px;border-right:1.5px solid currentColor;
+  border-bottom:1.5px solid currentColor;transform:rotate(45deg);
+}
+.saved-map-location-trigger:focus-visible,
+.saved-map-location-trigger[aria-expanded="true"]{
+  outline:none;border-color:var(--accent);
+}
+.saved-map-location-options{
+  position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;
+  display:flex;flex-direction:column;gap:3px;
+  max-height:220px;overflow-y:auto;padding:5px;
+  border:1px solid var(--border-color);border-radius:7px;
+  background:var(--card-bg);box-shadow:var(--shadow-md);
+  scrollbar-width:none;-ms-overflow-style:none;
+}
+.saved-map-location-options[hidden]{display:none!important;}
+.saved-map-location-options::-webkit-scrollbar{display:none;width:0;height:0;}
+.saved-map-location-option{
+  box-sizing:border-box;width:100%;padding:8px 9px;min-height:30px;
+  border:1px solid transparent;border-radius:6px;
+  background:transparent;color:var(--text-dark);
+  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
+  overflow-wrap:anywhere;
+}
+.saved-map-location-option:is(:hover,:focus-visible,[aria-selected="true"]){
+  outline:none;background:var(--card-bg2);border-color:var(--accent);
+}
+.saved-map-location-option[hidden]{display:none!important;}
+
+/* Match upper/lower padding of the viewer action strip; keep button sizes. */
+.lidar-control-drawer .lidar-control-strip{
+  align-items:center!important;
+  padding-top:3px!important;
+  padding-bottom:3px!important;
+}
+
+/* Actual viewer switch track and knob: 70% of the effective 48x26 / 18x18
+   sizes. An ID selector is necessary to override prior high-specificity :is()
+   rules; the Mapping/Driving TEXT remains at a readable 9px. */
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle{
+  display:inline-flex!important;align-items:center!important;
+  gap:4px!important;height:23px!important;min-height:23px!important;
+  padding:0 2px!important;margin:0!important;
+  border:0!important;border-radius:0!important;
+  background:transparent!important;box-shadow:none!important;outline:0!important;
+}
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle-label{
+  font:700 9px/1.2 var(--mono)!important;letter-spacing:.1px!important;
+}
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle-track{
+  width:33.6px!important;height:18.2px!important;flex:0 0 33.6px!important;
+}
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle-slider{
+  width:12.6px!important;height:12.6px!important;top:2px!important;left:2px!important;
+}
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle.driving .navigation-mode-toggle-slider{
+  left:calc(100% - 14.6px)!important;
+}
+#navigation-viewer-mode-controls-mount .navigation-mode-toggle.unknown .navigation-mode-toggle-slider{
+  left:calc(50% - 6.3px)!important;
+}
+.lidar-control-drawer .lidar-view-controls button[data-control-button]{
+  box-sizing:border-box;height:23px!important;min-height:23px!important;
+  padding:3px 6px!important;line-height:1.2!important;
+}
+
+
+/* A definite, single desktop grid track controls BOTH map panes.
+   Do not use height:100% on grid children when the containing track is auto. */
+@media (min-width: 801px) {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column {
+    height:auto!important;flex:1 1 0!important;min-height:0;
+    grid-template-rows:minmax(0,1fr);align-items:stretch;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column {
+    height:auto!important;min-height:0;align-self:stretch;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
+    padding-top:10px;padding-bottom:10px;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
+    flex:1 1 0!important;min-height:0;max-height:none!important;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-panel {
+    flex:1 1 0;min-height:0;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
+    margin-top:auto!important;padding-top:5px;
+  }
+}
+
+/* Place location buttons in the GREY column footer, not inside the white
+   form card. Without placeholder rows, both white surfaces fill the space
+   down to a single 9px column gap above the aligned action footers. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-actions {
+  /* 34px buttons + 5px vertical padding on each side = 44px, matching the
+     intrinsic height of the left .saved-map-primary-actions footer. */
+  flex:0 0 auto;min-height:44px;align-items:center;
+  margin-top:0!important;padding-block:5px!important;
+  justify-content:flex-end;
+}
+
+/* A single compact row for the radio, map name, timestamp and resolution.
+   Truncate long text rather than force a second row or resize the list. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option {
+  align-items:center;padding-top:8px;padding-bottom:8px;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option > input {
+  margin-top:0;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option > div {
+  display:flex;flex-direction:row;flex-wrap:nowrap;
+  align-items:center;gap:12px;min-width:0;overflow:hidden;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-name-row {
+  display:flex;flex:0 1 auto;min-width:0;align-items:center;gap:5px;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-name {
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-details {
+  flex:1 1 auto;min-width:0;margin-top:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-location-meta {
+  flex:0 1 auto;min-width:0;margin-top:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* Final controls are rendered once in HTML and adopted by their controllers. */
+body.dark-mode #darkToggle { background:var(--accent);border-color:var(--accent); }
+body.dark-mode #darkToggle .dark-toggle-slider { left:calc(100% - 19px); }
+.dashboard-ui-startup-error[hidden] { display:none!important; }
+.dashboard-ui-startup-error {
+  position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+  z-index:3000;display:flex;gap:12px;align-items:center;
+  padding:12px 14px;border:1px solid var(--danger-color);
+  border-radius:10px;background:var(--card-bg);color:var(--text-dark);
+  box-shadow:var(--shadow-lg);font-size:12px;
+}
+.dashboard-ui-startup-error button {
+  cursor:pointer;color:var(--accent);background:var(--card-bg2);
+  border:1px solid var(--border-color);padding:6px 10px;border-radius:7px;
+}
+@media(max-width:540px){
+  .dashboard-ui-startup-error{width:calc(100% - 32px);box-sizing:border-box;}
+}
+
+/* Saved maps: the left progress message must not reserve a row between the
+   white scrollable list and its button footer. The right form/card/footer
+   remain untouched; active feedback overlays the left list's lower edge. */
+@media (min-width:801px) {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
+    position:relative;
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress {
+    position:absolute;
+    z-index:2;
+    left:18px;
+    right:18px;
+    bottom:calc(10px + 44px + 9px + 7px);
+    width:auto;
+    box-sizing:border-box;
+    max-height:min(96px,18vh);
+    overflow-y:auto;
+    padding:4px 6px;
+    border-radius:6px;
+    background:var(--card-bg);
+  }
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-progress:empty:not(.is-loading) {
+    display:none;
+  }
+}

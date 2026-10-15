@@ -5,12 +5,12 @@
     const navigationMaps = components.navigationMaps = components.navigationMaps || {};
     const VIEW_NAME = 'savedNavigationMaps';
     const labels = {
-        title: '\uc800\uc7a5 \uc9c0\ub3c4 \uc120\ud0dd',
+        title: '\uc9c0\ub3c4 \uc120\ud0dd',
         description: '\uc9c0\ub3c4\ub97c \ubd88\ub7ec\uc624\uba74 \ud604\uc7ac localization \uc704\uce58\uac00 \ucd08\uae30\ud654\ub429\ub2c8\ub2e4.',
         cancel: '\ucde8\uc18c',
         load: '\uc120\ud0dd \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30',
         saveCurrent: '\ud604\uc7ac \uc9c0\ub3c4 \uc800\uc7a5',
-        startMapping: '\uc0c8 Mapping \uc2dc\uc791',
+        startMapping: '\uc0c8 \uc9c0\ub3c4 \uc0dd\uc131',
         clearCurrentMap: '\ud604\uc7ac \uc9c0\ub3c4 \uc81c\uac70',
         mappingStarting: 'Mapping \ubaa8\ub4dc\ub85c \uc804\ud658 \uc911...',
         mappingStarted: '\uc0c8 Mapping\uc744 \uc2dc\uc791\ud588\uc2b5\ub2c8\ub2e4.',
@@ -32,7 +32,6 @@
         renameSuccess: '\uc9c0\ub3c4 \uc774\ub984\uc744 \ubcc0\uacbd\ud588\uc2b5\ub2c8\ub2e4.',
         selectRequired: '\uc800\uc7a5 \uc9c0\ub3c4\ub97c \uc9c1\uc811 \uc120\ud0dd\ud558\uc138\uc694.',
         mapPrefix: 'MAP: ',
-        locationTitle: '장소 / GPS',
         currentLocation: '현재 장소',
         gpsStatus: 'GPS',
         securityStatus: '보안 구역',
@@ -68,14 +67,6 @@
         if (value !== undefined) element.textContent = value;
         return element;
     };
-
-    function createControlButton(value, variant = 'secondary', className = '') {
-        const button = create('button', className, value);
-        button.type = 'button';
-        button.dataset.controlButton = variant;
-        components.controls?.controlButton?.enhance?.(button);
-        return button;
-    }
 
     const formatSavedAt = value => {
         if (!value) return '--';
@@ -187,7 +178,6 @@
 
     function renderLocationPanel(status = locationFallback()) {
         const panel = create('section', 'saved-map-location-panel');
-        panel.append(create('div', 'saved-map-section-title', labels.locationTitle));
 
         const gps = status?.gps || { fix: false };
         const liveName = gps.matched_location_name;
@@ -216,15 +206,26 @@
 
         if (status?.unavailable) {
             panel.append(create('div', 'saved-map-location-note', `GPS/장소 상태 확인 불가: ${status.error || labels.unavailable}`));
-            return panel;
+            return { panel, actions: null };
         }
 
         const locations = Array.isArray(status.locations) ? status.locations : [];
+        const picker = create('div', 'saved-map-location-picker');
+        const newNameInput = create('input', 'saved-map-location-new');
+        newNameInput.type = 'text';
+        newNameInput.placeholder = '새로운 장소 이름 입력';
+        newNameInput.setAttribute('aria-label', '새 장소 이름 입력');
+        const DRAFT_LOCATION_VALUE = '__draft_location__';
+
         const selector = create('select', 'saved-map-location-select');
         selector.id = 'saved-map-location-select';
         const blank = create('option', '', labels.newLocation);
         blank.value = '';
         selector.append(blank);
+        const draftOption = create('option', '', '');
+        draftOption.value = DRAFT_LOCATION_VALUE;
+        draftOption.hidden = true;
+        selector.append(draftOption);
         for (const location of locations) {
             const option = create('option', '', location.name || location.location_id);
             option.value = location.location_id || '';
@@ -233,6 +234,97 @@
         if (status.last_location_id && locations.some(item => item.location_id === status.last_location_id)) {
             selector.value = status.last_location_id;
         }
+
+        // A styled listbox mirrors the existing select (the latter retains its
+        // value/ID for all existing location save, edit and delete operations).
+        selector.hidden = true;
+        selector.tabIndex = -1;
+        selector.setAttribute('aria-hidden', 'true');
+        const choice = create('div', 'saved-map-location-choice');
+        const trigger = create('button', 'saved-map-location-trigger', labels.newLocation);
+        trigger.type = 'button';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        const popup = create('div', 'saved-map-location-options');
+        popup.id = 'saved-map-location-options';
+        popup.setAttribute('role', 'listbox');
+        popup.setAttribute('aria-label', '저장된 장소 선택');
+        popup.hidden = true;
+        trigger.setAttribute('aria-controls', popup.id);
+        const optionButtons = new Map();
+        for (const option of selector.children) {
+            const item = create('button', 'saved-map-location-option', option.textContent);
+            item.type = 'button';
+            item.dataset.locationValue = option.value;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', 'false');
+            item.hidden = Boolean(option.hidden);
+            popup.append(item);
+            optionButtons.set(option.value, item);
+        }
+        const syncPicker = () => {
+            const selected = Array.from(selector.children)
+                .find(option => option.value === selector.value);
+            trigger.textContent = selected?.textContent || labels.newLocation;
+            for (const [value, item] of optionButtons) {
+                const source = Array.from(selector.children).find(option => option.value === value);
+                item.hidden = Boolean(source?.hidden);
+                item.textContent = source?.textContent || '';
+                item.setAttribute('aria-selected', String(selector.value === value));
+            }
+        };
+        const closePicker = () => {
+            popup.hidden = true;
+            trigger.setAttribute('aria-expanded', 'false');
+        };
+        const openPicker = () => {
+            popup.hidden = false;
+            trigger.setAttribute('aria-expanded', 'true');
+        };
+        const pickerItems = () => Array.from(optionButtons.values()).filter(item => !item.hidden);
+        const chooseOption = value => {
+            selector.value = value;
+            loadSelectedLocation();
+            syncPicker();
+            closePicker();
+            trigger.focus?.();
+        };
+        for (const item of optionButtons.values()) {
+            item.addEventListener('click', () => chooseOption(item.dataset.locationValue));
+            item.addEventListener('keydown', event => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closePicker();
+                    trigger.focus?.();
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const items = pickerItems();
+                    const index = items.indexOf(item);
+                    items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus?.();
+                }
+            });
+        }
+        trigger.addEventListener('click', () => {
+            if (popup.hidden) openPicker(); else closePicker();
+        });
+        trigger.addEventListener('keydown', event => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                openPicker();
+                const items = pickerItems();
+                if (items.length) {
+                    const selected = items.find(item => item.dataset.locationValue === selector.value);
+                    (selected || items[0]).focus?.();
+                }
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closePicker();
+            }
+        });
+        choice.addEventListener('focusout', event => {
+            if (!choice.contains?.(event.relatedTarget)) closePicker();
+        });
+        choice.append(trigger, popup);
 
         const fields = create('div', 'saved-map-location-fields');
         const fieldSpecs = [
@@ -255,6 +347,11 @@
         inputs['saved-map-location-radius'].value = '30';
 
         const loadSelectedLocation = () => {
+            if (selector.value === DRAFT_LOCATION_VALUE) {
+                inputs['saved-map-location-name'].value = newNameInput.value.trim();
+                deleteButton.disabled = true;
+                return;
+            }
             const location = locations.find(item => item.location_id === selector.value);
             inputs['saved-map-location-name'].value = location?.name || '';
             inputs['saved-map-location-lat'].value = location?.lat ?? '';
@@ -264,7 +361,8 @@
         };
 
         const actions = create('div', 'saved-map-location-actions');
-        const useCurrent = createControlButton(labels.useCurrentGps, 'secondary');
+        const useCurrent = create('button', 'mb-btn saved-map-use-current', labels.useCurrentGps);
+        useCurrent.type = 'button';
         useCurrent.dataset.requiresGps = 'true';
         useCurrent.disabled = gps.fix !== true;
         useCurrent.addEventListener('click', () => {
@@ -276,7 +374,8 @@
             }
         });
 
-        const saveLocation = createControlButton(labels.saveLocation, 'accent');
+        const saveLocation = create('button', 'mb-btn saved-map-save-location', labels.saveLocation);
+        saveLocation.type = 'button';
         saveLocation.addEventListener('click', async () => {
             const name = inputs['saved-map-location-name'].value.trim();
             const latText = inputs['saved-map-location-lat'].value.trim();
@@ -300,7 +399,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
                     body: JSON.stringify({
-                        location_id: selector.value || null,
+                        location_id: selector.value && selector.value !== DRAFT_LOCATION_VALUE ? selector.value : null,
                         name,
                         lat,
                         lng,
@@ -315,10 +414,11 @@
             }
         });
 
-        const deleteButton = createControlButton(labels.deleteLocation, 'danger');
+        const deleteButton = create('button', 'mb-btn saved-map-delete-location', labels.deleteLocation);
+        deleteButton.type = 'button';
         deleteButton.disabled = true;
         deleteButton.addEventListener('click', async () => {
-            if (!selector.value) return;
+            if (!selector.value || selector.value === DRAFT_LOCATION_VALUE) return;
             const selected = locations.find(item => item.location_id === selector.value);
             if (!global.confirm(`${selected?.name || selector.value} 장소를 삭제하시겠습니까?`)) return;
             try {
@@ -334,11 +434,28 @@
             }
         });
 
-        selector.addEventListener('change', loadSelectedLocation);
+        newNameInput.addEventListener('input', () => {
+            const draftName = newNameInput.value.trim();
+            draftOption.textContent = draftName;
+            draftOption.hidden = !draftName;
+            if (draftName) {
+                selector.value = DRAFT_LOCATION_VALUE;
+                inputs['saved-map-location-name'].value = draftName;
+                deleteButton.disabled = true;
+            } else if (selector.value === DRAFT_LOCATION_VALUE) {
+                selector.value = '';
+                inputs['saved-map-location-name'].value = '';
+                deleteButton.disabled = true;
+            }
+            syncPicker();
+        });
+        selector.addEventListener('change', () => { loadSelectedLocation(); syncPicker(); });
+        picker.append(newNameInput, selector, choice);
         actions.append(useCurrent, saveLocation, deleteButton);
-        panel.append(selector, fields, actions);
+        panel.append(picker, fields);
         loadSelectedLocation();
-        return panel;
+        syncPicker();
+        return { panel, actions };
     }
 
     function captureViewState(container = manager?.body) {
@@ -527,6 +644,12 @@
 
     function renderView(context = {}, snapshot = null) {
         const container = create('div', 'saved-map-modal');
+        // Existing modal header remains the title owner; append only a visual hint.
+        const headerTitle = manager?.title;
+        if (headerTitle && !headerTitle.querySelector('.saved-map-title-hint')) {
+            headerTitle.append(create('span', 'saved-map-title-hint',
+                `${labels.description}`));
+        }
         if (context.error) {
             const progress = create('div', 'saved-map-progress');
             showMessage(progress, `\uc9c0\ub3c4 \ubaa9\ub85d \uc870\ud68c \uc2e4\ud328: ${context.error}`, true);
@@ -536,8 +659,17 @@
 
         const maps = context.maps || [];
         const locationStatus = context.locationStatus || state.locationStatus || locationFallback();
-        container.append(create('p', 'saved-map-description', `${labels.description} ${labels.selectRequired} ${labels.renameHint}`));
-        container.append(renderLocationPanel(locationStatus));
+        const layout = create('div', 'saved-map-two-column');
+        const mapColumn = create('section', 'saved-map-primary-column');
+        const locationColumn = create('section', 'saved-map-secondary-column');
+        layout.append(mapColumn, locationColumn);
+        container.append(layout);
+        const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);
+        locationColumn.append(locationPanel);
+        if (locationActions) {
+            // Keep the action footer outside the white location form.
+            locationColumn.append(locationActions);
+        }
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name
@@ -575,8 +707,6 @@
             list.append(option);
         }
         if (!maps.length) list.append(create('div', 'saved-map-details', labels.noMaps));
-        container.append(list);
-
         const pose = create('div', 'saved-map-pose');
         const poseValues = snapshot?.pose || { x: '', y: '', yaw: '' };
         for (const [id, label, value] of [
@@ -593,24 +723,21 @@
             field.append(input);
             pose.append(field);
         }
-        container.append(pose);
+        mapColumn.append(pose);
+        mapColumn.append(list);
         progress = create('div', 'saved-map-progress', context.feedback || '');
         if (context.feedback) showMessage(progress, context.feedback, context.feedbackIsError);
-        container.append(progress);
+        mapColumn.append(progress);
 
         const mappingActions = create('div', 'saved-map-mode-actions');
 
-        const startMapping = create('button', 'saved-map-start-mapping', labels.startMapping);
+        const startMapping = create('button', 'mb-btn saved-map-start-mapping', labels.startMapping);
         startMapping.type = 'button';
-        startMapping.dataset.controlButton = 'success';
-        components.controls?.controlButton?.enhance?.(startMapping);
         startMapping.addEventListener('click', () => startMappingFromModal(container, progress));
 
-        const clearCurrentMap = create('button', 'saved-map-clear-current', labels.clearCurrentMap);
+        const clearCurrentMap = create('button', 'mb-btn saved-map-clear-current', labels.clearCurrentMap);
         clearCurrentMap.type = 'button';
-        clearCurrentMap.dataset.controlButton = 'secondary';
         clearCurrentMap.title = '\uc800\uc7a5 \ud30c\uc77c\uc740 \uc720\uc9c0\ud558\uace0 3D Viewer\uc5d0\uc11c \ud604\uc7ac \uc9c0\ub3c4\ub9cc \uc81c\uac70\ud569\ub2c8\ub2e4.';
-        components.controls?.controlButton?.enhance?.(clearCurrentMap);
         clearCurrentMap.disabled = !global.navigationMapView?.snapshot?.()?.map;
         clearCurrentMap.addEventListener('click', () => {
             clearCurrentMapFromViewer(progress);
@@ -618,20 +745,18 @@
         });
 
         mappingActions.append(startMapping, clearCurrentMap);
-        container.append(mappingActions);
 
         const actions = create('div', 'saved-map-actions');
 
-        const save = createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current');
+        const save = create('button', 'mb-btn saved-map-save-current', labels.saveCurrent);
+        save.type = 'button';
         save.addEventListener('click', async () => {
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });
 
-        const cancel = createControlButton(labels.cancel, 'secondary');
-        cancel.addEventListener('click', () => manager?.close());
-
-        const load = createControlButton(labels.load, 'accent', 'saved-map-load');
+        const load = create('button', 'mb-btn saved-map-load', labels.load);
+        load.type = 'button';
         load.disabled = !selectedMapName(container);
         load.addEventListener('click', () => loadSelectedMap(container, progress));
 
@@ -641,8 +766,10 @@
             showMessage(progress, '');
         });
 
-        actions.append(save, cancel, load);
-        container.append(actions);
+        actions.append(save, load);
+        const primaryActions = create('div', 'saved-map-primary-actions');
+        primaryActions.append(mappingActions, actions);
+        mapColumn.append(primaryActions);
         return container;
     }
 
