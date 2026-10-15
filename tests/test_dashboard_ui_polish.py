@@ -295,7 +295,10 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("                        Beep", DASHBOARD)
         self.assertIn("border: 1px solid color-mix(in srgb, var(--accent) 40%", feedback)
         self.assertIn("border: 1px solid color-mix(in srgb, var(--warning-color) 40%", feedback)
-        self.assertIn('height:max-content!important;min-height:0;align-self:start;', CSS)
+        self.assertIn('height:100%!important;min-height:0;align-self:stretch;', CSS)
+        self.assertIn('flex:1 1 auto;min-height:0;', CSS)
+        self.assertIn('margin-top:auto;padding-top:5px;', CSS)
+        self.assertNotIn('height:max-content!important;min-height:0;align-self:start;', CSS)
         self.assertIn('flex:1 1 0!important;min-height:0;max-height:none!important;', CSS)
         self.assertIn("display:flex;flex-direction:row;flex-wrap:nowrap;", CSS)
         self.assertNotIn("panel.append(create('div', 'saved-map-section-title', labels.locationTitle));", MAP)
@@ -326,8 +329,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-map-layout-v1', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-map-layout-v1', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-map-layout-v2', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-map-layout-v2', LOGIN)
 
 
 if __name__ == "__main__":
