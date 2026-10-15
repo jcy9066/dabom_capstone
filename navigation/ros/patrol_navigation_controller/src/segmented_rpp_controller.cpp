@@ -224,6 +224,13 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::stopped(
 void SegmentedRPPController::checkRotationCollision(
   const geometry_msgs::msg::PoseStamped & pose, double angle_error)
 {
+  if (!std::isfinite(angle_error) ||
+    !std::isfinite(pose.pose.position.x) ||
+    !std::isfinite(pose.pose.position.y) ||
+    !std::isfinite(yaw(pose)))
+  {
+    throw std::runtime_error("Cannot certify a pivot with non-finite pose");
+  }
   auto * costmap = costmap_->getCostmap();
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
   const double heading = yaw(pose);
@@ -288,6 +295,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     path_.poses[stage.end], pose.header.frame_id);
   const double remaining = angles::shortest_angular_distance(
     yaw(pose), yaw(rotation_goal));
+  if (!std::isfinite(remaining)) {
+    throw std::runtime_error("Invalid lattice pivot target orientation");
+  }
   if (std::abs(remaining) <= pivot_yaw_tolerance_) {
     if (std::abs(velocity.angular.z) >= transfer_angular_stop_) {
       return stopped(pose);
