@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from server.navigation_map_service import NavigationMapError
 from server.navigation_process_control import NavigationProcessError
 from server.navigation_ros_control import NavigationRosError
+from server.navigation_motion_segments import annotate_path
 from server.env_config import env_float, env_int, env_text
 
 
@@ -1684,20 +1685,12 @@ class NavigationControlApi:
             raise NavigationControlError("GOAL_OUT_OF_BOUNDS", "The goal is outside the active map.", 422)
 
     @staticmethod
-    def _normalized_path(path: Any) -> list[dict[str, float]]:
+    def _normalized_path(path: Any) -> list[dict[str, float | str]]:
         if not isinstance(path, list):
             return []
-        output = []
-        for point in path[:5000]:
-            if not isinstance(point, dict):
-                continue
-            try:
-                x, y = float(point["x"]), float(point["y"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if math.isfinite(x) and math.isfinite(y):
-                output.append({"x": x, "y": y})
-        return output
+        # Keep the 32-heading lattice's pose orientations and zero-distance
+        # rotation primitives. XY-only paths from legacy mocks remain valid.
+        return annotate_path(path)
 
     @staticmethod
     def _bounded_int(value: Any, minimum: int, maximum: int, field: str) -> int:
