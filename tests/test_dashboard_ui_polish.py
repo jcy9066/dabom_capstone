@@ -339,7 +339,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("border-radius: var(--ui-radius-control);", CSS)
 
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261016-new-map-label-v5", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261016-map-action-roles-v6", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
@@ -350,8 +350,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-bookmark-map-buttons-v9', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-bookmark-map-buttons-v9', LOGIN)
+        self.assertIn('selected_ui.css?v=20261016-map-action-semantic-v10', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261016-map-action-semantic-v10', LOGIN)
 
 
 if __name__ == "__main__":
