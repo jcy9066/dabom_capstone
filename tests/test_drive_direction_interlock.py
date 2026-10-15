@@ -1,9 +1,12 @@
 """Motor-free regressions for forward/reverse/pivot STOP handoffs."""
 from __future__ import annotations
 
+import os
 import threading
 import time
 from unittest.mock import Mock
+
+os.environ.setdefault("MIN_AUTO_DRIVE_PWM", "0.50")
 
 import pytest
 
