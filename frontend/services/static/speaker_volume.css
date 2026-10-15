@@ -36,7 +36,9 @@
 .speaker-volume-slider .speaker-volume-level {
   appearance:none;-webkit-appearance:none;
   width:var(--slider-width);max-width:100%;min-width:0;
-  height:var(--slider-height);padding:0;border:0;
+  height:var(--slider-height);padding:0;
+  box-sizing:border-box;
+  border:1pt solid var(--text-muted);
   background:var(--slider-bg);overflow:hidden;
   border-radius:var(--slider-border-radius);
   transition:height var(--level-transition-duration);

@@ -672,11 +672,8 @@
         const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);
         locationColumn.append(locationPanel);
         if (locationActions) {
-            // Match the left map feedback row before the independent button footer.
-            locationColumn.append(
-                create('div', 'saved-map-location-footer-spacer'),
-                locationActions
-            );
+            // Keep the action footer outside the white location form.
+            locationColumn.append(locationActions);
         }
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
