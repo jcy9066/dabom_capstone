@@ -113,7 +113,7 @@ geometry_msgs::msg::PoseStamped SegmentedRPPController::inControllerFrame(
   if (!nav2_util::transformPoseInTargetFrame(
       target, transformed, *tf_, target_frame))
   {
-    throw nav2_core::NoValidControl(
+    throw std::runtime_error(
       "Cannot transform lattice segment target to controller frame");
   }
   return transformed;
@@ -125,7 +125,7 @@ void SegmentedRPPController::buildStages()
   stage_index_ = 0;
   const size_t n = path_.poses.size();
   if (n < 2) {
-    throw nav2_core::NoValidControl("Lattice path must contain at least two poses");
+    throw std::runtime_error("Lattice path must contain at least two poses");
   }
 
   auto kind = [this](size_t index) -> int {
@@ -181,7 +181,7 @@ void SegmentedRPPController::buildStages()
     });
   }
   if (stages_.empty()) {
-    throw nav2_core::NoValidControl("State Lattice path contains no usable motion");
+    throw std::runtime_error("State Lattice path contains no usable motion");
   }
 }
 
@@ -201,7 +201,7 @@ void SegmentedRPPController::activateStage()
     path_.poses.begin() + stage.begin,
     path_.poses.begin() + stage.end + 1);
   if (slice.poses.size() < 2) {
-    throw nav2_core::NoValidControl("Movement segment is too short for RPP");
+    throw std::runtime_error("Movement segment is too short for RPP");
   }
   rpp_->setPlan(slice);
 }
@@ -239,7 +239,7 @@ void SegmentedRPPController::checkRotationCollision(
       (cost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
       costmap_->getLayeredCostmap()->isTrackingUnknown()))
     {
-      throw nav2_core::NoValidControl("In-place rotation footprint is obstructed");
+      throw std::runtime_error("In-place rotation footprint is obstructed");
     }
   }
 }
@@ -278,7 +278,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   const auto center = inControllerFrame(
     path_.poses[stage.begin], pose.header.frame_id);
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
-    throw nav2_core::NoValidControl("Robot moved away from planned rotation point");
+    throw std::runtime_error("Robot moved away from planned rotation point");
   }
   if (std::abs(velocity.linear.x) >= transfer_linear_stop_) {
     return stopped(pose);
