@@ -62,7 +62,7 @@ void SegmentedRPPController::configure(
 
   // Inner RPP shares the FollowPath parameter namespace. The outer
   // RotationShimController retains final goal yaw and its collision check.
-  rpp_ = rpp_loader_.createUniqueInstance(
+  rpp_ = rpp_loader_.createSharedInstance(
     "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController");
   rpp_->configure(parent, plugin_name_, tf, costmap_);
   collision_ = std::make_unique<
