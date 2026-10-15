@@ -773,6 +773,36 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, self.map_api.ros_control.cancel_calls)
         self.assertFalse(self.api.state_response(now=base + 5.1)["emergency_stop"])
 
+    async def test_nav2_cancel_exception_is_not_a_physical_path_estop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose", now=base, payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.refresh_watchdog_samples(base + 5.1)
+
+        def reject_cancel():
+            raise RuntimeError("Nav2 cancel transport failure")
+
+        self.map_api.ros_control.cancel_navigation = reject_cancel
+        self.assertEqual(
+            "BLOCKED_TIMEOUT",
+            await self.api.evaluate_watchdog(now=base + 5.1),
+        )
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("NAV_CANCEL_FAILED", result["last_error"])
+        self.assertFalse(result["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertTrue(any(
+            command["type"] == "stop" for _, command in self.commands
+        ))
+        self.assertFalse(any(
+            command["type"] == "emergency_stop" for _, command in self.commands
+        ))
+
     async def test_blocked_cancel_error_after_estop_does_not_reclassify_failure(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
