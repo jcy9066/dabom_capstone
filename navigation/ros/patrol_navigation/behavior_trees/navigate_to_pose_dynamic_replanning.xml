@@ -1,17 +1,22 @@
 <!--
-  Normal global replanning runs at 2 Hz while following the goal.
-  If planning/control fails, FollowPath is halted and recovery waits 500 ms
-  before retrying. Ten retries bound planner-side blockage to about five seconds.
-  A server-side pose-progress watchdog applies the same five-second deadline
-  when a path still exists but the RC car cannot make physical progress.
-  Spin/BackUp recovery is intentionally excluded.
+  Replan only when the untraversed portion of the Global Path becomes invalid.
+  Humble PlannerServer IsPathValid starts its lethal check at the closest path
+  point to the robot. The 10 Hz guard never republishes a valid Global Path.
+  Invalidity must persist 300 ms before replanning; RPP handles immediate
+  collision avoidance independently. Do not run Spin/BackUp recovery.
+  The backend still owns the 5-second no-progress and STOP watchdog.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="10" name="NavigateWithFiveSecondGrace">
-      <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="2.0">
-          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+    <RecoveryNode number_of_retries="5" name="NavigateWithBoundedRecovery">
+      <PipelineSequence name="NavigateOnValidatedPath">
+        <RateController hz="10.0">
+          <Fallback name="ReuseValidPath">
+            <IsPathValid path="{path}" server_timeout="100"/>
+            <Delay delay_msec="300">
+              <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            </Delay>
+          </Fallback>
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
