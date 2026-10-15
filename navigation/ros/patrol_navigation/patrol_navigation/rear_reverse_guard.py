@@ -114,7 +114,8 @@ class RearReverseGuard:
     ) -> tuple[float, bool, str | None]:
         """Return safe signed linear_x, Pi PWM-cap flag and STOP reason."""
         if speed_mps >= 0:
-            self._blind_moving = False
+            # Continue counting backward coasting after a zero/forward command;
+            # a brief STOP does not authorize another blind movement.
             return speed_mps, False, None
         if (
             self._odom_at is None
@@ -122,7 +123,6 @@ class RearReverseGuard:
             or now - self._odom_at > self.ODOM_MAX_AGE_SEC
             or now < self._odom_at
         ):
-            self._blind_moving = False
             return 0.0, True, "rear_reverse_odom_unavailable"
 
         requested = abs(speed_mps)
@@ -144,7 +144,6 @@ class RearReverseGuard:
             and 0 <= now - self._scan_at <= self.SCAN_MAX_AGE_SEC
             and self._nearest_obstacle_m <= braking_distance
         ):
-            self._blind_moving = False
             return 0.0, True, "rear_obstacle_in_stop_distance"
         if observed:
             self._blind_distance_m = 0.0
@@ -157,7 +156,6 @@ class RearReverseGuard:
             + safe_speed ** 2 / (2 * self.DECELERATION_MPS2)
         )
         if self._blind_distance_m + reserve >= self.MAX_BLIND_DISTANCE_M:
-            self._blind_moving = False
             return 0.0, True, "rear_blind_distance_exhausted"
 
         self._blind_moving = True
