@@ -61,6 +61,14 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "std::abs(velocity.linear.x) >= transfer_linear_stop_" in source
     assert "inControllerFrame(" in source
     assert "nav2_util::transformPoseInTargetFrame(" in source
+    # Humble nav2_core::Controller::Ptr is a shared_ptr and pluginlib's
+    # createUniqueInstance() cannot be assigned to it.
+    assert "rpp_loader_.createSharedInstance(" in source
+    assert "rpp_loader_.createUniqueInstance(" not in source
+    # Costmap2DROS owns footprint/layered costmap APIs, not Costmap2D.
+    assert "const auto footprint = costmap_->getRobotFootprint();" in source
+    assert "costmap_->getLayeredCostmap()->isTrackingUnknown()" in source
+    assert "costmap->getRobotFootprint()" not in source
 
 
 def test_lattice_controller_is_available_in_navigation_launch():
