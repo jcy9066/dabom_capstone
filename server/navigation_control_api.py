@@ -1212,6 +1212,16 @@ class NavigationControlApi:
         except Exception:
             rotation = {}
 
+        # The dashboard may have observed a Nav2 FAILED/CANCELED status
+        # first. Deliver the queued Pi STOP even though navigation is already
+        # terminal and the regular active-navigation watchdog would return.
+        with self._lock:
+            self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            pending_terminal_stop = self._pending_terminal_stop is not None
+            hard_fault = bool(self._encoder_stop_violation or self._pi_session_stop_pending)
+        if pending_terminal_stop and not hard_fault:
+            await self._deliver_terminal_stop()
+
         blocked = False
         with self._lock:
             retry_pending_stop = (
