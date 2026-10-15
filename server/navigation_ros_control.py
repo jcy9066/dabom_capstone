@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from server.env_config import env_float
+from server.navigation_motion_segments import annotate_path
 
 try:
     import rclpy
@@ -397,10 +398,14 @@ class NavigationRosControl:
         )
         if int(result_wrapper.status) != int(GoalStatus.STATUS_SUCCEEDED):
             raise NavigationRosError("PATH_NOT_FOUND", "Nav2 could not compute a path.", 422)
-        return [
-            {"x": float(item.pose.position.x), "y": float(item.pose.position.y)}
+        return annotate_path([
+            {
+                "x": float(item.pose.position.x),
+                "y": float(item.pose.position.y),
+                "yaw": self._yaw_from_orientation(item.pose.orientation),
+            }
             for item in result_wrapper.result.path.poses
-        ]
+        ])
 
     def navigate_to_pose(self, goal: dict[str, float]) -> dict[str, Any]:
         self._require_started()
