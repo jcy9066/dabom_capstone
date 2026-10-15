@@ -14,8 +14,10 @@ except ModuleNotFoundError:  # Direct robot_command_client.py execution.
 
 try:
     from raspberry.controllers.jerk_limiter import WheelJerkLimiter
+    from raspberry.controllers.direction_interlock import DriveDirectionInterlock, segment_mode
 except ModuleNotFoundError:
     from controllers.jerk_limiter import WheelJerkLimiter
+    from controllers.direction_interlock import DriveDirectionInterlock, segment_mode
 
 try:
     import serial
@@ -102,6 +104,8 @@ class MotorController:
             max_accel=0.50 / self.max_wheel_mps,
             max_jerk=2.0 / self.max_wheel_mps,
         )
+        self._direction_interlock = DriveDirectionInterlock()
+        self._direction_fault_latched = False
         self.last_command_at = 0.0
         self.current_motion = "stop"
         self.led_enabled = False
@@ -625,6 +629,49 @@ class MotorController:
 
         with self._command_lock:
             self._ensure_connected_locked()
+            if self._direction_fault_latched:
+                raise MotorControllerError(
+                    "automatic direction switch timed out; motion locked until explicit safety reset"
+                )
+            now = time.monotonic()
+            with self._state_lock:
+                telemetry = dict(self._encoder_state)
+            updated_at = telemetry.get("updated_monotonic")
+            snapshot = {
+                **telemetry,
+                "age_sec": None if updated_at is None else now - updated_at,
+            }
+            mode = segment_mode(left_normalized, right_normalized)
+            decision = self._direction_interlock.request(mode, now, snapshot)
+            if decision == "stop":
+                # One STOP per transition. Only a successful UART reply
+                # starts the encoder-stable confirmation window.
+                self._jerk_limiter.reset()
+                try:
+                    self._exchange_locked("STOP,direction_switch")
+                except Exception:
+                    self._direction_fault_latched = True
+                    raise
+                with self._state_lock:
+                    sequence = int(self._encoder_state["sequence"])
+                    self.current_motion = "stop"
+                    self.last_command_at = time.monotonic()
+                self._direction_interlock.mark_stop_sent(
+                    time.monotonic(), sequence,
+                )
+                return
+            if decision == "hold":
+                return
+            if decision == "timeout":
+                self._jerk_limiter.reset()
+                self._direction_fault_latched = True
+                self._exchange_locked("STOP,direction_switch_timeout")
+                with self._state_lock:
+                    self.current_motion = "stop"
+                    self.last_command_at = time.monotonic()
+                raise MotorControllerError(
+                    "direction change STOP not encoder-confirmed within 3s"
+                )
 
             limited_left, limited_right = self._jerk_limiter.step(
                 left_normalized, right_normalized, time.monotonic(),
@@ -663,6 +710,7 @@ class MotorController:
         with self._command_lock:
             # STOP, failsafe and E-STOP have no acceleration/jerk delay.
             self._jerk_limiter.reset()
+            self._direction_interlock.reset()
             with self._state_lock:
                 self.current_motion = "stop"
                 self.last_command_at = time.monotonic()
@@ -689,6 +737,13 @@ class MotorController:
             raise MotorControllerError(
                 str(error)
             ) from error
+
+    def clear_direction_fault_after_safety_resume(self) -> None:
+        """Re-arm only after operator/Pi safety-resume workflow completes."""
+        with self._command_lock:
+            self._direction_fault_latched = False
+            self._direction_interlock.reset()
+            self._jerk_limiter.reset()
 
     def failsafe_tick(self) -> None:
         with self._state_lock:
