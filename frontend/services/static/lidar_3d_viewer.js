@@ -30,8 +30,8 @@ if (root && canvas) {
         cameraViewBorder: 0xe2e8f0,
     };
 
-    const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
-    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.06;
+    const DEFAULT_OCCUPIED_HEIGHT_M = 0.24;
+    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.18;
     const INFLATION_HEIGHT_M = 0.006;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
@@ -1086,7 +1086,7 @@ if (root && canvas) {
                 Math.max(upperBox.max.z, wheelRadius * 2),
             );
 
-            obstacleHeightM = clamp(wheelRadius * 2.25, 0.07, 0.12);
+            obstacleHeightM = clamp(wheelRadius * 6.75, 0.21, 0.36);
 
             clearGroup(robotPoseGroup);
             robotPoseGroup.add(model);
@@ -1500,7 +1500,7 @@ if (root && canvas) {
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
             // Draw above the occupancy wall height and disable depth testing so
             // the planned Global Path stays readable over Map/LiDAR layers.
-            positions.push(x, y, 0.16);
+            positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04));
         }
         if (positions.length < 6) return;
 
