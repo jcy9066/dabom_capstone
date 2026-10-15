@@ -23,13 +23,14 @@ def _root():
 
 def test_initial_compute_path_is_before_any_path_validity_check():
     tree = _root()
-    recovery = tree.find("./RecoveryNode")
-    assert recovery is not None
-    assert recovery.attrib["number_of_retries"] == "5"
-    sequence = recovery.find("./Sequence")
+    sequence = tree.find("./Sequence")
     assert sequence is not None
-    assert sequence[0].tag == "ComputePathToPose"
-    assert sequence[0].attrib["path"] == "{path}"
+    assert sequence.attrib["name"] == "NavigateWithBoundedPlanning"
+    initial_budget = sequence.find("./Timeout")
+    assert initial_budget is not None
+    assert int(initial_budget.attrib["msec"]) == 5000
+    assert initial_budget[0].tag == "ComputePathToPose"
+    assert initial_budget[0].attrib["path"] == "{path}"
     assert sequence[1].tag == "PipelineSequence"
 
 
@@ -55,8 +56,14 @@ def test_invalidity_is_sampled_continuously_across_debounce():
     delay = reactive[1]
     assert delay.tag == "Delay"
     assert int(delay.attrib["delay_msec"]) == 300
-    assert len(delay) == 1 and delay[0].tag == "ComputePathToPose"
-    assert delay[0].attrib["planner_id"] == "GridBased"
+    timeout = delay.find("./Timeout")
+    assert timeout is not None
+    assert int(timeout.attrib["msec"]) == 5000
+    retries = timeout.find("./RetryUntilSuccessful")
+    assert retries is not None
+    assert int(retries.attrib["num_attempts"]) == 5
+    assert len(retries) == 1 and retries[0].tag == "ComputePathToPose"
+    assert retries[0].attrib["planner_id"] == "GridBased"
 
 
 def test_no_blind_automatic_spin_or_reverse_recovery():
@@ -65,10 +72,21 @@ def test_no_blind_automatic_spin_or_reverse_recovery():
     assert tree.find(".//BackUp") is None
     assert tree.find(".//DriveOnHeading") is None
     assert tree.find(".//ClearEntireCostmap") is None
+    assert tree.find(".//RecoveryNode") is None
     # A failed FollowPath must never be magically reported as success.
     follow = tree.find(".//PipelineSequence/FollowPath")
     assert follow is not None
     assert follow.attrib["controller_id"] == "FollowPath"
+
+
+def test_replan_budget_is_not_restarted_by_outer_recovery():
+    tree = _root()
+    assert len(tree.findall(".//RetryUntilSuccessful")) == 1
+    assert len(tree.findall(".//Timeout")) == 2
+    assert len(tree.findall(".//Delay")) == 1
+    assert tree.find("./Sequence/PipelineSequence") is not None
+    # No enclosing RecoveryNode is allowed to reset the 5-attempt counter.
+    assert tree.find(".//RecoveryNode") is None
 
 
 def test_navigator_uses_the_custom_bt_and_humble_nodes():
