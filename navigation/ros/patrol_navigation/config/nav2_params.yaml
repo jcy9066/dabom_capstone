@@ -131,8 +131,8 @@ local_costmap:
 
       # 임시값이다.
       # 바퀴까지 포함한 실제 외곽 크기를 측정한 뒤 수정한다.
-      robot_radius: 0.20
-      footprint_padding: 0.01
+      footprint: "[[0.14, 0.105], [0.14, -0.105], [-0.14, -0.105], [-0.14, 0.105]]"
+      footprint_padding: 0.03
 
       plugins:
         - obstacle_layer
@@ -176,8 +176,8 @@ global_costmap:
       publish_frequency: 2.0
       resolution: 0.05
 
-      robot_radius: 0.20
-      footprint_padding: 0.01
+      footprint: "[[0.14, 0.105], [0.14, -0.105], [-0.14, -0.105], [-0.14, 0.105]]"
+      footprint_padding: 0.03
       track_unknown_space: true
 
       plugins:
