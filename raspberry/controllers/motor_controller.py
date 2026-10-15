@@ -710,7 +710,7 @@ class MotorController:
         with self._command_lock:
             # STOP, failsafe and E-STOP have no acceleration/jerk delay.
             self._jerk_limiter.reset()
-            self._direction_interlock.reset()
+            self._direction_interlock.abort_pending()
             with self._state_lock:
                 self.current_motion = "stop"
                 self.last_command_at = time.monotonic()
