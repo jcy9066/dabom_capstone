@@ -1589,6 +1589,32 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   color:var(--text-muted);cursor:not-allowed;opacity:.55;transform:none;
 }
 
+/* Functional background tints for saved-map actions.
+   Reuse the record toolbar's .mb-btn dimensions, border, typography and motion.
+   The existing :disabled rule above keeps unavailable actions neutral. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-start-mapping { --saved-map-action-bg:#E7F1EB; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#F3EBE0; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#E7EDF5; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#ECE9F3; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#E8F1F3; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#E2F0ED; }
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#F5E5E8; }
+
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-start-mapping { --saved-map-action-bg:#21372D; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#3B332A; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#283748; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#353246; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#283841; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#203934; }
+body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#432C34; }
+
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:not(:disabled) {
+  background-color:var(--saved-map-action-bg,var(--card-bg2));
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:not(:disabled):hover {
+  background-color:color-mix(in srgb,var(--saved-map-action-bg,var(--card-bg2)) 90%,var(--accent));
+}
+
 @media(max-width:1150px){
  .saved-map-primary-column .saved-map-primary-actions{flex-wrap:wrap;row-gap:7px;}
  .saved-map-primary-column .saved-map-primary-actions .saved-map-mode-actions,
