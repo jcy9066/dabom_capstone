@@ -62,8 +62,8 @@ class DevPrimaryAccentContractTests(unittest.TestCase):
         for banned in ("fetch(", "addEventListener", "onclick=", "onkeydown="):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, SECTION)
-        self.assertIn("selected_ui.css?v=20261015-left-border-align-v7", INDEX)
-        self.assertIn("selected_ui.css?v=20261015-left-border-align-v7", LOGIN)
+        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", INDEX)
+        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", LOGIN)
 
 
 if __name__ == "__main__":

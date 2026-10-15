@@ -49,7 +49,7 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("createControlButton(labels.clearCurrentMap, 'secondary', 'saved-map-clear-current')", MAP)
         self.assertIn("startMappingFromModal(container, progress)", MAP)
         self.assertIn("loadSelectedMap(container, progress)", MAP)
-        self.assertIn(".saved-map-modal .dashboard-control-button", CSS)
+        self.assertNotIn(".saved-map-modal .dashboard-control-button", CSS)
         self.assertIn("min-height:min(60vh,550px)", CSS)
 
     def test_description_only_on_error(self):
@@ -100,7 +100,7 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.records-view .record-filter-controls,', CSS)
         self.assertIn('.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions,.saved-map-location-actions)', CSS)
         self.assertIn('  padding-block: 5px;', CSS)
-        self.assertIn('transform:translateY(-1px); border-color:var(--accent);', CSS)
+        self.assertNotIn('.saved-map-modal .dashboard-control-button:hover', CSS)
 
     def test_gallery_source_badge_does_not_overlap_image(self):
         self.assertIn('.gallery-card .gallery-card-source {', CSS)
@@ -221,8 +221,8 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn('.lidar-layer-drawer .lidar-display-options label{font-size:7px;', read("frontend/services/static/lidar_3d_viewer.css"))
 
     def test_updated_resources_referenced(self):
-        self.assertIn("selected_ui.css?v=20261015-left-border-align-v7", INDEX)
-        self.assertIn("selected_ui.css?v=20261015-left-border-align-v7", LOGIN)
+        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", INDEX)
+        self.assertIn("selected_ui.css?v=20261015-shared-map-buttons-v8", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
         self.assertIn("saved_map_modal.js?v=20261015-map-footer-tight-v3", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)

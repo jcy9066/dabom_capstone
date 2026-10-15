@@ -397,7 +397,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "labels.clearCurrentMap",
         ):
             self.assertIn(contract, self.map_control)
-        self.assertIn(".saved-map-actions button:disabled { cursor: not-allowed;", self.map_control_css)
+        self.assertNotIn(".saved-map-actions button:disabled { cursor: not-allowed;", self.map_control_css)
         self.assertIn(".saved-map-modal.is-pending .saved-map-actions button:disabled { cursor: progress;", self.map_control_css)
         self.assertNotIn("button:disabled { cursor: wait;", self.map_control_css)
 
