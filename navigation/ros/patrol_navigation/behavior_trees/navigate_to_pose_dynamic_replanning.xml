@@ -1,38 +1,39 @@
 <!--
-  ROS2 Humble / BehaviorTree.CPP v3:
-  - Compute the initial path immediately, before IsPathValid can inspect it.
-  - On 10Hz ticks reuse a valid path without re-publishing/re-planning.
-  - During a sustained invalid path, a ReactiveSequence continuously checks
-    invalidity and halts the Delay whenever validity is restored.
-  - Only if invalidity continues for >=300ms is ComputePathToPose re-run.
-  - The controller is responsible for immediate local collision-stop behavior.
-  - Recovery is bounded; no blind Spin/BackUp recovery is authorized.
+  Nav2 Humble / BehaviorTree.CPP v3, goal-scoped failure:
+  * Initial route: one bounded planner attempt.
+  * Reuse valid path and inspect it at 10 Hz.
+  * On sustained invalidity (300 ms), retry ComputePathToPose at most
+    five times over five seconds. Restored validity halts the retry subtree.
+  * If all attempts fail, fail FollowPath/Nav2 action; never silently
+    restart the entire Goal or issue blind Spin/BackUp recovery.
+  * Physical STOP, emergency gating and error reasons are server-owned.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="5" name="NavigateWithBoundedRecovery">
-      <Sequence name="NavigateWithInitialPlan">
+    <Sequence name="NavigateWithBoundedPlanning">
+      <Timeout msec="5000">
         <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-        <PipelineSequence name="NavigateOnValidatedPath">
-          <RateController hz="10.0">
-            <Fallback name="ReuseOrReplanPath">
-              <IsPathValid path="{path}" server_timeout="100"/>
-              <ReactiveSequence name="WaitForSustainedInvalidPath">
-                <Inverter>
-                  <IsPathValid path="{path}" server_timeout="100"/>
-                </Inverter>
-                <Delay delay_msec="300">
-                  <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-                </Delay>
-              </ReactiveSequence>
-            </Fallback>
-          </RateController>
-          <FollowPath path="{path}" controller_id="FollowPath"/>
-        </PipelineSequence>
-      </Sequence>
-      <Delay delay_msec="500">
-        <AlwaysSuccess/>
-      </Delay>
-    </RecoveryNode>
+      </Timeout>
+      <PipelineSequence name="NavigateOnValidatedPath">
+        <RateController hz="10.0">
+          <Fallback name="ReuseOrReplanPath">
+            <IsPathValid path="{path}" server_timeout="100"/>
+            <ReactiveSequence name="WaitForSustainedInvalidPath">
+              <Inverter>
+                <IsPathValid path="{path}" server_timeout="100"/>
+              </Inverter>
+              <Delay delay_msec="300">
+                <Timeout msec="5000">
+                  <RetryUntilSuccessful num_attempts="5">
+                    <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+                  </RetryUntilSuccessful>
+                </Timeout>
+              </Delay>
+            </ReactiveSequence>
+          </Fallback>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+    </Sequence>
   </BehaviorTree>
 </root>
