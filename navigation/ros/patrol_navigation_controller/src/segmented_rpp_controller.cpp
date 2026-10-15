@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -11,6 +12,7 @@
 #include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "nav2_util/node_utils.hpp"
+#include "nav2_util/robot_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
 
@@ -31,6 +33,7 @@ void SegmentedRPPController::configure(
     throw std::runtime_error("SegmentedRPPController requires a live lifecycle node");
   }
   parent_ = parent;
+  tf_ = tf;
   costmap_ = std::move(costmap_ros);
   plugin_name_ = std::move(name);
   using nav2_util::declare_parameter_if_not_declared;
@@ -100,6 +103,20 @@ double SegmentedRPPController::distance(
   return std::hypot(
     a.pose.position.x - b.pose.position.x,
     a.pose.position.y - b.pose.position.y);
+}
+
+geometry_msgs::msg::PoseStamped SegmentedRPPController::inControllerFrame(
+  const geometry_msgs::msg::PoseStamped & target,
+  const std::string & target_frame) const
+{
+  geometry_msgs::msg::PoseStamped transformed;
+  if (!nav2_util::transformPoseInTargetFrame(
+      target, transformed, *tf_, target_frame))
+  {
+    throw nav2_core::NoValidControl(
+      "Cannot transform lattice segment target to controller frame");
+  }
+  return transformed;
 }
 
 void SegmentedRPPController::buildStages()
@@ -242,7 +259,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     if (stage_index_ + 1 >= stages_.size()) {
       return rpp_->computeVelocityCommands(pose, velocity, goal_checker);
     }
-    const double to_end = distance(pose, path_.poses[stage.end]);
+    const auto end_pose = inControllerFrame(
+      path_.poses[stage.end], pose.header.frame_id);
+    const double to_end = distance(pose, end_pose);
     if (to_end <= transfer_position_tolerance_) {
       if (std::abs(velocity.linear.x) >= transfer_linear_stop_ ||
         std::abs(velocity.angular.z) >= transfer_angular_stop_)
@@ -256,7 +275,8 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     return rpp_->computeVelocityCommands(pose, velocity, goal_checker);
   }
 
-  const auto & center = path_.poses[stage.begin];
+  const auto center = inControllerFrame(
+    path_.poses[stage.begin], pose.header.frame_id);
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
     throw nav2_core::NoValidControl("Robot moved away from planned rotation point");
   }
@@ -264,8 +284,10 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     return stopped(pose);
   }
 
+  const auto rotation_goal = inControllerFrame(
+    path_.poses[stage.end], pose.header.frame_id);
   const double remaining = angles::shortest_angular_distance(
-    yaw(pose), stage.target_yaw);
+    yaw(pose), yaw(rotation_goal));
   if (std::abs(remaining) <= pivot_yaw_tolerance_) {
     if (std::abs(velocity.angular.z) >= transfer_angular_stop_) {
       return stopped(pose);
