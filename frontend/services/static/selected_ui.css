@@ -1585,7 +1585,8 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   flex:0 1 auto;min-width:0;margin:0;
 }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:disabled {
-  background:var(--card-bg2);cursor:not-allowed;opacity:.55;
+  background:var(--card-bg2);border-color:var(--border-color);
+  color:var(--text-muted);cursor:not-allowed;opacity:.55;transform:none;
 }
 
 @media(max-width:1150px){
