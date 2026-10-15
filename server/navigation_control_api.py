@@ -1459,10 +1459,29 @@ class NavigationControlApi:
                         self._sensor_recovery is not recovery
                         or self._state["emergency_stop"]
                         or self._state["navigation_state"] != "RESUMING"
-                        or self._watchdog_issue_locked(time.time()) is not None
                     ):
                         return
-                await asyncio.to_thread(self._ros.navigate_to_pose, recovery["goal"])
+                    # Sensor data may be lost again while the planner runs.
+                    # Re-arm the 1s stable window instead of leaving a
+                    # permanently stuck RESUMING/replanning=True episode.
+                    if self._watchdog_issue_locked(time.time()) is not None:
+                        recovery["replanning"] = False
+                        recovery["stable_since"] = None
+                        self._state["navigation_state"] = "NAVIGATING"
+                        self._touch_locked()
+                        return
+                    if time.time() - recovery["started_at"] >= 5.0:
+                        raise NavigationControlError(
+                            "SENSOR_RECOVERY_TIMEOUT",
+                            "Sensor recovery deadline expired during planning.",
+                        )
+                navigation = await asyncio.to_thread(
+                    self._ros.navigate_to_pose, recovery["goal"]
+                )
+                if not isinstance(navigation, dict) or navigation.get("accepted") is not True:
+                    raise NavigationControlError(
+                        "NAVIGATION_REJECTED", "Nav2 rejected recovered Goal.",
+                    )
             except Exception:
                 with self._lock:
                     if self._sensor_recovery is recovery:
