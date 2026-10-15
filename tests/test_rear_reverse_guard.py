@@ -16,6 +16,7 @@ from patrol_navigation.rear_reverse_guard import RearReverseGuard
 
 os.environ.setdefault("MIN_AUTO_DRIVE_PWM", "0.50")
 from raspberry.controllers.motor_controller import MotorController
+from raspberry.controllers.direction_interlock import DriveDirectionInterlock
 
 
 def _guard_with_odom() -> RearReverseGuard:
@@ -131,6 +132,9 @@ def test_pi_pwm_output_never_exceeds_30_percent_when_blind():
     commands = []
     motor._exchange_locked = commands.append
     motor._jerk_limiter = Mock()
+    motor._direction_interlock = DriveDirectionInterlock()
+    motor._direction_fault_latched = False
+    motor._encoder_state = {"sequence": 0, "updated_monotonic": None}
     motor._jerk_limiter.step.return_value = (0.8, -0.4)
     motor.drive(0.15, -0.12, True)
     left, right = map(float, commands[0].split(",")[1:])
@@ -147,6 +151,9 @@ def test_pi_blind_pwm_cap_is_below_breakaway_floor():
     commands = []
     motor._exchange_locked = commands.append
     motor._jerk_limiter = Mock()
+    motor._direction_interlock = DriveDirectionInterlock()
+    motor._direction_fault_latched = False
+    motor._encoder_state = {"sequence": 0, "updated_monotonic": None}
     motor._jerk_limiter.step.side_effect = lambda left, right, _: (left, right)
     motor.drive(-0.025, -0.025, True)
     left, right = map(float, commands[0].split(",")[1:])
