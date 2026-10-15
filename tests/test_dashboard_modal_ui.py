@@ -142,7 +142,7 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
         assert.strictEqual(button.tagName, 'BUTTON');
         assert.strictEqual(button.type, 'button');
         assert.strictEqual(button.dataset.controlButton, undefined);
-        assert.ok(button.className.split(/\\s+/).includes('mb-btn'));
+        assert.ok(button.className.split(/\s+/).includes('mb-btn'));
     }
     assert.strictEqual(locationActions.children[0].disabled, true); // GPS without fix
     assert.strictEqual(locationActions.children[2].disabled, true); // no place selected
