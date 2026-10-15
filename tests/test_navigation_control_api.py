@@ -1442,6 +1442,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pi_reconnect_requires_fresh_status_for_motion(self):
         await self.driving_ready()
+        # Only active NavigateToPose sessions may consume automatic motion
+        # safety tokens. A DRIVING-ready screen is not an active Goal.
+        with self.api._lock:
+            self.api._state["navigation_state"] = "NAVIGATING"
 
         status = {
             "mode": "auto",
