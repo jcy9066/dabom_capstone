@@ -26,7 +26,8 @@ controller_server:
     controller_plugins: ["FollowPath"]
 
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
+      plugin: "nav2_controller::PoseProgressChecker"
+      required_movement_angle: 0.15
       required_movement_radius: 0.10
       movement_time_allowance: 15.0
 
@@ -41,7 +42,7 @@ controller_server:
       # Disable initial heading shimming to prevent unintended 180-degree
       # turns at the start of a reverse segment.
       plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      primary_controller: "patrol_navigation_controller::SegmentedRPPController"
       angular_dist_threshold: 3.15
       angular_disengage_threshold: 3.15
       forward_sampling_distance: 0.20
@@ -49,6 +50,10 @@ controller_server:
       max_angular_accel: 1.00
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: true
+      segment_pivot_max_angular: 1.05
+      segment_pivot_acceleration: 1.00
+      segment_pivot_yaw_tolerance: 0.12
+      segment_transfer_position_tolerance: 0.08
       closed_loop: true
 
       desired_linear_vel: 0.212
