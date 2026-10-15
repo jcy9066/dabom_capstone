@@ -140,6 +140,7 @@ class NavigationControlApi:
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
         self._pending_nav_success: dict[str, Any] | None = None
+        self._pending_terminal_stop: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
@@ -480,6 +481,16 @@ class NavigationControlApi:
                 self._touch_locked(current)
             return None
         self._pending_nav_success = None
+        # A Nav2 terminal state is not evidence that Pi motor output stopped.
+        # Arm the output gate immediately, even if this state is first read by
+        # the dashboard; the async watchdog must deliver physical STOP.
+        self._arm_pending_stop_locked()
+        self._pending_terminal_stop = {
+            "reason": "nav2_failed" if terminal == "FAILED" else "nav2_canceled",
+            "attempts": 0,
+            "last_attempt_at": None,
+            "processing": False,
+        }
         self._state["navigation_state"] = terminal
         if terminal == "CANCELED":
             self._state["active_goal"] = None
@@ -1264,6 +1275,68 @@ class NavigationControlApi:
                 failed = await self._fail_blocked_navigation()
             return "BLOCKED_TIMEOUT" if failed else None
         return None
+
+    async def _deliver_terminal_stop(self) -> bool:
+        """Best-effort physical STOP after Nav2 fails or cancels itself.
+
+        At most three UART delivery attempts, spaced by 1s. Hardware safety
+        faults still take priority. Missing STOP acknowledgement permanently
+        holds the pending STOP gate and reports FAILED, not a synthetic E-STOP.
+        """
+        with self._lock:
+            pending = self._pending_terminal_stop
+            if (
+                pending is None
+                or pending["processing"]
+                or self._state["emergency_stop"]
+            ):
+                return False
+            now = time.monotonic()
+            if (
+                pending["last_attempt_at"] is not None
+                and now - pending["last_attempt_at"] < 1.0
+            ):
+                return False
+            if pending["attempts"] >= 3:
+                return False
+            pending["processing"] = True
+            pending["attempts"] += 1
+            pending["last_attempt_at"] = now
+        delivered = False
+        try:
+            try:
+                response = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": pending["reason"]},
+                )
+                delivered = (
+                    response.get("ok", False) and response.get("delivered", True)
+                    if isinstance(response, dict)
+                    else bool(response)
+                )
+            except Exception:
+                delivered = False
+            with self._lock:
+                if self._pending_terminal_stop is not pending:
+                    return False
+                if delivered:
+                    self._stop_commanded_at = time.time()
+                    self._stop_encoder_ticks = self._encoder_ticks
+                    self._stop_confirmation_after_sequence = self._encoder_sequence
+                    self._stop_confirmation_ticks = None
+                    self._stop_confirmation_started_at = None
+                    self._stop_confirmation_last_at = None
+                    self._stop_confirmation_samples = 0
+                    self._pending_terminal_stop = None
+                elif pending["attempts"] >= 3:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
+                    self._touch_locked()
+                return delivered
+        finally:
+            with self._lock:
+                if self._pending_terminal_stop is pending:
+                    pending["processing"] = False
 
     async def _resolve_pending_nav_success(self) -> None:
         """Finalize Nav2 success only after STOP delivery and stable encoders."""
