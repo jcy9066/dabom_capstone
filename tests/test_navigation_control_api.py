@@ -866,16 +866,92 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["active_goal"])
         self.assertFalse(result["emergency_stop"])
 
-    async def test_pi_loss_while_navigating_triggers_automatic_estop(self):
+    async def test_pi_loss_while_navigating_stops_without_automatic_estop(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
+        base = time.time()
         self.api.note_pi_connection(False)
-        issue = await self.api.evaluate_watchdog()
+        issue = await self.api.evaluate_watchdog(now=base)
         self.assertEqual("PI_CONNECTION_LOSS", issue)
         current = self.api.state_response()
-        self.assertTrue(current["emergency_stop"])
-        self.assertEqual("PI_CONNECTION_LOSS", current["emergency_reason"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertEqual("NAVIGATING", current["navigation_state"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertTrue(any(c["type"] == "stop" for _, c in self.commands))
+        self.assertEqual(1, self.map_api.ros_control.cancel_calls)
+
+        # Pi never recovered: end the bounded recovery episode as FAILED.
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual(
+            "SENSOR_RECOVERY_TIMEOUT:PI_CONNECTION_LOSS", current["last_error"],
+        )
+        self.assertFalse(current["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_lidar_loss_recovers_after_stable_samples_and_new_path(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6.0)
+        self.assertEqual(
+            "LIDAR_DATA_LOSS",
+            await self.api.evaluate_watchdog(now=base),
+        )
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(1, self.map_api.ros_control.cancel_calls)
+
+        # A restored sensor does not re-enable motor output until the Pi STOP
+        # is proven with fresh, stable post-command wheel encoder samples.
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertFalse(self.api.motion_allowed())
+        await self.confirm_pending_stop_for_test()
+
+        self.refresh_watchdog_samples(base + 1.25)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.25))
+        state = self.api.state_response()
+        self.assertEqual("NAVIGATING", state["navigation_state"])
+        self.assertFalse(state["emergency_stop"])
+        self.assertEqual(2, self.map_api.ros_control.plan_calls)
+        self.assertEqual(2, self.map_api.ros_control.navigate_calls)
+        self.assertIsNone(self.api._sensor_recovery)
+
+    async def test_recovery_does_not_start_new_goal_without_stop_confirmation(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6.0)
+        self.assertEqual("LIDAR_DATA_LOSS", await self.api.evaluate_watchdog(now=base))
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.refresh_watchdog_samples(base + 1.2)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.2))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_nav2_failed_issues_physical_stop_without_emergency_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.map_api.ros_control.state = "FAILED"
+        observed = self.api.state_response()
+        self.assertEqual("FAILED", observed["navigation_state"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(0, sum(
+            c["type"] == "emergency_stop" for _, c in self.commands
+        ))
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.assertTrue(any(
+            c.get("reason") == "nav2_failed" for _, c in self.commands
+        ))
+        self.assertFalse(self.api.state_response()["emergency_stop"])
 
     async def test_encoder_motion_after_stop_updates_estop_reason(self):
         await self.driving_ready()
