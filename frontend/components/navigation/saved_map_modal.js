@@ -214,7 +214,7 @@
 
         if (status?.unavailable) {
             panel.append(create('div', 'saved-map-location-note', `GPS/장소 상태 확인 불가: ${status.error || labels.unavailable}`));
-            return panel;
+            return { panel, actions: null };
         }
 
         const locations = Array.isArray(status.locations) ? status.locations : [];
@@ -457,10 +457,10 @@
         selector.addEventListener('change', () => { loadSelectedLocation(); syncPicker(); });
         picker.append(newNameInput, selector, choice);
         actions.append(useCurrent, saveLocation, deleteButton);
-        panel.append(picker, fields, actions);
+        panel.append(picker, fields);
         loadSelectedLocation();
         syncPicker();
-        return panel;
+        return { panel, actions };
     }
 
     function captureViewState(container = manager?.body) {
@@ -669,7 +669,15 @@
         const locationColumn = create('section', 'saved-map-secondary-column');
         layout.append(mapColumn, locationColumn);
         container.append(layout);
-        locationColumn.append(renderLocationPanel(locationStatus));
+        const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);
+        locationColumn.append(locationPanel);
+        if (locationActions) {
+            // Match the left map feedback row before the independent button footer.
+            locationColumn.append(
+                create('div', 'saved-map-location-footer-spacer'),
+                locationActions
+            );
+        }
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name

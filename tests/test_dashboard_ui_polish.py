@@ -60,7 +60,11 @@ class DashboardUiPolishContract(unittest.TestCase):
 
     def test_saved_map_actions_and_location_callbacks_preserved(self):
         self.assertIn('saved-map-two-column', MAP)
-        self.assertIn('locationColumn.append(renderLocationPanel(locationStatus))', MAP)
+        self.assertIn('const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);', MAP)
+        self.assertIn('locationColumn.append(locationPanel);', MAP)
+        self.assertIn("create('div', 'saved-map-location-footer-spacer')", MAP)
+        self.assertIn('return { panel, actions };', MAP)
+        self.assertIn('return { panel, actions: null };', MAP)
         self.assertIn("loadSelectedMap(container, progress)", MAP)
         self.assertIn("startMappingFromModal(container, progress)", MAP)
         self.assertIn("saveCurrentNavigationMap?.(save)", MAP)
@@ -299,6 +303,12 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('height:auto!important;min-height:0;align-self:stretch;', CSS)
         self.assertIn('flex:1 1 0;min-height:0;', CSS)
         self.assertIn('margin-top:auto!important;padding-top:5px;', CSS)
+        self.assertIn('.saved-map-secondary-column > .saved-map-location-footer-spacer', CSS)
+        self.assertIn('.saved-map-secondary-column > .saved-map-location-actions', CSS)
+        self.assertIn('flex:0 0 auto;min-height:52px;align-items:center;', CSS)
+        self.assertIn('margin-top:0!important;padding-block:5px!important;', CSS)
+        self.assertIn('panel.append(picker, fields);', MAP)
+        self.assertNotIn('panel.append(picker, fields, actions);', MAP)
         self.assertNotIn('height:100%!important;min-height:0;align-self:stretch;', CSS)
         self.assertNotIn('height:max-content!important;min-height:0;align-self:start;', CSS)
         self.assertIn('flex:1 1 0!important;min-height:0;max-height:none!important;', CSS)
@@ -320,7 +330,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("border-radius: var(--ui-radius-control);", CSS)
 
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261015-location-layout-v1", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261015-location-footer-v2", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
@@ -331,8 +341,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-grid-track-v3', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261015-grid-track-v3', LOGIN)
+        self.assertIn('selected_ui.css?v=20261015-location-footer-v4', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261015-location-footer-v4', LOGIN)
 
 
 if __name__ == "__main__":

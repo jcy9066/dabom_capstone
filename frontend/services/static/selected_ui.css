@@ -2178,6 +2178,18 @@ header { padding-top: 3px; }
   }
 }
 
+/* Place location buttons in the GREY column footer, not inside the white
+   form card. The 20px spacer mirrors the left map progress row so both white
+   content surfaces end together and their button footers share a baseline. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-footer-spacer {
+  flex:0 0 20px;min-height:20px;
+}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-actions {
+  flex:0 0 auto;min-height:52px;align-items:center;
+  margin-top:0!important;padding-block:5px!important;
+  justify-content:flex-end;
+}
+
 /* A single compact row for the radio, map name, timestamp and resolution.
    Truncate long text rather than force a second row or resize the list. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-list .saved-map-option {

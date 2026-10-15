@@ -128,6 +128,14 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.ok(primary.children.indexOf(pose) < primary.children.indexOf(list));
     assert.strictEqual(list.children.length, 1);
     assert.ok(list.children.every(node => node.className === 'saved-map-option'));
+    const secondary = manager.body.querySelector('.saved-map-secondary-column');
+    const locationCard = secondary.querySelector('.saved-map-location-panel');
+    const locationActions = secondary.querySelector('.saved-map-location-actions');
+    assert.strictEqual(secondary.children[0], locationCard);
+    assert.strictEqual(secondary.children[1].className, 'saved-map-location-footer-spacer');
+    assert.strictEqual(secondary.children[2], locationActions);
+    assert.strictEqual(locationCard.querySelector('.saved-map-location-actions'), null);
+    assert.strictEqual(locationActions.children.length, 3);
     const picker = manager.body.querySelector('.saved-map-location-picker');
     assert.ok(picker);
     const newName = picker.querySelector('.saved-map-location-new');
