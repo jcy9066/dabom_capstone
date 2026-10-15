@@ -562,6 +562,7 @@ class MotorController:
         self,
         left_mps: float,
         right_mps: float,
+        rear_blind_limited: bool = False,
     ) -> None:
         """
         좌우 바퀴 목표 속도(m/s)를 Pico의
@@ -610,7 +611,14 @@ class MotorController:
             abs(right_normalized),
         )
 
-        if 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+        if rear_blind_limited:
+            # A safety cap MUST take precedence over motor breakaway PWM.
+            # The motor may fail to move at 30% duty, but silently raising
+            # it to MIN_AUTO_DRIVE_PWM (often 50%) is not permitted.
+            if peak > 0.30:
+                left_normalized *= 0.30 / peak
+                right_normalized *= 0.30 / peak
+        elif 0.0 < peak < MIN_AUTO_DRIVE_PWM:
             pwm_scale = MIN_AUTO_DRIVE_PWM / peak
             left_normalized *= pwm_scale
             right_normalized *= pwm_scale
@@ -621,6 +629,14 @@ class MotorController:
             limited_left, limited_right = self._jerk_limiter.step(
                 left_normalized, right_normalized, time.monotonic(),
             )
+            if rear_blind_limited:
+                # Deceleration is allowed to bypass jerk smoothing when a
+                # fresh safety restriction lowers the permitted output.
+                final_peak = max(abs(limited_left), abs(limited_right))
+                if final_peak > 0.30:
+                    limited_left *= 0.30 / final_peak
+                    limited_right *= 0.30 / final_peak
+                    self._jerk_limiter.reset()
             try:
                 self._exchange_locked(
                     "DRIVE,"
