@@ -747,6 +747,20 @@ class RobotConnectionManager:
                     and ack.get("safety_session") == command.get("safety_session")
                     and ack.get("safety_epoch") == command.get("safety_epoch")
                 )
+            # Motion ACK must come from the Pi *after* motor execution,
+            # with the same safety generation that was authorized. The Pi
+            # advances its epoch on STOP, so this identity check applies
+            # only to the motion commands that carry an expected generation.
+            if command.get("type") in ("move", "auto_drive") and (
+                "safety_session" in command or "safety_epoch" in command
+            ):
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and type(ack.get("safety_epoch")) is int
+                    and ack["safety_epoch"] == command.get("safety_epoch")
+                )
             return isinstance(ack, dict) and ack.get("ok") is True
         except Exception:
             return False
@@ -5596,7 +5610,11 @@ async def send_robot_command(
             )
         command["safety_session"] = motion_context["safety_session"]
         command["safety_epoch"] = motion_context["safety_epoch"]
-    if controlled_motion and navigation_control_api.motion_requires_ack():
+    # A WebSocket send only proves that the server handed the frame to the
+    # transport. Never report physical motor/STOP delivery without the Pi's
+    # command_id-matched ACK, including ordinary auto_drive, move and STOP.
+    physical_command = command_type in {"move", "auto_drive", "stop", "emergency_stop"}
+    if physical_command:
         delivered = await connections.send_command_wait_ack(robot_id, command)
     else:
         delivered = await connections.send_command(robot_id, command)
@@ -5611,13 +5629,13 @@ async def send_robot_command(
         {
             "ok": delivered,
             "delivered": delivered,
-            "blocked": False,
+            "blocked": not delivered,
             "robot_id": robot_id,
             "command": command,
             "error": (
                 None
                 if delivered
-                else "robot not connected"
+                else "robot command not delivered or acknowledged"
             ),
         },
         status_code=status_code,
