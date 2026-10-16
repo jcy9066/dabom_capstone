@@ -111,6 +111,7 @@ python3 -m pytest -q \
     tests/test_navigation_motion_segments.py \
     tests/test_navigation_control_api.py \
     tests/test_navigation_frontend.py \
-    tests/test_drive_direction_interlock.py
+    tests/test_drive_direction_interlock.py \
+    tests/test_nav2_twist_bridge_guard.py
 info 'Navigation-focused Python/C++ regression suite PASS'
 info 'NOT VERIFIED: actual Nav2 action, TF/costmap runtime, Pi motors and physical RC car'

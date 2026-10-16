@@ -26,6 +26,7 @@ def test_humble_gate_does_not_start_robot_or_nav2():
     assert 'lib/libsegmented_rpp_controller.so' in text
     assert 'nav2_core::GlobalPlanner' in text
     assert 'nav2_core::Controller' in text
+    assert 'tests/test_nav2_twist_bridge_guard.py' in text
 
 
 def test_humble_gate_reports_unsupported_host_before_writes():

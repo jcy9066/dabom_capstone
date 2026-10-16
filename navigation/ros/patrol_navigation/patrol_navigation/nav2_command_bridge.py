@@ -17,6 +17,7 @@ from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 from patrol_navigation.env_config import env_bool, env_float, env_text
 from patrol_navigation.rear_reverse_guard import RearReverseGuard
+from patrol_navigation.nav2_twist_guard import valid_differential_twist
 
 
 class Nav2CommandBridge(Node):
@@ -609,19 +610,19 @@ class Nav2CommandBridge(Node):
         linear_x = float(msg.linear.x)
         angular_z = float(msg.angular.z)
 
-        if (
-            not math.isfinite(linear_x)
-            or not math.isfinite(angular_z)
+        # Validate all six axes, not only the two we convert to wheel
+        # speeds. Otherwise lateral/vertical commands can be silently
+        # accepted, or mistaken for a physically verified zero STOP.
+        if not valid_differential_twist(
+            linear_x, msg.linear.y, msg.linear.z,
+            msg.angular.x, msg.angular.y, angular_z,
         ):
             self.rejected_count += 1
 
             self.get_logger().warning(
-                "Twist rejected: NaN or Infinity"
+                "Twist rejected: non-finite or unsupported motion axis"
             )
-
-            self._queue_stop(
-                "nav2_invalid_twist"
-            )
+            self._queue_stop("nav2_invalid_twist")
             return
 
         now = time.monotonic()
