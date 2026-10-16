@@ -28,7 +28,8 @@ def _manager():
     methods = [node for node in manager.body
                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                and node.name in {
-                   "send_command", "send_command_wait_ack", "receive_ack",
+                   "_send_serialized_command", "send_command",
+                   "send_command_wait_ack", "receive_ack",
                }]
     isolated = ast.ClassDef(
         name="IsolatedManager", bases=[], keywords=[],
@@ -39,9 +40,11 @@ def _manager():
     exec(compile(module, str(APP), "exec"), env)
     result = env["IsolatedManager"]()
     result.active = {}
+    result._send_locks = {}
     result.lock = asyncio.Lock()
     result.pending_acks = {}
     result.ack_timeout_sec = 0.08
+    result.send_timeout_sec = 0.08
     return result
 
 

@@ -660,10 +660,14 @@ class RobotConnectionManager:
         self.active = {}
         self.lock = asyncio.Lock()
         self.pending_acks = {}
+        # One send mutex per robot. No slow WebSocket send holds the global
+        # connection/ACK bookkeeping lock or blocks other robots.
+        self._send_locks = {}
         self.ack_timeout_sec = env_float(
             "ROBOT_COMMAND_ACK_TIMEOUT_SEC",
             minimum=0.1,
         )
+        self.send_timeout_sec = self.ack_timeout_sec
 
     async def connect(self, robot_id, websocket):
         await websocket.accept()
@@ -706,16 +710,32 @@ class RobotConnectionManager:
                 future.set_result({"ok": False, "error": "robot disconnected"})
         return disconnected
 
+    async def _send_serialized_command(self, robot_id, websocket, command):
+        # Serialize sends to the same robot (including STOP), but never
+        # hold the global connection/ACK lock across network I/O.
+        send_lock = self._send_locks.setdefault(robot_id, asyncio.Lock())
+        async with send_lock:
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+            await websocket.send_json(command)
+            # A replaced/disconnected socket must never be accepted as
+            # current, even if its old send completed without exception.
+            async with self.lock:
+                return self.active.get(robot_id) is websocket
+
     async def send_command(self, robot_id, command):
         async with self.lock:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        async with self.lock:
-            if self.active.get(robot_id) is not websocket:
-                return False
-            await websocket.send_json(command)
-        return True
+        try:
+            return await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command),
+                timeout=self.send_timeout_sec,
+            )
+        except Exception:
+            return False
 
     async def send_command_wait_ack(self, robot_id, command):
         command = dict(command)
@@ -731,12 +751,19 @@ class RobotConnectionManager:
             if command_id in self.pending_acks:
                 return False
             self.pending_acks[command_id] = (robot_id, websocket, future)
+        # The total send + Pi ACK round trip shares ONE bounded deadline.
+        # A blocked send must not acquire the global lock or evade timeout.
+        deadline = loop.time() + self.ack_timeout_sec
         try:
-            async with self.lock:
-                if self.active.get(robot_id) is not websocket:
-                    return False
-                await websocket.send_json(command)
-            ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            sent = await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command),
+                timeout=max(0.001, deadline - loop.time()),
+            )
+            if not sent:
+                return False
+            ack = await asyncio.wait_for(
+                future, timeout=max(0.001, deadline - loop.time())
+            )
             if command.get("type") == "resume_safety_check":
                 # Only a command_id-matched Pi ACK can prove processing.
                 # The Pi's raw ACK has "ok" but no "delivered" field.

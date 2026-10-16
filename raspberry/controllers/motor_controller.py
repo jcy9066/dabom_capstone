@@ -323,6 +323,41 @@ class MotorController:
         ):
             reader_thread.join(timeout=0.5)
 
+    @staticmethod
+    def _valid_uart_ack(command: str, response: str) -> bool:
+        """Only the exact Pico ACK for this command proves execution.
+
+        UART v1 has no command IDs; validating opcode and grammar is
+        mandatory, though a delayed *same-opcode* ACK cannot be disambiguated
+        without a future firmware protocol version.
+        """
+        parts = command.split(",")
+        opcode = parts[0]
+        exact = {
+            "PING": "OK,PONG",
+            "FW_INFO": "OK,FW,MOTOR_SAFE_V1",
+            "STOP": "OK,STOP",
+            "DRIVE": "OK,DRIVE",
+            "ENC_RESET": "OK,ENC_RESET",
+        }
+        if opcode in exact:
+            return response == exact[opcode]
+        if opcode == "MOVE" and len(parts) == 3:
+            return response == "OK,MOVE," + parts[1]
+        if opcode == "ENC_STREAM" and len(parts) == 2:
+            return response == "OK,ENC_STREAM," + parts[1]
+        if opcode == "LED" and len(parts) == 2:
+            return response == "OK,LED," + parts[1]
+        if opcode == "BEEP" and len(parts) == 2:
+            return response == "OK,BEEP," + parts[1]
+        if opcode == "ENC_GET":
+            fields = response.split(",")
+            return (
+                len(fields) == 7 and fields[:2] == ["OK", "ENC"]
+                and all(x.lstrip("-").isdigit() for x in fields[2:])
+            )
+        return False
+
     def _exchange_locked(self, command: str) -> str:
         serial_device = self._serial_device()
 
@@ -370,11 +405,19 @@ class MotorController:
                     response = None
 
             if response is not None:
-                if response.startswith("ERR"):
+                if response.startswith("ERR,"):
                     raise MotorControllerError(
                         f"Pico W 명령 거부: {response}"
                     )
-
+                if not self._valid_uart_ack(command, response):
+                    # On a mismatched response, the Pi cannot claim that
+                    # the motor received STOP. Close the ambiguous UART
+                    # session; reconnection begins with a new STOP.
+                    self._close_serial_locked()
+                    raise MotorControllerError(
+                        f"Pico W ACK 불일치: command={command.split(',')[0]} "
+                        f"response={response}"
+                    )
                 return response
 
             if not self.connected:
