@@ -182,6 +182,9 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     monkeypatch.setattr(module.threading, "Thread", Mock())
     bridge = module.Nav2CommandBridge()
     motor._jerk_limiter.step = Mock(side_effect=lambda l, r, now: (l, r))
+    # Direction-switch sequencing has its own interlock tests. This
+    # translation contract must not depend on previous encoder snapshots.
+    motor._direction_interlock.request = Mock(return_value="drive")
     assert bridge.max_wheel_mps == .17
     if hasattr(bridge, "_log_drive_diagnostics"):
         bridge._log_drive_diagnostics = Mock()
