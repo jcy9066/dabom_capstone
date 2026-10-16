@@ -210,7 +210,12 @@ def generate_launch_description():
         parameters=[
             nav2_params,
             {
-                "GridBased.lattice_filepath": PathJoinSubstitution(
+                "GridBased.max_wheel_mps": max_wheel_mps,
+                "GridBased.max_angular_rps": max_angular_rps,
+                "GridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32.json"]
+                ),
+                "GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(
                     [pkg_share, "config", "lattice_diff32.json"]
                 ),
             },
