@@ -470,6 +470,27 @@ class NavigationControlApi:
             and now - self._estop_last_attempt_at >= self.ESTOP_RETRY_WINDOW_SEC
         )
 
+    def _sync_waypoint_progress_locked(self, ros_nav: dict[str, Any]) -> None:
+        # Humble NavigateThroughPoses publishes remaining pose count after
+        # RemovePassedGoals removes an intermediate within 0.50m XY.
+        # Keep the final Goal separate and never trim it from a route.
+        if (
+            self._state["navigation_state"] != "NAVIGATING"
+            or ros_nav.get("action") != "navigate_through_poses"
+            or not self._state["waypoints"]
+        ):
+            return
+        count = ros_nav.get("number_of_poses_remaining")
+        if isinstance(count, bool) or not isinstance(count, int):
+            return
+        outstanding = len(self._state["waypoints"])
+        if not 1 <= count <= outstanding + 1:
+            return
+        passed = outstanding + 1 - count
+        if passed > 0:
+            self._state["waypoints"] = self._state["waypoints"][passed:]
+            self._touch_locked()
+
     def _sync_ros_navigation_terminal_locked(
         self,
         ros_nav: dict[str, Any],
@@ -477,6 +498,7 @@ class NavigationControlApi:
         *,
         allow_during_blocked_failure: bool = False,
     ) -> str | None:
+        self._sync_waypoint_progress_locked(ros_nav)
         if self._state["navigation_state"] != "NAVIGATING":
             return None
         # A fault-triggered Nav2 cancel must not become a user Goal cancel.
