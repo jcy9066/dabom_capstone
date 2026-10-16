@@ -30,7 +30,7 @@ def _bridge_class(*names):
     module = ast.fix_missing_locations(
         ast.Module(body=[declaration], type_ignores=[]),
     )
-    env = {"threading": threading, "NavBridgeBase": NavBridgeBase}
+    env = {"threading": threading, "time": time, "NavBridgeBase": NavBridgeBase}
     exec(compile(module, str(SOURCE), "exec"), env)
     return env["OfflineBridge"]
 
@@ -41,6 +41,9 @@ def _fake(cls):
     instance._pending_command = None
     instance._stop_command_in_flight = False
     instance._stop_delivery_failed = False
+    instance._stop_retry_command = None
+    instance._stop_retry_due_at = None
+    instance.STOP_RETRY_INTERVAL_SEC = 0.50
     instance._worker_shutdown = False
     instance.server_request_enabled = True
     instance.motor_output_enabled = True
@@ -270,3 +273,165 @@ def test_shutdown_join_budget_covers_drive_and_final_stop():
     assert end.index('{"type": "stop", "reason": "nav2_command_bridge_shutdown"}') < (
         end.index("self._command_worker_thread.join(")
     )
+
+
+def test_stop_retries_automatically_without_another_twist():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    bridge.STOP_RETRY_INTERVAL_SEC = 0.06
+    succeeded = threading.Event()
+    calls = []
+
+    def post(payload):
+        calls.append((payload["type"], time.monotonic()))
+        if len(calls) == 1:
+            return False
+        succeeded.set()
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "stop", "reason": "nav2_twist_timeout"})
+        deadline = time.monotonic() + 1.0
+        while not bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert bridge._stop_delivery_failed
+        assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+        assert succeeded.wait(1.5), "worker did not retry STOP on its own"
+        deadline = time.monotonic() + 1.0
+        while bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert not bridge._stop_delivery_failed
+        assert len(calls) == 2
+        assert calls[1][1] - calls[0][1] >= 0.04
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+    finally:
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+def test_repeated_stop_callbacks_cannot_bypass_retry_interval():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    bridge.STOP_RETRY_INTERVAL_SEC = 0.30
+    succeeded = threading.Event()
+    calls = []
+
+    def post(payload):
+        calls.append(time.monotonic())
+        if len(calls) == 1:
+            return False
+        succeeded.set()
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "stop", "reason": "first"})
+        deadline = time.monotonic() + 1.0
+        while not bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert bridge._stop_delivery_failed
+        for index in range(12):
+            assert bridge._queue_command({"type": "stop", "reason": f"repeat-{index}"})
+            assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+        time.sleep(0.06)
+        assert len(calls) == 1, "duplicate STOP events bypassed retry throttle"
+        assert succeeded.wait(1.5)
+        assert len(calls) == 2
+        assert calls[1] - calls[0] >= 0.25
+    finally:
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+def test_repeated_failures_keep_drive_blocked_until_stop_ack():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    bridge.STOP_RETRY_INTERVAL_SEC = 0.04
+    succeeded = threading.Event()
+    attempts = []
+
+    def post(payload):
+        attempts.append(payload["type"])
+        if len(attempts) < 4:
+            return False
+        succeeded.set()
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "stop", "reason": "timeout"})
+        deadline = time.monotonic() + 1.5
+        while len(attempts) < 3 and time.monotonic() < deadline:
+            assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+            time.sleep(0.01)
+        assert len(attempts) >= 3
+        assert succeeded.wait(1.5)
+        assert attempts == ["stop"] * 4
+        deadline = time.monotonic() + 1
+        while bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert not bridge._stop_delivery_failed
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+    finally:
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+def test_shutdown_does_not_continue_background_stop_retries():
+    cls = _bridge_class("_queue_command", "_command_worker", "destroy_node")
+    bridge = _fake(cls)
+    bridge.STOP_RETRY_INTERVAL_SEC = 0.05
+    failed = threading.Event()
+    calls = []
+
+    def post(payload):
+        calls.append(payload["type"])
+        failed.set()
+        return False
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    bridge._command_worker_thread = worker
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "stop", "reason": "bad_http"})
+        assert failed.wait(1)
+        deadline = time.monotonic() + 1
+        while not bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert bridge._stop_delivery_failed
+        assert bridge.destroy_node() == "destroyed"
+        assert not worker.is_alive()
+        assert calls.count("stop") == 2  # original + final shutdown STOP
+    finally:
+        with bridge._command_condition:
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+
+
+def test_http_deadline_allows_remote_pi_ack_round_trip():
+    launch = (
+        ROOT / "navigation/ros/patrol_navigation/launch/navigation.launch.py"
+    ).read_text(encoding="utf-8")
+    assert '"nav2_request_timeout_sec",\n                # Must permit' in launch
+    assert 'default_value="1.50"' in launch

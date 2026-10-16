@@ -21,6 +21,10 @@ from patrol_navigation.nav2_twist_guard import valid_differential_twist
 
 
 class Nav2CommandBridge(Node):
+    # On transport/ACK failures continue attempting STOP at a bounded rate.
+    # Physical output stays disabled until Pi acknowledges a STOP.
+    STOP_RETRY_INTERVAL_SEC = 0.50
+
     def __init__(self) -> None:
         super().__init__("nav2_command_bridge")
 
@@ -219,6 +223,8 @@ class Nav2CommandBridge(Node):
         # A failed physical STOP must be explicitly retried/acknowledged
         # before accepting any subsequent auto_drive.
         self._stop_delivery_failed = False
+        self._stop_retry_command: dict | None = None
+        self._stop_retry_due_at: float | None = None
 
         self._command_worker_thread = threading.Thread(
             target=self._command_worker,
@@ -284,13 +290,23 @@ class Nav2CommandBridge(Node):
                 self._pending_command is not None
                 and self._pending_command.get("type") in ("stop", "emergency_stop")
             )
-            # Pending STOP is a safety barrier: do not let an immediately
-            # arriving Twist replace it while the HTTP worker is busy.
+            # STOP is a safety barrier. Never allow auto_drive to erase
+            # pending, in-flight, or unacknowledged STOP.
             if not is_stop and (
                 pending_is_stop or self._stop_command_in_flight
                 or self._stop_delivery_failed
             ):
                 return False
+            if is_stop and (self._stop_command_in_flight or self._stop_delivery_failed):
+                # Repeated zero-Twist / timeout callbacks must not bypass
+                # the retry rate limit or flood the HTTP/Pi ACK path.
+                # Update the reason without delaying a scheduled retry.
+                if self._stop_delivery_failed:
+                    self._stop_retry_command = command
+                    if self._stop_retry_due_at is None:
+                        self._stop_retry_due_at = time.monotonic()
+                    self._command_condition.notify_all()
+                return True
             self._pending_command = command
             self._command_condition.notify()
 
@@ -299,47 +315,59 @@ class Nav2CommandBridge(Node):
     def _command_worker(self) -> None:
         while True:
             with self._command_condition:
-                self._command_condition.wait_for(
-                    lambda: (
-                        self._worker_shutdown
-                        or self._pending_command
-                        is not None
-                    )
-                )
+                while True:
+                    # Shutdown may enqueue one final STOP; do not spawn
+                    # additional retries after the worker is being destroyed.
+                    if self._pending_command is not None:
+                        payload = self._pending_command
+                        self._pending_command = None
+                        break
+                    if self._worker_shutdown:
+                        return
+                    if self._stop_delivery_failed and self._stop_retry_command is not None:
+                        due_at = self._stop_retry_due_at
+                        remaining = max(0.0, (due_at or 0.0) - time.monotonic())
+                        if remaining <= 0.0:
+                            payload = self._stop_retry_command
+                            self._stop_retry_command = None
+                            self._stop_retry_due_at = None
+                            break
+                        self._command_condition.wait(timeout=remaining)
+                    else:
+                        self._command_condition.wait()
 
-                if (
-                    self._worker_shutdown
-                    and self._pending_command is None
-                ):
-                    return
-
-                payload = self._pending_command
-                self._pending_command = None
-                is_stop = (
-                    payload is not None
-                    and payload.get("type") in ("stop", "emergency_stop")
-                )
+                is_stop = payload.get("type") in ("stop", "emergency_stop")
                 if is_stop:
                     self._stop_command_in_flight = True
 
-            if payload is not None:
-                stop_confirmed = False
+            stop_confirmed = False
+            try:
+                sent = self._post_command(payload)
+                stop_confirmed = sent is True
+            except Exception as exc:
+                # An unexpected serialization, HTTP or logging failure
+                # must not permanently kill the ONLY STOP delivery worker.
+                self.send_error_count += 1
                 try:
-                    sent = self._post_command(payload)
-                    stop_confirmed = sent is True
-                except Exception as exc:
-                    # An unexpected serialization, HTTP or logging failure
-                    # must not permanently kill the ONLY STOP delivery worker.
-                    self.send_error_count += 1
-                    try:
-                        self._log_send_error(f"command worker failure: {exc}")
-                    except Exception:
-                        pass
-                finally:
-                    if is_stop:
-                        with self._command_condition:
-                            self._stop_delivery_failed = not stop_confirmed
-                            self._stop_command_in_flight = False
+                    self._log_send_error(f"command worker failure: {exc}")
+                except Exception:
+                    pass
+            finally:
+                if is_stop:
+                    with self._command_condition:
+                        self._stop_delivery_failed = not stop_confirmed
+                        self._stop_command_in_flight = False
+                        if stop_confirmed:
+                            self._stop_retry_command = None
+                            self._stop_retry_due_at = None
+                        elif not self._worker_shutdown:
+                            # Persistent, rate-limited retries; keep motion
+                            # latched off until a Pi STOP ACK is received.
+                            self._stop_retry_command = dict(payload)
+                            self._stop_retry_due_at = (
+                                time.monotonic() + self.STOP_RETRY_INTERVAL_SEC
+                            )
+                        self._command_condition.notify_all()
 
     def _post_command(
         self,

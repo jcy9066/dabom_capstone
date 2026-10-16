@@ -474,7 +474,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "nav2_request_timeout_sec",
-                default_value="0.25",
+                # Must permit the server to await Pi's command_id ACK.
+                # A 0.25s HTTP deadline can expire before a valid Pi ACK.
+                default_value="1.50",
             ),
 
             # -------------------------------------------------
