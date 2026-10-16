@@ -123,8 +123,16 @@ inline MotionTimeScore estimatePathTime(
             limits.linear_accel_mps2 / limits.linear_jerk_mps3, core / 4.0);
         }
       } else {
-        seconds += trapezoidalTime(
+        // A pivot accelerates the wheels in opposite directions. Its
+        // angular jerk bound follows from the same wheel-level jerk cap:
+        // angular_jerk = 2 * wheel_jerk / wheel_track. Ignoring this would
+        // systematically underprice stop-turn-go paths.
+        const double angular_jerk_rps3 =
+          2.0 * limits.linear_jerk_mps3 / limits.wheel_track_m;
+        const double core = trapezoidalTime(
           run_rotation, limits.angular_rps, limits.angular_accel_rps2);
+        seconds += core + std::min(
+          limits.angular_accel_rps2 / angular_jerk_rps3, core / 4.0);
       }
     };
 
