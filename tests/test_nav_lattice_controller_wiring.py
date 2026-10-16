@@ -55,7 +55,13 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "stages_[stage_index_]" in source
     assert "checkRotationCollision(pose, remaining)" in source
     assert "collision_->footprintCostAtPose(" in source
-    assert "nav2_costmap_2d::NO_INFORMATION" in source
+    # Match the GlobalPlanner's conservative collision envelope: 253
+    # inscribed/inflated, 254 lethal and 255 unknown must all block a spin.
+    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in source
+    assert "costmap_->isCurrent()" in source
+    assert "footprint.size() < 3" in source
+    assert "std::isfinite(cost)" in source
+    assert "nav2_costmap_2d::LETHAL_OBSTACLE" not in source
     assert "std::runtime_error" in source  # Humble exception path
     assert "nav2_core::NoValidControl" not in source
     assert "std::abs(velocity.linear.x) >= transfer_linear_stop_" in source
@@ -67,7 +73,7 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "rpp_loader_.createUniqueInstance(" not in source
     # Costmap2DROS owns footprint/layered costmap APIs, not Costmap2D.
     assert "const auto footprint = costmap_->getRobotFootprint();" in source
-    assert "costmap_->getLayeredCostmap()->isTrackingUnknown()" in source
+    assert "costmap_->getRobotFootprint()" in source
     assert "costmap->getRobotFootprint()" not in source
 
 
