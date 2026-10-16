@@ -1,5 +1,6 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/time_scored_lattice_planner.hpp"
+#include "patrol_navigation_controller/path_sweep.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -34,34 +35,39 @@ bool validAgainstCurrentCostmap(
   if (!costmap) {
     return false;
   }
+
+  std::vector<MotionPose> poses;
+  poses.reserve(path.poses.size());
+  for (const auto & stamped : path.poses) {
+    poses.push_back({
+      stamped.pose.position.x,
+      stamped.pose.position.y,
+      tf2::getYaw(stamped.pose.orientation)
+    });
+  }
+
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap->getMutex());
   const auto footprint = costmap_ros->getRobotFootprint();
   if (footprint.size() < 3) {
     return false;
   }
-  for (const auto & stamped : path.poses) {
-    const auto & pose = stamped.pose;
-    const double x = pose.position.x;
-    const double y = pose.position.y;
-    const double yaw = tf2::getYaw(pose.orientation);
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw)) {
-      return false;
-    }
-    const double cost = checker.footprintCostAtPose(x, y, yaw, footprint);
-    // Only current sensor/costmap evidence can justify an unknown cell.
-    // Known lethal obstacles and off-grid geometry always reject the path.
-    // Pi/local-costmap safety checks still gate actual unknown traversal.
-    if (!std::isfinite(cost) || cost < 0.0 ||
-      cost == nav2_costmap_2d::LETHAL_OBSTACLE)
-    {
-      return false;
-    }
-    if (cost == nav2_costmap_2d::NO_INFORMATION) {
-      continue;
-    }
-  }
-  return true;
+
+  // When a route traverses NO_INFORMATION there is no verified, fresh
+  // sensor clearance here. Reject rather than converting "allow_unknown"
+  // into permission to drive with an unverified footprint. Sensor-proved
+  // clearance can be introduced separately only with explicit evidence.
+  return validateSweptPath(
+    poses, [&](const MotionPose & sample) {
+      const double cost = checker.footprintCostAtPose(
+        sample.x, sample.y, sample.yaw, footprint);
+      // Collision checker's -1 means off-map / invalid geometry.
+      // >= 253 includes inscribed obstacles, lethal cells, and unknown
+      // cells. All are STOP/invalid-path conditions without proof of safety.
+      return std::isfinite(cost) && cost >= 0.0 &&
+        cost < static_cast<double>(
+        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+    });
 }
 
 }  // namespace
