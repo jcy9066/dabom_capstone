@@ -6,6 +6,7 @@
 
 using patrol_navigation_controller::stationaryForSegmentTransition;
 using patrol_navigation_controller::validUnitQuaternion;
+using patrol_navigation_controller::safeToContinuePivot;
 
 int main()
 {
@@ -20,6 +21,16 @@ int main()
   assert(!stationaryForSegmentTransition(0.0, inf, 0.02, 0.04));
   assert(!stationaryForSegmentTransition(0.0, 0.0, nan, 0.04));
   assert(!stationaryForSegmentTransition(0.0, 0.0, 0.02, 0.0));
+  // Initial pivot must wait for a true stop. The subsequent control cycles
+  // allow angular velocity, but never unwanted linear drift.
+  assert(!safeToContinuePivot(false, 0.0, 0.10, 0.02, 0.04));
+  assert(safeToContinuePivot(false, 0.0, 0.0, 0.02, 0.04));
+  assert(safeToContinuePivot(true, 0.0, 0.10, 0.02, 0.04));
+  assert(safeToContinuePivot(true, 0.0, -0.80, 0.02, 0.04));
+  assert(!safeToContinuePivot(true, 0.03, 0.10, 0.02, 0.04));
+  assert(!safeToContinuePivot(true, nan, 0.10, 0.02, 0.04));
+  assert(!safeToContinuePivot(true, 0.0, inf, 0.02, 0.04));
+  assert(!safeToContinuePivot(true, 0.0, 0.10, -0.02, 0.04));
   assert(validUnitQuaternion(0, 0, 0, 1));
   assert(validUnitQuaternion(0, 0, std::sqrt(0.5), std::sqrt(0.5)));
   assert(!validUnitQuaternion(0, 0, 0, 0));

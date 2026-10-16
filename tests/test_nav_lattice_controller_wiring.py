@@ -155,3 +155,21 @@ def test_replanning_replaces_stages_transactionally_and_fails_closed():
         assert state_clear in invalidate
     assert "invalidatePlan();\n  rpp_->deactivate();" in code
     assert "invalidatePlan();\n}" in code
+
+
+def test_pivot_entry_stop_is_not_reapplied_during_active_rotation():
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    header = (
+        PACKAGE / "include/patrol_navigation_controller/segmented_rpp_controller.hpp"
+    ).read_text()
+    guard = (
+        PACKAGE / "include/patrol_navigation_controller/segment_handoff_guard.hpp"
+    ).read_text()
+    assert "bool pivot_started_ = false;" in header
+    assert "pivot_started_ = false;" in source
+    assert "pivot_started_ = true;" in source
+    assert "safeToContinuePivot(" in source
+    assert "if (!pivot_started)" in guard
+    assert "return std::abs(linear_x) < linear_stop_threshold;" in guard
+    assert "return stationaryForSegmentTransition(" in guard
+    assert "pivot_started_, velocity.linear.x, velocity.angular.z," in source

@@ -229,6 +229,7 @@ void SegmentedRPPController::invalidatePlan() noexcept
   plan_ready_ = false;
   stages_.clear();
   stage_index_ = 0;
+  pivot_started_ = false;
   path_.poses.clear();
 }
 
@@ -238,6 +239,7 @@ void SegmentedRPPController::advanceStage()
   // its path slice. A failed intermediate handoff is a latched invalid plan
   // until a new, fully installed path replaces it.
   ++stage_index_;
+  pivot_started_ = false;
   try {
     activateStage();
   } catch (...) {
@@ -362,10 +364,13 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
     throw std::runtime_error("Robot moved away from planned rotation point");
   }
-  // Residual yaw motion after translation cannot authorize a new pivot.
-  // Pi's encoder-level interlock remains an independent requirement.
-  if (!stationaryForSegmentTransition(
-      velocity.linear.x, velocity.angular.z,
+  // Entering a pivot requires full standstill. Once a pivot has started,
+  // angular Odometry is expected to be nonzero: do NOT reapply the entry
+  // threshold on each tick or the rotation will repeatedly STOP/restart.
+  // Translation remains forbidden throughout the pivot. Pi's independent
+  // encoder STOP interlock still protects changes of drive direction.
+  if (!safeToContinuePivot(
+      pivot_started_, velocity.linear.x, velocity.angular.z,
       transfer_linear_stop_, transfer_angular_stop_))
   {
     return stopped(pose);
@@ -398,6 +403,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   geometry_msgs::msg::TwistStamped command = stopped(pose);
   command.twist.angular.z = std::clamp(
     desired, velocity.angular.z - maximum_step, velocity.angular.z + maximum_step);
+  pivot_started_ = true;
   return command;
 }
 

@@ -37,6 +37,26 @@ inline bool stationaryForSegmentTransition(
     std::abs(angular_z) < angular_stop_threshold;
 }
 
+// A pivot is entered only from a stop. During the same pivot, yaw motion
+// must continue without a stop/start oscillation. Linear motion is always
+// prohibited while the pivot is active.
+inline bool safeToContinuePivot(
+  bool pivot_started, double linear_x, double angular_z,
+  double linear_stop_threshold, double angular_stop_threshold)
+{
+  if (!stationaryForSegmentTransition(
+      0.0, 0.0, linear_stop_threshold, angular_stop_threshold) ||
+    !std::isfinite(linear_x) || !std::isfinite(angular_z))
+  {
+    return false;
+  }
+  if (!pivot_started) {
+    return stationaryForSegmentTransition(
+      linear_x, angular_z, linear_stop_threshold, angular_stop_threshold);
+  }
+  return std::abs(linear_x) < linear_stop_threshold;
+}
+
 }  // namespace patrol_navigation_controller
 
 #endif  // PATROL_NAVIGATION_CONTROLLER__SEGMENT_HANDOFF_GUARD_HPP_

@@ -82,6 +82,7 @@ private:
   // Fail closed if replacement planning or a handoff cannot initialize.
   // A nonempty old inner-RPP path must never authorize stale driving.
   bool plan_ready_ = false;
+  bool pivot_started_ = false;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;
