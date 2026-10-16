@@ -1,6 +1,8 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/segmented_rpp_controller.hpp"
 #include "patrol_navigation_controller/segment_handoff_guard.hpp"
+#include "patrol_navigation_controller/local_motion_sweep.hpp"
+#include "patrol_navigation_controller/path_sweep.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -274,6 +276,60 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::stopped(
   return command;
 }
 
+geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const geometry_msgs::msg::TwistStamped & command)
+{
+  const double linear = command.twist.linear.x;
+  const double angular = command.twist.angular.z;
+  if (!std::isfinite(linear) || !std::isfinite(angular) ||
+    !std::isfinite(command.twist.linear.y) ||
+    !std::isfinite(command.twist.angular.x) ||
+    !std::isfinite(command.twist.angular.y))
+  {
+    throw std::runtime_error("Non-finite Nav2 motion command");
+  }
+  if (std::abs(linear) < 1e-10 && std::abs(angular) < 1e-10) {
+    return command;  // A physical STOP never requires costmap clearance.
+  }
+  if (!costmap_ || !costmap_->isCurrent() || !collision_) {
+    throw std::runtime_error("Local costmap stale during Nav2 motion");
+  }
+  // Controller pose may not use the rolling local costmap's odom frame.
+  const auto local_pose = inControllerFrame(pose, costmap_->getGlobalFrameID());
+  const auto & position = local_pose.pose.position;
+  const auto initial = MotionPose{position.x, position.y, yaw(local_pose)};
+  const auto projected = localMotionHorizon(initial, linear, angular);
+  if (projected.size() < 2) {
+    throw std::runtime_error("Cannot certify Nav2 motion horizon");
+  }
+  auto * map = costmap_->getCostmap();
+  if (!map) {
+    throw std::runtime_error("Local costmap missing during Nav2 motion");
+  }
+  // Use the complete padded chassis at every interpolated position and
+  // heading, including pure pivots and reversing. Nav2 Humble IsPathValid
+  // checks stored path poses, not the full continuous executed trajectory.
+  std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*map->getMutex());
+  const auto footprint = costmap_->getRobotFootprint();
+  if (footprint.size() < 3 || !costmap_->isCurrent()) {
+    throw std::runtime_error("Local chassis or costmap no longer valid");
+  }
+  const bool safe = validateSweptPath(
+    projected, [&](const MotionPose & sample) {
+      const double cost = collision_->footprintCostAtPose(
+        sample.x, sample.y, sample.yaw, footprint);
+      // Includes inscribed 253, lethal 254, unknown 255 and off-map -1.
+      return std::isfinite(cost) && cost >= 0.0 &&
+        cost < static_cast<double>(
+        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+    });
+  if (!safe) {
+    throw std::runtime_error("Local swept chassis obstructed during Nav2 motion");
+  }
+  return command;
+}
+
 void SegmentedRPPController::checkRotationCollision(
   const geometry_msgs::msg::PoseStamped & pose, double angle_error)
 {
@@ -341,7 +397,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     // Do not truncate the final segment's normal RPP or terminal goal-yaw
     // behavior: Nav2's outer RotationShim owns the last pose orientation.
     if (stage_index_ + 1 >= stages_.size()) {
-      return rpp_->computeVelocityCommands(pose, velocity, goal_checker);
+      return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
     }
     const auto end_pose = inControllerFrame(
       path_.poses[stage.end], pose.header.frame_id);
@@ -356,7 +412,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       advanceStage();
       return stopped(pose);
     }
-    return rpp_->computeVelocityCommands(pose, velocity, goal_checker);
+    return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
   }
 
   const auto center = inControllerFrame(
@@ -403,8 +459,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   geometry_msgs::msg::TwistStamped command = stopped(pose);
   command.twist.angular.z = std::clamp(
     desired, velocity.angular.z - maximum_step, velocity.angular.z + maximum_step);
+  const auto certified = checkedCommand(pose, command);
   pivot_started_ = true;
-  return command;
+  return certified;
 }
 
 void SegmentedRPPController::setSpeedLimit(

@@ -67,6 +67,9 @@ private:
     double angle_error);
   geometry_msgs::msg::TwistStamped stopped(
     const geometry_msgs::msg::PoseStamped & pose) const;
+  geometry_msgs::msg::TwistStamped checkedCommand(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const geometry_msgs::msg::TwistStamped & command);
 
   pluginlib::ClassLoader<nav2_core::Controller> rpp_loader_;
   nav2_core::Controller::Ptr rpp_;

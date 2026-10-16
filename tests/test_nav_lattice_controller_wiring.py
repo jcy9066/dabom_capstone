@@ -173,3 +173,51 @@ def test_pivot_entry_stop_is_not_reapplied_during_active_rotation():
     assert "return std::abs(linear_x) < linear_stop_threshold;" in guard
     assert "return stationaryForSegmentTransition(" in guard
     assert "pivot_started_, velocity.linear.x, velocity.angular.z," in source
+
+
+def test_nav2_motion_commands_require_fresh_local_swept_chassis_clearance():
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    header = (
+        PACKAGE / "include/patrol_navigation_controller/segmented_rpp_controller.hpp"
+    ).read_text()
+    pure = (
+        PACKAGE / "include/patrol_navigation_controller/local_motion_sweep.hpp"
+    ).read_text()
+    assert "checkedCommand(" in header
+    assert source.count(
+        "return checkedCommand(pose, rpp_->computeVelocityCommands("
+    ) == 2
+    assert "const auto certified = checkedCommand(pose, command);" in source
+    assert source.index("const auto certified = checkedCommand(") < source.index(
+        "pivot_started_ = true;"
+    )
+    assert "costmap_->isCurrent()" in source
+    assert "costmap_->getGlobalFrameID()" in source
+    assert "localMotionHorizon(initial, linear, angular)" in source
+    assert "return validateSweptPath(" not in source  # checkedCommand fails by throw
+    assert "const bool safe = validateSweptPath(" in source
+    assert "collision_->footprintCostAtPose(" in source
+    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in source
+    assert "cost >= 0.0" in source
+    assert "Local swept chassis obstructed during Nav2 motion" in source
+    assert "travel > 0.25 || rotation > 1.20" in pure
+
+
+def test_ros_free_local_motion_horizon_cpp(tmp_path):
+    compiler = shutil.which("g++") or shutil.which("clang++")
+    if compiler is None:
+        pytest.skip("No C++ compiler available")
+    binary = tmp_path / "local_motion_horizon"
+    code = ROOT / "tests/cpp/test_local_motion_sweep.cpp"
+    result = subprocess.run(
+        [
+            compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pedantic",
+            "-I", str(PACKAGE / "include"), str(code), "-o", str(binary),
+        ],
+        capture_output=True, text=True, check=False, timeout=45,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = subprocess.run(
+        [str(binary)], capture_output=True, text=True, check=False, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
