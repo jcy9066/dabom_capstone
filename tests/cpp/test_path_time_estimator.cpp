@@ -32,6 +32,19 @@ int main()
   assert(pivot_score.valid);
   assert(pivot_score.switches == 1);
   assert(pivot_score.seconds > long_score.seconds);
+  // Angular jerk is derived from the wheel-level jerk limit and the
+  // actual track width. A stricter motor jerk cannot improve pivot time.
+  MotionTimeLimits high_jerk = limits;
+  high_jerk.linear_jerk_mps3 = 4.0;
+  MotionTimeLimits low_jerk = limits;
+  low_jerk.linear_jerk_mps3 = 0.5;
+  const std::vector<MotionPose> pure_pivot{
+    {0, 0, 0}, {0, 0, 1.5707963267948966}
+  };
+  const auto fast_turn = estimatePathTime(pure_pivot, high_jerk);
+  const auto slow_turn = estimatePathTime(pure_pivot, low_jerk);
+  assert(fast_turn.valid && slow_turn.valid);
+  assert(slow_turn.seconds > fast_turn.seconds);
 
   // Reversing may be slow in an unknown rear sector; cost must include it.
   const std::vector<MotionPose> reverse{{0, 0, 0}, {-0.2, 0, 0}};
