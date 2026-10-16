@@ -33,9 +33,17 @@ int main()
   assert(!validateSweptPath(ahead, [](const MotionPose & p) {
     return std::abs(p.x - 1.05) > 0.002;
   }));
+  // Default sweep sampling at <=0.05 rad checks the projected poses.
+  // This obstacle's angular footprint includes yaw=0.1923.. which is one
+  // of the emitted samples; the previous ±0.002 threshold missed them all.
+  assert(!validateSweptPath(spin, [](const MotionPose & p) {
+    return std::abs(p.yaw - 0.20) > 0.02;
+  }));
+  // For a narrower obstacle, explicitly request a denser angular step
+  // so the swept check samples *between* the 0.03846-rad input poses.
   assert(!validateSweptPath(spin, [](const MotionPose & p) {
     return std::abs(p.yaw - 0.20) > 0.002;
-  }));
+  }, patrol_navigation_controller::PathSweepLimits{0.025, 0.01, 60000}));
   assert(validateSweptPath(curve, [](const MotionPose &) { return true; }));
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const double inf = std::numeric_limits<double>::infinity();

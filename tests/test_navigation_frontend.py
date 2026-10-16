@@ -513,7 +513,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
 
     def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
         viewer = self.viewer
-        self.assertIn("positions.push(x, y, 0.16)", viewer)
+        # Route height now clears the taller static/dynamic wall layers.
+        self.assertIn(
+            "positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04))",
+            viewer,
+        )
         self.assertIn("depthTest: false", viewer)
         self.assertIn("line.renderOrder = 100", viewer)
         self.assertIn("points.renderOrder = 101", viewer)
