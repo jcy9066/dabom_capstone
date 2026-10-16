@@ -387,6 +387,17 @@ set -u
 ros2 pkg prefix nav2_rotation_shim_controller >/dev/null 2>&1 \
     || fail "nav2_rotation_shim_controller is missing from the ROS 2 Humble Nav2 installation"
 
+# Planner and controller are C++ plugins, not resources in patrol_navigation.
+# A Python-only colcon build may succeed while these remain uninstalled.
+# Refuse to enter the GPU navigation runtime if any plugin package is absent.
+for navigation_package in \
+    patrol_navigation_controller \
+    nav2_smac_planner \
+    nav2_regulated_pure_pursuit_controller; do
+    ros2 pkg prefix "${navigation_package}" >/dev/null 2>&1 \
+        || fail "Required Nav2 plugin package ${navigation_package} is missing; build the GPU workspace with --packages-select patrol_navigation_controller patrol_navigation and install the Humble Nav2 plugins"
+done
+
 export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV
 export WHEEL_TICKS_TOPIC ODOM_TOPIC ODOM_FRAME BASE_FRAME
