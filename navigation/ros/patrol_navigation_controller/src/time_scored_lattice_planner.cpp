@@ -1,5 +1,6 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/time_scored_lattice_planner.hpp"
+#include "patrol_navigation_controller/alternate_goal_candidates.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
 
 #include <chrono>
@@ -73,6 +74,35 @@ bool validAgainstCurrentCostmap(
         cost < static_cast<double>(
         nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
     });
+}
+
+// Verify the entire chassis at a candidate's final Yaw using the CURRENT
+// costmap. Pure XY point checks would incorrectly permit the rectangular
+// vehicle to rotate into a wall at its destination.
+bool endpointFootprintClear(
+  const MotionPose & pose,
+  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> & costmap_ros)
+{
+  if (!costmap_ros || !costmap_ros->isCurrent() ||
+    !std::isfinite(pose.x) || !std::isfinite(pose.y) ||
+    !std::isfinite(pose.yaw))
+  {
+    return false;
+  }
+  auto * map = costmap_ros->getCostmap();
+  if (!map) {
+    return false;
+  }
+  std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> guard(*map->getMutex());
+  auto footprint = costmap_ros->getRobotFootprint();
+  if (footprint.size() < 3) {
+    return false;
+  }
+  nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(map);
+  const double cost = checker.footprintCostAtPose(
+    pose.x, pose.y, pose.yaw, footprint);
+  return std::isfinite(cost) && cost >= 0.0 &&
+    cost < static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
 }
 
 }  // namespace
@@ -185,8 +215,19 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   double best_seconds = std::numeric_limits<double>::infinity();
   unsigned int best_switches = std::numeric_limits<unsigned int>::max();
   std::string best_candidate;
+  const MotionPose original_goal{
+    goal.pose.position.x, goal.pose.position.y, tf2::getYaw(goal.pose.orientation)
+  };
+  // An unknown/stale map never justifies moving to an alternate endpoint.
+  if (!costmap_ || !costmap_->isCurrent()) {
+    return best;
+  }
+  const bool original_goal_clear = endpointFootprintClear(original_goal, costmap_);
 
-  for (size_t index = 0; index < candidate_ids_.size(); ++index) {
+  // When the original Goal's swept chassis footprint is already blocked,
+  // searching a lattice to that exact endpoint spends the whole deadline
+  // on an impossible target. Use the reserved time to test nearby goals.
+  for (size_t index = 0; original_goal_clear && index < candidate_ids_.size(); ++index) {
     const auto elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started).count();
     if (elapsed >= max_total_planning_sec_) {
@@ -227,7 +268,12 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
           });
         }
         const auto score = estimatePathTime(coordinates, time_limits_);
-        if (score.valid &&
+        // Do not discard the runner-up merely because a shorter/faster
+        // candidate was invalidated by a costmap update. Validate before
+        // ranking so the next collision-safe candidate can still win.
+        const bool collision_safe =
+          score.valid && validAgainstCurrentCostmap(path, costmap_);
+        if (collision_safe &&
           (score.seconds < best_seconds - 1e-6 ||
           (std::abs(score.seconds - best_seconds) <= 1e-6 &&
           score.switches < best_switches)))
@@ -265,6 +311,86 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
             node->get_logger(), "%s candidate cleanup failed: %s",
             name_.c_str(), error.what());
         }
+      }
+    }
+  }
+
+  if (!original_goal_clear && best.poses.empty()) {
+    // Physical obstruction of the requested Goal: try closer safe endpoints
+    // first. Search only within the absolute 0.50m final XY tolerance, keep
+    // the original final Yaw, and never invent a path by moving poses in XY.
+    // No more than five Smac attempts are allowed within the same 5s budget.
+    size_t attempted = 0;
+    const auto nearby = nearbyGoalCandidates(original_goal);
+    for (const auto & alternate : nearby) {
+      if (attempted >= 5 || std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count() >= max_total_planning_sec_)
+      {
+        break;
+      }
+      if (!endpointFootprintClear(alternate, costmap_)) {
+        continue;
+      }
+      ++attempted;
+      auto candidate_goal = goal;
+      candidate_goal.pose.position.x = alternate.x;
+      candidate_goal.pose.position.y = alternate.y;
+      // Orientation remains exactly the user's original final Goal Yaw.
+      nav2_core::GlobalPlanner::Ptr planner;
+      bool configured = false;
+      bool activated = false;
+      try {
+        planner = loader_.createSharedInstance(
+          "nav2_smac_planner/SmacPlannerLattice");
+        planner->configure(
+          parent_, name_ + ".QuickMotion", tf_, costmap_);
+        configured = true;
+        planner->activate();
+        activated = true;
+        auto path = planner->createPlan(start, candidate_goal);
+        const auto now = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count();
+        if (now < max_total_planning_sec_ && path.poses.size() >= 2) {
+          const auto & endpoint = path.poses.back().pose;
+          const double distance_to_original = std::hypot(
+            endpoint.position.x - original_goal.x,
+            endpoint.position.y - original_goal.y);
+          const double yaw_error = std::abs(shortestTurn(
+            original_goal.yaw, tf2::getYaw(endpoint.orientation)));
+          if (distance_to_original <= 0.48 &&
+            yaw_error <= 0.20 &&
+            validAgainstCurrentCostmap(path, costmap_))
+          {
+            best = std::move(path);
+            best_candidate = "NearestSafeGoal";
+            break;
+          }
+        }
+      } catch (const std::exception & error) {
+        if (node) {
+          RCLCPP_WARN(
+            node->get_logger(), "%s alternate Goal could not plan: %s",
+            name_.c_str(), error.what());
+        }
+      }
+      if (activated) {
+        try {
+          planner->deactivate();
+        } catch (const std::exception &) {
+          // A failed cleanup cannot authorize an unverified path.
+          best.poses.clear();
+        }
+      }
+      if (configured) {
+        try {
+          planner->cleanup();
+        } catch (const std::exception &) {
+          best.poses.clear();
+        }
+      }
+      // Clean up before returning a chosen route. Failure above invalidates.
+      if (!best.poses.empty()) {
+        break;
       }
     }
   }
