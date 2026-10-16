@@ -69,7 +69,13 @@ void TimeScoredLatticePlanner::configure(
   time_limits_.forward_mps = wheel_mps;
   time_limits_.reverse_mps = wheel_mps * reverse_fraction;
 
-  if (candidate_ids_.size() < 2 || candidate_ids_.size() > 4 ||
+  // Only configured, costmap-checked 32-heading candidate searches may run.
+  // Arbitrary IDs would silently use Smac's built-in Ackermann defaults.
+  const bool recognized_candidates =
+    candidate_ids_.size() == 2 &&
+    candidate_ids_[0] == "QuickMotion" &&
+    candidate_ids_[1] == "StableTurns";
+  if (!recognized_candidates ||
     !std::isfinite(reverse_fraction) || reverse_fraction <= 0.0 ||
     reverse_fraction > 1.0 || !std::isfinite(max_total_planning_sec_) ||
     max_total_planning_sec_ <= 0.0 ||
@@ -134,7 +140,17 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
       candidate->activate();
       activated = true;
       auto path = candidate->createPlan(start, goal);
-      if (path.poses.size() >= 2) {
+      // Smac's inner max_planning_time is independent of the wrapper
+      // deadline. Reject any result that arrived after the 5s budget.
+      const auto elapsed_after_candidate = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+      if (elapsed_after_candidate >= max_total_planning_sec_) {
+        if (node) {
+          RCLCPP_WARN(
+            node->get_logger(), "%s planning deadline exceeded after %s",
+            name_.c_str(), candidate_ids_[index].c_str());
+        }
+      } else if (path.poses.size() >= 2) {
         std::vector<MotionPose> coordinates;
         coordinates.reserve(path.poses.size());
         for (const auto & pose : path.poses) {
@@ -186,6 +202,14 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     }
   }
 
+  // The full selection, not just candidate launch, must stay within
+  // the bounded planning interval. A stale route must never be returned.
+  if (std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - started).count() >= max_total_planning_sec_)
+  {
+    best.poses.clear();
+    return best;
+  }
   if (best.poses.empty()) {
     if (node) {
       RCLCPP_WARN(
