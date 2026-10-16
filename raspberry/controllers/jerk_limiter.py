@@ -49,10 +49,23 @@ class WheelJerkLimiter:
         for previous_v, previous_a, target in zip(
             self._velocity, self._acceleration, targets,
         ):
-            desired_a = max(
-                -self.max_accel,
-                min(self.max_accel, (target - previous_v) / dt),
+            error = target - previous_v
+            # Brake BEFORE reaching a small target: abruptly setting
+            # acceleration to zero on a velocity clamp violates jerk.
+            # The braking window includes a discrete-step margin because
+            # our command is held for the entire control interval.
+            braking_window = (
+                previous_a * previous_a / (2.0 * self.max_jerk)
+                + abs(previous_a) * dt
+                + 0.5 * self.max_jerk * dt * dt
             )
+            if previous_a * error > 0.0 and abs(error) <= braking_window:
+                desired_a = 0.0
+            else:
+                desired_a = max(
+                    -self.max_accel,
+                    min(self.max_accel, error / dt),
+                )
             limited_a = max(
                 previous_a - self.max_jerk * dt,
                 min(previous_a + self.max_jerk * dt, desired_a),
@@ -60,9 +73,9 @@ class WheelJerkLimiter:
             limited_a = max(-self.max_accel, min(self.max_accel, limited_a))
             velocity = previous_v + limited_a * dt
 
-            if (target - previous_v) * (target - velocity) <= 0:
-                velocity = target
-                limited_a = 0.0
+            # Do NOT snap to target while acceleration is nonzero.
+            # That implicit acceleration impulse would exceed max_jerk.
+            # Small smooth corrections may overshoot the target briefly.
             # Never drive straight from positive to negative (or vice versa)
             # without first commanding a zero-velocity boundary.
             if previous_v * target < 0 and previous_v * velocity <= 0:

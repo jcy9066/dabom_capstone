@@ -175,3 +175,32 @@ def test_jerk_limiter_rejects_invalid_timestamps_and_timestep_config():
         limiter.step(0.0, 0.0, float("inf"))
     with pytest.raises(ValueError):
         WheelJerkLimiter(max_accel=1.0, max_jerk=2.0, max_dt=0.0)
+
+
+def test_small_constant_target_has_no_terminal_jerk_impulse():
+    limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+    previous_velocity, previous_accel = 0.0, 0.0
+    readings = []
+    for tick in range(50):
+        value, other = limiter.step(0.1, 0.1, tick * 0.1)
+        acceleration = (value - previous_velocity) / 0.1
+        assert abs(acceleration) <= 1.000001
+        assert abs(acceleration - previous_accel) <= 0.200002, (tick, readings)
+        readings.append(value)
+        previous_velocity, previous_accel = value, acceleration
+    assert abs(readings[-1] - 0.1) < 1e-5
+    assert max(readings) <= 0.11
+
+
+def test_target_speed_settles_without_breaking_jerk_limit():
+    for target in (0.2, 0.5, 0.8, -0.2, -0.5, -0.8, 1.0, -1.0):
+        limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+        previous_velocity, previous_accel = 0.0, 0.0
+        for tick in range(100):
+            value, other = limiter.step(target, target, tick * 0.1)
+            accel = (value - previous_velocity) / 0.1
+            assert abs(accel) <= 1.000001
+            assert abs(accel - previous_accel) <= 0.200002
+            assert abs(value) <= 1.000001
+            previous_velocity, previous_accel = value, accel
+        assert abs(previous_velocity - target) < 1e-4
