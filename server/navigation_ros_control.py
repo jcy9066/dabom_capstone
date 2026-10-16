@@ -130,6 +130,7 @@ class NavigationRosControl:
         self._navigate_goal_handle = None
         self._navigate_result_future = None
         self._route_poses_remaining: int | None = None
+        self._route_feedback_epoch = 0
         self._navigate_action_kind = "navigate_to_pose"
         self._navigation_state = "IDLE"
         self._navigation_error = None
@@ -495,11 +496,15 @@ class NavigationRosControl:
         request = NavigateThroughPoses.Goal()
         request.poses = [self._pose_stamped(item) for item in poses]
         with self._lock:
+            self._route_feedback_epoch += 1
+            feedback_epoch = self._route_feedback_epoch
             self._route_poses_remaining = len(poses)
             self._navigate_action_kind = "navigate_through_poses"
         handle = self._wait_future(
             self._navigate_through_client.send_goal_async(
-                request, feedback_callback=self._on_waypoint_feedback,
+                request,
+                feedback_callback=lambda msg, epoch=feedback_epoch:
+                    self._on_waypoint_feedback(msg, epoch),
             ),
             timeout_sec=3.0,
             error_code="NAVIGATION_START_TIMEOUT",
@@ -534,6 +539,7 @@ class NavigationRosControl:
         request = NavigateToPose.Goal()
         request.pose = self._pose_stamped(goal)
         with self._lock:
+            self._route_feedback_epoch += 1
             self._route_poses_remaining = None
             self._navigate_action_kind = "navigate_to_pose"
         goal_handle = self._wait_future(
@@ -641,13 +647,18 @@ class NavigationRosControl:
                     self._navigate_result_future = None
             return {"requested": True, "confirmed": True, "completed": True}
 
-    def _on_waypoint_feedback(self, msg: Any) -> None:
+    def _on_waypoint_feedback(self, msg: Any, epoch: int) -> None:
         try:
             count = int(msg.feedback.number_of_poses_remaining)
         except (AttributeError, ValueError, TypeError, OverflowError):
             return
         with self._lock:
-            if self._navigate_action_kind == "navigate_through_poses" and count >= 1:
+            if (
+                epoch == self._route_feedback_epoch
+                and self._navigate_action_kind == "navigate_through_poses"
+                and self._navigation_state == "NAVIGATING"
+                and count >= 1
+            ):
                 # Never increase the remaining count from delayed feedback.
                 if self._route_poses_remaining is not None:
                     self._route_poses_remaining = min(
