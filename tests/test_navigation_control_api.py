@@ -41,6 +41,8 @@ class FakeRos:
         self.plan_calls = 0
         self.navigate_calls = 0
         self.cancel_calls = 0
+        self.through_plan_calls = []
+        self.through_navigation_calls = []
         self.state = "IDLE"
         self.health = {
             "available": True,
@@ -60,6 +62,17 @@ class FakeRos:
         self.navigate_calls += 1
         self.state = "NAVIGATING"
         return {"accepted": True, "goal": goal}
+
+    def compute_path_through_poses(self, poses):
+        self.plan_calls += 1
+        self.through_plan_calls.append([dict(p) for p in poses])
+        return [{"x": 0.0, "y": 0.0}, *[dict(p) for p in poses]]
+
+    def navigate_through_poses(self, poses):
+        self.navigate_calls += 1
+        self.through_navigation_calls.append([dict(p) for p in poses])
+        self.state = "NAVIGATING"
+        return {"accepted": True, "action": "/navigate_through_poses"}
 
     def cancel_navigation(self):
         self.cancel_calls += 1
@@ -508,6 +521,62 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(old_goal, current["active_goal"])
         self.assertFalse(current["emergency_stop"])
         self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_waypoint_route_uses_one_nav2_action_and_final_yaw(self):
+        await self.driving_ready()
+        request = {
+            "goal": {"x": 1.6, "y": 1.0, "yaw": -0.7},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        }
+        planned = await self.api.plan_goal(request)
+        self.assertEqual("PATH_READY", planned["navigation_state"])
+        self.assertEqual(2, len(planned["waypoints"]))
+        self.assertEqual(1, len(self.map_api.ros_control.through_plan_calls))
+        route = self.map_api.ros_control.through_plan_calls[0]
+        self.assertEqual(3, len(route))
+        self.assertAlmostEqual(math.atan2(0.3, 0.5), route[0]["yaw"])
+        self.assertAlmostEqual(math.atan2(0.2, 0.6), route[1]["yaw"])
+        self.assertAlmostEqual(-0.7, route[-1]["yaw"])
+        started = await self.api.start_navigation()
+        self.assertEqual("/navigate_through_poses", started["navigation"]["action"])
+        self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+    async def test_intermediate_waypoint_yaw_is_not_required(self):
+        await self.driving_ready()
+        request = {
+            "goal": {"x": 1.5, "y": 1.0, "yaw": 0.2},
+            "waypoints": [{"x": 0.5, "y": 0.4, "yaw": 99.0}],
+        }
+        response = await self.api.plan_goal(request)
+        self.assertEqual("PATH_READY", response["navigation_state"])
+        self.assertNotEqual(99.0, response["waypoints"][0]["yaw"])
+        self.assertEqual(0.2, response["active_goal"]["yaw"])
+
+    async def test_invalid_waypoint_rejected_without_canceling_running_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({
+                "goal": {"x": 1.5, "y": 1.5, "yaw": 0.0},
+                "waypoints": [{"x": 300.0, "y": 0.0}],
+            })
+        self.assertEqual("GOAL_OUT_OF_BOUNDS", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+
+    async def test_bad_waypoint_numbers_are_rejected(self):
+        await self.driving_ready()
+        for bad in ([{"x": True, "y": 0}], [{"x": "nan", "y": 0}], "not-a-list"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(NavigationControlError) as raised:
+                    await self.api.plan_goal({
+                        "goal": {"x": 1.5, "y": 1.0, "yaw": 0.0},
+                        "waypoints": bad,
+                    })
+                self.assertEqual("INVALID_WAYPOINTS", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.plan_calls)
 
     async def test_goal_terminal_and_manual_tolerance_rules(self):
         await self.driving_ready()
