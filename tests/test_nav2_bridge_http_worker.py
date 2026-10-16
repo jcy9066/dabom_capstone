@@ -179,3 +179,47 @@ def test_dry_run_stop_does_not_claim_physical_delivery():
     bridge, _ = _fake_bridge(cls)
     bridge.motor_output_enabled = False
     assert bridge._post_command({"type": "stop", "reason": "test"}) is True
+
+
+def test_actual_motor_drive_requires_explicit_delivery_ack():
+    cls = _bridge_methods(
+        "_post_command",
+        responder=lambda *_args, **_kw: _Response(
+            b'{"ok":true,"accepted":true,"delivered":false,"blocked":true}'
+        ),
+    )
+    bridge, _ = _fake_bridge(cls)
+    bridge.motor_output_enabled = True
+    assert bridge._post_command({
+        "type": "auto_drive", "left_mps": 0.10, "right_mps": 0.10,
+    }) is False
+    assert bridge.send_error_count == 1
+    assert bridge.sent_count == 0
+
+
+def test_actual_motor_drive_rejects_contradictory_blocked_ack():
+    cls = _bridge_methods(
+        "_post_command",
+        responder=lambda *_args, **_kw: _Response(
+            b'{"ok":true,"delivered":true,"blocked":true}'
+        ),
+    )
+    bridge, _ = _fake_bridge(cls)
+    bridge.motor_output_enabled = True
+    assert bridge._post_command({
+        "type": "auto_drive", "left_mps": 0.10, "right_mps": 0.10,
+    }) is False
+
+
+def test_dry_run_drive_can_be_accepted_without_pi_delivery():
+    cls = _bridge_methods(
+        "_post_command",
+        responder=lambda *_args, **_kw: _Response(
+            b'{"ok":true,"accepted":true,"delivered":false,"blocked":true,"dry_run":true}'
+        ),
+    )
+    bridge, _ = _fake_bridge(cls)
+    bridge.motor_output_enabled = False
+    assert bridge._post_command({
+        "type": "auto_drive", "left_mps": 0.10, "right_mps": 0.10,
+    }) is True

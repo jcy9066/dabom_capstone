@@ -383,9 +383,12 @@ class Nav2CommandBridge(Node):
                     not isinstance(response_data, dict)
                     or response_data.get("ok") is not True
                     or (
-                        payload.get("type") in ("stop", "emergency_stop")
+                        payload.get("type") in ("auto_drive", "stop", "emergency_stop")
                         and self.motor_output_enabled
-                        and response_data.get("delivered") is not True
+                        and (
+                            response_data.get("delivered") is not True
+                            or response_data.get("blocked") is True
+                        )
                     )
                 ):
                     raise RuntimeError(
@@ -812,8 +815,10 @@ class Nav2CommandBridge(Node):
             self._worker_shutdown = True
             self._command_condition.notify_all()
 
+        # At shutdown the worker may need to finish a previous in-flight
+        # drive AND the final queued STOP (two HTTP requests).
         self._command_worker_thread.join(
-            timeout=self.request_timeout_sec + 0.5
+            timeout=2.0 * self.request_timeout_sec + 0.5
         )
         if self._command_worker_thread.is_alive():
             self.get_logger().error(

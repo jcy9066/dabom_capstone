@@ -261,3 +261,12 @@ def test_shutdown_timeout_queues_stop_without_racing_inflight_drive():
             bridge._worker_shutdown = True
             bridge._command_condition.notify_all()
         worker.join(timeout=2.0)
+
+
+def test_shutdown_join_budget_covers_drive_and_final_stop():
+    code = SOURCE.read_text(encoding="utf-8")
+    end = code.split("    def destroy_node(", 1)[1].split("\n\ndef main(", 1)[0]
+    assert "timeout=2.0 * self.request_timeout_sec + 0.5" in end
+    assert end.index('{"type": "stop", "reason": "nav2_command_bridge_shutdown"}') < (
+        end.index("self._command_worker_thread.join(")
+    )
