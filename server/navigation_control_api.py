@@ -510,6 +510,7 @@ class NavigationControlApi:
         self._state["navigation_state"] = terminal
         if terminal == "CANCELED":
             self._state["active_goal"] = None
+            self._state["waypoints"] = []
             self._state["planned_path"] = []
         self._reset_navigation_progress_locked()
         self._touch_locked(current)
@@ -1135,6 +1136,7 @@ class NavigationControlApi:
     async def resume_navigation(self) -> dict[str, Any]:
         with self._lock:
             goal = dict(self._state["active_goal"] or {})
+            waypoints = [dict(p) for p in self._state["waypoints"]]
             estop_generation = self._estop_generation
             if not self._state["emergency_stop"]:
                 raise NavigationControlError(
@@ -1157,7 +1159,9 @@ class NavigationControlApi:
         path: list[dict[str, float]] = []
         if restart_navigation:
             self._assert_watchdogs_healthy(ignore_estop=True)
-            path = self._normalized_path(await asyncio.to_thread(self._ros.compute_path, goal))
+            path = self._normalized_path(
+                await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
+            )
             if len(path) < 2:
                 raise NavigationControlError(
                     "PATH_NOT_FOUND",
@@ -1249,7 +1253,7 @@ class NavigationControlApi:
         if not restart_navigation:
             return {**self.state_response(), "replanned": False}
         try:
-            navigation = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
+            navigation = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         except Exception:
             await self.emergency_stop("RESUME_NAVIGATION_FAILED", automatic=True, force=True)
             raise
@@ -1472,6 +1476,7 @@ class NavigationControlApi:
                 "stop_delivered": False, "stop_attempt_at": None,
                 "replanning": False,
                 "goal": dict(self._state["active_goal"] or {}),
+                "waypoints": [dict(p) for p in self._state["waypoints"]],
             }
             self._sensor_recovery = recovery
             self._reset_navigation_progress_locked()
@@ -1591,7 +1596,9 @@ class NavigationControlApi:
                 self._touch_locked()
             try:
                 path = self._normalized_path(
-                    await asyncio.to_thread(self._ros.compute_path, recovery["goal"])
+                    await asyncio.to_thread(
+                        self._compute_path_for_route, recovery["goal"], recovery["waypoints"]
+                    )
                 )
                 if len(path) < 2:
                     raise NavigationControlError(
@@ -1619,7 +1626,7 @@ class NavigationControlApi:
                             "Sensor recovery deadline expired during planning.",
                         )
                 navigation = await asyncio.to_thread(
-                    self._ros.navigate_to_pose, recovery["goal"]
+                    self._navigate_route, recovery["goal"], recovery["waypoints"]
                 )
                 if not isinstance(navigation, dict) or navigation.get("accepted") is not True:
                     raise NavigationControlError(
@@ -1785,6 +1792,7 @@ class NavigationControlApi:
                     if self._stop_confirmed_locked(time.time()):
                         self._state["navigation_state"] = "SUCCEEDED"
                         self._state["active_goal"] = None
+                        self._state["waypoints"] = []
                         self._state["planned_path"] = []
                         self._state["last_error"] = None
                         self._reset_navigation_progress_locked()
@@ -1944,6 +1952,7 @@ class NavigationControlApi:
         self._state["navigation_state"] = terminal
         if terminal == "CANCELED":
             self._state["active_goal"] = None
+            self._state["waypoints"] = []
             self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
