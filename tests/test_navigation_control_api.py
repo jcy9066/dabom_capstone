@@ -612,6 +612,25 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             })
         self.assertEqual(1, len(self.api.state_response()["waypoints"]))
 
+    async def test_emergency_stop_preserves_completed_waypoint_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": -0.2},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        original_status = self.map_api.ros_control.navigation_status
+        self.map_api.ros_control.navigation_status = lambda: {
+            **original_status(),
+            "action": "navigate_through_poses",
+            "number_of_poses_remaining": 2,
+        }
+        result = await self.api.emergency_stop("operator")
+        self.assertTrue(result["emergency_stop"])
+        self.assertEqual(1, len(result["waypoints"]))
+        self.assertEqual(1.0, result["waypoints"][0]["x"])
+        self.assertAlmostEqual(-0.2, result["active_goal"]["yaw"])
+
     async def test_manual_final_xy_cannot_bypass_pending_intermediates(self):
         await self.driving_ready()
         await self.api.plan_goal({
