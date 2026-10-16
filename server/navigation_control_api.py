@@ -1805,6 +1805,25 @@ class NavigationControlApi:
                 if self._pending_terminal_stop is pending:
                     pending["processing"] = False
 
+    @staticmethod
+    def _original_goal_pose_confirmed(goal: dict, pose: dict | None) -> bool:
+        """Evaluate the actual robot pose against the user's original goal.
+
+        A Smac alternate endpoint and a permissive Nav2 XY goal checker
+        must not combine into a synthetic success far from the request.
+        """
+        if not isinstance(goal, dict) or not isinstance(pose, dict):
+            return False
+        try:
+            gx, gy, gyaw = float(goal["x"]), float(goal["y"]), float(goal["yaw"])
+            px, py, pyaw = float(pose["x"]), float(pose["y"]), float(pose["yaw"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if not all(math.isfinite(v) for v in (gx, gy, gyaw, px, py, pyaw)):
+            return False
+        yaw_error = math.atan2(math.sin(pyaw - gyaw), math.cos(pyaw - gyaw))
+        return math.hypot(px - gx, py - gy) <= 0.50 and abs(yaw_error) <= 0.20
+
     async def _resolve_pending_nav_success(self) -> None:
         """Finalize Nav2 success only after STOP delivery and stable encoders."""
         with self._lock:
@@ -1847,12 +1866,26 @@ class NavigationControlApi:
 
             deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
             while delivered and time.monotonic() < deadline:
+                # Fetch live localization without holding the state lock.
+                # Require it only in live motor mode; dry-run/demo tests
+                # have no physically verified odometry or arrival.
+                physical_pose = (
+                    self._safe_live_pose() if self._motor_output_enabled else None
+                )
                 with self._lock:
                     if self._pending_nav_success is not pending:
                         return
                     if self._state["emergency_stop"] or self._encoder_stop_violation:
                         return
                     if self._stop_confirmed_locked(time.time()):
+                        if self._motor_output_enabled and not self._original_goal_pose_confirmed(
+                            self._state["active_goal"], physical_pose
+                        ):
+                            self._state["navigation_state"] = "FAILED"
+                            self._state["last_error"] = "ORIGINAL_GOAL_NOT_REACHED"
+                            self._reset_navigation_progress_locked()
+                            self._touch_locked()
+                            return
                         self._state["navigation_state"] = "SUCCEEDED"
                         self._state["active_goal"] = None
                         self._state["waypoints"] = []

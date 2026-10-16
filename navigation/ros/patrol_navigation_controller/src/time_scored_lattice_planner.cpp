@@ -276,7 +276,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
         // Never rank an otherwise collision-free path whose actual terminal
         // XY/yaw lies outside the approved Nav2 goal-checker envelope.
         const bool terminal_safe = goalEndpointWithinTolerance(
-          coordinates.back(), original_goal, 0.50, 0.20);
+          coordinates.back(), original_goal, 0.20, 0.20);
         const bool collision_safe =
           score.valid && terminal_safe &&
           validAgainstCurrentCostmap(path, costmap_);
@@ -367,7 +367,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
             endpoint.position.x, endpoint.position.y,
             tf2::getYaw(endpoint.orientation)};
           if (goalEndpointWithinTolerance(
-              actual_endpoint, original_goal, 0.48, 0.20) &&
+              actual_endpoint, original_goal, 0.20, 0.20) &&
             validAgainstCurrentCostmap(path, costmap_))
           {
             // Arrival must satisfy the original final Yaw and pass a

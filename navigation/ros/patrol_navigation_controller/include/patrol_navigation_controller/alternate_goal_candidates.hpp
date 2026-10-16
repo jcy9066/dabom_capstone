@@ -42,7 +42,7 @@ inline bool goalEndpointWithinTolerance(
 // This function proposes locations only; the planner MUST subsequently verify
 // footprint collision clearance and a feasible, freshly collision-checked path.
 inline std::vector<MotionPose> nearbyGoalCandidates(
-  const MotionPose & goal, const double radius_m = 0.48,
+  const MotionPose & goal, const double radius_m = 0.20,
   const double grid_step_m = 0.05)
 {
   std::vector<MotionPose> proposed;

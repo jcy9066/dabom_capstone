@@ -176,13 +176,13 @@ def test_blocked_goal_alternate_is_nearest_and_requires_full_footprint():
     assert "candidate_goal.pose.position.x = alternate.x;" in cpp
     assert "candidate_goal.pose.position.y = alternate.y;" in cpp
     assert "goalEndpointWithinTolerance(" in cpp
-    assert "actual_endpoint, original_goal, 0.48, 0.20" in cpp
+    assert "actual_endpoint, original_goal, 0.20, 0.20" in cpp
     assert "validAgainstCurrentCostmap(path, costmap_)" in cpp
     assert "best_candidate = \"NearestSafeGoal\"" in cpp
     assert "closest_endpoint_m = distance_to_original;" in cpp
     assert "score.seconds < best_seconds" in cpp
     assert "if (attempted >= 5" in cpp
-    assert "const double radius_m = 0.48" in header
+    assert "const double radius_m = 0.20" in header
     assert "radius_m > 0.50" in header
     assert "goal.x + dx, goal.y + dy, goal.yaw" in header
     assert "std::sort(" in header
@@ -196,9 +196,9 @@ def test_all_smac_candidate_endpoints_obey_final_xy_and_yaw_contract():
     assert "goalEndpointWithinTolerance(" in helper
     assert "endpoint.x - original_goal.x" in helper
     assert "std::abs(shortestTurn(endpoint.yaw, original_goal.yaw))" in helper
-    assert "coordinates.back(), original_goal, 0.50, 0.20" in source
+    assert "coordinates.back(), original_goal, 0.20, 0.20" in source
     assert "score.valid && terminal_safe &&" in source
-    assert "actual_endpoint, original_goal, 0.48, 0.20" in source
+    assert "actual_endpoint, original_goal, 0.20, 0.20" in source
 
 
 def test_each_time_ranked_candidate_is_collision_checked_before_selection():
