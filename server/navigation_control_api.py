@@ -1112,7 +1112,15 @@ class NavigationControlApi:
 
     async def emergency_stop(self, reason: str, automatic: bool = False, force: bool = False) -> dict[str, Any]:
         normalized_reason = (str(reason).strip() or "dashboard_emergency_stop")[:96]
+        try:
+            last_route_status = self._ros.navigation_status()
+        except Exception:
+            last_route_status = {}
         with self._lock:
+            # Capture already-passed intermediate poses before changing the
+            # navigation state to EMERGENCY_STOPPED. A later safe resume must
+            # not route the robot back to those completed waypoints.
+            self._sync_waypoint_progress_locked(last_route_status)
             self._post_resume_motion_ready = False
             if self._encoder_stop_violation:
                 normalized_reason = "ENCODER_MOVEMENT_AFTER_STOP"
