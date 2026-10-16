@@ -74,6 +74,13 @@ def generate_launch_description():
             "navigate_to_pose_dynamic_replanning.xml",
         ]
     )
+    navigate_through_poses_bt = PathJoinSubstitution(
+        [
+            pkg_share,
+            "behavior_trees",
+            "navigate_through_poses_dynamic_replanning.xml",
+        ]
+    )
 
     # ---------------------------------------------------------
     # Launch arguments
@@ -248,6 +255,7 @@ def generate_launch_description():
             nav2_params,
             {
                 "default_nav_to_pose_bt_xml": navigate_to_pose_bt,
+                "default_nav_through_poses_bt_xml": navigate_through_poses_bt,
             },
         ],
         remappings=common_remappings,
