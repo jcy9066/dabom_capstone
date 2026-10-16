@@ -129,6 +129,8 @@ class NavigationRosControl:
         self._navigate_through_client = None
         self._navigate_goal_handle = None
         self._navigate_result_future = None
+        self._route_poses_remaining: int | None = None
+        self._navigate_action_kind = "navigate_to_pose"
         self._navigation_state = "IDLE"
         self._navigation_error = None
         self._last_scan_at = None
@@ -492,8 +494,13 @@ class NavigationRosControl:
             )
         request = NavigateThroughPoses.Goal()
         request.poses = [self._pose_stamped(item) for item in poses]
+        with self._lock:
+            self._route_poses_remaining = len(poses)
+            self._navigate_action_kind = "navigate_through_poses"
         handle = self._wait_future(
-            self._navigate_through_client.send_goal_async(request),
+            self._navigate_through_client.send_goal_async(
+                request, feedback_callback=self._on_waypoint_feedback,
+            ),
             timeout_sec=3.0,
             error_code="NAVIGATION_START_TIMEOUT",
             message="Timed out submitting waypoint route.",
@@ -526,6 +533,9 @@ class NavigationRosControl:
             raise NavigationRosError("NAVIGATOR_UNAVAILABLE", "NavigateToPose action is unavailable.", 503)
         request = NavigateToPose.Goal()
         request.pose = self._pose_stamped(goal)
+        with self._lock:
+            self._route_poses_remaining = None
+            self._navigate_action_kind = "navigate_to_pose"
         goal_handle = self._wait_future(
             self._navigate_client.send_goal_async(request),
             timeout_sec=3.0,
@@ -631,9 +641,27 @@ class NavigationRosControl:
                     self._navigate_result_future = None
             return {"requested": True, "confirmed": True, "completed": True}
 
+    def _on_waypoint_feedback(self, msg: Any) -> None:
+        try:
+            count = int(msg.feedback.number_of_poses_remaining)
+        except (AttributeError, ValueError, TypeError, OverflowError):
+            return
+        with self._lock:
+            if self._navigate_action_kind == "navigate_through_poses" and count >= 1:
+                # Never increase the remaining count from delayed feedback.
+                if self._route_poses_remaining is not None:
+                    self._route_poses_remaining = min(
+                        self._route_poses_remaining, count,
+                    )
+
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:
-            return {"state": self._navigation_state, "error": self._navigation_error}
+            return {
+                "state": self._navigation_state,
+                "error": self._navigation_error,
+                "action": self._navigate_action_kind,
+                "number_of_poses_remaining": self._route_poses_remaining,
+            }
 
     def navigation_ready(self) -> bool:
         if ROS_IMPORT_ERROR is not None or not self._started:
