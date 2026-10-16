@@ -60,6 +60,8 @@ private:
     const std::string & target_frame) const;
   void buildStages();
   void activateStage();
+  void advanceStage();
+  void invalidatePlan() noexcept;
   void checkRotationCollision(
     const geometry_msgs::msg::PoseStamped & pose,
     double angle_error);
@@ -77,6 +79,9 @@ private:
   nav_msgs::msg::Path path_;
   std::vector<Stage> stages_;
   size_t stage_index_ = 0;
+  // Fail closed if replacement planning or a handoff cannot initialize.
+  // A nonempty old inner-RPP path must never authorize stale driving.
+  bool plan_ready_ = false;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;

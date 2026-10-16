@@ -82,6 +82,7 @@ void SegmentedRPPController::activate()
 
 void SegmentedRPPController::deactivate()
 {
+  invalidatePlan();
   rpp_->deactivate();
 }
 
@@ -93,7 +94,7 @@ void SegmentedRPPController::cleanup()
   }
   collision_.reset();
   costmap_.reset();
-  stages_.clear();
+  invalidatePlan();
 }
 
 double SegmentedRPPController::yaw(const geometry_msgs::msg::PoseStamped & pose)
@@ -223,11 +224,44 @@ void SegmentedRPPController::activateStage()
   rpp_->setPlan(slice);
 }
 
+void SegmentedRPPController::invalidatePlan() noexcept
+{
+  plan_ready_ = false;
+  stages_.clear();
+  stage_index_ = 0;
+  path_.poses.clear();
+}
+
+void SegmentedRPPController::advanceStage()
+{
+  // Never expose the next stage to computeVelocityCommands if RPP rejects
+  // its path slice. A failed intermediate handoff is a latched invalid plan
+  // until a new, fully installed path replaces it.
+  ++stage_index_;
+  try {
+    activateStage();
+  } catch (...) {
+    invalidatePlan();
+    throw;
+  }
+}
+
 void SegmentedRPPController::setPlan(const nav_msgs::msg::Path & path)
 {
-  path_ = path;
-  buildStages();
-  activateStage();
+  // Nav2 can deliver a replacement path while the controller is moving.
+  // Invalidate the previous plan BEFORE parsing/replacing stages and before
+  // passing a new movement slice to the nested RPP plugin. An exception
+  // anywhere in this process must never re-enable its cached old route.
+  invalidatePlan();
+  try {
+    path_ = path;
+    buildStages();
+    activateStage();
+    plan_ready_ = true;
+  } catch (...) {
+    invalidatePlan();
+    throw;
+  }
 }
 
 geometry_msgs::msg::TwistStamped SegmentedRPPController::stopped(
@@ -283,6 +317,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * goal_checker)
 {
+  if (!plan_ready_) {
+    throw std::runtime_error("Segmented controller has no valid active path");
+  }
   if (stage_index_ >= stages_.size()) {
     return stopped(pose);
   }
@@ -314,8 +351,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       {
         return stopped(pose);  // Pi STOP + direction interlock owns actual halt
       }
-      ++stage_index_;
-      activateStage();
+      advanceStage();
       return stopped(pose);
     }
     return rpp_->computeVelocityCommands(pose, velocity, goal_checker);
@@ -349,8 +385,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     {
       return stopped(pose);
     }
-    ++stage_index_;
-    activateStage();
+    advanceStage();
     return stopped(pose);
   }
 

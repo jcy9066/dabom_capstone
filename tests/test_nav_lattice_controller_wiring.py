@@ -114,3 +114,44 @@ def test_ros_free_segment_handoff_safety_cpp(tmp_path):
         [str(binary)], capture_output=True, text=True, timeout=15, check=False,
     )
     assert executed.returncode == 0, executed.stdout + executed.stderr
+
+
+def test_replanning_replaces_stages_transactionally_and_fails_closed():
+    code = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    interface = (
+        PACKAGE / "include/patrol_navigation_controller/segmented_rpp_controller.hpp"
+    ).read_text()
+    assert "bool plan_ready_ = false;" in interface
+    assert "void invalidatePlan() noexcept;" in interface
+    assert "void advanceStage();" in interface
+    replacement = code.split(
+        "void SegmentedRPPController::setPlan(", 1
+    )[1].split(
+        "geometry_msgs::msg::TwistStamped SegmentedRPPController::stopped(", 1
+    )[0]
+    assert replacement.index("invalidatePlan();") < replacement.index("path_ = path;")
+    assert replacement.index("path_ = path;") < replacement.index("buildStages();")
+    assert replacement.index("buildStages();") < replacement.index("activateStage();")
+    assert replacement.index("activateStage();") < replacement.index("plan_ready_ = true;")
+    assert "catch (...) {\n    invalidatePlan();\n    throw;" in replacement
+    compute = code.split(
+        "SegmentedRPPController::computeVelocityCommands(", 1
+    )[1].split("void SegmentedRPPController::setSpeedLimit(", 1)[0]
+    assert compute.index("if (!plan_ready_)") < compute.index("stages_[stage_index_]")
+    assert "Segmented controller has no valid active path" in compute
+    assert compute.count("advanceStage();") == 2
+    assert "++stage_index_;" not in compute
+    handoff = code.split("void SegmentedRPPController::advanceStage()", 1)[1]
+    handoff = handoff.split("void SegmentedRPPController::setPlan(", 1)[0]
+    assert "++stage_index_;" in handoff
+    assert "activateStage();" in handoff
+    assert "catch (...) {\n    invalidatePlan();\n    throw;" in handoff
+    invalidate = code.split("void SegmentedRPPController::invalidatePlan()", 1)[1]
+    invalidate = invalidate.split("void SegmentedRPPController::advanceStage()", 1)[0]
+    for state_clear in (
+        "plan_ready_ = false;", "stages_.clear();",
+        "stage_index_ = 0;", "path_.poses.clear();",
+    ):
+        assert state_clear in invalidate
+    assert "invalidatePlan();\n  rpp_->deactivate();" in code
+    assert "invalidatePlan();\n}" in code
