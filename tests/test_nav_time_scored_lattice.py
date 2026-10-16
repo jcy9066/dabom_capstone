@@ -203,7 +203,8 @@ def test_all_smac_candidate_endpoints_obey_final_xy_and_yaw_contract():
 
 def test_each_time_ranked_candidate_is_collision_checked_before_selection():
     code = SOURCE.read_text()
-    assert "score.valid && validAgainstCurrentCostmap(path, costmap_)" in code
+    assert "score.valid && terminal_safe &&" in code
+    assert "validAgainstCurrentCostmap(path, costmap_)" in code
     assert "if (collision_safe &&" in code
     assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
     # A safer runner-up must be eligible if the faster original candidate is
