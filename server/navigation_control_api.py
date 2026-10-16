@@ -166,6 +166,7 @@ class NavigationControlApi:
             "emergency_stop": False,
             "emergency_reason": None,
             "active_goal": None,
+            "waypoints": [],
             "planned_path": [],
             "active_map": None,
             "localization_ready": False,
@@ -2141,6 +2142,55 @@ class NavigationControlApi:
             raise NavigationControlError("INVALID_GOAL", "goal values must be finite.", 400)
         goal["yaw"] = math.atan2(math.sin(goal["yaw"]), math.cos(goal["yaw"]))
         return goal
+
+    def _validated_waypoints(
+        self, raw: Any, final_goal: dict[str, float]
+    ) -> list[dict[str, float]]:
+        """Intermediate points need XY only; route headings are planning hints."""
+        if raw is None:
+            return []
+        if not isinstance(raw, list) or len(raw) > 24:
+            raise NavigationControlError(
+                "INVALID_WAYPOINTS", "waypoints must be a list of at most 24 points.", 400,
+            )
+        points: list[dict[str, float]] = []
+        for value in raw:
+            if not isinstance(value, dict) or isinstance(value.get("x"), bool) or isinstance(value.get("y"), bool):
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Each waypoint requires numeric x and y.", 400,
+                )
+            try:
+                x, y = float(value["x"]), float(value["y"])
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Each waypoint requires finite x and y.", 400,
+                ) from exc
+            if not math.isfinite(x) or not math.isfinite(y):
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Waypoint coordinates must be finite.", 400,
+                )
+            points.append({"x": x, "y": y})
+        for i, point in enumerate(points):
+            following = points[i + 1] if i + 1 < len(points) else final_goal
+            dx, dy = following["x"] - point["x"], following["y"] - point["y"]
+            # Humble planner requires a PoseStamped yaw even though arrival at
+            # intermediate points is determined exclusively by 0.50m XY.
+            point["yaw"] = math.atan2(dy, dx) if math.hypot(dx, dy) > 1e-6 else final_goal["yaw"]
+        return points
+
+    def _compute_path_for_route(
+        self, final_goal: dict[str, float], waypoints: list[dict[str, float]]
+    ) -> Any:
+        if waypoints:
+            return self._ros.compute_path_through_poses([*waypoints, final_goal])
+        return self._ros.compute_path(final_goal)
+
+    def _navigate_route(
+        self, final_goal: dict[str, float], waypoints: list[dict[str, float]]
+    ) -> Any:
+        if waypoints:
+            return self._ros.navigate_through_poses([*waypoints, final_goal])
+        return self._ros.navigate_to_pose(final_goal)
 
     def _validate_goal_in_active_map(self, goal: dict[str, float]) -> None:
         with self._lock:
