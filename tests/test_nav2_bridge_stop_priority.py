@@ -540,3 +540,139 @@ def test_non_graceful_shutdown_depends_on_independent_pi_and_pico_watchdogs():
     assert "def failsafe_tick(self)" in motor
     assert "time.monotonic() - self.last_command_at" in motor
     assert "#define COMMAND_TIMEOUT_MS 350U" in firmware
+
+
+def test_unacknowledged_drive_is_replaced_with_stop_and_blocks_motion():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    drive_started = threading.Event()
+    release_drive = threading.Event()
+    stop_started = threading.Event()
+    release_stop = threading.Event()
+    observed = []
+
+    def post(payload):
+        observed.append(payload["type"])
+        if payload["type"] == "auto_drive":
+            drive_started.set()
+            assert release_drive.wait(2.0)
+            return False  # Pi may have driven but the ACK was lost
+        stop_started.set()
+        assert release_stop.wait(2.0)
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.12})
+        assert drive_started.wait(2.0)
+        # The latest queued drive must be discarded when first drive fails.
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.15})
+        release_drive.set()
+        assert stop_started.wait(2.0)
+        assert observed == ["auto_drive", "stop"]
+        assert bridge._stop_delivery_failed
+        assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.2})
+        release_stop.set()
+        deadline = time.monotonic() + 1.0
+        while bridge._stop_delivery_failed and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert not bridge._stop_delivery_failed
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.12})
+    finally:
+        release_drive.set()
+        release_stop.set()
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+
+def test_unacknowledged_drive_preserves_already_queued_emergency_stop():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    drive_started, release = threading.Event(), threading.Event()
+    sent = []
+
+    def post(payload):
+        sent.append((payload["type"], payload.get("reason")))
+        if payload["type"] == "auto_drive":
+            drive_started.set()
+            assert release.wait(2.0)
+            return False
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.13})
+        assert drive_started.wait(2.0)
+        assert bridge._queue_command({"type": "emergency_stop", "reason": "operator"})
+        release.set()
+        deadline = time.monotonic() + 2.0
+        while len(sent) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert sent[:2] == [("auto_drive", None), ("emergency_stop", "operator")]
+    finally:
+        release.set()
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+
+def test_failed_drive_during_shutdown_preserves_final_stop():
+    cls = _bridge_class("_queue_command", "_command_worker", "destroy_node")
+    bridge = _fake(cls)
+    bridge.request_timeout_sec = 0.4
+    entered, release = threading.Event(), threading.Event()
+    received = []
+
+    def post(payload):
+        received.append((payload["type"], payload.get("reason")))
+        if payload["type"] == "auto_drive":
+            entered.set()
+            assert release.wait(2.0)
+            return False
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    bridge._command_worker_thread = worker
+    worker.start()
+    result = {}
+    shutdown = None
+    try:
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.15})
+        assert entered.wait(2.0)
+        shutdown = threading.Thread(
+            target=lambda: result.setdefault("value", bridge.destroy_node()),
+            daemon=True,
+        )
+        shutdown.start()
+        deadline = time.monotonic() + 1.0
+        while not bridge._worker_shutdown and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert bridge._worker_shutdown
+        release.set()
+        shutdown.join(timeout=3.0)
+        assert not shutdown.is_alive()
+        assert result["value"] == "destroyed"
+        assert received == [
+            ("auto_drive", None), ("stop", "nav2_command_bridge_shutdown"),
+        ]
+    finally:
+        release.set()
+        with bridge._command_condition:
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        if shutdown is not None:
+            shutdown.join(timeout=2.0)
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()

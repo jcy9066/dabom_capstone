@@ -379,7 +379,26 @@ class Nav2CommandBridge(Node):
                     if shutdown_stop and attempt + 1 < max_attempts:
                         time.sleep(self.SHUTDOWN_STOP_RETRY_SEC)
             finally:
-                if is_stop:
+                if not is_stop and payload.get("type") == "auto_drive" and not stop_confirmed:
+                    # A timed-out/negative Pi ACK does not prove that the
+                    # wheels stayed still. The Pi may have executed the drive
+                    # and lost its ACK. Discard queued drives, latch motion,
+                    # and serialize a STOP behind the in-flight request.
+                    with self._command_condition:
+                        self._stop_delivery_failed = True
+                        pending_is_stop = (
+                            self._pending_command is not None
+                            and self._pending_command.get("type") in ("stop", "emergency_stop")
+                        )
+                        if not self._worker_shutdown and not pending_is_stop:
+                            self._pending_command = {
+                                "type": "stop",
+                                "reason": "nav2_drive_ack_unconfirmed",
+                                "source": "nav2_command_bridge",
+                                "dry_run": not self.motor_output_enabled,
+                            }
+                        self._command_condition.notify_all()
+                elif is_stop:
                     with self._command_condition:
                         self._stop_delivery_failed = not stop_confirmed
                         self._stop_command_in_flight = False
