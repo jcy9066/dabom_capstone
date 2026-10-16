@@ -50,6 +50,7 @@ def test_planner_config_has_two_separately_parameterized_safe_smac_candidates():
     assert chosen["plugin"] == "patrol_navigation_controller::TimeScoredLatticePlanner"
     assert chosen["candidate_names"] == ["QuickMotion", "StableTurns"]
     assert chosen["max_total_planning_time"] == pytest.approx(5.0)
+    assert chosen["wheel_track_m"] > 0
     assert chosen["reverse_fraction"] == pytest.approx(0.30)
     assert chosen["switch_stop_sec"] == pytest.approx(0.50)
     for name in chosen["candidate_names"]:
@@ -69,6 +70,7 @@ def test_lattice_asset_and_measured_limits_reach_both_candidates():
     launch = (NAV / "launch/navigation.launch.py").read_text()
     assert '"GridBased.max_wheel_mps": max_wheel_mps' in launch
     assert '"GridBased.max_angular_rps": max_angular_rps' in launch
+    assert '"GridBased.wheel_track_m": wheel_track_m' in launch
     assert '"GridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(' in launch
     assert '"GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(' in launch
     assert '"lattice_diff32.json"' in launch
@@ -100,6 +102,7 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "linear_accel_mps2" in pure
     assert "angular_accel_rps2" in pure
     assert "linear_jerk_mps3" in pure
+    assert "limits.wheel_track_m" in pure
     assert "direction_switch_sec" in pure
     assert "limits.reverse_mps" in pure
 
