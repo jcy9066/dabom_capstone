@@ -343,12 +343,27 @@ void SegmentedRPPController::checkRotationCollision(
   if (!costmap_ || !costmap_->isCurrent() || !collision_) {
     throw std::runtime_error("Cannot certify rotation on a stale or missing costmap");
   }
+  // The input can be in map or odom; costmap cells are always addressed in
+  // the local costmap's global frame. Checking untransformed XY/Yaw against
+  // an odom grid would certify the wrong physical patch of ground.
+  const auto local_pose = inControllerFrame(pose, costmap_->getGlobalFrameID());
+  if (!std::isfinite(local_pose.pose.position.x) ||
+    !std::isfinite(local_pose.pose.position.y) ||
+    !validUnitQuaternion(
+      local_pose.pose.orientation.x, local_pose.pose.orientation.y,
+      local_pose.pose.orientation.z, local_pose.pose.orientation.w))
+  {
+    throw std::runtime_error("Cannot certify rotation with invalid transformed pose");
+  }
   auto * costmap = costmap_->getCostmap();
   if (!costmap) {
     throw std::runtime_error("Cannot certify rotation without a costmap");
   }
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
-  const double heading = yaw(pose);
+  if (!costmap_->isCurrent()) {
+    throw std::runtime_error("Local costmap became stale during pivot check");
+  }
+  const double heading = yaw(local_pose);
   const size_t steps = std::max<size_t>(
     1, static_cast<size_t>(std::ceil(std::abs(angle_error) / 0.05)));
   const auto footprint = costmap_->getRobotFootprint();
@@ -358,7 +373,7 @@ void SegmentedRPPController::checkRotationCollision(
   for (size_t i = 0; i <= steps; ++i) {
     const double test_heading = heading + angle_error * static_cast<double>(i) / steps;
     const double cost = collision_->footprintCostAtPose(
-      pose.pose.position.x, pose.pose.position.y, test_heading, footprint);
+      local_pose.pose.position.x, local_pose.pose.position.y, test_heading, footprint);
     // Identical conservative threshold to the global candidate scorer:
     // 253 is inscribed/inflated, 254 lethal, 255 unknown.
     // No unknown rotation is safe without current positive clearance.

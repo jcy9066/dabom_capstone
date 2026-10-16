@@ -221,3 +221,21 @@ def test_ros_free_local_motion_horizon_cpp(tmp_path):
         [str(binary)], capture_output=True, text=True, check=False, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_pivot_collision_samples_are_in_local_costmap_frame():
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    rotation = source.split(
+        "void SegmentedRPPController::checkRotationCollision(", 1
+    )[1].split(
+        "geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands(", 1
+    )[0]
+    assert "inControllerFrame(pose, costmap_->getGlobalFrameID())" in rotation
+    assert "const double heading = yaw(local_pose);" in rotation
+    assert "local_pose.pose.position.x, local_pose.pose.position.y" in rotation
+    assert "pose.pose.position.x, pose.pose.position.y, test_heading" not in rotation
+    assert "Local costmap became stale during pivot check" in rotation
+    assert rotation.index("auto local_pose") < rotation.index("costmap->getMutex()")
+    assert rotation.index("costmap->getMutex()") < rotation.index("costmap_->isCurrent()) {")
+    assert "validUnitQuaternion(" in rotation
+

@@ -149,3 +149,29 @@ def test_jerk_limiter_reset_and_validation():
         limiter.step(float("nan"), 0.0, 2.1)
     with pytest.raises(ValueError):
         WheelJerkLimiter(max_accel=0.0, max_jerk=2.0)
+
+
+def test_jerk_limiter_direction_reversal_must_cross_zero_boundary():
+    limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+    previous = 0.0
+    for tick in range(100):
+        previous = limiter.step(1.0, 1.0, tick * 0.1)[0]
+    assert previous > 0.0
+    observed_zero = False
+    for tick in range(100, 250):
+        velocity = limiter.step(-1.0, -1.0, tick * 0.1)[0]
+        if velocity == 0.0:
+            observed_zero = True
+        if velocity < 0.0:
+            assert observed_zero
+            break
+    else:
+        pytest.fail("Reverse motion never became available")
+
+
+def test_jerk_limiter_rejects_invalid_timestamps_and_timestep_config():
+    limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+    with pytest.raises(ValueError):
+        limiter.step(0.0, 0.0, float("inf"))
+    with pytest.raises(ValueError):
+        WheelJerkLimiter(max_accel=1.0, max_jerk=2.0, max_dt=0.0)
