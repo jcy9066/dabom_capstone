@@ -40,8 +40,9 @@ public:
 private:
   pluginlib::ClassLoader<nav2_core::GlobalPlanner> loader_;
   std::vector<std::string> candidate_ids_;
-  std::vector<nav2_core::GlobalPlanner::Ptr> candidates_;
   rclcpp_lifecycle::LifecycleNode::WeakPtr parent_;
+  std::shared_ptr<tf2_ros::Buffer> tf_;
+  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_;
   MotionTimeLimits time_limits_;
   double max_total_planning_sec_ = 5.0;
   std::string name_;
