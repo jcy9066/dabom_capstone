@@ -28,6 +28,8 @@ void TimeScoredLatticePlanner::configure(
     throw std::runtime_error("TimeScoredLatticePlanner requires a lifecycle node");
   }
   parent_ = parent;
+  tf_ = std::move(tf);
+  costmap_ = std::move(costmap_ros);
   name_ = std::move(name);
   using nav2_util::declare_parameter_if_not_declared;
   declare_parameter_if_not_declared(
@@ -73,45 +75,28 @@ void TimeScoredLatticePlanner::configure(
     throw std::runtime_error("Invalid time-scored lattice planning limits");
   }
 
-  candidates_.clear();
-  candidates_.reserve(candidate_ids_.size());
-  try {
-    for (const auto & candidate_id : candidate_ids_) {
-      // Each Smac instance has its own penalty parameters and A* state.
-      // Both use the same approved 32-heading motion primitives and live
-      // collision costmap; no synthetic or unchecked paths are introduced.
-      auto instance = loader_.createSharedInstance(
-        "nav2_smac_planner/SmacPlannerLattice");
-      instance->configure(
-        parent, name_ + "." + candidate_id, tf, costmap_ros);
-      candidates_.push_back(std::move(instance));
-    }
-  } catch (...) {
-    cleanup();
-    throw;
-  }
+  // Nav2 Humble NodeLattice shares a static motion table and reuses its
+  // search penalties if the same lattice path is initialized again.
+  // Therefore configuring long-lived Smac candidate instances here would
+  // silently apply one candidate's penalty policy to the other. Instead,
+  // create each candidate's A* state at the time of each planning request,
+  // using separate lattice file paths (identical approved primitives).
 }
 
 void TimeScoredLatticePlanner::activate()
 {
-  for (auto & planner : candidates_) {
-    planner->activate();
-  }
+  // Candidate planner instances are created and activated per request.
 }
 
 void TimeScoredLatticePlanner::deactivate()
 {
-  for (auto & planner : candidates_) {
-    planner->deactivate();
-  }
+  // Each request deactivates its candidates before returning.
 }
 
 void TimeScoredLatticePlanner::cleanup()
 {
-  for (auto & planner : candidates_) {
-    planner->cleanup();
-  }
-  candidates_.clear();
+  tf_.reset();
+  costmap_.reset();
 }
 
 nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
@@ -125,44 +110,75 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   unsigned int best_switches = std::numeric_limits<unsigned int>::max();
   std::string best_candidate;
 
-  for (size_t index = 0; index < candidates_.size(); ++index) {
+  for (size_t index = 0; index < candidate_ids_.size(); ++index) {
     const auto elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started).count();
     if (elapsed >= max_total_planning_sec_) {
       break;
     }
-
+    // Construct and configure an isolated search per candidate. Humble's
+    // static NodeLattice::motion_table will only reload penalty parameters
+    // if its lattice_filepath changes, so the two config paths must differ.
+    nav2_core::GlobalPlanner::Ptr candidate;
+    bool configured = false;
+    bool activated = false;
     try {
-      auto path = candidates_[index]->createPlan(start, goal);
-      if (path.poses.size() < 2) {
-        continue;
-      }
-      std::vector<MotionPose> coordinates;
-      coordinates.reserve(path.poses.size());
-      for (const auto & pose : path.poses) {
-        coordinates.push_back({
-          pose.pose.position.x, pose.pose.position.y,
-          tf2::getYaw(pose.pose.orientation)
-        });
-      }
-      const auto score = estimatePathTime(coordinates, time_limits_);
-      if (!score.valid) {
-        continue;
-      }
-      if (score.seconds < best_seconds - 1e-6 ||
-        (std::abs(score.seconds - best_seconds) <= 1e-6 &&
-        score.switches < best_switches))
-      {
-        best_seconds = score.seconds;
-        best_switches = score.switches;
-        best_candidate = candidate_ids_[index];
-        best = std::move(path);
+      candidate = loader_.createSharedInstance(
+        "nav2_smac_planner/SmacPlannerLattice");
+      candidate->configure(
+        parent_, name_ + "." + candidate_ids_[index], tf_, costmap_);
+      configured = true;
+      candidate->activate();
+      activated = true;
+      auto path = candidate->createPlan(start, goal);
+      if (path.poses.size() >= 2) {
+        std::vector<MotionPose> coordinates;
+        coordinates.reserve(path.poses.size());
+        for (const auto & pose : path.poses) {
+          coordinates.push_back({
+            pose.pose.position.x, pose.pose.position.y,
+            tf2::getYaw(pose.pose.orientation)
+          });
+        }
+        const auto score = estimatePathTime(coordinates, time_limits_);
+        if (score.valid &&
+          (score.seconds < best_seconds - 1e-6 ||
+          (std::abs(score.seconds - best_seconds) <= 1e-6 &&
+          score.switches < best_switches)))
+        {
+          best_seconds = score.seconds;
+          best_switches = score.switches;
+          best_candidate = candidate_ids_[index];
+          best = std::move(path);
+        }
       }
     } catch (const std::exception & error) {
       if (node) {
         RCLCPP_WARN(
           node->get_logger(), "%s candidate %s could not plan: %s",
           name_.c_str(), candidate_ids_[index].c_str(), error.what());
+      }
+    }
+    if (activated) {
+      try {
+        candidate->deactivate();
+      } catch (const std::exception & error) {
+        if (node) {
+          RCLCPP_ERROR(
+            node->get_logger(), "%s candidate deactivate failed: %s",
+            name_.c_str(), error.what());
+        }
+      }
+    }
+    if (configured) {
+      try {
+        candidate->cleanup();
+      } catch (const std::exception & error) {
+        if (node) {
+          RCLCPP_ERROR(
+            node->get_logger(), "%s candidate cleanup failed: %s",
+            name_.c_str(), error.what());
+        }
       }
     }
   }
@@ -180,7 +196,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
       node->get_logger(),
       "%s selected %s predicted=%.2fs handoffs=%u candidates=%zu",
       name_.c_str(), best_candidate.c_str(), best_seconds,
-      best_switches, candidates_.size());
+      best_switches, candidate_ids_.size());
   }
   return best;
 }
