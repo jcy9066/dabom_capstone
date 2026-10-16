@@ -20,6 +20,7 @@ find_package(nav2_util REQUIRED)
 
 add_library(segmented_rpp_controller SHARED
   src/segmented_rpp_controller.cpp
+  src/time_scored_lattice_planner.cpp
 )
 target_compile_features(segmented_rpp_controller PUBLIC cxx_std_17)
 target_include_directories(segmented_rpp_controller PUBLIC
