@@ -6,6 +6,7 @@
 
 #include "patrol_navigation_controller/path_time_estimator.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
+#include "patrol_navigation_controller/alternate_goal_candidates.hpp"
 
 using patrol_navigation_controller::MotionPose;
 using patrol_navigation_controller::MotionTimeLimits;
@@ -126,5 +127,32 @@ int main()
   assert(!validateSweptPath(
     {{0, 0, 0}},
     [](const MotionPose &) {return true;}));
+  // Candidate endpoints are absolute <= 0.50m from the original Goal,
+  // deterministic, and keep the requested final Yaw unchanged.
+  const patrol_navigation_controller::MotionPose goal{1.0, 2.0, 1.2};
+  const auto nearby = patrol_navigation_controller::nearbyGoalCandidates(goal);
+  assert(nearby.size() > 25);
+  double previous_distance = 0.0;
+  for (const auto & candidate : nearby) {
+    const double distance = std::hypot(
+      candidate.x - goal.x, candidate.y - goal.y);
+    assert(distance <= 0.48 + 1e-8);
+    assert(distance > 0.0);
+    assert(distance + 1e-10 >= previous_distance);
+    assert(candidate.yaw == goal.yaw);
+    previous_distance = distance;
+  }
+  assert(std::abs(std::hypot(nearby.front().x - 1.0,
+    nearby.front().y - 2.0) - 0.05) < 1e-8);
+  const auto repeated = patrol_navigation_controller::nearbyGoalCandidates(goal);
+  assert(repeated.size() == nearby.size());
+  for (size_t i = 0; i < nearby.size(); ++i) {
+    assert(nearby[i].x == repeated[i].x &&
+      nearby[i].y == repeated[i].y);
+  }
+  assert(patrol_navigation_controller::nearbyGoalCandidates(
+    goal, 0.51).empty());
+  assert(patrol_navigation_controller::nearbyGoalCandidates(
+    {1.0, 2.0, nan}).empty());
   return 0;
 }
