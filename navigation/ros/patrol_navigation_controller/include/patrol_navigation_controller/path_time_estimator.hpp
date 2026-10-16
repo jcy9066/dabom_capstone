@@ -27,6 +27,7 @@ struct MotionTimeLimits
   // A real observation may permit faster reverse, but cannot weaken safety.
   double reverse_mps = 0.212 * 0.30;
   double angular_rps = 1.05;
+  double wheel_track_m = 0.21;  // overridden from WHEEL_TRACK_M at launch
   double linear_accel_mps2 = 0.50;
   double angular_accel_rps2 = 1.0;
   double linear_jerk_mps3 = 2.0;
@@ -63,7 +64,7 @@ inline MotionTimeScore estimatePathTime(
   MotionTimeScore result;
   const double values[] = {
     limits.forward_mps, limits.reverse_mps, limits.angular_rps,
-    limits.linear_accel_mps2, limits.angular_accel_rps2, limits.linear_jerk_mps3
+    limits.wheel_track_m, limits.linear_accel_mps2, limits.angular_accel_rps2, limits.linear_jerk_mps3
   };
   for (const auto value : values) {
     if (!std::isfinite(value) || value <= 0.0) {
@@ -104,8 +105,14 @@ inline MotionTimeScore estimatePathTime(
       if (driving) {
         const double speed = current == kReverse ?
           limits.reverse_mps : limits.forward_mps;
+        // Differential drive: vmax at either wheel is
+        // |v| + (wheel_track / 2) * |omega|. A curve with yaw/distance
+        // curvature must reduce the permitted linear speed accordingly.
+        const double curve_factor = 1.0 +
+          (run_rotation * limits.wheel_track_m) / (2.0 * std::max(1e-6, run_distance));
+        const double curve_speed = speed / curve_factor;
         const double translational = trapezoidalTime(
-          run_distance, speed, limits.linear_accel_mps2);
+          run_distance, curve_speed, limits.linear_accel_mps2);
         const double rotational = trapezoidalTime(
           run_rotation, limits.angular_rps, limits.angular_accel_rps2);
         // Translation and yaw on a curved path can occur together.
