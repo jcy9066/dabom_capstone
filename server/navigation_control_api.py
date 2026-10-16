@@ -2283,6 +2283,9 @@ class NavigationControlApi:
             self._robot_mode != "manual"
             or self._state.get("navigation_mode") != "DRIVING"
             or self._state.get("emergency_stop")
+            # A manual arrival at the final XY must not skip ordered
+            # intermediate waypoints that are still pending.
+            or bool(self._state.get("waypoints"))
             or not isinstance(goal, dict)
             or not isinstance(payload, dict)
         ):
