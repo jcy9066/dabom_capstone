@@ -212,6 +212,7 @@ def generate_launch_description():
             {
                 "GridBased.max_wheel_mps": max_wheel_mps,
                 "GridBased.max_angular_rps": max_angular_rps,
+                "GridBased.wheel_track_m": wheel_track_m,
                 "GridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(
                     [pkg_share, "config", "lattice_diff32.json"]
                 ),
