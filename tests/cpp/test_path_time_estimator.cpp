@@ -5,10 +5,13 @@
 #include <vector>
 
 #include "patrol_navigation_controller/path_time_estimator.hpp"
+#include "patrol_navigation_controller/path_sweep.hpp"
 
 using patrol_navigation_controller::MotionPose;
 using patrol_navigation_controller::MotionTimeLimits;
 using patrol_navigation_controller::estimatePathTime;
+using patrol_navigation_controller::PathSweepLimits;
+using patrol_navigation_controller::validateSweptPath;
 
 int main()
 {
@@ -82,5 +85,33 @@ int main()
   broken.forward_mps = 0.0;
   assert(!estimatePathTime(short_forward, broken).valid);
   assert(!estimatePathTime({{0, 0, 0}, {0, 0, 0}}, limits).valid);
+  // 0.10m edge with a blocked midpoint but clear endpoints cannot pass.
+  const std::vector<MotionPose> corridor{{0.0, 0.0, 0.0}, {0.10, 0.0, 0.0}};
+  size_t samples = 0;
+  assert(validateSweptPath(corridor, [&](const MotionPose &) {
+    ++samples;
+    return true;
+  }));
+  assert(samples == 5);
+  assert(!validateSweptPath(corridor, [](const MotionPose & pose) {
+    return std::abs(pose.x - 0.05) > 0.001;
+  }));
+
+  // Rotate in-place: orientation sweeps through intermediate footprint poses.
+  const std::vector<MotionPose> rotation{{0, 0, 0}, {0, 0, 0.4}};
+  assert(!validateSweptPath(rotation, [](const MotionPose & pose) {
+    return std::abs(pose.yaw - 0.2) > 0.001;
+  }));
+  // A path with unsampled length, non-finite pose, or too many samples
+  // must fail closed rather than silently permit unknown terrain.
+  assert(!validateSweptPath(
+    corridor, [](const MotionPose &) {return true;},
+    PathSweepLimits{0.025, 0.05, 3}));
+  assert(!validateSweptPath(
+    {{0, 0, 0}, {nan, 0, 0}},
+    [](const MotionPose &) {return true;}));
+  assert(!validateSweptPath(
+    {{0, 0, 0}},
+    [](const MotionPose &) {return true;}));
   return 0;
 }
