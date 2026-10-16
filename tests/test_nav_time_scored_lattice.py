@@ -162,6 +162,39 @@ def test_selected_route_checks_every_interpolated_chassis_pose():
     assert "std::abs(pose.yaw - 0.2)" in cpp
 
 
+def test_blocked_goal_alternate_is_nearest_and_requires_full_footprint():
+    cpp = SOURCE.read_text()
+    header = (
+        PKG / "include/patrol_navigation_controller/alternate_goal_candidates.hpp"
+    ).read_text()
+    assert "endpointFootprintClear(" in cpp
+    assert "const bool original_goal_clear = endpointFootprintClear(" in cpp
+    assert "if (!original_goal_clear && best.poses.empty())" in cpp
+    assert "nearbyGoalCandidates(original_goal)" in cpp
+    assert "if (attempted >= 5" in cpp
+    assert "if (!endpointFootprintClear(alternate, costmap_))" in cpp
+    assert "candidate_goal.pose.position.x = alternate.x;" in cpp
+    assert "candidate_goal.pose.position.y = alternate.y;" in cpp
+    assert "distance_to_original <= 0.48" in cpp
+    assert "yaw_error <= 0.20" in cpp
+    assert "validAgainstCurrentCostmap(path, costmap_)" in cpp
+    assert "best_candidate = \"NearestSafeGoal\"" in cpp
+    assert "const double radius_m = 0.48" in header
+    assert "radius_m > 0.50" in header
+    assert "goal.x + dx, goal.y + dy, goal.yaw" in header
+    assert "std::sort(" in header
+
+
+def test_each_time_ranked_candidate_is_collision_checked_before_selection():
+    code = SOURCE.read_text()
+    assert "score.valid && validAgainstCurrentCostmap(path, costmap_)" in code
+    assert "if (collision_safe &&" in code
+    assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
+    # A safer runner-up must be eligible if the faster original candidate is
+    # invalid, rather than discarding every plan at final validation.
+    assert code.index("const bool collision_safe") < code.index("best = std::move(path)")
+
+
 def test_pure_cpp_cost_model_execution(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
     if compiler is None:
