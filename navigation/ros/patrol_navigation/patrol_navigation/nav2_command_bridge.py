@@ -213,6 +213,9 @@ class Nav2CommandBridge(Node):
         self._command_condition = threading.Condition()
         self._pending_command: dict | None = None
         self._worker_shutdown = False
+        # A physical STOP may supersede a pending drive, but no later drive
+        # may erase a queued or currently transmitting STOP command.
+        self._stop_command_in_flight = False
 
         self._command_worker_thread = threading.Thread(
             target=self._command_worker,
@@ -273,8 +276,15 @@ class Nav2CommandBridge(Node):
             if self._worker_shutdown:
                 return False
 
-            # 아직 전송되지 않은 이전 명령은 폐기하고
-            # 가장 최근 명령만 서버에 전송한다.
+            is_stop = command.get("type") in ("stop", "emergency_stop")
+            pending_is_stop = (
+                self._pending_command is not None
+                and self._pending_command.get("type") in ("stop", "emergency_stop")
+            )
+            # Pending STOP is a safety barrier: do not let an immediately
+            # arriving Twist replace it while the HTTP worker is busy.
+            if not is_stop and (pending_is_stop or self._stop_command_in_flight):
+                return False
             self._pending_command = command
             self._command_condition.notify()
 
@@ -299,6 +309,12 @@ class Nav2CommandBridge(Node):
 
                 payload = self._pending_command
                 self._pending_command = None
+                is_stop = (
+                    payload is not None
+                    and payload.get("type") in ("stop", "emergency_stop")
+                )
+                if is_stop:
+                    self._stop_command_in_flight = True
 
             if payload is not None:
                 try:
@@ -306,13 +322,15 @@ class Nav2CommandBridge(Node):
                 except Exception as exc:
                     # An unexpected serialization, HTTP or logging failure
                     # must not permanently kill the ONLY STOP delivery worker.
-                    # Preserve the worker for the next STOP; server/Pi safety
-                    # timeouts remain independently responsible for shutdown.
                     self.send_error_count += 1
                     try:
                         self._log_send_error(f"command worker failure: {exc}")
                     except Exception:
                         pass
+                finally:
+                    if is_stop:
+                        with self._command_condition:
+                            self._stop_command_in_flight = False
 
     def _post_command(
         self,
@@ -766,28 +784,31 @@ class Nav2CommandBridge(Node):
         )
 
     def destroy_node(self):
-        if self.motor_output_enabled:
-            # 종료 시에는 대기열을 거치지 않고 즉시 정지 요청한다.
-            self._post_command(
-                {
-                    "type": "stop",
-                    "reason": (
-                        "nav2_command_bridge_shutdown"
-                    ),
-                }
-            )
-
+        # Quiesce the worker before the final STOP. Otherwise an in-flight
+        # auto_drive could arrive at the server AFTER the synchronous STOP,
+        # undoing shutdown ordering. The server/Pi watchdog remains the
+        # independent fail-safe if a network worker never returns.
         with self._command_condition:
             self._pending_command = None
             self._worker_shutdown = True
             self._command_condition.notify_all()
 
         self._command_worker_thread.join(
-            timeout=(
-                self.request_timeout_sec
-                + 0.5
-            )
+            timeout=self.request_timeout_sec + 0.5
         )
+        if self._command_worker_thread.is_alive():
+            self.get_logger().error(
+                "Nav2 command worker still active during shutdown; "
+                "remote STOP order cannot be confirmed"
+            )
+
+        if self.motor_output_enabled:
+            self._post_command(
+                {
+                    "type": "stop",
+                    "reason": "nav2_command_bridge_shutdown",
+                }
+            )
 
         return super().destroy_node()
 
