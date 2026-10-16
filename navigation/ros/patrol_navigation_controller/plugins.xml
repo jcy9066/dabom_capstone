@@ -8,4 +8,10 @@
       The outer Nav2 RotationShimController retains final-goal yaw handling.
     </description>
   </class>
+  <class
+    name="patrol_navigation_controller::TimeScoredLatticePlanner"
+    type="patrol_navigation_controller::TimeScoredLatticePlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>Compare costmap-valid lattice paths by predicted traversal time.</description>
+  </class>
 </library>
