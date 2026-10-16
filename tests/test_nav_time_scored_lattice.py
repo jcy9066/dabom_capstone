@@ -179,6 +179,9 @@ def test_blocked_goal_alternate_is_nearest_and_requires_full_footprint():
     assert "yaw_error <= 0.20" in cpp
     assert "validAgainstCurrentCostmap(path, costmap_)" in cpp
     assert "best_candidate = \"NearestSafeGoal\"" in cpp
+    assert "closest_endpoint_m = distance_to_original;" in cpp
+    assert "score.seconds < best_seconds" in cpp
+    assert "if (attempted >= 5" in cpp
     assert "const double radius_m = 0.48" in header
     assert "radius_m > 0.50" in header
     assert "goal.x + dx, goal.y + dy, goal.yaw" in header
