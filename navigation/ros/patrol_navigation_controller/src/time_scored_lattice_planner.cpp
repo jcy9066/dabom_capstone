@@ -49,12 +49,16 @@ bool validAgainstCurrentCostmap(
       return false;
     }
     const double cost = checker.footprintCostAtPose(x, y, yaw, footprint);
-    // Lethal footprint, unknown footprint, or off-grid map coordinates:
-    // uncertain traversability cannot authorize new autonomous motion.
+    // Only current sensor/costmap evidence can justify an unknown cell.
+    // Known lethal obstacles and off-grid geometry always reject the path.
+    // Pi/local-costmap safety checks still gate actual unknown traversal.
     if (!std::isfinite(cost) || cost < 0.0 ||
-      cost >= nav2_costmap_2d::LETHAL_OBSTACLE)
+      cost == nav2_costmap_2d::LETHAL_OBSTACLE)
     {
       return false;
+    }
+    if (cost == nav2_costmap_2d::NO_INFORMATION) {
+      continue;
     }
   }
   return true;
