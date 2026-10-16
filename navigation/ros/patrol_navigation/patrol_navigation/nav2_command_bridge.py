@@ -216,6 +216,9 @@ class Nav2CommandBridge(Node):
         # A physical STOP may supersede a pending drive, but no later drive
         # may erase a queued or currently transmitting STOP command.
         self._stop_command_in_flight = False
+        # A failed physical STOP must be explicitly retried/acknowledged
+        # before accepting any subsequent auto_drive.
+        self._stop_delivery_failed = False
 
         self._command_worker_thread = threading.Thread(
             target=self._command_worker,
@@ -283,7 +286,10 @@ class Nav2CommandBridge(Node):
             )
             # Pending STOP is a safety barrier: do not let an immediately
             # arriving Twist replace it while the HTTP worker is busy.
-            if not is_stop and (pending_is_stop or self._stop_command_in_flight):
+            if not is_stop and (
+                pending_is_stop or self._stop_command_in_flight
+                or self._stop_delivery_failed
+            ):
                 return False
             self._pending_command = command
             self._command_condition.notify()
@@ -317,8 +323,10 @@ class Nav2CommandBridge(Node):
                     self._stop_command_in_flight = True
 
             if payload is not None:
+                stop_confirmed = False
                 try:
-                    self._post_command(payload)
+                    sent = self._post_command(payload)
+                    stop_confirmed = sent is True
                 except Exception as exc:
                     # An unexpected serialization, HTTP or logging failure
                     # must not permanently kill the ONLY STOP delivery worker.
@@ -330,6 +338,7 @@ class Nav2CommandBridge(Node):
                 finally:
                     if is_stop:
                         with self._command_condition:
+                            self._stop_delivery_failed = not stop_confirmed
                             self._stop_command_in_flight = False
 
     def _post_command(
@@ -373,6 +382,11 @@ class Nav2CommandBridge(Node):
                 if (
                     not isinstance(response_data, dict)
                     or response_data.get("ok") is not True
+                    or (
+                        payload.get("type") in ("stop", "emergency_stop")
+                        and self.motor_output_enabled
+                        and response_data.get("delivered") is not True
+                    )
                 ):
                     raise RuntimeError(
                         "server rejected command: "
@@ -784,12 +798,17 @@ class Nav2CommandBridge(Node):
         )
 
     def destroy_node(self):
-        # Quiesce the worker before the final STOP. Otherwise an in-flight
-        # auto_drive could arrive at the server AFTER the synchronous STOP,
-        # undoing shutdown ordering. The server/Pi watchdog remains the
-        # independent fail-safe if a network worker never returns.
+        # Serialize the final STOP behind any in-flight drive on the SAME
+        # worker. A synchronous STOP from this thread could be delivered
+        # before a blocked drive request and then undone by that old drive.
+        # If the join deadline expires, the daemon worker will still send
+        # this queued STOP after its bounded HTTP request finishes; server
+        # and Pi watchdogs independently handle network outages.
         with self._command_condition:
-            self._pending_command = None
+            self._pending_command = (
+                {"type": "stop", "reason": "nav2_command_bridge_shutdown"}
+                if self.motor_output_enabled else None
+            )
             self._worker_shutdown = True
             self._command_condition.notify_all()
 
@@ -799,15 +818,11 @@ class Nav2CommandBridge(Node):
         if self._command_worker_thread.is_alive():
             self.get_logger().error(
                 "Nav2 command worker still active during shutdown; "
-                "remote STOP order cannot be confirmed"
+                "remote STOP delivery remains unconfirmed"
             )
-
-        if self.motor_output_enabled:
-            self._post_command(
-                {
-                    "type": "stop",
-                    "reason": "nav2_command_bridge_shutdown",
-                }
+        elif self._stop_delivery_failed:
+            self.get_logger().error(
+                "Nav2 shutdown STOP was not acknowledged by the server"
             )
 
         return super().destroy_node()

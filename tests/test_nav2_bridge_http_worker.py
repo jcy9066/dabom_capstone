@@ -52,6 +52,7 @@ def _fake_bridge(cls):
     bridge.command_url = "http://127.0.0.1:21063/api/robots/test/command"
     bridge.control_token = "test-token"
     bridge.request_timeout_sec = 0.05
+    bridge.motor_output_enabled = False
     bridge.sent_count = 0
     bridge.send_error_count = 0
     bridge.last_server_log_at = 0.0
@@ -152,3 +153,29 @@ def test_bridge_rejects_nonfinite_runtime_limits_before_worker_start():
     assert code.index("not math.isfinite(request_timeout_sec)") < code.index(
         "self._command_worker_thread.start()"
     )
+
+
+def test_actual_motor_stop_requires_explicit_delivery_ack():
+    cls = _bridge_methods(
+        "_post_command",
+        responder=lambda *_args, **_kw: _Response(
+            b'{"ok":true,"delivered":false}'
+        ),
+    )
+    bridge, _ = _fake_bridge(cls)
+    bridge.motor_output_enabled = True
+    assert bridge._post_command({"type": "stop", "reason": "test"}) is False
+    assert bridge.send_error_count == 1
+    assert bridge.sent_count == 0
+
+
+def test_dry_run_stop_does_not_claim_physical_delivery():
+    cls = _bridge_methods(
+        "_post_command",
+        responder=lambda *_args, **_kw: _Response(
+            b'{"ok":true,"delivered":false,"dry_run":true}'
+        ),
+    )
+    bridge, _ = _fake_bridge(cls)
+    bridge.motor_output_enabled = False
+    assert bridge._post_command({"type": "stop", "reason": "test"}) is True

@@ -40,6 +40,7 @@ def _fake(cls):
     instance._command_condition = threading.Condition()
     instance._pending_command = None
     instance._stop_command_in_flight = False
+    instance._stop_delivery_failed = False
     instance._worker_shutdown = False
     instance.server_request_enabled = True
     instance.motor_output_enabled = True
@@ -182,3 +183,81 @@ def test_destroy_orders_final_stop_after_worker_quiesces():
         if shutdown_thread is not None:
             shutdown_thread.join(timeout=2)
         worker.join(timeout=2)
+
+
+def test_failed_stop_latches_motion_until_acknowledged_retry():
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    finished = threading.Event()
+    attempts = []
+
+    def post(payload):
+        attempts.append(payload["type"])
+        if len(attempts) == 1:
+            return False  # HTTP STOP not delivered/acknowledged
+        finished.set()
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "stop", "reason": "test_failure"})
+        limit = time.monotonic() + 2.0
+        while not bridge._stop_delivery_failed and time.monotonic() < limit:
+            time.sleep(0.005)
+        assert bridge._stop_delivery_failed
+        assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+        assert bridge._queue_command({"type": "stop", "reason": "retry"})
+        assert finished.wait(2.0)
+        limit = time.monotonic() + 2.0
+        while bridge._stop_delivery_failed and time.monotonic() < limit:
+            time.sleep(0.005)
+        assert not bridge._stop_delivery_failed
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+    finally:
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+def test_shutdown_timeout_queues_stop_without_racing_inflight_drive():
+    cls = _bridge_class("_queue_command", "_command_worker", "destroy_node")
+    bridge = _fake(cls)
+    bridge.request_timeout_sec = 0.01
+    started, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    messages = []
+
+    def post(payload):
+        messages.append(payload["type"])
+        if payload["type"] == "auto_drive":
+            started.set()
+            assert release.wait(2.0)
+        else:
+            stopped.set()
+        return True
+
+    bridge._post_command = post
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    bridge._command_worker_thread = worker
+    worker.start()
+    try:
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.2})
+        assert started.wait(2.0)
+        # Join deliberately times out before releasing the in-flight drive.
+        assert bridge.destroy_node() == "destroyed"
+        assert not stopped.is_set()
+        release.set()
+        assert stopped.wait(2.0)
+        worker.join(timeout=2.0)
+        assert messages == ["auto_drive", "stop"]
+        assert not worker.is_alive()
+    finally:
+        release.set()
+        with bridge._command_condition:
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2.0)
