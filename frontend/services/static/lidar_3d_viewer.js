@@ -1444,30 +1444,27 @@ if (root && canvas) {
 
     function displayedGlobalPath(
         control = currentControlState,
-        state = currentVisualizationState,
+        _state = currentVisualizationState,
     ) {
-        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
-        const livePathStatus = String(state?.globalPathStatus || 'none');
-
-        // Show standalone ComputePathToPose results for debugging.
-        if (!control?.active_goal) {
-            return livePathStatus === 'fresh' && livePath.length >= 2
-                ? livePath
-                : [];
-        }
+        // The control API owns the Goal and its currently approved path.
+        // /plan and /global_path visualize independent ROS computations and
+        // do not carry an action ID: their delayed WS packets may describe
+        // the preceding Goal after cancel/replacement. Never let those
+        // unowned packets override the server's Goal-bound planned_path.
+        if (String(control?.navigation_mode || '').toUpperCase() !== 'DRIVING'
+            || !control?.active_goal) return [];
 
         const navState = String(control.navigation_state || '').toUpperCase();
-        if (navState === 'FAILED') return [];
-
-        if (!['NAVIGATING', 'RESUMING'].includes(navState)) {
-            return control.planned_path || [];
+        // A retained Goal may be retried after FAILED / EMERGENCY_STOPPED,
+        // but its old path must not look executable. REPLACING_GOAL retains
+        // the old Goal internally until Pi STOP has been confirmed.
+        if (!['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING'].includes(navState)) {
+            return [];
         }
-
-        if (livePathStatus === 'fresh') {
-            return livePath.length >= 2 ? livePath : [];
-        }
-        if (livePathStatus === 'stale') return [];
-        return control.planned_path || [];
+        const authorizedPath = control.planned_path;
+        return Array.isArray(authorizedPath) && authorizedPath.length >= 2
+            ? authorizedPath
+            : [];
     }
 
     function pathKey(path) {
@@ -1673,7 +1670,15 @@ if (root && canvas) {
         currentGoalKey = nextKey;
 
         clearGroup(goalRoot);
-        const active = createGoalMarker(currentControlState?.active_goal, COLORS.goal);
+        // During replacement the previous Goal is retained for recovery,
+        // not offered as the currently executable destination.
+        const replacing = String(
+            currentControlState?.navigation_state || ''
+        ).toUpperCase() === 'REPLACING_GOAL';
+        const active = createGoalMarker(
+            replacing ? null : currentControlState?.active_goal,
+            COLORS.goal,
+        );
         if (active) goalRoot.add(active);
         const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal);
         if (draft) goalRoot.add(draft);
@@ -1886,6 +1891,9 @@ if (root && canvas) {
             trajectoryRoot.visible = false;
         }
 
+        // Preserve the recorded trace for review after completion but stop
+        // appending stationary localization jitter after the Goal ends.
+        if (!movingNow) trajectorySessionActive = false;
         previousNavigationMode = mode;
         previousNavigationState = navState;
         scheduleControlOverflowLayout();

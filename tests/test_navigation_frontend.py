@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -447,6 +449,67 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("MANUAL 전환을 중단했습니다", request)
         self.assertIn("state.drivePending", request)
 
+
+    def test_goal_bound_global_path_and_terminal_visibility_contract(self):
+        dashboard = (
+            ROOT / "frontend/services/static/script.js"
+        ).read_text(encoding="utf-8")
+        viewer = self.viewer
+        displayed = viewer.split("    function displayedGlobalPath(", 1)[1].split(
+            "    function pathKey(", 1
+        )[0]
+        assert "control?.active_goal" in displayed
+        assert "control.planned_path" in displayed
+        assert "REPLACING_GOAL" in displayed
+        assert "'PATH_READY', 'READY', 'NAVIGATING', 'RESUMING'" in displayed
+        assert "return livePath" not in displayed
+        assert "navigationGlobalPathRunKey === null) return;" in dashboard
+        assert "if (navigationGlobalPathRunKey !== null" in dashboard
+        assert "if (!movingNow) trajectorySessionActive = false;" in viewer
+        assert "replacing ? null : currentControlState?.active_goal" in viewer
+
+    def test_goal_path_owner_decision_executes_with_node_when_available(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js not installed; source contract still checked")
+        viewer = self.viewer
+        function = (
+            "function displayedGlobalPath(" +
+            viewer.split("    function displayedGlobalPath(", 1)[1].split(
+                "    function pathKey(", 1
+            )[0]
+        )
+        javascript = (
+            "const currentControlState=null, currentVisualizationState=null;\n" +
+            function +
+            """
+            const old = [{x:0,y:0},{x:1,y:1}];
+            const newPath = [{x:0,y:0},{x:2,y:2}];
+            const live = {globalPath: old, globalPathStatus:'fresh'};
+            const base = {
+                navigation_mode:'DRIVING', active_goal:{x:2,y:2,yaw:0},
+                planned_path:newPath, navigation_state:'NAVIGATING',
+            };
+            function check(condition) { if (!condition) process.exit(1); }
+            check(displayedGlobalPath(base, live) === newPath);
+            for (const s of [
+                'REPLACING_GOAL', 'FAILED', 'SUCCEEDED',
+                'CANCELED', 'EMERGENCY_STOPPED', 'PAUSING_FOR_MANUAL',
+            ]) {
+                check(displayedGlobalPath({...base,navigation_state:s},live).length === 0);
+            }
+            check(displayedGlobalPath({...base,navigation_state:'PATH_READY'},live)===newPath);
+            check(displayedGlobalPath({...base,navigation_state:'READY'},live)===newPath);
+            check(displayedGlobalPath({...base,navigation_mode:'MAPPING'},live).length===0);
+            check(displayedGlobalPath({...base,active_goal:null},live).length===0);
+            check(displayedGlobalPath({...base,planned_path:[]},live).length===0);
+            """
+        )
+        result = subprocess.run(
+            [node, "-e", javascript],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
     def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
         viewer = self.viewer

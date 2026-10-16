@@ -590,6 +590,10 @@ function scheduleNavigationGlobalPathStale() {
     cancelNavigationGlobalPathStaleTimer();
 }
 function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
+    // Raw ROS global_path has no Goal execution ID. Ignore packets received
+    // before an active Goal or after cancellation/completion so late arrivals
+    // cannot resurrect an orphaned route in dashboard visualization state.
+    if (navigationGlobalPathRunKey === null) return;
     lidarState.globalPath = Array.isArray(path) ? path : [];
     if (lidarState.globalPath.length >= 2) {
         lidarState.globalPathStatus = 'fresh';
@@ -671,7 +675,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
-    if (Array.isArray(data.global_path) && data.global_path.length >= 2) {
+    if (navigationGlobalPathRunKey !== null
+        && Array.isArray(data.global_path) && data.global_path.length >= 2) {
         applyNavigationGlobalPath(
             data.global_path,
             data.global_path_updated_at ?? null,
@@ -742,6 +747,7 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'global_path') {
+        if (navigationGlobalPathRunKey === null) return;
         applyNavigationGlobalPath(
             message.path,
             message.received_at ?? null,
