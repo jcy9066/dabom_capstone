@@ -445,6 +445,13 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
           pivot_started_ = true;
           return certified;
         }
+        // Final XY and yaw are within the actual goal checker tolerances.
+        // Publish a STOP, not a leftover RPP linear command: the server
+        // still needs fresh encoder samples before confirming success.
+        // In particular, re-entering RPP here can unexpectedly drive
+        // forward after a successful final heading correction.
+        pivot_started_ = false;
+        return stopped(pose);
       }
       return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
     }

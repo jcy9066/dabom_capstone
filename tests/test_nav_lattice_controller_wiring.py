@@ -272,3 +272,16 @@ def test_final_yaw_rotation_requires_swept_footprint_certification():
         final.index('command.twist.angular.z = std::clamp(')
     )
     assert 'return certified;' in final
+
+
+def test_final_yaw_satisfied_cannot_resume_terminal_linear_rpp():
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    final = source.split("if (stage_index_ + 1 >= stages_.size()) {", 1)[1].split(
+        "const auto end_pose = inControllerFrame(", 1
+    )[0]
+    assert "if (distance(pose, terminal) <= 0.25)" in final
+    assert "return stopped(pose);" in final
+    assert "pivot_started_ = false;" in final
+    assert final.index("pivot_started_ = false;") < final.index(
+        "return checkedCommand(pose, rpp_->computeVelocityCommands"
+    )
