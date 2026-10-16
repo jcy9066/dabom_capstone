@@ -24,6 +24,8 @@ class Nav2CommandBridge(Node):
     # On transport/ACK failures continue attempting STOP at a bounded rate.
     # Physical output stays disabled until Pi acknowledges a STOP.
     STOP_RETRY_INTERVAL_SEC = 0.50
+    SHUTDOWN_STOP_MAX_ATTEMPTS = 3
+    SHUTDOWN_STOP_RETRY_SEC = 0.10
 
     def __init__(self) -> None:
         super().__init__("nav2_command_bridge")
@@ -215,14 +217,25 @@ class Nav2CommandBridge(Node):
         self.send_error_count = 0
 
         self._command_condition = threading.Condition()
-        self._pending_command: dict | None = None
+        # In live-motor mode, a newly started/restarted Nav2 bridge must
+        # establish a Pi-acknowledged STOP before accepting ANY drive.
+        # This does not affect DRY_RUN launches.
+        self._pending_command: dict | None = (
+            {
+                "type": "stop",
+                "reason": "nav2_command_bridge_startup",
+                "source": "nav2_command_bridge",
+                "dry_run": False,
+            }
+            if self.motor_output_enabled else None
+        )
         self._worker_shutdown = False
         # A physical STOP may supersede a pending drive, but no later drive
         # may erase a queued or currently transmitting STOP command.
         self._stop_command_in_flight = False
         # A failed physical STOP must be explicitly retried/acknowledged
         # before accepting any subsequent auto_drive.
-        self._stop_delivery_failed = False
+        self._stop_delivery_failed = bool(self.motor_output_enabled)
         self._stop_retry_command: dict | None = None
         self._stop_retry_due_at: float | None = None
 
@@ -337,21 +350,34 @@ class Nav2CommandBridge(Node):
                         self._command_condition.wait()
 
                 is_stop = payload.get("type") in ("stop", "emergency_stop")
+                shutdown_stop = is_stop and self._worker_shutdown
                 if is_stop:
                     self._stop_command_in_flight = True
 
             stop_confirmed = False
+            # At shutdown, send a bounded number of final STOP attempts
+            # serially after any in-flight drive has completed. Neither
+            # timers nor a second HTTP thread may overtake this command.
+            max_attempts = (
+                self.SHUTDOWN_STOP_MAX_ATTEMPTS if shutdown_stop else 1
+            )
             try:
-                sent = self._post_command(payload)
-                stop_confirmed = sent is True
-            except Exception as exc:
-                # An unexpected serialization, HTTP or logging failure
-                # must not permanently kill the ONLY STOP delivery worker.
-                self.send_error_count += 1
-                try:
-                    self._log_send_error(f"command worker failure: {exc}")
-                except Exception:
-                    pass
+                for attempt in range(max_attempts):
+                    try:
+                        sent = self._post_command(payload)
+                        stop_confirmed = sent is True
+                    except Exception as exc:
+                        # Never kill the sole command worker on a bad payload
+                        # or failed socket; preserve subsequent STOP delivery.
+                        self.send_error_count += 1
+                        try:
+                            self._log_send_error(f"command worker failure: {exc}")
+                        except Exception:
+                            pass
+                    if stop_confirmed:
+                        break
+                    if shutdown_stop and attempt + 1 < max_attempts:
+                        time.sleep(self.SHUTDOWN_STOP_RETRY_SEC)
             finally:
                 if is_stop:
                     with self._command_condition:
@@ -843,10 +869,15 @@ class Nav2CommandBridge(Node):
             self._worker_shutdown = True
             self._command_condition.notify_all()
 
-        # At shutdown the worker may need to finish a previous in-flight
-        # drive AND the final queued STOP (two HTTP requests).
+        # Budget for one in-flight drive, up to three final STOP requests,
+        # and the bounded retry intervals. A kernel/socket hang can still
+        # exceed this, so the independent Pi/Pico watchdogs are essential.
         self._command_worker_thread.join(
-            timeout=2.0 * self.request_timeout_sec + 0.5
+            timeout=(
+                (1 + self.SHUTDOWN_STOP_MAX_ATTEMPTS) * self.request_timeout_sec
+                + (self.SHUTDOWN_STOP_MAX_ATTEMPTS - 1) * self.SHUTDOWN_STOP_RETRY_SEC
+                + 0.5
+            )
         )
         if self._command_worker_thread.is_alive():
             self.get_logger().error(

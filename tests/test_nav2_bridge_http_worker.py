@@ -64,6 +64,8 @@ def _fake_bridge(cls):
     bridge._stop_retry_command = None
     bridge._stop_retry_due_at = None
     bridge.STOP_RETRY_INTERVAL_SEC = 0.50
+    bridge.SHUTDOWN_STOP_MAX_ATTEMPTS = 3
+    bridge.SHUTDOWN_STOP_RETRY_SEC = 0.10
     logged = []
     bridge.get_logger = lambda: SimpleNamespace(info=lambda msg: logged.append(msg))
     bridge._log_send_error = lambda msg: logged.append(msg)

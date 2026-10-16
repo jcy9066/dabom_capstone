@@ -44,6 +44,8 @@ def _fake(cls):
     instance._stop_retry_command = None
     instance._stop_retry_due_at = None
     instance.STOP_RETRY_INTERVAL_SEC = 0.50
+    instance.SHUTDOWN_STOP_MAX_ATTEMPTS = 3
+    instance.SHUTDOWN_STOP_RETRY_SEC = 0.10
     instance._worker_shutdown = False
     instance.server_request_enabled = True
     instance.motor_output_enabled = True
@@ -269,7 +271,8 @@ def test_shutdown_timeout_queues_stop_without_racing_inflight_drive():
 def test_shutdown_join_budget_covers_drive_and_final_stop():
     code = SOURCE.read_text(encoding="utf-8")
     end = code.split("    def destroy_node(", 1)[1].split("\n\ndef main(", 1)[0]
-    assert "timeout=2.0 * self.request_timeout_sec + 0.5" in end
+    assert "(1 + self.SHUTDOWN_STOP_MAX_ATTEMPTS) * self.request_timeout_sec" in end
+    assert "(self.SHUTDOWN_STOP_MAX_ATTEMPTS - 1) * self.SHUTDOWN_STOP_RETRY_SEC" in end
     assert end.index('{"type": "stop", "reason": "nav2_command_bridge_shutdown"}') < (
         end.index("self._command_worker_thread.join(")
     )
@@ -421,7 +424,7 @@ def test_shutdown_does_not_continue_background_stop_retries():
         assert bridge._stop_delivery_failed
         assert bridge.destroy_node() == "destroyed"
         assert not worker.is_alive()
-        assert calls.count("stop") == 2  # original + final shutdown STOP
+        assert calls.count("stop") == 4  # first STOP + 3 bounded shutdown retries
     finally:
         with bridge._command_condition:
             bridge._worker_shutdown = True
@@ -435,3 +438,105 @@ def test_http_deadline_allows_remote_pi_ack_round_trip():
     ).read_text(encoding="utf-8")
     assert '"nav2_request_timeout_sec",\n                # Must permit' in launch
     assert 'default_value="1.50"' in launch
+
+
+def test_startup_requires_pi_stop_ack_before_any_motion():
+    code = SOURCE.read_text(encoding="utf-8")
+    start = code.split("    def __init__(self) -> None:", 1)[1].split(
+        "    def _queue_command(", 1
+    )[0]
+    assert '"reason": "nav2_command_bridge_startup"' in start
+    assert 'self._stop_delivery_failed = bool(self.motor_output_enabled)' in start
+    assert start.index('"reason": "nav2_command_bridge_startup"') < start.index(
+        'self._command_worker_thread.start()'
+    )
+
+    cls = _bridge_class("_queue_command", "_command_worker")
+    bridge = _fake(cls)
+    bridge._stop_delivery_failed = True
+    bridge._pending_command = {
+        "type": "stop", "reason": "nav2_command_bridge_startup",
+        "source": "nav2_command_bridge", "dry_run": False,
+    }
+    started = threading.Event()
+    release = threading.Event()
+    bridge._post_command = lambda payload: (
+        started.set() or release.wait(2.0) or True
+    )
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    worker.start()
+    try:
+        assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.12})
+        assert started.wait(1)
+        assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.12})
+        release.set()
+        limit = time.monotonic() + 1.5
+        while bridge._stop_delivery_failed and time.monotonic() < limit:
+            time.sleep(0.005)
+        assert not bridge._stop_delivery_failed
+        assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.12})
+    finally:
+        release.set()
+        with bridge._command_condition:
+            bridge._pending_command = None
+            bridge._worker_shutdown = True
+            bridge._command_condition.notify_all()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+
+def test_shutdown_stop_succeeds_after_two_failed_acks():
+    cls = _bridge_class("_queue_command", "_command_worker", "destroy_node")
+    bridge = _fake(cls)
+    bridge.SHUTDOWN_STOP_RETRY_SEC = 0.01
+    calls = []
+    bridge._post_command = lambda payload: (
+        calls.append(payload["type"]) or len(calls) >= 3
+    )
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    bridge._command_worker_thread = worker
+    worker.start()
+    assert bridge.destroy_node() == "destroyed"
+    assert calls == ["stop", "stop", "stop"]
+    assert not bridge._stop_delivery_failed
+    assert not worker.is_alive()
+
+
+def test_shutdown_stop_failure_is_reported_after_bounded_attempts():
+    cls = _bridge_class("_queue_command", "_command_worker", "destroy_node")
+    bridge = _fake(cls)
+    bridge.SHUTDOWN_STOP_RETRY_SEC = 0.01
+    calls, errors = [], []
+    bridge.get_logger = lambda: SimpleNamespace(error=lambda msg: errors.append(msg))
+
+    def fail(payload):
+        calls.append(payload["type"])
+        return False
+
+    bridge._post_command = fail
+    worker = threading.Thread(target=bridge._command_worker, daemon=True)
+    bridge._command_worker_thread = worker
+    worker.start()
+    assert bridge.destroy_node() == "destroyed"
+    assert calls == ["stop"] * bridge.SHUTDOWN_STOP_MAX_ATTEMPTS
+    assert bridge._stop_delivery_failed
+    assert any("not acknowledged" in msg for msg in errors)
+    assert not worker.is_alive()
+
+
+def test_non_graceful_shutdown_depends_on_independent_pi_and_pico_watchdogs():
+    client = (
+        ROOT / "raspberry/robot_command_client.py"
+    ).read_text(encoding="utf-8")
+    motor = (
+        ROOT / "raspberry/controllers/motor_controller.py"
+    ).read_text(encoding="utf-8")
+    firmware = (
+        ROOT / "raspberry/pico_w_sdk/main.c"
+    ).read_text(encoding="utf-8")
+    assert "target=self.failsafe_loop" in client
+    assert "self.motor.failsafe_tick()" in client
+    assert 'reason="websocket_disconnected"' in client
+    assert "def failsafe_tick(self)" in motor
+    assert "time.monotonic() - self.last_command_at" in motor
+    assert "#define COMMAND_TIMEOUT_MS 350U" in firmware
