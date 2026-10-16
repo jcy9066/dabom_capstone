@@ -4,7 +4,11 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
+
+#include "nav2_costmap_2d/cost_values.hpp"
+#include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include <utility>
 
 #include "nav2_util/node_utils.hpp"
@@ -13,6 +17,50 @@
 
 namespace patrol_navigation_controller
 {
+namespace
+{
+
+// Smac verified the candidate against the costmap when it was created.
+// Two subsequent searches may have allowed an obstacle update, so verify
+// the selected path again against the *current* chassis footprint.
+bool validAgainstCurrentCostmap(
+  const nav_msgs::msg::Path & path,
+  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> & costmap_ros)
+{
+  if (!costmap_ros || !costmap_ros->isCurrent() || path.poses.size() < 2) {
+    return false;
+  }
+  auto * costmap = costmap_ros->getCostmap();
+  if (!costmap) {
+    return false;
+  }
+  nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap);
+  std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap->getMutex());
+  const auto footprint = costmap_ros->getRobotFootprint();
+  if (footprint.size() < 3) {
+    return false;
+  }
+  for (const auto & stamped : path.poses) {
+    const auto & pose = stamped.pose;
+    const double x = pose.position.x;
+    const double y = pose.position.y;
+    const double yaw = tf2::getYaw(pose.orientation);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw)) {
+      return false;
+    }
+    const double cost = checker.footprintCostAtPose(x, y, yaw, footprint);
+    // Lethal footprint, unknown footprint, or off-grid map coordinates:
+    // uncertain traversability cannot authorize new autonomous motion.
+    if (!std::isfinite(cost) || cost < 0.0 ||
+      cost >= nav2_costmap_2d::LETHAL_OBSTACLE)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
 
 TimeScoredLatticePlanner::TimeScoredLatticePlanner()
 : loader_("nav2_core", "nav2_core::GlobalPlanner")
@@ -209,6 +257,14 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   {
     best.poses.clear();
     return best;
+  }
+  if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_)) {
+    if (node) {
+      RCLCPP_WARN(
+        node->get_logger(), "%s selected lattice path invalidated by latest costmap",
+        name_.c_str());
+    }
+    best.poses.clear();
   }
   if (best.poses.empty()) {
     if (node) {
