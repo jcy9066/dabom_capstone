@@ -216,7 +216,7 @@ def generate_launch_description():
                     [pkg_share, "config", "lattice_diff32.json"]
                 ),
                 "GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(
-                    [pkg_share, "config", "lattice_diff32.json"]
+                    [pkg_share, "config", "lattice_diff32_stable.json"]
                 ),
             },
         ],
