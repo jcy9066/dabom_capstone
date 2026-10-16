@@ -43,6 +43,36 @@ def test_lattice_has_uniform_32_headings_and_diff_motion():
 
 
 
+def test_lattice_both_assets_match_humble_json_reader_schema():
+    """Upstream Humble nav2_smac_planner/utils.hpp uses json.at on all keys."""
+    required_meta = {
+        "turning_radius", "grid_resolution", "num_of_headings",
+        "heading_angles", "number_of_trajectories", "motion_model",
+    }
+    required_primitive = {
+        "trajectory_id", "start_angle_index", "end_angle_index",
+        "trajectory_radius", "trajectory_length", "arc_length",
+        "straight_length", "left_turn", "poses",
+    }
+    originals = [
+        json.loads((CONFIG / name).read_text())
+        for name in ("lattice_diff32.json", "lattice_diff32_stable.json")
+    ]
+    assert originals[0] == originals[1]
+    for payload in originals:
+        meta = payload["lattice_metadata"]
+        primitives = payload["primitives"]
+        assert required_meta <= set(meta)
+        assert meta["number_of_trajectories"] == len(primitives) == 160
+        assert meta["num_of_headings"] == len(meta["heading_angles"]) == 32
+        assert all(required_primitive <= set(item) for item in primitives)
+        assert all(
+            len(item["poses"]) >= 2
+            and all(len(pose) == 3 for pose in item["poses"])
+            for item in primitives
+        )
+
+
 def test_lattice_primitives_start_and_finish_in_declared_heading_bins():
     """Reject primitive data that loads but cannot produce a valid 32-bin path."""
     payload = json.loads((CONFIG / "lattice_diff32.json").read_text())
