@@ -4,6 +4,7 @@
 #define PATROL_NAVIGATION_CONTROLLER__PATH_TIME_ESTIMATOR_HPP_
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
