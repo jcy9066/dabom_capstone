@@ -97,7 +97,16 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "for (size_t index = 0; index < candidate_ids_.size()" in code
     assert "candidates_[index]" not in code
     assert "elapsed >= max_total_planning_sec_" in code
-    assert "if (path.poses.size() < 2)" in code
+    assert "if (path.poses.size() >= 2)" in code
+    # A path that arrives after the global deadline must never be executed.
+    assert "elapsed_after_candidate >= max_total_planning_sec_" in code
+    assert "best.poses.clear();" in code
+    assert 'candidate_ids_[0] == "QuickMotion"' in code
+    assert 'candidate_ids_[1] == "StableTurns"' in code
+    assert "validAgainstCurrentCostmap(best, costmap_)" in code
+    assert "costmap_ros->isCurrent()" in code
+    assert "checker.footprintCostAtPose(" in code
+    assert "nav2_costmap_2d::LETHAL_OBSTACLE" in code
     pure = HEADER.read_text()
     assert "linear_accel_mps2" in pure
     assert "angular_accel_rps2" in pure
@@ -117,6 +126,19 @@ def test_candidate_search_instance_recreated_to_reload_humble_static_costs():
     assert "candidate->activate()" in code
     assert "candidate->deactivate()" in code
     assert "candidate->cleanup()" in code
+
+
+def test_selected_route_is_rechecked_before_publishing():
+    code = SOURCE.read_text()
+    assert "bool validAgainstCurrentCostmap(" in code
+    assert "std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t>" in code
+    assert "costmap_ros->getRobotFootprint()" in code
+    assert "costmap_ros->isCurrent()" in code
+    assert "nav2_costmap_2d::LETHAL_OBSTACLE" in code
+    assert "cost == nav2_costmap_2d::NO_INFORMATION" in code
+    # Reject updated obstacles rather than falling back to a stale candidate.
+    assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
+    assert "best.poses.clear();" in code
 
 
 def test_pure_cpp_cost_model_execution(tmp_path):
