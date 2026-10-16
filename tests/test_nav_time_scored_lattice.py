@@ -69,9 +69,16 @@ def test_lattice_asset_and_measured_limits_reach_both_candidates():
     launch = (NAV / "launch/navigation.launch.py").read_text()
     assert '"GridBased.max_wheel_mps": max_wheel_mps' in launch
     assert '"GridBased.max_angular_rps": max_angular_rps' in launch
-    for name in ("QuickMotion", "StableTurns"):
-        assert f'"GridBased.{name}.lattice_filepath": PathJoinSubstitution(' in launch
-    assert (NAV / "config/lattice_diff32.json").is_file()
+    assert '"GridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(' in launch
+    assert '"GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(' in launch
+    assert '"lattice_diff32.json"' in launch
+    assert '"lattice_diff32_stable.json"' in launch
+    fast = NAV / "config/lattice_diff32.json"
+    stable = NAV / "config/lattice_diff32_stable.json"
+    assert fast.is_file() and stable.is_file()
+    # Same geometry, deliberately different paths: Humble Smac's static
+    # NodeLattice::motion_table skips penalty reload if paths are identical.
+    assert fast.read_bytes() == stable.read_bytes()
 
 
 def test_planner_really_compares_path_time_not_just_path_length():
@@ -81,7 +88,12 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "estimatePathTime(coordinates, time_limits_)" in code
     assert "score.seconds < best_seconds - 1e-6" in code
     assert "best_switches" in code
-    assert "candidates_[index]->createPlan(start, goal)" in code
+    assert "candidate->createPlan(start, goal)" in code
+    assert "candidate->configure(" in code
+    assert "candidate->deactivate()" in code
+    assert "candidate->cleanup()" in code
+    assert "for (size_t index = 0; index < candidate_ids_.size()" in code
+    assert "candidates_[index]" not in code
     assert "elapsed >= max_total_planning_sec_" in code
     assert "if (path.poses.size() < 2)" in code
     pure = HEADER.read_text()
@@ -90,6 +102,18 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "linear_jerk_mps3" in pure
     assert "direction_switch_sec" in pure
     assert "limits.reverse_mps" in pure
+
+
+def test_candidate_search_instance_recreated_to_reload_humble_static_costs():
+    code = SOURCE.read_text()
+    assert "NodeLattice::motion_table" in code
+    assert "loader_.createSharedInstance(" in code
+    assert "candidate->configure(" in code
+    assert "candidate->createPlan(start, goal)" in code
+    assert code.index("candidate->configure(") < code.index("candidate->createPlan(start, goal)")
+    assert "candidate->activate()" in code
+    assert "candidate->deactivate()" in code
+    assert "candidate->cleanup()" in code
 
 
 def test_pure_cpp_cost_model_execution(tmp_path):
