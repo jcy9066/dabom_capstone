@@ -1947,6 +1947,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
+        # Establish the Pi safety identity before obtaining an auto-drive
+        # permit; the legacy driving_ready fixture has no session ID.
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
         safety = self.api.motion_safety_context()
         self.assertIsNotNone(safety)
         with self.api._lock:
