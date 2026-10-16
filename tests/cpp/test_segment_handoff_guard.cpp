@@ -7,6 +7,7 @@
 using patrol_navigation_controller::stationaryForSegmentTransition;
 using patrol_navigation_controller::validUnitQuaternion;
 using patrol_navigation_controller::safeToContinuePivot;
+using patrol_navigation_controller::validDifferentialDriveCommand;
 
 int main()
 {
@@ -31,6 +32,19 @@ int main()
   assert(!safeToContinuePivot(true, nan, 0.10, 0.02, 0.04));
   assert(!safeToContinuePivot(true, 0.0, inf, 0.02, 0.04));
   assert(!safeToContinuePivot(true, 0.0, 0.10, -0.02, 0.04));
+  // Differential drive must reject an invalid 6D twist even when vx/wz
+  // are zero; otherwise the STOP fast-path would ignore the other axes.
+  assert(validDifferentialDriveCommand(0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
+  assert(validDifferentialDriveCommand(0.2, 0.0, 0.0, 0.0, 0.0, 1.0));
+  assert(validDifferentialDriveCommand(0.0, 1e-10, 0.0, 0.0, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.1, 0.0, 0.0, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, 0.1, 0.0, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, 0.0, 0.1, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, 0.0, 0.0, 0.1, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, nan, 0.0, 0.0, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, nan, 0.0, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, 0.0, inf, 0.0, 0.0));
+  assert(!validDifferentialDriveCommand(0.0, 0.0, 0.0, 0.0, 0.0, inf));
   assert(validUnitQuaternion(0, 0, 0, 1));
   assert(validUnitQuaternion(0, 0, std::sqrt(0.5), std::sqrt(0.5)));
   assert(!validUnitQuaternion(0, 0, 0, 0));

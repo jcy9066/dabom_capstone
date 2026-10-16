@@ -239,3 +239,21 @@ def test_pivot_collision_samples_are_in_local_costmap_frame():
     assert rotation.index("costmap->getMutex()") < rotation.index("costmap_->isCurrent()) {")
     assert "validUnitQuaternion(" in rotation
 
+
+
+def test_nav2_rejects_unsupported_twist_components_before_stop_shortcut():
+    cpp = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    start = cpp.index("SegmentedRPPController::checkedCommand(")
+    end = cpp.index("void SegmentedRPPController::checkRotationCollision(", start)
+    command = cpp[start:end]
+    header = (
+        PACKAGE / "include/patrol_navigation_controller/segment_handoff_guard.hpp"
+    ).read_text()
+    assert "validDifferentialDriveCommand(" in command
+    assert "command.twist.linear.z" in command
+    assert command.index("if (!validDifferentialDriveCommand(") < command.index(
+        "if (std::abs(linear) < 1e-10"
+    )
+    for axis in ("linear_y", "linear_z", "angular_x", "angular_y"):
+        assert f"std::abs({axis}) <= epsilon" in header
+    assert "std::isfinite(value)" in header

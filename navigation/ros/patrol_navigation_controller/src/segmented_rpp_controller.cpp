@@ -282,12 +282,14 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
 {
   const double linear = command.twist.linear.x;
   const double angular = command.twist.angular.z;
-  if (!std::isfinite(linear) || !std::isfinite(angular) ||
-    !std::isfinite(command.twist.linear.y) ||
-    !std::isfinite(command.twist.angular.x) ||
-    !std::isfinite(command.twist.angular.y))
+  // Differential-drive projection uses only linear.x and angular.z.
+  // Reject other nonzero/non-finite components before the zero-command
+  // shortcut, otherwise a malformed "STOP" can bypass the swept check.
+  if (!validDifferentialDriveCommand(
+      linear, command.twist.linear.y, command.twist.linear.z,
+      command.twist.angular.x, command.twist.angular.y, angular))
   {
-    throw std::runtime_error("Non-finite Nav2 motion command");
+    throw std::runtime_error("Non-differential or non-finite Nav2 motion command");
   }
   if (std::abs(linear) < 1e-10 && std::abs(angular) < 1e-10) {
     return command;  // A physical STOP never requires costmap clearance.

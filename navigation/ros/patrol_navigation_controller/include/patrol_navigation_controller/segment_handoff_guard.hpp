@@ -57,6 +57,28 @@ inline bool safeToContinuePivot(
   return std::abs(linear_x) < linear_stop_threshold;
 }
 
+// This robot has a differential-drive base. Commands on the four other
+// twist axes are unsupported even when finite. Reject them before treating
+// (linear.x=0, angular.z=0) as a physical STOP.
+inline bool validDifferentialDriveCommand(
+  double linear_x, double linear_y, double linear_z,
+  double angular_x, double angular_y, double angular_z)
+{
+  const double values[] = {
+    linear_x, linear_y, linear_z, angular_x, angular_y, angular_z
+  };
+  for (const double value : values) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
+  constexpr double epsilon = 1e-9;
+  return std::abs(linear_y) <= epsilon &&
+    std::abs(linear_z) <= epsilon &&
+    std::abs(angular_x) <= epsilon &&
+    std::abs(angular_y) <= epsilon;
+}
+
 }  // namespace patrol_navigation_controller
 
 #endif  // PATROL_NAVIGATION_CONTROLLER__SEGMENT_HANDOFF_GUARD_HPP_
