@@ -321,6 +321,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     // the original final Yaw, and never invent a path by moving poses in XY.
     // No more than five Smac attempts are allowed within the same 5s budget.
     size_t attempted = 0;
+    double closest_endpoint_m = std::numeric_limits<double>::infinity();
     const auto nearby = nearbyGoalCandidates(original_goal);
     for (const auto & alternate : nearby) {
       if (attempted >= 5 || std::chrono::duration<double>(
@@ -371,7 +372,15 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
                 tf2::getYaw(point.pose.orientation)});
             }
             const auto score = estimatePathTime(traced, time_limits_);
-            if (score.valid) {
+            if (score.valid &&
+              (distance_to_original < closest_endpoint_m - 1e-6 ||
+              (std::abs(distance_to_original - closest_endpoint_m) <= 1e-6 &&
+              score.seconds < best_seconds)))
+            {
+              // Smac's 0.50m terminal tolerance means a path endpoint can
+              // differ from the sampled center. Rank *actual endpoints* by
+              // absolute distance, not by their requested sample centers.
+              closest_endpoint_m = distance_to_original;
               best = std::move(path);
               best_seconds = score.seconds;
               best_switches = score.switches;
@@ -401,10 +410,10 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
           best.poses.clear();
         }
       }
-      // Clean up before returning a chosen route. Failure above invalidates.
-      if (!best.poses.empty()) {
-        break;
-      }
+      // Continue within the bounded attempt/time budget: a planner's
+      // terminal pose may differ from the requested sample by up to its
+      // terminal tolerance, so an earlier sample is not always the closest
+      // feasible actual endpoint.
     }
   }
 
