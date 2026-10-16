@@ -54,6 +54,21 @@ int main()
   assert(estimatePathTime(long_forward, slower).seconds >
     long_score.seconds);
 
+  // Wider wheel separation increases the required wheel travel in curves;
+  // this cannot produce a faster feasible traverse at the same wheel cap.
+  const std::vector<MotionPose> curved{
+    {0, 0, 0}, {0.20, 0.04, 0.50}
+  };
+  MotionTimeLimits narrow = limits;
+  narrow.wheel_track_m = 0.12;
+  MotionTimeLimits wide = limits;
+  wide.wheel_track_m = 0.36;
+  assert(estimatePathTime(curved, wide).seconds >
+    estimatePathTime(curved, narrow).seconds);
+  MotionTimeLimits invalid_track = limits;
+  invalid_track.wheel_track_m = 0.0;
+  assert(!estimatePathTime(curved, invalid_track).valid);
+
   // Rotation wraparound must use the short turn rather than a full revolution.
   const auto wrapped = estimatePathTime(
     {{0, 0, 3.13}, {0, 0, -3.13}}, limits);
