@@ -624,6 +624,7 @@ class NavigationControlApi:
                             "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "IDLE"
                         ),
                         "active_goal": None,
+                        "waypoints": [],
                         "planned_path": [],
                         "active_map": None,
                         "localization_ready": False,
@@ -718,6 +719,7 @@ class NavigationControlApi:
                         "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "READY"
                     ),
                     "active_goal": None,
+                    "waypoints": [],
                     "planned_path": [],
                     "active_map": loaded.get("active_map"),
                     "localization_ready": True,
@@ -1025,6 +1027,7 @@ class NavigationControlApi:
                 else:
                     self._state["navigation_state"] = "READY"
                     self._state["active_goal"] = None
+                    self._state["waypoints"] = []
                     self._state["planned_path"] = []
             self._touch_locked()
         if cancel_error is not None:
@@ -2274,6 +2277,7 @@ class NavigationControlApi:
         if math.hypot(robot_x - goal_x, robot_y - goal_y) > self._goal_reached_tolerance_m:
             return
         self._state["active_goal"] = None
+        self._state["waypoints"] = []
         self._state["planned_path"] = []
         self._state["navigation_state"] = "SUCCEEDED"
         self._state["last_error"] = None
