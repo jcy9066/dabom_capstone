@@ -176,6 +176,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                         })
                 return {
                     "ok": True,
+                    "delivered": True,
                     "encoder_sequence": marker,
                     "safety_session": "test-pi",
                     "safety_epoch": self._fake_safety_epoch,
@@ -1965,8 +1966,11 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
         self.assertTrue(accepted({"ok": True, "delivered": True}))
-        self.assertTrue(accepted({"ok": True}))
         for reply in (
+            {"ok": True},
+            {"ok": True, "delivered": None},
+            {"ok": True, "delivered": 1},
+            {"ok": True, "delivered": "true"},
             False, None, RuntimeError("disconnected"), "OK",
             {"ok": False, "delivered": True},
             {"ok": True, "delivered": False},

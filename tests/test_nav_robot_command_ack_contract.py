@@ -156,3 +156,110 @@ def test_robot_manager_only_completes_matching_command_id():
         )
         assert await task is True
     asyncio.run(run())
+
+
+def test_resume_safety_check_normalizes_only_real_pi_ack():
+    command = {"type": "resume_safety_check", "command_id": "check-ok"}
+    manager = _manager()
+    async def scenario():
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        task = asyncio.create_task(
+            manager.send_command_wait_ack("pi-01", command)
+        )
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert await manager.receive_ack(
+            "pi-01", ws, {
+                "command_id": "check-ok",
+                "ok": True,
+                "encoder_sequence": 17,
+                "safety_session": "session-1",
+                "safety_epoch": 4,
+            },
+        )
+        result = await task
+        assert result == {
+            "command_id": "check-ok",
+            "ok": True,
+            "delivered": True,
+            "encoder_sequence": 17,
+            "safety_session": "session-1",
+            "safety_epoch": 4,
+        }
+        assert not manager.pending_acks
+    asyncio.run(scenario())
+
+
+def test_resume_safety_check_never_trusts_partial_or_negative_pi_ack():
+    async def scenario(ack):
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        task = asyncio.create_task(
+            manager.send_command_wait_ack(
+                "pi-01", {"type": "resume_safety_check", "command_id": "check"},
+            )
+        )
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert await manager.receive_ack(
+            "pi-01", ws, {"command_id": "check", **ack},
+        )
+        result = await task
+        assert isinstance(result, dict)
+        assert result["delivered"] is False
+        return result
+
+    # Even an incoming claim of delivered=true does not override ok=false,
+    # and no "ok" field may be upgraded to success.
+    for payload in (
+        {"ok": False, "delivered": True},
+        {"delivered": True},
+        {"ok": "true", "delivered": True},
+    ):
+        result = asyncio.run(scenario(payload))
+        assert result["delivered"] is False
+
+
+def test_resume_safety_check_http_timeout_does_not_claim_delivery():
+    result, manager = asyncio.run(_round_trip(
+        {"type": "resume_safety_check", "command_id": "timeout"},
+        {}, timeout=True,
+    ))
+    assert result is False
+    assert manager.pending_acks == {}
+
+
+def test_navigation_ack_helper_requires_explicit_dict_delivery():
+    import ast
+    from pathlib import Path
+    nav_source = (
+        ROOT / "server/navigation_control_api.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(nav_source)
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+               and n.name == "NavigationControlApi")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "_pi_command_delivered")
+    isolated = ast.fix_missing_locations(ast.Module(
+        body=[ast.ClassDef(
+            name="OfflineNavigation", bases=[], keywords=[],
+            body=[method], decorator_list=[],
+        )],
+        type_ignores=[],
+    ))
+    env = {"Any": object}
+    exec(compile(isolated, str(APP), "exec"), env)
+    valid = env["OfflineNavigation"]._pi_command_delivered
+    assert valid(True) is True
+    assert valid(False) is False
+    assert valid({"ok": True, "delivered": True}) is True
+    for payload in (
+        {"ok": True}, {"ok": True, "delivered": None},
+        {"ok": True, "delivered": 1},
+        {"ok": True, "delivered": "true"},
+        {"ok": False, "delivered": True},
+        {"ok": "true", "delivered": True},
+        {"ok": True, "delivered": False},
+        None, "OK", 1,
+    ):
+        assert valid(payload) is False, repr(payload)

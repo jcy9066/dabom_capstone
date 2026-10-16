@@ -401,9 +401,13 @@ class NavigationControlApi:
             return response
         if not isinstance(response, dict):
             return False
+        # A dict must explicitly report BOTH success and delivery.
+        # Merely {"ok": true} is ambiguous and cannot release a STOP
+        # or authorize a safety resume. Legacy boolean senders still
+        # follow the explicitly handled branch above.
         return (
             response.get("ok") is True
-            and response.get("delivered", True) is True
+            and response.get("delivered") is True
         )
 
     def motion_safety_context(self) -> dict[str, Any] | None:

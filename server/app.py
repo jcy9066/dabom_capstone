@@ -738,7 +738,16 @@ class RobotConnectionManager:
                 await websocket.send_json(command)
             ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
             if command.get("type") == "resume_safety_check":
-                return ack if isinstance(ack, dict) else False
+                # Only a command_id-matched Pi ACK can prove processing.
+                # The Pi's raw ACK has "ok" but no "delivered" field.
+                # Normalize it here; do not allow an untrusted/malformed
+                # incoming delivered flag to override the actual ACK result.
+                if not isinstance(ack, dict):
+                    return False
+                return {
+                    **ack,
+                    "delivered": ack.get("ok") is True,
+                }
             if command.get("type") == "resume_navigation":
                 return (
                     isinstance(ack, dict)
