@@ -199,6 +199,7 @@ planner_server:
       candidate_names: ["QuickMotion", "StableTurns"]
       max_wheel_mps: 0.212
       max_angular_rps: 1.05
+      wheel_track_m: 0.21  # overwritten from calibrated WHEEL_TRACK_M at launch
       max_linear_accel: 0.50
       max_angular_accel: 1.0
       max_linear_jerk: 2.0
