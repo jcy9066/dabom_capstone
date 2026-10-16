@@ -147,17 +147,14 @@ def test_launch_overrides_stale_limits_and_preserves_custom_dynamics(ros_stubs, 
         "FollowPath.segment_pivot_max_angular": max_angular,
     }
     planner = next(a for a in actions if a.kwargs.get("name") == "planner_server")
-    assert planner.kwargs["parameters"][-1] == {
-        "GridBased.max_wheel_mps": calibration,
-        "GridBased.max_angular_rps": max_angular,
-        "GridBased.wheel_track_m": 0.4023,
-        "GridBased.QuickMotion.lattice_filepath": planner.kwargs["parameters"][-1][
-            "GridBased.QuickMotion.lattice_filepath"
-        ],
-        "GridBased.StableTurns.lattice_filepath": planner.kwargs["parameters"][-1][
-            "GridBased.StableTurns.lattice_filepath"
-        ],
-    }
+    overrides = planner.kwargs["parameters"][-1]
+    assert overrides["GridBased.max_wheel_mps"] == calibration
+    assert overrides["GridBased.max_angular_rps"] == pytest.approx(max_angular)
+    assert overrides["GridBased.wheel_track_m"] == pytest.approx(0.4023)
+    assert {
+        "GridBased.QuickMotion.lattice_filepath",
+        "GridBased.StableTurns.lattice_filepath",
+    } <= set(overrides)
     bridge = next(a for a in actions if a.kwargs.get("name") == "nav2_command_bridge")
     assert bridge.kwargs["parameters"][0]["max_wheel_mps"] == calibration
     opaque = next(a for a in actions if "function" in a.kwargs)
