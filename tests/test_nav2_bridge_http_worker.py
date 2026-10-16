@@ -57,6 +57,13 @@ def _fake_bridge(cls):
     bridge.send_error_count = 0
     bridge.last_server_log_at = 0.0
     bridge.last_error_log_at = 0.0
+    # The isolated worker has no ROS constructor, so initialize its
+    # fail-closed STOP retry state explicitly.
+    bridge._stop_command_in_flight = False
+    bridge._stop_delivery_failed = False
+    bridge._stop_retry_command = None
+    bridge._stop_retry_due_at = None
+    bridge.STOP_RETRY_INTERVAL_SEC = 0.50
     logged = []
     bridge.get_logger = lambda: SimpleNamespace(info=lambda msg: logged.append(msg))
     bridge._log_send_error = lambda msg: logged.append(msg)
