@@ -1903,6 +1903,57 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["planned_path"])
         self.assertTrue(result["goal_retained"])
 
+
+    async def test_resume_check_rejects_pi_reported_delivery_failure(self):
+        await self.driving_ready()
+        await self.api.emergency_stop("initial")
+        original_sender = self.api._send_robot_command
+
+        async def incomplete_check(robot_id, command):
+            if command["type"] == "resume_safety_check":
+                return {
+                    "ok": True, "delivered": False,
+                    "encoder_sequence": 2,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                }
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = incomplete_check
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_resume_release_rejects_truthy_failure_response(self):
+        await self.driving_ready()
+        await self.api.emergency_stop("initial")
+        original_sender = self.api._send_robot_command
+
+        async def incomplete_release(robot_id, command):
+            if command["type"] == "resume_navigation":
+                return {"ok": False, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = incomplete_release
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("PI_RESUME_FAILED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_late_auto_motion_context_rejected_after_goal_canceled(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        safety = self.api.motion_safety_context()
+        self.assertIsNotNone(safety)
+        with self.api._lock:
+            self.api._state["navigation_state"] = "CANCELED"
+        self.assertFalse(self.api.note_authorized_motion(safety))
+        self.assertIsNone(self.api.motion_safety_context())
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

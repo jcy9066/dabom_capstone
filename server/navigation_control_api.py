@@ -442,6 +442,14 @@ class NavigationControlApi:
             now = time.time()
             if not self._motion_allowed_locked(now):
                 return False
+            # Motion safety is re-evaluated at the last server authorization
+            # boundary. A cached context fetched before a Goal terminates
+            # must not authorize a delayed auto-drive after CANCELED/FAILED.
+            if (
+                self._robot_mode == "auto"
+                and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+            ):
+                return False
             if expected_safety is not None and (
                 not self._connected
                 or self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec
@@ -1230,7 +1238,7 @@ class NavigationControlApi:
                     422,
                 )
         prepared = await self._send_robot_command(self._robot_id, {"type": "resume_safety_check"})
-        if not isinstance(prepared, dict) or prepared.get("ok") is not True:
+        if not isinstance(prepared, dict) or not self._pi_command_delivered(prepared):
             raise NavigationControlError("STOP_NOT_CONFIRMED", "The Pi did not confirm a latched safety stop.", 409)
         try:
             marker = int(prepared["encoder_sequence"])
