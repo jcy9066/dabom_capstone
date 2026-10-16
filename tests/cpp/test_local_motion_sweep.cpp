@@ -30,9 +30,16 @@ int main()
   assert(std::abs(curve.back().x - (1.0 + 0.20 * std::sin(0.50))) < 1e-10);
   assert(std::abs(curve.back().y - (2.0 + 0.20 * (1 - std::cos(0.50)))) < 1e-10);
   // Dense collision sampling checks obstacles in between predicted poses.
+  // Default projection spacing is 0.02m; a broad occupied band must
+  // block it without additional interpolation.
+  assert(!validateSweptPath(ahead, [](const MotionPose & p) {
+    return std::abs(p.x - 1.05) > 0.012;
+  }));
+  // A narrow 4mm obstacle between 0.02m-spaced poses is only resolvable
+  // if the sweep interpolation step is intentionally finer.
   assert(!validateSweptPath(ahead, [](const MotionPose & p) {
     return std::abs(p.x - 1.05) > 0.002;
-  }));
+  }, patrol_navigation_controller::PathSweepLimits{0.005, 0.05, 60000}));
   // Default sweep sampling at <=0.05 rad checks the projected poses.
   // This obstacle's angular footprint includes yaw=0.1923.. which is one
   // of the emitted samples; the previous ±0.002 threshold missed them all.
