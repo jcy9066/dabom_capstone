@@ -21,6 +21,11 @@ namespace patrol_navigation_controller
 namespace
 {
 
+// Nav2 Humble's NodeLattice motion table is process-global. Different
+// planner requests must not interleave configuration/search with different
+// candidate penalties, even if each action has its own Smac instance.
+std::mutex lattice_candidate_search_mutex;
+
 // Smac verified the candidate against the costmap when it was created.
 // Two subsequent searches may have allowed an obstacle update, so verify
 // the selected path again against the *current* chassis footprint.
@@ -171,6 +176,10 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   const geometry_msgs::msg::PoseStamped & goal)
 {
   const auto started = std::chrono::steady_clock::now();
+  // Serialize all time-ranked searches in this process to isolate Smac's
+  // static motion table. Waiting consumes the 5-second planning deadline;
+  // no motion is permitted when this budget is exhausted.
+  std::unique_lock<std::mutex> search_lock(lattice_candidate_search_mutex);
   const auto node = parent_.lock();
   nav_msgs::msg::Path best;
   double best_seconds = std::numeric_limits<double>::infinity();
