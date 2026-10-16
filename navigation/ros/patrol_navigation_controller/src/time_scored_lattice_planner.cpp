@@ -270,6 +270,13 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     }
     best.poses.clear();
   }
+  // Footprint verification can also block on a costmap update. Honor the
+  // deadline after it, not merely after completing the Smac search.
+  if (std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - started).count() >= max_total_planning_sec_)
+  {
+    best.poses.clear();
+  }
   if (best.poses.empty()) {
     if (node) {
       RCLCPP_WARN(
