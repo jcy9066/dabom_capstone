@@ -111,14 +111,12 @@ class Nav2CommandBridge(Node):
 
         self.control_token = env_text("ROBOT_CONTROL_TOKEN")
 
-        self.request_timeout_sec = max(
-            0.05,
-            float(
-                self.get_parameter(
-                    "request_timeout_sec"
-                ).value
-            ),
+        request_timeout_sec = float(
+            self.get_parameter("request_timeout_sec").value
         )
+        if not math.isfinite(request_timeout_sec) or request_timeout_sec <= 0.0:
+            raise ValueError("request_timeout_sec must be finite and positive")
+        self.request_timeout_sec = max(0.05, request_timeout_sec)
 
         self.odom_topic = str(
             self.get_parameter(
@@ -146,9 +144,9 @@ class Nav2CommandBridge(Node):
             ).value
         )
 
-        if self.wheel_track_m <= 0.0:
+        if not math.isfinite(self.wheel_track_m) or self.wheel_track_m <= 0.0:
             raise ValueError(
-                "wheel_track_m must be positive"
+                "wheel_track_m must be finite and positive"
             )
 
         if (
@@ -161,9 +159,9 @@ class Nav2CommandBridge(Node):
                 "max_wheel_mps must match MAX_WHEEL_MPS on both hosts"
             )
 
-        if self.twist_timeout_sec <= 0.0:
+        if not math.isfinite(self.twist_timeout_sec) or self.twist_timeout_sec <= 0.0:
             raise ValueError(
-                "twist_timeout_sec must be positive"
+                "twist_timeout_sec must be finite and positive"
             )
 
         if not 0.0 <= self.min_auto_drive_pwm <= 1.0:
@@ -303,29 +301,43 @@ class Nav2CommandBridge(Node):
                 self._pending_command = None
 
             if payload is not None:
-                self._post_command(payload)
+                try:
+                    self._post_command(payload)
+                except Exception as exc:
+                    # An unexpected serialization, HTTP or logging failure
+                    # must not permanently kill the ONLY STOP delivery worker.
+                    # Preserve the worker for the next STOP; server/Pi safety
+                    # timeouts remain independently responsible for shutdown.
+                    self.send_error_count += 1
+                    try:
+                        self._log_send_error(f"command worker failure: {exc}")
+                    except Exception:
+                        pass
 
     def _post_command(
         self,
         payload: dict,
     ) -> bool:
-        body = json.dumps(
-            payload,
-            allow_nan=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-
-        request = Request(
-            self.command_url,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Robot-Control-Token": self.control_token,
-            },
-            method="POST",
-        )
-
         try:
+            # json.dumps(allow_nan=False), Request construction and the
+            # HTTP response parser must all live inside the exception gate.
+            # Otherwise a malformed payload can kill the STOP worker.
+            body = json.dumps(
+                payload,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+            request = Request(
+                self.command_url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Robot-Control-Token": self.control_token,
+                },
+                method="POST",
+            )
+
             with urlopen(
                 request,
                 timeout=self.request_timeout_sec,
@@ -340,9 +352,9 @@ class Nav2CommandBridge(Node):
                     else {}
                 )
 
-                if not response_data.get(
-                    "ok",
-                    False,
+                if (
+                    not isinstance(response_data, dict)
+                    or response_data.get("ok") is not True
                 ):
                     raise RuntimeError(
                         "server rejected command: "
@@ -391,6 +403,8 @@ class Nav2CommandBridge(Node):
             json.JSONDecodeError,
             RuntimeError,
             ValueError,
+            TypeError,
+            OverflowError,
         ) as exc:
             self.send_error_count += 1
             self._log_send_error(
