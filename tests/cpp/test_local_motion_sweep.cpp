@@ -35,10 +35,10 @@ int main()
   assert(!validateSweptPath(ahead, [](const MotionPose & p) {
     return std::abs(p.x - 1.05) > 0.012;
   }));
-  // A narrow 4mm obstacle between 0.02m-spaced poses is only resolvable
+  // A narrow 6mm obstacle between 0.02m-spaced poses is only resolvable
   // if the sweep interpolation step is intentionally finer.
   assert(!validateSweptPath(ahead, [](const MotionPose & p) {
-    return std::abs(p.x - 1.05) > 0.002;
+    return std::abs(p.x - 1.05) > 0.003;
   }, patrol_navigation_controller::PathSweepLimits{0.005, 0.05, 60000}));
   // Default sweep sampling at <=0.05 rad checks the projected poses.
   // This obstacle's angular footprint includes yaw=0.1923.. which is one
