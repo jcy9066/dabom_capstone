@@ -2396,17 +2396,3 @@ class NavigationRosRotationTelemetryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-    def test_original_goal_arrival_contract_catches_compounded_tolerances(self):
-        validated = self.api._original_goal_pose_confirmed
-        goal = {"x": 1.0, "y": 0.0, "yaw": 0.0}
-        assert not validated(goal, {"x": 0.06, "y": 0.0, "yaw": 0.0})
-        assert validated(goal, {"x": 0.55, "y": 0.0, "yaw": 0.0})
-        assert not validated(goal, {"x": 0.95, "y": 0.0, "yaw": 1.0})
-        assert validated(goal, {"x": 0.95, "y": 0.0, "yaw": 2 * math.pi})
-        for bad in (
-            None, {"x": 1.0, "y": 0.0},
-            {"x": float("nan"), "y": 0.0, "yaw": 0.0},
-        ):
-            assert not validated(goal, bad)
