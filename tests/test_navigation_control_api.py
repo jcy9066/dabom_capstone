@@ -566,6 +566,66 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, self.map_api.ros_control.cancel_calls)
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
 
+    async def test_passed_waypoint_progress_culls_route_without_dropping_final(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": 0.4},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 2,
+            })
+        state = self.api.state_response()
+        self.assertEqual(1, len(state["waypoints"]))
+        self.assertEqual(1.0, state["waypoints"][0]["x"])
+        self.assertEqual(1.7, state["active_goal"]["x"])
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 1,
+            })
+        self.assertEqual([], self.api.state_response()["waypoints"])
+        self.assertIsNotNone(self.api.state_response()["active_goal"])
+
+    async def test_stale_waypoint_count_never_reinstates_removed_points(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": 0.4},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 2,
+            })
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 3,
+            })
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_to_pose",
+                "number_of_poses_remaining": 1,
+            })
+        self.assertEqual(1, len(self.api.state_response()["waypoints"]))
+
+    async def test_manual_final_xy_cannot_bypass_pending_intermediates(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.5, "y": 1.2, "yaw": 0.0},
+            "waypoints": [{"x": 0.5, "y": 0.4}],
+        })
+        self.api.note_pi_status({"mode": "manual", "navigation_mode": "driving"})
+        self.api.note_navigation_sample(
+            "pose", payload={"x": 1.5, "y": 1.2, "yaw": 0.0},
+        )
+        state = self.api.state_response()
+        self.assertIsNotNone(state["active_goal"])
+        self.assertEqual("PATH_READY", state["navigation_state"])
+
     async def test_bad_waypoint_numbers_are_rejected(self):
         await self.driving_ready()
         for bad in ([{"x": True, "y": 0}], [{"x": "nan", "y": 0}], "not-a-list"):
