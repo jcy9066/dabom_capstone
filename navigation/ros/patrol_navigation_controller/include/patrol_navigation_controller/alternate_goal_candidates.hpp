@@ -11,6 +11,33 @@
 namespace patrol_navigation_controller
 {
 
+// The path's *actual* terminal pose (not the requested Smac target) must
+// remain within the Nav2 goal checker's approved XY and final-yaw limits.
+// Nav2 may end a tolerance-based search short of its requested endpoint.
+inline bool goalEndpointWithinTolerance(
+  const MotionPose & endpoint, const MotionPose & original_goal,
+  const double max_xy_m = 0.50, const double max_yaw_rad = 0.20)
+{
+  const double values[] = {
+    endpoint.x, endpoint.y, endpoint.yaw,
+    original_goal.x, original_goal.y, original_goal.yaw,
+    max_xy_m, max_yaw_rad
+  };
+  for (const double value : values) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
+  if (max_xy_m <= 0.0 || max_yaw_rad <= 0.0 ||
+    max_yaw_rad > 3.14159265358979323846)
+  {
+    return false;
+  }
+  return std::hypot(
+    endpoint.x - original_goal.x, endpoint.y - original_goal.y) <= max_xy_m &&
+    std::abs(shortestTurn(endpoint.yaw, original_goal.yaw)) <= max_yaw_rad;
+}
+
 // Keep a margin inside Nav2's 0.50m XY Goal tolerance for localization noise.
 // This function proposes locations only; the planner MUST subsequently verify
 // footprint collision clearance and a feasible, freshly collision-checked path.

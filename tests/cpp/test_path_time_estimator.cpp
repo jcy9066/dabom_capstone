@@ -13,6 +13,7 @@ using patrol_navigation_controller::MotionTimeLimits;
 using patrol_navigation_controller::estimatePathTime;
 using patrol_navigation_controller::PathSweepLimits;
 using patrol_navigation_controller::validateSweptPath;
+using patrol_navigation_controller::goalEndpointWithinTolerance;
 
 int main()
 {
@@ -127,6 +128,22 @@ int main()
   assert(!validateSweptPath(
     {{0, 0, 0}},
     [](const MotionPose &) {return true;}));
+  // Nav2 Smac may terminate inside its search tolerance. Validate the
+  // *returned* endpoint against approved final-XY and final-Yaw tolerances.
+  // The wrapped angle case must not interpret +pi to -pi as a full turn.
+  const MotionPose requested_goal{1.0, 2.0, 3.13};
+  assert(goalEndpointWithinTolerance({1.49, 2.0, -3.13}, requested_goal));
+  assert(!goalEndpointWithinTolerance({1.51, 2.0, 3.13}, requested_goal));
+  assert(!goalEndpointWithinTolerance({1.0, 2.0, 2.80}, requested_goal));
+  assert(!goalEndpointWithinTolerance({1.49, 2.0, 3.13},
+    requested_goal, 0.48, 0.20));
+  assert(!goalEndpointWithinTolerance({nan, 2.0, 3.13}, requested_goal));
+  assert(!goalEndpointWithinTolerance({1.0, 2.0, nan}, requested_goal));
+  assert(!goalEndpointWithinTolerance(
+    {1.0, 2.0, 3.13}, requested_goal, -0.5, 0.20));
+  assert(!goalEndpointWithinTolerance(
+    {1.0, 2.0, 3.13}, requested_goal, 0.50, nan));
+
   // Candidate endpoints are absolute <= 0.50m from the original Goal,
   // deterministic, and keep the requested final Yaw unchanged.
   const patrol_navigation_controller::MotionPose goal{1.0, 2.0, 1.2};

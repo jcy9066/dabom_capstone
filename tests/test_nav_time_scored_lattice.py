@@ -98,10 +98,10 @@ def test_planner_really_compares_path_time_not_just_path_length():
     # configuration and search must run under the same process mutex.
     assert "std::mutex lattice_candidate_search_mutex;" in code
     assert "std::unique_lock<std::mutex> search_lock(lattice_candidate_search_mutex);" in code
-    assert "for (size_t index = 0; index < candidate_ids_.size()" in code
+    assert "for (size_t index = 0; original_goal_clear && index < candidate_ids_.size()" in code
     assert "candidates_[index]" not in code
     assert "elapsed >= max_total_planning_sec_" in code
-    assert "if (path.poses.size() >= 2)" in code
+    assert "else if (path.poses.size() >= 2)" in code
     # A path that arrives after the global deadline must never be executed.
     assert "elapsed_after_candidate >= max_total_planning_sec_" in code
     assert "best.poses.clear();" in code
@@ -175,8 +175,8 @@ def test_blocked_goal_alternate_is_nearest_and_requires_full_footprint():
     assert "if (!endpointFootprintClear(alternate, costmap_))" in cpp
     assert "candidate_goal.pose.position.x = alternate.x;" in cpp
     assert "candidate_goal.pose.position.y = alternate.y;" in cpp
-    assert "distance_to_original <= 0.48" in cpp
-    assert "yaw_error <= 0.20" in cpp
+    assert "goalEndpointWithinTolerance(" in cpp
+    assert "actual_endpoint, original_goal, 0.48, 0.20" in cpp
     assert "validAgainstCurrentCostmap(path, costmap_)" in cpp
     assert "best_candidate = \"NearestSafeGoal\"" in cpp
     assert "closest_endpoint_m = distance_to_original;" in cpp
@@ -186,6 +186,19 @@ def test_blocked_goal_alternate_is_nearest_and_requires_full_footprint():
     assert "radius_m > 0.50" in header
     assert "goal.x + dx, goal.y + dy, goal.yaw" in header
     assert "std::sort(" in header
+
+
+def test_all_smac_candidate_endpoints_obey_final_xy_and_yaw_contract():
+    source = SOURCE.read_text()
+    helper = (
+        PKG / "include/patrol_navigation_controller/alternate_goal_candidates.hpp"
+    ).read_text()
+    assert "goalEndpointWithinTolerance(" in helper
+    assert "endpoint.x - original_goal.x" in helper
+    assert "std::abs(shortestTurn(endpoint.yaw, original_goal.yaw))" in helper
+    assert "coordinates.back(), original_goal, 0.50, 0.20" in source
+    assert "score.valid && terminal_safe &&" in source
+    assert "actual_endpoint, original_goal, 0.48, 0.20" in source
 
 
 def test_each_time_ranked_candidate_is_collision_checked_before_selection():

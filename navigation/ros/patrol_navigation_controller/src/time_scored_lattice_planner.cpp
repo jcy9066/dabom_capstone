@@ -271,8 +271,15 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
         // Do not discard the runner-up merely because a shorter/faster
         // candidate was invalidated by a costmap update. Validate before
         // ranking so the next collision-safe candidate can still win.
+        // A successful Smac search is not proof of arrival at the
+        // requested Goal: search tolerance may return a different endpoint.
+        // Never rank an otherwise collision-free path whose actual terminal
+        // XY/yaw lies outside the approved Nav2 goal-checker envelope.
+        const bool terminal_safe = goalEndpointWithinTolerance(
+          coordinates.back(), original_goal, 0.50, 0.20);
         const bool collision_safe =
-          score.valid && validAgainstCurrentCostmap(path, costmap_);
+          score.valid && terminal_safe &&
+          validAgainstCurrentCostmap(path, costmap_);
         if (collision_safe &&
           (score.seconds < best_seconds - 1e-6 ||
           (std::abs(score.seconds - best_seconds) <= 1e-6 &&
@@ -356,10 +363,11 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
           const double distance_to_original = std::hypot(
             endpoint.position.x - original_goal.x,
             endpoint.position.y - original_goal.y);
-          const double yaw_error = std::abs(shortestTurn(
-            original_goal.yaw, tf2::getYaw(endpoint.orientation)));
-          if (distance_to_original <= 0.48 &&
-            yaw_error <= 0.20 &&
+          const MotionPose actual_endpoint{
+            endpoint.position.x, endpoint.position.y,
+            tf2::getYaw(endpoint.orientation)};
+          if (goalEndpointWithinTolerance(
+              actual_endpoint, original_goal, 0.48, 0.20) &&
             validAgainstCurrentCostmap(path, costmap_))
           {
             // Arrival must satisfy the original final Yaw and pass a
