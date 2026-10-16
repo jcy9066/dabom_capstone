@@ -231,20 +231,30 @@ void SegmentedRPPController::checkRotationCollision(
   {
     throw std::runtime_error("Cannot certify a pivot with non-finite pose");
   }
+  if (!costmap_ || !costmap_->isCurrent() || !collision_) {
+    throw std::runtime_error("Cannot certify rotation on a stale or missing costmap");
+  }
   auto * costmap = costmap_->getCostmap();
+  if (!costmap) {
+    throw std::runtime_error("Cannot certify rotation without a costmap");
+  }
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap->getMutex()));
   const double heading = yaw(pose);
   const size_t steps = std::max<size_t>(
     1, static_cast<size_t>(std::ceil(std::abs(angle_error) / 0.05)));
   const auto footprint = costmap_->getRobotFootprint();
+  if (footprint.size() < 3) {
+    throw std::runtime_error("Cannot certify rotation with invalid robot footprint");
+  }
   for (size_t i = 0; i <= steps; ++i) {
     const double test_heading = heading + angle_error * static_cast<double>(i) / steps;
     const double cost = collision_->footprintCostAtPose(
       pose.pose.position.x, pose.pose.position.y, test_heading, footprint);
-    if (cost < 0.0 ||
-      cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE) ||
-      (cost == static_cast<double>(nav2_costmap_2d::NO_INFORMATION) &&
-      costmap_->getLayeredCostmap()->isTrackingUnknown()))
+    // Identical conservative threshold to the global candidate scorer:
+    // 253 is inscribed/inflated, 254 lethal, 255 unknown.
+    // No unknown rotation is safe without current positive clearance.
+    if (!std::isfinite(cost) || cost < 0.0 ||
+      cost >= static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE))
     {
       throw std::runtime_error("In-place rotation footprint is obstructed");
     }
