@@ -106,7 +106,8 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "validAgainstCurrentCostmap(best, costmap_)" in code
     assert "costmap_ros->isCurrent()" in code
     assert "checker.footprintCostAtPose(" in code
-    assert "nav2_costmap_2d::LETHAL_OBSTACLE" in code
+    assert "return validateSweptPath(" in code
+    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     pure = HEADER.read_text()
     assert "linear_accel_mps2" in pure
     assert "angular_accel_rps2" in pure
@@ -134,11 +135,27 @@ def test_selected_route_is_rechecked_before_publishing():
     assert "std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t>" in code
     assert "costmap_ros->getRobotFootprint()" in code
     assert "costmap_ros->isCurrent()" in code
-    assert "nav2_costmap_2d::LETHAL_OBSTACLE" in code
-    assert "cost == nav2_costmap_2d::NO_INFORMATION" in code
+    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
+    assert "cost == nav2_costmap_2d::NO_INFORMATION" not in code
+    assert "return std::isfinite(cost) && cost >= 0.0" in code
     # Reject updated obstacles rather than falling back to a stale candidate.
     assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
     assert "best.poses.clear();" in code
+
+
+def test_selected_route_checks_every_interpolated_chassis_pose():
+    geometry = (
+        PKG / "include/patrol_navigation_controller/path_sweep.hpp"
+    ).read_text()
+    assert "max_translation_step_m = 0.025" in geometry
+    assert "max_rotation_step_rad = 0.05" in geometry
+    assert "max_samples = 60000" in geometry
+    assert "for (size_t step =" in geometry
+    assert "if (!collision_free(sample))" in geometry
+    assert "return validateSweptPath(" in SOURCE.read_text()
+    cpp = CPP_TEST.read_text()
+    assert "std::abs(pose.x - 0.05)" in cpp
+    assert "std::abs(pose.yaw - 0.2)" in cpp
 
 
 def test_pure_cpp_cost_model_execution(tmp_path):
