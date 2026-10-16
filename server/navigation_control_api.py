@@ -389,6 +389,23 @@ class NavigationControlApi:
             and self._stop_confirmed_locked(now)
         )
 
+    @staticmethod
+    def _pi_command_delivered(response: Any) -> bool:
+        """A nonempty error response is never a physical Pi acknowledgment.
+
+        The local command sender historically returns bool; the WebSocket
+        acknowledgment sender may return {"ok": bool, "delivered": bool}.
+        Treat malformed/partial/exception values as failure, never truthiness.
+        """
+        if type(response) is bool:
+            return response
+        if not isinstance(response, dict):
+            return False
+        return (
+            response.get("ok") is True
+            and response.get("delivered", True) is True
+        )
+
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
         with self._lock:
@@ -810,12 +827,7 @@ class NavigationControlApi:
             ),
             return_exceptions=True,
         )
-        delivered = (
-            bool(stop_result.get("ok")) and bool(stop_result.get("delivered", True))
-            if isinstance(stop_result, dict)
-            else bool(stop_result) if not isinstance(stop_result, BaseException)
-            else False
-        )
+        delivered = self._pi_command_delivered(stop_result)
         cancel_ok = (
             isinstance(cancel_result, dict)
             and cancel_result.get("confirmed") is True
@@ -1023,7 +1035,7 @@ class NavigationControlApi:
         )
         cancel_error = cancel_result if isinstance(cancel_result, BaseException) else None
         cancel = None if cancel_error is not None else cancel_result
-        delivered = bool(stop_result) if not isinstance(stop_result, BaseException) else False
+        delivered = self._pi_command_delivered(stop_result)
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
@@ -1070,10 +1082,11 @@ class NavigationControlApi:
             cancel = await asyncio.to_thread(self._ros.cancel_navigation)
         except Exception as exc:
             cancel_error = exc
-        delivered = await self._send_robot_command(
+        stop_response = await self._send_robot_command(
             self._robot_id,
             {"type": "stop", "reason": "manual_drive_takeover"},
         )
+        delivered = self._pi_command_delivered(stop_response)
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
@@ -1088,13 +1101,18 @@ class NavigationControlApi:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif not delivered:
+                    # A missing physical STOP must not present manual
+                    # takeover as READY despite a successful ROS cancel.
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal is not None:
                     self._apply_cancel_terminal_locked(terminal)
                 elif self._state["navigation_mode"] == "MAPPING":
                     self._state["navigation_state"] = "IDLE"
                 else:
                     self._state["navigation_state"] = "READY"
-                if terminal != "FAILED":
+                if delivered and terminal != "FAILED" and not self._state["emergency_stop"]:
                     self._state["last_error"] = None
                 self._reset_navigation_progress_locked()
             else:
@@ -1154,17 +1172,27 @@ class NavigationControlApi:
             self._estop_delivery_token += 1
             delivery_token = self._estop_delivery_token
             self._touch_locked()
-        cancel, delivered = await asyncio.gather(
+        cancel, stop_response = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
             self._send_robot_command(
                 self._robot_id,
                 {"type": "emergency_stop", "reason": normalized_reason, "automatic": automatic},
             ),
+            return_exceptions=True,
         )
+        delivered = self._pi_command_delivered(stop_response)
         with self._lock:
             if self._estop_delivery_token == delivery_token:
-                self._estop_command_acknowledged = bool(delivered)
-        return {**self.state_response(), "cancel": cancel, "stop_delivered": delivered, "automatic": automatic}
+                self._estop_command_acknowledged = delivered
+        # A failed ROS cancel must never suppress or overwrite the Pi E-STOP
+        # result; the server remains latched in EMERGENCY_STOPPED either way.
+        return {
+            **self.state_response(),
+            "cancel": None if isinstance(cancel, BaseException) else cancel,
+            "cancel_error": str(cancel) if isinstance(cancel, BaseException) else None,
+            "stop_delivered": delivered,
+            "automatic": automatic,
+        }
 
     async def resume_navigation(self) -> dict[str, Any]:
         with self._lock:
@@ -1242,7 +1270,7 @@ class NavigationControlApi:
                 "safety_session": safety_session,
                 "safety_epoch": safety_epoch,
             })
-            if not delivered:
+            if not self._pi_command_delivered(delivered):
                 await self.emergency_stop("RESUME_RELEASE_FAILED", automatic=True, force=True)
                 raise NavigationControlError("PI_RESUME_FAILED", "The Pi did not accept the resume command.", 409)
         except Exception:
@@ -1533,11 +1561,7 @@ class NavigationControlApi:
                 self._touch_locked()
                 return
             recovery["stop_attempt_at"] = time.monotonic()
-            delivered = (
-                bool(stop.get("ok")) and bool(stop.get("delivered", True))
-                if isinstance(stop, dict) else
-                bool(stop) if not isinstance(stop, BaseException) else False
-            )
+            delivered = self._pi_command_delivered(stop)
             if delivered:
                 self._record_sensor_stop_ack_locked(recovery)
             self._touch_locked()
@@ -1603,10 +1627,7 @@ class NavigationControlApi:
                     self._robot_id,
                     {"type": "stop", "reason": "navigation_sensor_recovery_retry"},
                 )
-                delivered = (
-                    bool(stop.get("ok")) and bool(stop.get("delivered", True))
-                    if isinstance(stop, dict) else bool(stop)
-                )
+                delivered = self._pi_command_delivered(stop)
             except Exception:
                 delivered = False
             with self._lock:
@@ -1747,11 +1768,7 @@ class NavigationControlApi:
                     self._robot_id,
                     {"type": "stop", "reason": pending["reason"]},
                 )
-                delivered = (
-                    response.get("ok", False) and response.get("delivered", True)
-                    if isinstance(response, dict)
-                    else bool(response)
-                )
+                delivered = self._pi_command_delivered(response)
             except Exception:
                 delivered = False
             with self._lock:
@@ -1793,10 +1810,11 @@ class NavigationControlApi:
         delivered = False
         try:
             try:
-                delivered = bool(await self._send_robot_command(
+                stop_response = await self._send_robot_command(
                     self._robot_id,
                     {"type": "stop", "reason": "navigation_goal_succeeded"},
-                ))
+                )
+                delivered = self._pi_command_delivered(stop_response)
             except Exception:
                 delivered = False
 
@@ -1883,10 +1901,11 @@ class NavigationControlApi:
                     )
                 return False
 
-            delivered = await self._send_robot_command(
+            stop_response = await self._send_robot_command(
                 self._robot_id,
                 {"type": "stop", "reason": "navigation_blocked_timeout"},
             )
+            delivered = self._pi_command_delivered(stop_response)
             failed = False
             with self._lock:
                 self._stop_commanded_at = time.time()

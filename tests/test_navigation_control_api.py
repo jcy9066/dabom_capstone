@@ -1903,6 +1903,112 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["planned_path"])
         self.assertTrue(result["goal_retained"])
 
+    def test_pi_ack_contract_rejects_truthy_error_payloads(self):
+        accepted = self.api._pi_command_delivered
+        self.assertTrue(accepted(True))
+        self.assertTrue(accepted({"ok": True, "delivered": True}))
+        self.assertTrue(accepted({"ok": True}))
+        for reply in (
+            False, None, RuntimeError("disconnected"), "OK",
+            {"ok": False, "delivered": True},
+            {"ok": True, "delivered": False},
+            {"ok": "false", "delivered": True},
+            {"ok": True, "delivered": "false"},
+            {"error": "Pi unavailable"},
+        ):
+            self.assertFalse(accepted(reply), repr(reply))
+
+    async def test_cancel_dict_stop_failure_cannot_ack_encoder_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command["type"] == "stop":
+                return {"ok": False, "delivered": False, "error": "Pi UART timeout"}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        canceled = await self.api.cancel_goal()
+        self.assertIs(canceled["stop_delivered"], False)
+        self.assertEqual("FAILED", canceled["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", canceled["last_error"])
+        self.assertIsNone(self.api._stop_confirmation_after_sequence)
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_manual_dict_stop_failure_cannot_report_ready(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command.get("reason") == "manual_drive_takeover":
+                return {"ok": True, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        paused = await self.api.pause_for_manual()
+        self.assertIs(paused["stop_delivered"], False)
+        self.assertEqual("FAILED", paused["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", paused["last_error"])
+        self.assertIsNone(self.api._stop_confirmation_after_sequence)
+        self.assertIsNotNone(paused["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_emergency_stop_dict_error_does_not_acknowledge_pi(self):
+        await self.driving_ready()
+        original_sender = self.api._send_robot_command
+
+        async def reject_estop(robot_id, command):
+            if command["type"] == "emergency_stop":
+                return {"ok": False, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_estop
+        stopped = await self.api.emergency_stop("operator")
+        self.assertTrue(stopped["emergency_stop"])
+        self.assertEqual("EMERGENCY_STOPPED", stopped["navigation_state"])
+        self.assertIs(stopped["stop_delivered"], False)
+        self.assertFalse(self.api._estop_command_acknowledged)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_ros_cancel_exception_keeps_emergency_stop_delivery(self):
+        await self.driving_ready()
+
+        def reject_nav_cancel():
+            raise RuntimeError("ROS cancellation failed")
+
+        self.map_api.ros_control.cancel_navigation = reject_nav_cancel
+        stopped = await self.api.emergency_stop("operator")
+        self.assertTrue(stopped["emergency_stop"])
+        self.assertTrue(stopped["stop_delivered"])
+        self.assertIn("ROS cancellation failed", stopped["cancel_error"])
+        self.assertTrue(self.api._estop_command_acknowledged)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_terminal_success_dict_stop_failure_is_not_success(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command.get("reason") == "navigation_goal_succeeded":
+                return {"ok": True, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        self.map_api.ros_control.state = "SUCCEEDED"
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+
     async def test_cancel_pi_stop_failure_retains_goal_and_fails_safely(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
