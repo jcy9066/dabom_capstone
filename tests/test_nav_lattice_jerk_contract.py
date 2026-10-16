@@ -84,9 +84,11 @@ def test_planner_and_rpp_humble_config_contract():
     params = yaml.safe_load((CONFIG / "nav2_params.yaml").read_text())
     planner = params["planner_server"]["ros__parameters"]["GridBased"]
     controller = params["controller_server"]["ros__parameters"]["FollowPath"]
-    assert planner["plugin"] == "nav2_smac_planner/SmacPlannerLattice"
-    assert planner["allow_reverse_expansion"] is True
-    assert controller["primary_controller"].endswith("RegulatedPurePursuitController")
+    assert planner["plugin"] == "patrol_navigation_controller::TimeScoredLatticePlanner"
+    assert planner["candidate_names"] == ["QuickMotion", "StableTurns"]
+    assert planner["QuickMotion"]["allow_reverse_expansion"] is True
+    assert planner["StableTurns"]["allow_reverse_expansion"] is True
+    assert controller["primary_controller"] == "patrol_navigation_controller::SegmentedRPPController"
     assert controller["allow_reversing"] is True
     assert controller["use_rotate_to_heading"] is False
     assert controller["use_velocity_scaled_lookahead_dist"] is True
