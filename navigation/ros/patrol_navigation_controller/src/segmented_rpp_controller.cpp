@@ -1,5 +1,6 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/segmented_rpp_controller.hpp"
+#include "patrol_navigation_controller/segment_handoff_guard.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -53,11 +54,15 @@ void SegmentedRPPController::configure(
   node->get_parameter(
     plugin_name_ + ".segment_transfer_position_tolerance", transfer_position_tolerance_);
 
-  if (controller_frequency_ <= 0.0 || pivot_max_angular_ <= 0.0 ||
-    pivot_acceleration_ <= 0.0 || pivot_yaw_tolerance_ <= 0.0 ||
-    transfer_position_tolerance_ <= 0.0)
-  {
-    throw std::runtime_error("Invalid segmented controller limits");
+  const double positive_limits[] = {
+    controller_frequency_, pivot_max_angular_, pivot_acceleration_,
+    pivot_yaw_tolerance_, transfer_position_tolerance_,
+    transfer_linear_stop_, transfer_angular_stop_
+  };
+  for (const double limit : positive_limits) {
+    if (!std::isfinite(limit) || limit <= 0.0) {
+      throw std::runtime_error("Invalid segmented controller limits");
+    }
   }
 
   // Inner RPP shares the FollowPath parameter namespace. The outer
@@ -126,6 +131,18 @@ void SegmentedRPPController::buildStages()
   const size_t n = path_.poses.size();
   if (n < 2) {
     throw std::runtime_error("Lattice path must contain at least two poses");
+  }
+
+  // A nonfinite position or malformed orientation can be incorrectly
+  // classified as a forward segment when ordinary comparisons fail.
+  for (const auto & stamped : path_.poses) {
+    const auto & p = stamped.pose;
+    if (!std::isfinite(p.position.x) || !std::isfinite(p.position.y) ||
+      !validUnitQuaternion(
+        p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w))
+    {
+      throw std::runtime_error("Lattice path contains an invalid pose");
+    }
   }
 
   auto kind = [this](size_t index) -> int {
@@ -269,6 +286,17 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   if (stage_index_ >= stages_.size()) {
     return stopped(pose);
   }
+  // Reject malformed live pose or Odometry before calculating the next
+  // command; nonfinite components would bypass transition comparisons.
+  if (!std::isfinite(pose.pose.position.x) ||
+    !std::isfinite(pose.pose.position.y) ||
+    !validUnitQuaternion(
+      pose.pose.orientation.x, pose.pose.orientation.y,
+      pose.pose.orientation.z, pose.pose.orientation.w) ||
+    !std::isfinite(velocity.linear.x) || !std::isfinite(velocity.angular.z))
+  {
+    throw std::runtime_error("Invalid pose or velocity at segment handoff");
+  }
   const auto & stage = stages_[stage_index_];
   if (stage.mode == Mode::Drive) {
     // Do not truncate the final segment's normal RPP or terminal goal-yaw
@@ -280,8 +308,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       path_.poses[stage.end], pose.header.frame_id);
     const double to_end = distance(pose, end_pose);
     if (to_end <= transfer_position_tolerance_) {
-      if (std::abs(velocity.linear.x) >= transfer_linear_stop_ ||
-        std::abs(velocity.angular.z) >= transfer_angular_stop_)
+      if (!stationaryForSegmentTransition(
+          velocity.linear.x, velocity.angular.z,
+          transfer_linear_stop_, transfer_angular_stop_))
       {
         return stopped(pose);  // Pi STOP + direction interlock owns actual halt
       }
@@ -297,7 +326,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
     throw std::runtime_error("Robot moved away from planned rotation point");
   }
-  if (std::abs(velocity.linear.x) >= transfer_linear_stop_) {
+  // Residual yaw motion after translation cannot authorize a new pivot.
+  // Pi's encoder-level interlock remains an independent requirement.
+  if (!stationaryForSegmentTransition(
+      velocity.linear.x, velocity.angular.z,
+      transfer_linear_stop_, transfer_angular_stop_))
+  {
     return stopped(pose);
   }
 
@@ -309,7 +343,10 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     throw std::runtime_error("Invalid lattice pivot target orientation");
   }
   if (std::abs(remaining) <= pivot_yaw_tolerance_) {
-    if (std::abs(velocity.angular.z) >= transfer_angular_stop_) {
+    if (!stationaryForSegmentTransition(
+        velocity.linear.x, velocity.angular.z,
+        transfer_linear_stop_, transfer_angular_stop_))
+    {
       return stopped(pose);
     }
     ++stage_index_;

@@ -4,7 +4,11 @@ These checks supplement, but do NOT replace, a colcon build, Nav2 controller
 plugin loading, ROS integration tests or physical robot safety validation.
 """
 from pathlib import Path
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
+
+import pytest
 
 import yaml
 
@@ -64,7 +68,13 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "nav2_costmap_2d::LETHAL_OBSTACLE" not in source
     assert "std::runtime_error" in source  # Humble exception path
     assert "nav2_core::NoValidControl" not in source
-    assert "std::abs(velocity.linear.x) >= transfer_linear_stop_" in source
+    assert "stationaryForSegmentTransition(" in source
+    assert "transfer_linear_stop_, transfer_angular_stop_" in source
+    assert "Invalid pose or velocity at segment handoff" in source
+    assert "Lattice path contains an invalid pose" in source
+    assert "validUnitQuaternion(" in source
+    assert "std::isfinite(limit)" in source
+    assert "std::abs(velocity.linear.x) >= transfer_linear_stop_" not in source
     assert "inControllerFrame(" in source
     assert "nav2_util::transformPoseInTargetFrame(" in source
     # Humble nav2_core::Controller::Ptr is a shared_ptr and pluginlib's
@@ -84,3 +94,23 @@ def test_lattice_controller_is_available_in_navigation_launch():
     launch = (ROS_ROOT / "patrol_navigation/launch/navigation.launch.py").read_text()
     assert '"FollowPath.segment_pivot_max_angular": max_angular_rps' in launch
     assert '"FollowPath.desired_linear_vel": max_wheel_mps' in launch
+
+
+def test_ros_free_segment_handoff_safety_cpp(tmp_path):
+    compiler = shutil.which("g++") or shutil.which("clang++")
+    if compiler is None:
+        pytest.skip("No C++ compiler; Nav2 still requires a separate Humble build")
+    test_source = ROOT / "tests/cpp/test_segment_handoff_guard.cpp"
+    binary = tmp_path / "segment_handoff_guard"
+    compiled = subprocess.run(
+        [
+            compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pedantic",
+            "-I", str(PACKAGE / "include"), str(test_source), "-o", str(binary),
+        ],
+        capture_output=True, text=True, timeout=45, check=False,
+    )
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    executed = subprocess.run(
+        [str(binary)], capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert executed.returncode == 0, executed.stdout + executed.stderr
