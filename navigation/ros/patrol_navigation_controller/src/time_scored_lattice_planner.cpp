@@ -361,9 +361,22 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
             yaw_error <= 0.20 &&
             validAgainstCurrentCostmap(path, costmap_))
           {
-            best = std::move(path);
-            best_candidate = "NearestSafeGoal";
-            break;
+            // Arrival must satisfy the original final Yaw and pass a
+            // physically meaningful time model, even for fallback paths.
+            std::vector<MotionPose> traced;
+            traced.reserve(path.poses.size());
+            for (const auto & point : path.poses) {
+              traced.push_back({
+                point.pose.position.x, point.pose.position.y,
+                tf2::getYaw(point.pose.orientation)});
+            }
+            const auto score = estimatePathTime(traced, time_limits_);
+            if (score.valid) {
+              best = std::move(path);
+              best_seconds = score.seconds;
+              best_switches = score.switches;
+              best_candidate = "NearestSafeGoal";
+            }
           }
         }
       } catch (const std::exception & error) {
