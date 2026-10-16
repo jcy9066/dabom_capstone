@@ -94,6 +94,10 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "candidate->configure(" in code
     assert "candidate->deactivate()" in code
     assert "candidate->cleanup()" in code
+    # Humble's lattice motion table is shared across callbacks; candidate
+    # configuration and search must run under the same process mutex.
+    assert "std::mutex lattice_candidate_search_mutex;" in code
+    assert "std::unique_lock<std::mutex> search_lock(lattice_candidate_search_mutex);" in code
     assert "for (size_t index = 0; index < candidate_ids_.size()" in code
     assert "candidates_[index]" not in code
     assert "elapsed >= max_total_planning_sec_" in code
