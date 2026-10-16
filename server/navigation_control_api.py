@@ -864,6 +864,7 @@ class NavigationControlApi:
 
     async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal = self._validated_goal(payload.get("goal", payload))
+        waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         with self._lock:
             if self._state["navigation_mode"] != "DRIVING":
                 raise NavigationControlError("DRIVING_MODE_REQUIRED", "Goal poses require DRIVING mode.")
@@ -873,8 +874,10 @@ class NavigationControlApi:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Resume before planning a new goal.")
             replacing = self._state["navigation_state"] in self.ACTIVE_NAV_STATES
 
-        # Reject an invalid destination before interrupting an existing Goal.
+        # Reject an invalid destination/route before interrupting an active Goal.
         self._validate_goal_in_active_map(goal)
+        for intermediate in waypoints:
+            self._validate_goal_in_active_map(intermediate)
         if replacing:
             await self._stop_for_goal_replacement()
 
@@ -885,7 +888,7 @@ class NavigationControlApi:
                 self._assert_watchdogs_healthy()
             # Nav2's ComputePathToPose(use_start=False) starts at the latest
             # robot pose, not the old Goal or the old planned path origin.
-            path = await asyncio.to_thread(self._ros.compute_path, goal)
+            path = await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
             normalized_path = self._normalized_path(path)
             if len(normalized_path) < 2:
                 raise NavigationControlError(
@@ -915,6 +918,7 @@ class NavigationControlApi:
                     "GOAL_REPLACEMENT_INTERRUPTED", "Goal replacement was interrupted.", 409,
                 )
             self._state["active_goal"] = goal
+            self._state["waypoints"] = [dict(point) for point in waypoints]
             self._state["planned_path"] = normalized_path
             self._state["navigation_state"] = "PATH_READY"
             self._state["last_error"] = None
@@ -924,6 +928,7 @@ class NavigationControlApi:
     async def start_navigation(self) -> dict[str, Any]:
         with self._lock:
             goal = dict(self._state["active_goal"] or {})
+            waypoints = [dict(p) for p in self._state["waypoints"]]
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
             self._assert_resume_safety_locked(require_estop=False)
@@ -938,7 +943,7 @@ class NavigationControlApi:
             if not goal or not path_ready:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
-        result = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
+        result = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         try:
             progress_pose = self._get_live_pose()
         except Exception:
@@ -2233,6 +2238,7 @@ class NavigationControlApi:
         return {
             **self._state,
             "active_goal": dict(self._state["active_goal"]) if self._state["active_goal"] else None,
+            "waypoints": [dict(p) for p in self._state["waypoints"]],
             "planned_path": [dict(point) for point in self._state["planned_path"]],
             "active_map": dict(self._state["active_map"]) if self._state["active_map"] else None,
         }
