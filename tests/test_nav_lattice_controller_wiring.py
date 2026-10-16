@@ -42,7 +42,7 @@ def test_humble_rotation_shim_wraps_segmented_rpp_and_keeps_final_yaw():
     tracking = controller["FollowPath"]
     assert tracking["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
     assert tracking["primary_controller"] == "patrol_navigation_controller::SegmentedRPPController"
-    assert tracking["rotate_to_goal_heading"] is True
+    assert tracking["rotate_to_goal_heading"] is False
     assert tracking["allow_reversing"] is True
     assert tracking["use_rotate_to_heading"] is False
     assert tracking["segment_pivot_max_angular"] == 1.05
@@ -257,3 +257,18 @@ def test_nav2_rejects_unsupported_twist_components_before_stop_shortcut():
     for axis in ("linear_y", "linear_z", "angular_x", "angular_y"):
         assert f"std::abs({axis}) <= epsilon" in header
     assert "std::isfinite(value)" in header
+
+
+def test_final_yaw_rotation_requires_swept_footprint_certification():
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    final = source.split('if (stage_index_ + 1 >= stages_.size()) {', 1)[1].split(
+        'const auto end_pose = inControllerFrame(', 1
+    )[0]
+    assert 'path_.poses.back()' in final
+    assert 'distance(pose, terminal) <= 0.25' in final
+    assert 'if (!safeToContinuePivot(' in final
+    assert 'checkRotationCollision(pose, remaining);' in final
+    assert final.index('checkRotationCollision(pose, remaining);') < (
+        final.index('command.twist.angular.z = std::clamp(')
+    )
+    assert 'return certified;' in final

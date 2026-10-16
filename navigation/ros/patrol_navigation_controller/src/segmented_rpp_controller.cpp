@@ -68,7 +68,9 @@ void SegmentedRPPController::configure(
   }
 
   // Inner RPP shares the FollowPath parameter namespace. The outer
-  // RotationShimController retains final goal yaw and its collision check.
+  // RotationShimController delegates path tracking only; its final rotation
+  // skips the sweep check when angular_dist_threshold is 3.15 radians.
+  // SegmentedRPP owns the swept-collision-checked terminal yaw pivot.
   rpp_ = rpp_loader_.createSharedInstance(
     "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController");
   rpp_->configure(parent, plugin_name_, tf, costmap_);
@@ -411,9 +413,39 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   }
   const auto & stage = stages_[stage_index_];
   if (stage.mode == Mode::Drive) {
-    // Do not truncate the final segment's normal RPP or terminal goal-yaw
-    // behavior: Nav2's outer RotationShim owns the last pose orientation.
+    // Never use RotationShim for terminal yaw: its large 3.15rad initial
+    // heading threshold causes the Humble collision sweep to skip checks.
+    // Once near the final endpoint, pivot using OUR swept-footprint gate.
     if (stage_index_ + 1 >= stages_.size()) {
+      const auto terminal = inControllerFrame(
+        path_.poses.back(), pose.header.frame_id);
+      if (distance(pose, terminal) <= 0.25) {
+        const double remaining = angles::shortest_angular_distance(
+          yaw(pose), yaw(terminal));
+        if (!std::isfinite(remaining)) {
+          throw std::runtime_error("Invalid final Goal yaw");
+        }
+        if (std::abs(remaining) > pivot_yaw_tolerance_) {
+          if (!safeToContinuePivot(
+              pivot_started_, velocity.linear.x, velocity.angular.z,
+              transfer_linear_stop_, transfer_angular_stop_))
+          {
+            return stopped(pose);
+          }
+          checkRotationCollision(pose, remaining);
+          const double magnitude = std::min(
+            pivot_max_angular_,
+            std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
+          const double requested = std::copysign(magnitude, remaining);
+          const double step = pivot_acceleration_ / controller_frequency_;
+          geometry_msgs::msg::TwistStamped command = stopped(pose);
+          command.twist.angular.z = std::clamp(
+            requested, velocity.angular.z - step, velocity.angular.z + step);
+          const auto certified = checkedCommand(pose, command);
+          pivot_started_ = true;
+          return certified;
+        }
+      }
       return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
     }
     const auto end_pose = inControllerFrame(

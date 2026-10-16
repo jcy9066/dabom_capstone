@@ -35,10 +35,10 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.12
 
     FollowPath:
-      # RPP follows forward/reverse cusps; the wrapper performs final goal yaw.
+      # SegmentedRPP, not RotationShim, collision-checks final goal yaw.
       # Disable initial heading shimming to prevent unintended 180-degree
       # turns at the start of a reverse segment.
       plugin: "nav2_rotation_shim_controller::RotationShimController"
@@ -49,10 +49,10 @@ controller_server:
       rotate_to_heading_angular_vel: 1.05
       max_angular_accel: 1.00
       simulate_ahead_time: 1.0
-      rotate_to_goal_heading: true
+      rotate_to_goal_heading: false
       segment_pivot_max_angular: 1.05
       segment_pivot_acceleration: 1.00
-      segment_pivot_yaw_tolerance: 0.12
+      segment_pivot_yaw_tolerance: 0.10
       segment_transfer_position_tolerance: 0.08
       closed_loop: true
 
