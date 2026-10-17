@@ -30,8 +30,8 @@ if (root && canvas) {
         cameraViewBorder: 0xe2e8f0,
     };
 
-    const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
-    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.06;
+    const DEFAULT_OCCUPIED_HEIGHT_M = 0.24;
+    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.18;
     const INFLATION_HEIGHT_M = 0.006;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
@@ -1086,7 +1086,7 @@ if (root && canvas) {
                 Math.max(upperBox.max.z, wheelRadius * 2),
             );
 
-            obstacleHeightM = clamp(wheelRadius * 2.25, 0.07, 0.12);
+            obstacleHeightM = clamp(wheelRadius * 6.75, 0.21, 0.36);
 
             clearGroup(robotPoseGroup);
             robotPoseGroup.add(model);
@@ -1444,30 +1444,27 @@ if (root && canvas) {
 
     function displayedGlobalPath(
         control = currentControlState,
-        state = currentVisualizationState,
+        _state = currentVisualizationState,
     ) {
-        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
-        const livePathStatus = String(state?.globalPathStatus || 'none');
-
-        // Show standalone ComputePathToPose results for debugging.
-        if (!control?.active_goal) {
-            return livePathStatus === 'fresh' && livePath.length >= 2
-                ? livePath
-                : [];
-        }
+        // The control API owns the Goal and its currently approved path.
+        // /plan and /global_path visualize independent ROS computations and
+        // do not carry an action ID: their delayed WS packets may describe
+        // the preceding Goal after cancel/replacement. Never let those
+        // unowned packets override the server's Goal-bound planned_path.
+        if (String(control?.navigation_mode || '').toUpperCase() !== 'DRIVING'
+            || !control?.active_goal) return [];
 
         const navState = String(control.navigation_state || '').toUpperCase();
-        if (navState === 'FAILED') return [];
-
-        if (!['NAVIGATING', 'RESUMING'].includes(navState)) {
-            return control.planned_path || [];
+        // A retained Goal may be retried after FAILED / EMERGENCY_STOPPED,
+        // but its old path must not look executable. REPLACING_GOAL retains
+        // the old Goal internally until Pi STOP has been confirmed.
+        if (!['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING'].includes(navState)) {
+            return [];
         }
-
-        if (livePathStatus === 'fresh') {
-            return livePath.length >= 2 ? livePath : [];
-        }
-        if (livePathStatus === 'stale') return [];
-        return control.planned_path || [];
+        const authorizedPath = control.planned_path;
+        return Array.isArray(authorizedPath) && authorizedPath.length >= 2
+            ? authorizedPath
+            : [];
     }
 
     function pathKey(path) {
@@ -1480,6 +1477,14 @@ if (root && canvas) {
             hash = Math.imul(hash, 16777619);
             hash ^= y;
             hash = Math.imul(hash, 16777619);
+            // Distinguish paths with identical XY but different yaw/motion
+            // (reverse and in-place rotation are visible path changes).
+            hash ^= Math.round((Number(point?.yaw) || 0) * 1000);
+            hash = Math.imul(hash, 16777619);
+            for (const letter of String(point?.motion || '')) {
+                hash ^= letter.charCodeAt(0);
+                hash = Math.imul(hash, 16777619);
+            }
         }
         return `${path.length}:${hash >>> 0}`;
     }
@@ -1500,7 +1505,7 @@ if (root && canvas) {
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
             // Draw above the occupancy wall height and disable depth testing so
             // the planned Global Path stays readable over Map/LiDAR layers.
-            positions.push(x, y, 0.16);
+            positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04));
         }
         if (positions.length < 6) return;
 
@@ -1537,6 +1542,83 @@ if (root && canvas) {
         points.frustumCulled = false;
         points.renderOrder = 101;
         pathRoot.add(line, points);
+
+        // Arrowheads show the motion direction; reverse segments are amber.
+        // Rotation-only segments receive a compact circular marker.
+        const valid = path.filter(point =>
+            Number.isFinite(Number(point?.x))
+            && Number.isFinite(Number(point?.y))
+        );
+        const height = Math.max(
+            0.18, obstacleHeightM + 0.055, DYNAMIC_OBSTACLE_HEIGHT_M + 0.055,
+        );
+        let distanceSinceArrow = 0;
+        let lastRotationAt = null;
+        for (let i = 0; i + 1 < valid.length; i += 1) {
+            const from = valid[i];
+            const to = valid[i + 1];
+            const dx = Number(to.x) - Number(from.x);
+            const dy = Number(to.y) - Number(from.y);
+            const length = Math.hypot(dx, dy);
+            const motion = String(from.motion || '');
+            if (motion.startsWith('rotate_') && length < 0.003) {
+                const center = new THREE.Vector3(Number(from.x), Number(from.y), height);
+                if (lastRotationAt && center.distanceTo(lastRotationAt) < 0.08) continue;
+                lastRotationAt = center.clone();
+                const ring = new THREE.Mesh(
+                    new THREE.RingGeometry(0.045, 0.06, 20),
+                    new THREE.MeshBasicMaterial({
+                        color: COLORS.globalPath,
+                        side: THREE.DoubleSide,
+                        depthTest: false,
+                        depthWrite: false,
+                    }),
+                );
+                ring.position.copy(center);
+                ring.renderOrder = 102;
+                pathRoot.add(ring);
+                const left = motion === 'rotate_left';
+                const tangent = new THREE.Vector3(left ? -1 : 1, 0, 0);
+                const rotationArrow = new THREE.ArrowHelper(
+                    tangent,
+                    new THREE.Vector3(center.x, center.y + 0.06, height),
+                    0.085, COLORS.globalPath, 0.045, 0.035,
+                );
+                rotationArrow.traverse(part => {
+                    if (part.material) {
+                        part.material.depthTest = false;
+                        part.material.depthWrite = false;
+                    }
+                    part.renderOrder = 103;
+                });
+                pathRoot.add(rotationArrow);
+                continue;
+            }
+            if (length < 0.001) continue;
+            distanceSinceArrow += length;
+            if (distanceSinceArrow < 0.28) continue;
+            distanceSinceArrow = 0;
+            const forward = motion !== 'reverse';
+            const direction = new THREE.Vector3(dx / length, dy / length, 0);
+            const position = new THREE.Vector3(
+                (Number(from.x) + Number(to.x)) / 2,
+                (Number(from.y) + Number(to.y)) / 2,
+                height,
+            );
+            const arrow = new THREE.ArrowHelper(
+                direction, position, 0.14,
+                forward ? COLORS.globalPath : COLORS.trajectory,
+                0.06, 0.035,
+            );
+            arrow.traverse(part => {
+                if (part.material) {
+                    part.material.depthTest = false;
+                    part.material.depthWrite = false;
+                }
+                part.renderOrder = 102;
+            });
+            pathRoot.add(arrow);
+        }
     }
 
     function createGoalMarker(goal, color) {
@@ -1588,7 +1670,15 @@ if (root && canvas) {
         currentGoalKey = nextKey;
 
         clearGroup(goalRoot);
-        const active = createGoalMarker(currentControlState?.active_goal, COLORS.goal);
+        // During replacement the previous Goal is retained for recovery,
+        // not offered as the currently executable destination.
+        const replacing = String(
+            currentControlState?.navigation_state || ''
+        ).toUpperCase() === 'REPLACING_GOAL';
+        const active = createGoalMarker(
+            replacing ? null : currentControlState?.active_goal,
+            COLORS.goal,
+        );
         if (active) goalRoot.add(active);
         const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal);
         if (draft) goalRoot.add(draft);
@@ -1801,6 +1891,9 @@ if (root && canvas) {
             trajectoryRoot.visible = false;
         }
 
+        // Preserve the recorded trace for review after completion but stop
+        // appending stationary localization jitter after the Goal ends.
+        if (!movingNow) trajectorySessionActive = false;
         previousNavigationMode = mode;
         previousNavigationState = navState;
         scheduleControlOverflowLayout();

@@ -48,6 +48,9 @@ def test_manual_default_reaches_full_pwm(motor, direction):
     (0., 0., "STOP,zero_drive"),
 ])
 def test_drive_preserves_fractional_output_curvature_and_stop(motor, left, right, expected):
+    # This test covers m/s -> PWM scaling, not the independent
+    # jerk-limited output ramp. Exercise that filter in its own tests.
+    motor._jerk_limiter.step = Mock(side_effect=lambda l, r, now: (l, r))
     motor.drive(left, right)
     motor._exchange_locked.assert_called_once_with(expected)
 
@@ -116,6 +119,8 @@ def ros_stubs(monkeypatch):
         "rclpy.time": {"Time": Mock()},
         "nav_msgs": {},
         "nav_msgs.msg": {"Odometry": object},
+        "sensor_msgs": {},
+        "sensor_msgs.msg": {"LaserScan": object},
         "tf2_ros": {"Buffer": Mock(), "TransformListener": Mock(), "TransformException": RuntimeError},
         "geometry_msgs": {},
         "geometry_msgs.msg": {"Twist": object},
@@ -140,15 +145,21 @@ def test_launch_overrides_stale_limits_and_preserves_custom_dynamics(ros_stubs, 
     custom.write_text(yaml.safe_dump(config))
     actions = module.generate_launch_description().args[0]
     controller = next(a for a in actions if a.kwargs.get("name") == "controller_server")
-    max_angular = 2.0 * calibration / 0.4023
+    max_angular = min(1.05, 2.0 * calibration / 0.4023)
     assert controller.kwargs["parameters"][-1] == {
-        "FollowPath.min_vel_x": 0.0,
-        "FollowPath.min_speed_xy": 0.0,
-        "FollowPath.max_vel_x": calibration,
-        "FollowPath.max_speed_xy": calibration,
-        "FollowPath.max_vel_theta": max_angular,
+        "FollowPath.desired_linear_vel": calibration,
         "FollowPath.rotate_to_heading_angular_vel": max_angular,
+        "FollowPath.segment_pivot_max_angular": max_angular,
     }
+    planner = next(a for a in actions if a.kwargs.get("name") == "planner_server")
+    overrides = planner.kwargs["parameters"][-1]
+    assert overrides["GridBased.max_wheel_mps"] == calibration
+    assert overrides["GridBased.max_angular_rps"] == pytest.approx(max_angular)
+    assert overrides["GridBased.wheel_track_m"] == pytest.approx(0.4023)
+    assert {
+        "GridBased.QuickMotion.lattice_filepath",
+        "GridBased.StableTurns.lattice_filepath",
+    } <= set(overrides)
     bridge = next(a for a in actions if a.kwargs.get("name") == "nav2_command_bridge")
     assert bridge.kwargs["parameters"][0]["max_wheel_mps"] == calibration
     opaque = next(a for a in actions if "function" in a.kwargs)
@@ -170,6 +181,10 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     module = load_module(ROOT / path, "speed_bridge")
     monkeypatch.setattr(module.threading, "Thread", Mock())
     bridge = module.Nav2CommandBridge()
+    motor._jerk_limiter.step = Mock(side_effect=lambda l, r, now: (l, r))
+    # Direction-switch sequencing has its own interlock tests. This
+    # translation contract must not depend on previous encoder snapshots.
+    motor._direction_interlock.request = Mock(return_value="drive")
     assert bridge.max_wheel_mps == .17
     if hasattr(bridge, "_log_drive_diagnostics"):
         bridge._log_drive_diagnostics = Mock()
@@ -177,7 +192,10 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     bridge._queue_command = Mock(return_value=True)
     bridge._queue_stop = Mock(return_value=True)
     for linear, angular in ((.17, 0.), (.085, 0.), (-.17, 0.), (.17, .6)):
-        bridge.on_twist(SimpleNamespace(linear=SimpleNamespace(x=linear), angular=SimpleNamespace(z=angular)))
+        bridge.on_twist(SimpleNamespace(
+            linear=SimpleNamespace(x=linear, y=0.0, z=0.0),
+            angular=SimpleNamespace(x=0.0, y=0.0, z=angular),
+        ))
         payload = bridge._queue_command.call_args.args[0]
         motor.drive(payload["left_mps"], payload["right_mps"])
         fields = motor._exchange_locked.call_args.args[0].split(",")
@@ -192,8 +210,8 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     pure_spin_angular = (2.0 * bridge.max_wheel_mps) / bridge.wheel_track_m
     bridge.on_twist(
         SimpleNamespace(
-            linear=SimpleNamespace(x=0.0),
-            angular=SimpleNamespace(z=pure_spin_angular),
+            linear=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            angular=SimpleNamespace(x=0.0, y=0.0, z=pure_spin_angular),
         )
     )
     spin_payload = bridge._queue_command.call_args.args[0]
@@ -202,12 +220,18 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     motor.drive(spin_payload["left_mps"], spin_payload["right_mps"])
     motor._exchange_locked.assert_called_with("DRIVE,-1.000,1.000")
 
-    bridge.on_twist(SimpleNamespace(linear=SimpleNamespace(x=0.), angular=SimpleNamespace(z=0.)))
+    bridge.on_twist(SimpleNamespace(
+        linear=SimpleNamespace(x=0., y=0., z=0.),
+        angular=SimpleNamespace(x=0., y=0., z=0.),
+    ))
     bridge._queue_stop.assert_called_with("nav2_zero_twist")
     bridge.last_twist_at -= 1.
     bridge.check_timeout()
     bridge._queue_stop.assert_called_with("nav2_twist_timeout")
-    bridge.on_twist(SimpleNamespace(linear=SimpleNamespace(x=math.nan), angular=SimpleNamespace(z=0.)))
+    bridge.on_twist(SimpleNamespace(
+        linear=SimpleNamespace(x=math.nan, y=0., z=0.),
+        angular=SimpleNamespace(x=0., y=0., z=0.),
+    ))
     bridge._queue_stop.assert_called_with("nav2_invalid_twist")
     ros_stubs.overrides = {"max_wheel_mps": .5}
     with pytest.raises(ValueError, match="MAX_WHEEL_MPS"):
@@ -218,11 +242,12 @@ def test_nav2_rotates_in_place_before_path_tracking():
     config = yaml.safe_load((ROS / "config/nav2_params.yaml").read_text())
     follow = config["controller_server"]["ros__parameters"]["FollowPath"]
     assert follow["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
-    assert follow["primary_controller"] == "dwb_core::DWBLocalPlanner"
-    assert follow["min_vel_x"] == 0.0
-    assert follow["min_speed_xy"] == 0.0
-    assert follow["PathAlign.scale"] > follow["GoalAlign.scale"]
-    assert follow["PathDist.scale"] > follow["GoalDist.scale"]
+    assert follow["primary_controller"] == "patrol_navigation_controller::SegmentedRPPController"
+    assert follow["use_rotate_to_heading"] is False
+    assert follow["allow_reversing"] is True
+    assert follow["segment_pivot_max_angular"] == pytest.approx(1.05)
+    assert follow["segment_pivot_yaw_tolerance"] == pytest.approx(0.10)
+    assert follow["rotate_to_goal_heading"] is False
 
 
 def test_pi_cli_cannot_override_shared_calibration(monkeypatch):
@@ -382,6 +407,9 @@ def test_pico_full_pwm_and_direction_ratios_without_hardware(tmp_path):
             end += 1
         return source[start:end]
 
+    # Current Pico firmware splits target requests and PWM application
+    # into non-blocking motor_request_signed_speed / motor_write_pwm.
+    # Do not reference the removed motor_set_signed_speed helper.
     harness = '''
 #include <stdbool.h>
 #include <stdint.h>
@@ -390,32 +418,44 @@ def test_pico_full_pwm_and_direction_ratios_without_hardware(tmp_path):
 #include <math.h>
 typedef unsigned int uint;
 #define PWM_WRAP 999U
+#define MOTOR_MAX_PWM 0.30f
 #define CURVE_INNER_RATIO 0.35f
-typedef struct { uint pwm_pin, dir_pin, slice, channel; bool forward_dir_level; } motor_channel_t;
+typedef struct {
+    uint slice, channel;
+    float target_speed;
+} motor_channel_t;
 static uint16_t last_level;
-static bool last_direction;
-static void gpio_put(uint pin, bool value) { last_direction = value; }
-static void pwm_set_chan_level(uint slice, uint channel, uint16_t value) { last_level = value; }
-static float clamp_float(float value, float lo, float hi) { return fminf(hi, fmaxf(lo, value)); }
+static void pwm_set_chan_level(uint slice, uint channel, uint16_t value) {
+    (void)slice; (void)channel; last_level = value;
+}
+static float clamp_float(float value, float lo, float hi) {
+    return fminf(hi, fmaxf(lo, value));
+}
 '''
-    harness += function("motor_set_signed_speed(") + "\n" + function("direction_to_wheel_speeds(")
+    harness += (function("motor_write_pwm(") + "\n"
+                + function("motor_request_signed_speed(") + "\n"
+                + function("direction_to_wheel_speeds("))
     harness += '''
 int main(void) {
-    motor_channel_t motor = {.forward_dir_level = true};
+    motor_channel_t motor = {0};
     float left, right;
     assert(direction_to_wheel_speeds("forward", 1.f, &left, &right));
     assert(left == 1.f && right == 1.f);
-    motor_set_signed_speed(&motor, left);
-    assert(last_level == PWM_WRAP && last_direction);
+    motor_request_signed_speed(&motor, left);
+    assert(motor.target_speed == MOTOR_MAX_PWM);
+    motor_write_pwm(&motor, left);
+    assert(last_level > 0 && last_level <= (uint16_t)(MOTOR_MAX_PWM * PWM_WRAP));
     assert(direction_to_wheel_speeds("backward", 1.f, &left, &right));
     assert(left == -1.f && right == -1.f);
-    motor_set_signed_speed(&motor, left);
-    assert(last_level == PWM_WRAP && !last_direction);
+    motor_request_signed_speed(&motor, left);
+    assert(motor.target_speed == -MOTOR_MAX_PWM);
     assert(direction_to_wheel_speeds("forward_left", 1.f, &left, &right));
     assert(left == .35f && right == 1.f);
     assert(direction_to_wheel_speeds("rotate_left", 1.f, &left, &right));
     assert(left == -1.f && right == 1.f);
-    motor_set_signed_speed(&motor, 0.f);
+    motor_request_signed_speed(&motor, 0.f);
+    assert(motor.target_speed == 0.f);
+    motor_write_pwm(&motor, 0.f);
     assert(last_level == 0);
     return 0;
 }

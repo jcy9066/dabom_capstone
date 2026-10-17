@@ -584,45 +584,16 @@ function cancelNavigationGlobalPathStaleTimer() {
     }
 }
 
-function scheduleNavigationGlobalPathStale(receivedAtSec = null) {
+function scheduleNavigationGlobalPathStale() {
+    // A Global Path belongs to its Goal execution, not to a heartbeat.
+    // Keep it until an explicit replacement or Goal termination.
     cancelNavigationGlobalPathStaleTimer();
-
-    // Standalone ComputePathToPose debugging:
-    // retain the latest path until another path or reset arrives.
-    if (navigationGlobalPathRunKey === null) {
-        return;
-    }
-
-    let delayMs = GLOBAL_PATH_STALE_MS;
-    const received = Number(receivedAtSec);
-
-    if (Number.isFinite(received) && received > 0) {
-        delayMs = Math.max(
-            0,
-            GLOBAL_PATH_STALE_MS - Math.max(0, Date.now() - received * 1000),
-        );
-    }
-
-    if (delayMs <= 0) {
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        return;
-    }
-
-    navigationGlobalPathStaleTimer = window.setTimeout(() => {
-        navigationGlobalPathStaleTimer = null;
-
-        if (
-            lidarState.globalPathStatus !== 'fresh'
-            && lidarState.globalPathStatus !== 'pending'
-        ) return;
-
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        emitNavigationVisualizationState(false);
-    }, delayMs);
 }
 function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
+    // Raw ROS global_path has no Goal execution ID. Ignore packets received
+    // before an active Goal or after cancellation/completion so late arrivals
+    // cannot resurrect an orphaned route in dashboard visualization state.
+    if (navigationGlobalPathRunKey === null) return;
     lidarState.globalPath = Array.isArray(path) ? path : [];
     if (lidarState.globalPath.length >= 2) {
         lidarState.globalPathStatus = 'fresh';
@@ -704,7 +675,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
-    if (Array.isArray(data.global_path) && data.global_path.length >= 2) {
+    if (navigationGlobalPathRunKey !== null
+        && Array.isArray(data.global_path) && data.global_path.length >= 2) {
         applyNavigationGlobalPath(
             data.global_path,
             data.global_path_updated_at ?? null,
@@ -775,6 +747,7 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'global_path') {
+        if (navigationGlobalPathRunKey === null) return;
         applyNavigationGlobalPath(
             message.path,
             message.received_at ?? null,

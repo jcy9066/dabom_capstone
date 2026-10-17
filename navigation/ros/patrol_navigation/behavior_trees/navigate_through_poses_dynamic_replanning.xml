@@ -1,0 +1,43 @@
+<!--
+  Nav2 Humble single NavigateThroughPoses action:
+  * Intermediate poses are considered passed at XY distance <= 0.50m.
+    RemovePassedGoals never removes the last pose, preserving final Goal yaw
+    (SimpleGoalChecker: xy=0.50m, yaw=0.20rad).
+  * Initial path is computed once before validity checks.
+  * Valid Global Path is reused at 10Hz. If invalidity lasts >=300ms,
+    at most 5 planner retries within a 5s deadline are permitted.
+  * No autonomous blind Spin, BackUp or costmap-clearing recovery.
+  * The existing FollowPath controller executes reverse/pivot segments.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="NavigateThroughOrderedWaypoints">
+      <Timeout msec="5000">
+        <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+      </Timeout>
+      <PipelineSequence name="NavigateOnValidatedWaypointPath">
+        <RateController hz="10.0">
+          <Fallback name="ReuseOrReplanWaypointPath">
+            <Sequence name="CullAndReuseValidPath">
+              <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.50"/>
+              <IsPathValid path="{path}" server_timeout="100"/>
+            </Sequence>
+            <ReactiveSequence name="WaitForSustainedInvalidWaypointPath">
+              <Inverter>
+                <IsPathValid path="{path}" server_timeout="100"/>
+              </Inverter>
+              <Delay delay_msec="300">
+                <Timeout msec="5000">
+                  <RetryUntilSuccessful num_attempts="5">
+                    <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+                  </RetryUntilSuccessful>
+                </Timeout>
+              </Delay>
+            </ReactiveSequence>
+          </Fallback>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+    </Sequence>
+  </BehaviorTree>
+</root>

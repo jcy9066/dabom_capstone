@@ -460,6 +460,7 @@ class RobotCommandClient:
                     self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
+                    *([True] if message.get("rear_blind_limited") is True else []),
                 )
 
             elif command_type == "stop":
@@ -532,6 +533,12 @@ class RobotCommandClient:
                     if not self.emergency_stop_latched or message.get("safety_epoch") != self._safety_epoch:
                         raise RuntimeError("emergency stop changed during resume release")
                     self.emergency_stop_latched = False
+                # A timed-out direction handoff must not be cleared by a
+                # routine stop or a new auto-drive command. Re-arm it only
+                # after the explicit Pi emergency safety-resume handshake.
+                await asyncio.to_thread(
+                    self.motor.clear_direction_fault_after_safety_resume,
+                )
 
             elif command_type == "navigation_mode":
                 target_navigation_mode = str(

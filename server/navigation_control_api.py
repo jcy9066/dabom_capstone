@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from server.navigation_map_service import NavigationMapError
 from server.navigation_process_control import NavigationProcessError
 from server.navigation_ros_control import NavigationRosError
+from server.navigation_motion_segments import annotate_path
 from server.env_config import env_float, env_int, env_text
 
 
@@ -59,9 +60,9 @@ class NavigationControlApi:
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
     ROTATION_MAX_CUMULATIVE_SEC = 15.0
-    STOP_CONFIRM_STABLE_SEC = 0.3
+    STOP_CONFIRM_STABLE_SEC = 0.5
     STOP_CONFIRM_MAX_AGE_SEC = 0.5
-    STOP_CONFIRM_TIMEOUT_SEC = 2.0
+    STOP_CONFIRM_TIMEOUT_SEC = 3.0
     ESTOP_RETRY_INTERVAL_SEC = 1.0
     ESTOP_MAX_ATTEMPTS = 3
     ESTOP_RETRY_WINDOW_SEC = 10.0
@@ -138,6 +139,9 @@ class NavigationControlApi:
         self._rotation_last_verified_yaw: float | None = None
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
+        self._pending_nav_success: dict[str, Any] | None = None
+        self._pending_terminal_stop: dict[str, Any] | None = None
+        self._sensor_recovery: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
@@ -162,6 +166,7 @@ class NavigationControlApi:
             "emergency_stop": False,
             "emergency_reason": None,
             "active_goal": None,
+            "waypoints": [],
             "planned_path": [],
             "active_map": None,
             "localization_ready": False,
@@ -364,6 +369,10 @@ class NavigationControlApi:
     def _motion_allowed_locked(self, now: float) -> bool:
         if self._state["emergency_stop"] or self._encoder_stop_violation:
             return False
+        if self._sensor_recovery is not None:
+            return False
+        if self._state["navigation_state"] == "REPLACING_GOAL":
+            return False
 
         if self._stop_commanded_at is None:
             return True
@@ -380,11 +389,39 @@ class NavigationControlApi:
             and self._stop_confirmed_locked(now)
         )
 
+    @staticmethod
+    def _pi_command_delivered(response: Any) -> bool:
+        """A nonempty error response is never a physical Pi acknowledgment.
+
+        The local command sender historically returns bool; the WebSocket
+        acknowledgment sender may return {"ok": bool, "delivered": bool}.
+        Treat malformed/partial/exception values as failure, never truthiness.
+        """
+        if type(response) is bool:
+            return response
+        if not isinstance(response, dict):
+            return False
+        # A dict must explicitly report BOTH success and delivery.
+        # Merely {"ok": true} is ambiguous and cannot release a STOP
+        # or authorize a safety resume. Legacy boolean senders still
+        # follow the explicitly handled branch above.
+        return (
+            response.get("ok") is True
+            and response.get("delivered") is True
+        )
+
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
         with self._lock:
             now = time.time()
             if not self._motion_allowed_locked(now):
+                return None
+            # No Nav2 auto-drive command is authorized once its Goal has
+            # FAILED, CANCELED or SUCCEEDED. Manual mode stays independent.
+            if (
+                self._robot_mode == "auto"
+                and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+            ):
                 return None
             if not self._connected:
                 return None
@@ -408,6 +445,14 @@ class NavigationControlApi:
         with self._lock:
             now = time.time()
             if not self._motion_allowed_locked(now):
+                return False
+            # Motion safety is re-evaluated at the last server authorization
+            # boundary. A cached context fetched before a Goal terminates
+            # must not authorize a delayed auto-drive after CANCELED/FAILED.
+            if (
+                self._robot_mode == "auto"
+                and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+            ):
                 return False
             if expected_safety is not None and (
                 not self._connected
@@ -454,6 +499,27 @@ class NavigationControlApi:
             and now - self._estop_last_attempt_at >= self.ESTOP_RETRY_WINDOW_SEC
         )
 
+    def _sync_waypoint_progress_locked(self, ros_nav: dict[str, Any]) -> None:
+        # Humble NavigateThroughPoses publishes remaining pose count after
+        # RemovePassedGoals removes an intermediate within 0.50m XY.
+        # Keep the final Goal separate and never trim it from a route.
+        if (
+            self._state["navigation_state"] != "NAVIGATING"
+            or ros_nav.get("action") != "navigate_through_poses"
+            or not self._state["waypoints"]
+        ):
+            return
+        count = ros_nav.get("number_of_poses_remaining")
+        if isinstance(count, bool) or not isinstance(count, int):
+            return
+        outstanding = len(self._state["waypoints"])
+        if not 1 <= count <= outstanding + 1:
+            return
+        passed = outstanding + 1 - count
+        if passed > 0:
+            self._state["waypoints"] = self._state["waypoints"][passed:]
+            self._touch_locked()
+
     def _sync_ros_navigation_terminal_locked(
         self,
         ros_nav: dict[str, Any],
@@ -461,16 +527,41 @@ class NavigationControlApi:
         *,
         allow_during_blocked_failure: bool = False,
     ) -> str | None:
+        self._sync_waypoint_progress_locked(ros_nav)
         if self._state["navigation_state"] != "NAVIGATING":
+            return None
+        # A fault-triggered Nav2 cancel must not become a user Goal cancel.
+        if self._sensor_recovery is not None:
             return None
         if self._blocked_failure_in_progress and not allow_during_blocked_failure:
             return None
         terminal = str(ros_nav.get("state", "")).upper()
         if terminal not in {"SUCCEEDED", "FAILED", "CANCELED"}:
             return None
+        if terminal == "SUCCEEDED":
+            # Nav2 success proves the pose/yaw goal, not physical motor STOP.
+            # Gate any late velocity commands until fresh encoder samples
+            # establish a stable STOP for the configured confirmation window.
+            if self._pending_nav_success is None:
+                self._arm_pending_stop_locked()
+                self._pending_nav_success = {"started_at": current, "processing": False}
+                self._touch_locked(current)
+            return None
+        self._pending_nav_success = None
+        # A Nav2 terminal state is not evidence that Pi motor output stopped.
+        # Arm the output gate immediately, even if this state is first read by
+        # the dashboard; the async watchdog must deliver physical STOP.
+        self._arm_pending_stop_locked()
+        self._pending_terminal_stop = {
+            "reason": "nav2_failed" if terminal == "FAILED" else "nav2_canceled",
+            "attempts": 0,
+            "last_attempt_at": None,
+            "processing": False,
+        }
         self._state["navigation_state"] = terminal
-        if terminal in {"SUCCEEDED", "CANCELED"}:
+        if terminal == "CANCELED":
             self._state["active_goal"] = None
+            self._state["waypoints"] = []
             self._state["planned_path"] = []
         self._reset_navigation_progress_locked()
         self._touch_locked(current)
@@ -584,6 +675,7 @@ class NavigationControlApi:
                             "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "IDLE"
                         ),
                         "active_goal": None,
+                        "waypoints": [],
                         "planned_path": [],
                         "active_map": None,
                         "localization_ready": False,
@@ -678,6 +770,7 @@ class NavigationControlApi:
                         "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "READY"
                     ),
                     "active_goal": None,
+                    "waypoints": [],
                     "planned_path": [],
                     "active_map": loaded.get("active_map"),
                     "localization_ready": True,
@@ -723,8 +816,104 @@ class NavigationControlApi:
         async with self._operation_lock:
             return await self.switch_mode(request, user=user)
 
+    async def _stop_for_goal_replacement(self) -> None:
+        """Cancel the prior Nav2 Goal and verify Pi STOP before replanning.
+
+        Called only by plan_goal while the API operation lock serializes
+        dashboard mutations. Changing a Goal never bypasses a pending
+        emergency stop or reuses encoder samples recorded before STOP.
+        """
+        with self._lock:
+            self._sensor_recovery = None
+            self._pending_nav_success = None
+            self._pending_terminal_stop = None
+            self._arm_pending_stop_locked()
+            self._state["navigation_state"] = "REPLACING_GOAL"
+            self._touch_locked()
+
+        cancel_result, stop_result = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": "navigation_goal_replace"},
+            ),
+            return_exceptions=True,
+        )
+        delivered = self._pi_command_delivered(stop_result)
+        cancel_ok = (
+            isinstance(cancel_result, dict)
+            and cancel_result.get("confirmed") is True
+        )
+        error_code = (
+            "GOAL_REPLACEMENT_STOP_NOT_DELIVERED" if not delivered
+            else "GOAL_REPLACEMENT_CANCEL_FAILED" if not cancel_ok
+            else None
+        )
+        with self._lock:
+            if self._state["emergency_stop"] or self._encoder_stop_violation:
+                raise NavigationControlError(
+                    "EMERGENCY_STOP_ACTIVE",
+                    "Emergency stop interrupted Goal replacement.", 409,
+                )
+            if self._state["navigation_state"] != "REPLACING_GOAL":
+                raise NavigationControlError(
+                    "GOAL_REPLACEMENT_INTERRUPTED",
+                    "Goal replacement was interrupted.", 409,
+                )
+            self._stop_commanded_at = time.time()
+            self._stop_encoder_ticks = self._encoder_ticks
+            self._stop_confirmation_after_sequence = (
+                (self._encoder_sequence or 0) if delivered else None
+            )
+            self._stop_confirmation_ticks = None
+            self._stop_confirmation_started_at = None
+            self._stop_confirmation_last_at = None
+            self._stop_confirmation_samples = 0
+            if error_code is not None:
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = error_code
+                self._reset_navigation_progress_locked()
+                self._touch_locked()
+                raise NavigationControlError(
+                    error_code, "Previous Goal could not be safely stopped.", 409,
+                )
+
+        deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._state["emergency_stop"] or self._encoder_stop_violation:
+                    raise NavigationControlError(
+                        "EMERGENCY_STOP_ACTIVE",
+                        "Emergency stop interrupted Goal replacement.", 409,
+                    )
+                if self._state["navigation_state"] != "REPLACING_GOAL":
+                    raise NavigationControlError(
+                        "GOAL_REPLACEMENT_INTERRUPTED",
+                        "Goal replacement was interrupted.", 409,
+                    )
+                if self._stop_confirmed_locked(time.time()):
+                    # Reuse the existing post-stop motion permit only after
+                    # proven stationary encoders. A later Start still checks
+                    # fresh Pi safety identity and watchdog health.
+                    self._post_resume_motion_ready = True
+                    return
+            await asyncio.sleep(0.02)
+
+        with self._lock:
+            if self._state["navigation_state"] == "REPLACING_GOAL":
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = "GOAL_REPLACEMENT_STOP_NOT_CONFIRMED"
+                self._reset_navigation_progress_locked()
+                self._touch_locked()
+        raise NavigationControlError(
+            "GOAL_REPLACEMENT_STOP_NOT_CONFIRMED",
+            "Fresh encoder STOP confirmation was not received within 3 seconds.",
+            409,
+        )
+
     async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal = self._validated_goal(payload.get("goal", payload))
+        waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         with self._lock:
             if self._state["navigation_mode"] != "DRIVING":
                 raise NavigationControlError("DRIVING_MODE_REQUIRED", "Goal poses require DRIVING mode.")
@@ -732,17 +921,55 @@ class NavigationControlApi:
                 raise NavigationControlError("NAVIGATION_NOT_READY", "Localization and Nav2 must be ready.")
             if self._state["emergency_stop"]:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Resume before planning a new goal.")
+            replacing = self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+
+        # Reject an invalid destination/route before interrupting an active Goal.
         self._validate_goal_in_active_map(goal)
-        path = await asyncio.to_thread(self._ros.compute_path, goal)
-        normalized_path = self._normalized_path(path)
-        if len(normalized_path) < 2:
-            raise NavigationControlError("PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422)
+        for intermediate in waypoints:
+            self._validate_goal_in_active_map(intermediate)
+        if replacing:
+            await self._stop_for_goal_replacement()
+
+        try:
+            if replacing:
+                # Destination validation occurred before cancel; confirm the
+                # live sensor and Pi health again after the physical STOP.
+                self._assert_watchdogs_healthy()
+            # Nav2's ComputePathToPose(use_start=False) starts at the latest
+            # robot pose, not the old Goal or the old planned path origin.
+            path = await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
+            normalized_path = self._normalized_path(path)
+            if len(normalized_path) < 2:
+                raise NavigationControlError(
+                    "PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422,
+                )
+        except Exception as exc:
+            if replacing:
+                with self._lock:
+                    if (
+                        self._state["navigation_state"] == "REPLACING_GOAL"
+                        and not self._state["emergency_stop"]
+                    ):
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = (
+                            "GOAL_REPLACEMENT_PLAN_FAILED"
+                        )
+                        self._touch_locked()
+            raise
+
         with self._lock:
+            if self._state["emergency_stop"] or self._encoder_stop_violation:
+                raise NavigationControlError(
+                    "EMERGENCY_STOP_ACTIVE", "Emergency stop interrupted Goal planning.", 409,
+                )
+            if replacing and self._state["navigation_state"] != "REPLACING_GOAL":
+                raise NavigationControlError(
+                    "GOAL_REPLACEMENT_INTERRUPTED", "Goal replacement was interrupted.", 409,
+                )
             self._state["active_goal"] = goal
+            self._state["waypoints"] = [dict(point) for point in waypoints]
             self._state["planned_path"] = normalized_path
-            self._state["navigation_state"] = (
-                "EMERGENCY_STOPPED" if self._state["emergency_stop"] else "PATH_READY"
-            )
+            self._state["navigation_state"] = "PATH_READY"
             self._state["last_error"] = None
             self._touch_locked()
         return self.state_response()
@@ -750,6 +977,7 @@ class NavigationControlApi:
     async def start_navigation(self) -> dict[str, Any]:
         with self._lock:
             goal = dict(self._state["active_goal"] or {})
+            waypoints = [dict(p) for p in self._state["waypoints"]]
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
             self._assert_resume_safety_locked(require_estop=False)
@@ -764,7 +992,7 @@ class NavigationControlApi:
             if not goal or not path_ready:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
-        result = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
+        result = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         try:
             progress_pose = self._get_live_pose()
         except Exception:
@@ -804,17 +1032,22 @@ class NavigationControlApi:
 
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
+            self._pending_nav_success = None
+            self._sensor_recovery = None
             self._arm_pending_stop_locked()
-        cancel = None
-        cancel_error = None
-        try:
-            cancel = await asyncio.to_thread(self._ros.cancel_navigation)
-        except Exception as exc:
-            cancel_error = exc
-        delivered = await self._send_robot_command(
-            self._robot_id,
-            {"type": "stop", "reason": "navigation_goal_cancel"},
+        # Nav2 action cancellation and physical STOP must proceed concurrently.
+        # Pending-stop is armed before either call to gate late motor commands.
+        cancel_result, stop_result = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": "navigation_goal_cancel"},
+            ),
+            return_exceptions=True,
         )
+        cancel_error = cancel_result if isinstance(cancel_result, BaseException) else None
+        cancel = None if cancel_error is not None else cancel_result
+        delivered = self._pi_command_delivered(stop_result)
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
@@ -827,15 +1060,21 @@ class NavigationControlApi:
             self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
+                self._reset_navigation_progress_locked()
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif not delivered:
+                    # A canceled Nav2 action does not prove that the Pi has
+                    # stopped the wheels. Retain the Goal for operator Retry.
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal is not None:
                     self._apply_cancel_terminal_locked(terminal)
                 else:
                     self._state["navigation_state"] = "READY"
                     self._state["active_goal"] = None
+                    self._state["waypoints"] = []
                     self._state["planned_path"] = []
-                self._reset_navigation_progress_locked()
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
@@ -844,6 +1083,7 @@ class NavigationControlApi:
     async def pause_for_manual(self) -> dict[str, Any]:
         """Stop the active ROS action while retaining the goal for manual arrival."""
         with self._lock:
+            self._sensor_recovery = None
             self._arm_pending_stop_locked()
             previous_navigation_state = self._state["navigation_state"]
             self._state["navigation_state"] = "PAUSING_FOR_MANUAL"
@@ -854,10 +1094,11 @@ class NavigationControlApi:
             cancel = await asyncio.to_thread(self._ros.cancel_navigation)
         except Exception as exc:
             cancel_error = exc
-        delivered = await self._send_robot_command(
+        stop_response = await self._send_robot_command(
             self._robot_id,
             {"type": "stop", "reason": "manual_drive_takeover"},
         )
+        delivered = self._pi_command_delivered(stop_response)
         with self._lock:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
@@ -872,13 +1113,18 @@ class NavigationControlApi:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                elif not delivered:
+                    # A missing physical STOP must not present manual
+                    # takeover as READY despite a successful ROS cancel.
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal is not None:
                     self._apply_cancel_terminal_locked(terminal)
                 elif self._state["navigation_mode"] == "MAPPING":
                     self._state["navigation_state"] = "IDLE"
                 else:
                     self._state["navigation_state"] = "READY"
-                if terminal != "FAILED":
+                if delivered and terminal != "FAILED" and not self._state["emergency_stop"]:
                     self._state["last_error"] = None
                 self._reset_navigation_progress_locked()
             else:
@@ -896,7 +1142,15 @@ class NavigationControlApi:
 
     async def emergency_stop(self, reason: str, automatic: bool = False, force: bool = False) -> dict[str, Any]:
         normalized_reason = (str(reason).strip() or "dashboard_emergency_stop")[:96]
+        try:
+            last_route_status = self._ros.navigation_status()
+        except Exception:
+            last_route_status = {}
         with self._lock:
+            # Capture already-passed intermediate poses before changing the
+            # navigation state to EMERGENCY_STOPPED. A later safe resume must
+            # not route the robot back to those completed waypoints.
+            self._sync_waypoint_progress_locked(last_route_status)
             self._post_resume_motion_ready = False
             if self._encoder_stop_violation:
                 normalized_reason = "ENCODER_MOVEMENT_AFTER_STOP"
@@ -921,6 +1175,8 @@ class NavigationControlApi:
             self._state["emergency_stop"] = True
             self._state["emergency_reason"] = normalized_reason
             self._state["navigation_state"] = "EMERGENCY_STOPPED"
+            self._sensor_recovery = None
+            self._pending_terminal_stop = None
             if not was_stopped and not self._encoder_stop_violation:
                 self._stop_commanded_at = time.time()
                 self._stop_encoder_ticks = self._encoder_ticks
@@ -928,21 +1184,32 @@ class NavigationControlApi:
             self._estop_delivery_token += 1
             delivery_token = self._estop_delivery_token
             self._touch_locked()
-        cancel, delivered = await asyncio.gather(
+        cancel, stop_response = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
             self._send_robot_command(
                 self._robot_id,
                 {"type": "emergency_stop", "reason": normalized_reason, "automatic": automatic},
             ),
+            return_exceptions=True,
         )
+        delivered = self._pi_command_delivered(stop_response)
         with self._lock:
             if self._estop_delivery_token == delivery_token:
-                self._estop_command_acknowledged = bool(delivered)
-        return {**self.state_response(), "cancel": cancel, "stop_delivered": delivered, "automatic": automatic}
+                self._estop_command_acknowledged = delivered
+        # A failed ROS cancel must never suppress or overwrite the Pi E-STOP
+        # result; the server remains latched in EMERGENCY_STOPPED either way.
+        return {
+            **self.state_response(),
+            "cancel": None if isinstance(cancel, BaseException) else cancel,
+            "cancel_error": str(cancel) if isinstance(cancel, BaseException) else None,
+            "stop_delivered": delivered,
+            "automatic": automatic,
+        }
 
     async def resume_navigation(self) -> dict[str, Any]:
         with self._lock:
             goal = dict(self._state["active_goal"] or {})
+            waypoints = [dict(p) for p in self._state["waypoints"]]
             estop_generation = self._estop_generation
             if not self._state["emergency_stop"]:
                 raise NavigationControlError(
@@ -965,7 +1232,9 @@ class NavigationControlApi:
         path: list[dict[str, float]] = []
         if restart_navigation:
             self._assert_watchdogs_healthy(ignore_estop=True)
-            path = self._normalized_path(await asyncio.to_thread(self._ros.compute_path, goal))
+            path = self._normalized_path(
+                await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
+            )
             if len(path) < 2:
                 raise NavigationControlError(
                     "PATH_NOT_FOUND",
@@ -973,7 +1242,7 @@ class NavigationControlApi:
                     422,
                 )
         prepared = await self._send_robot_command(self._robot_id, {"type": "resume_safety_check"})
-        if not isinstance(prepared, dict) or prepared.get("ok") is not True:
+        if not isinstance(prepared, dict) or not self._pi_command_delivered(prepared):
             raise NavigationControlError("STOP_NOT_CONFIRMED", "The Pi did not confirm a latched safety stop.", 409)
         try:
             marker = int(prepared["encoder_sequence"])
@@ -1013,7 +1282,7 @@ class NavigationControlApi:
                 "safety_session": safety_session,
                 "safety_epoch": safety_epoch,
             })
-            if not delivered:
+            if not self._pi_command_delivered(delivered):
                 await self.emergency_stop("RESUME_RELEASE_FAILED", automatic=True, force=True)
                 raise NavigationControlError("PI_RESUME_FAILED", "The Pi did not accept the resume command.", 409)
         except Exception:
@@ -1057,7 +1326,7 @@ class NavigationControlApi:
         if not restart_navigation:
             return {**self.state_response(), "replanned": False}
         try:
-            navigation = await asyncio.to_thread(self._ros.navigate_to_pose, goal)
+            navigation = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         except Exception:
             await self.emergency_stop("RESUME_NAVIGATION_FAILED", automatic=True, force=True)
             raise
@@ -1180,6 +1449,20 @@ class NavigationControlApi:
         except Exception:
             rotation = {}
 
+        # The dashboard may have observed a Nav2 FAILED/CANCELED status
+        # first. Deliver the queued Pi STOP even though navigation is already
+        # terminal and the regular active-navigation watchdog would return.
+        with self._lock:
+            self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            pending_terminal_stop = self._pending_terminal_stop is not None
+            hard_fault = bool(self._encoder_stop_violation or self._pi_session_stop_pending)
+            recovering = self._sensor_recovery is not None
+        if pending_terminal_stop and not hard_fault:
+            await self._deliver_terminal_stop()
+        if recovering and not hard_fault:
+            await self._advance_sensor_recovery(current)
+            return None
+
         blocked = False
         with self._lock:
             retry_pending_stop = (
@@ -1213,18 +1496,31 @@ class NavigationControlApi:
                 if self._state["navigation_state"] not in self.ACTIVE_NAV_STATES:
                     return None
                 issue = self._watchdog_issue_locked(current)
-                if issue is None and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES:
+                # A terminal Nav2 success may still have moving wheels.
+                # Treat the ensuing bounded STOP confirmation as navigation,
+                # not as another no-progress / blockage recovery attempt.
+                waiting_for_stop = self._pending_nav_success is not None
+                if (
+                    issue is None and not waiting_for_stop
+                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
+                ):
                     self._note_rotation_progress_locked(rotation, current)
                 blocked = (
                     issue is None
+                    and not waiting_for_stop
                     and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
                     and self._navigation_progress_timed_out_locked(current)
                 )
                 if blocked:
                     self._blocked_failure_in_progress = True
         if issue:
-            await self.emergency_stop(issue, automatic=True)
+            if issue in {"ENCODER_MOVEMENT_AFTER_STOP", "PI_SAFETY_SESSION_CHANGED"}:
+                await self.emergency_stop(issue, automatic=True)
+            else:
+                await self._begin_sensor_recovery(issue, current)
             return issue
+        if not blocked:
+            await self._resolve_pending_nav_success()
         if blocked:
             # User navigation mutations (Cancel / Manual / Resume) use the same
             # operation lock. If one wins the race, re-checking inside
@@ -1233,6 +1529,406 @@ class NavigationControlApi:
                 failed = await self._fail_blocked_navigation()
             return "BLOCKED_TIMEOUT" if failed else None
         return None
+
+    async def _begin_sensor_recovery(self, issue: str, current: float) -> None:
+        """STOP immediately and allow a bounded 5s sensor recovery episode.
+
+        Ordinary data/communication loss is not a hardware E-STOP. Cancelling
+        the old ROS action and arming the Pi STOP gate prevents stale driving.
+        """
+        with self._lock:
+            if (
+                self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                or self._state["emergency_stop"]
+                or self._sensor_recovery is not None
+            ):
+                return
+            self._arm_pending_stop_locked()
+            recovery = {
+                "reason": issue, "started_at": current, "stable_since": None,
+                "stop_delivered": False, "stop_attempt_at": None,
+                "replanning": False,
+                "goal": dict(self._state["active_goal"] or {}),
+                "waypoints": [dict(p) for p in self._state["waypoints"]],
+            }
+            self._sensor_recovery = recovery
+            self._reset_navigation_progress_locked()
+            self._touch_locked(current)
+        cancel, stop = await asyncio.gather(
+            asyncio.to_thread(self._ros.cancel_navigation),
+            self._send_robot_command(
+                self._robot_id,
+                {"type": "stop", "reason": f"navigation_sensor_{issue.lower()}"},
+            ),
+            return_exceptions=True,
+        )
+        with self._lock:
+            if self._sensor_recovery is not recovery:
+                return
+            if isinstance(cancel, BaseException):
+                recovery["cancel_error"] = str(cancel)
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = "SENSOR_RECOVERY_CANCEL_FAILED"
+                self._sensor_recovery = None
+                self._touch_locked()
+                return
+            recovery["stop_attempt_at"] = time.monotonic()
+            delivered = self._pi_command_delivered(stop)
+            if delivered:
+                self._record_sensor_stop_ack_locked(recovery)
+            self._touch_locked()
+
+    def _record_sensor_stop_ack_locked(self, recovery: dict[str, Any]) -> None:
+        recovery["stop_delivered"] = True
+        self._stop_commanded_at = time.time()
+        self._stop_encoder_ticks = self._encoder_ticks
+        self._stop_confirmation_after_sequence = self._encoder_sequence
+        self._stop_confirmation_ticks = None
+        self._stop_confirmation_started_at = None
+        self._stop_confirmation_last_at = None
+        self._stop_confirmation_samples = 0
+
+    def _safe_live_pose(self) -> dict[str, Any] | None:
+        try:
+            return self._get_live_pose()
+        except Exception:
+            return None
+
+    async def _advance_sensor_recovery(self, current: float) -> None:
+        with self._lock:
+            recovery = self._sensor_recovery
+            if recovery is None or self._state["emergency_stop"]:
+                return
+            if current - recovery["started_at"] >= 5.0:
+                self._sensor_recovery = None
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = f"SENSOR_RECOVERY_TIMEOUT:{recovery['reason']}"
+                self._arm_pending_stop_locked()
+                self._touch_locked(current)
+                return
+            if recovery["replanning"]:
+                return
+            issue = self._watchdog_issue_locked(current)
+            healthy = issue is None and self._pi_estop_latched is False
+            if healthy:
+                if recovery["stable_since"] is None:
+                    recovery["stable_since"] = current
+            else:
+                recovery["stable_since"] = None
+            ready = bool(
+                healthy and recovery["stop_delivered"]
+                and recovery["stable_since"] is not None
+                and current - recovery["stable_since"] >= 1.0
+                and self._stop_confirmed_locked(time.time())
+                and recovery["goal"]
+            )
+            retry_stop = bool(
+                not recovery["stop_delivered"]
+                and (
+                    recovery["stop_attempt_at"] is None
+                    or time.monotonic() - recovery["stop_attempt_at"] >= 1.0
+                )
+            )
+            if retry_stop:
+                recovery["stop_attempt_at"] = time.monotonic()
+            if ready:
+                recovery["replanning"] = True
+        if retry_stop:
+            try:
+                stop = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "navigation_sensor_recovery_retry"},
+                )
+                delivered = self._pi_command_delivered(stop)
+            except Exception:
+                delivered = False
+            with self._lock:
+                if self._sensor_recovery is recovery and delivered:
+                    self._record_sensor_stop_ack_locked(recovery)
+        if not ready:
+            return
+
+        # Do not hold the thread lock during ROS actions. The identity of
+        # the episode is checked again after each asynchronous boundary.
+        async with self._operation_lock:
+            with self._lock:
+                if (
+                    self._sensor_recovery is not recovery
+                    or self._state["emergency_stop"]
+                    or self._state["navigation_state"] != "NAVIGATING"
+                ):
+                    return
+                self._state["navigation_state"] = "RESUMING"
+                self._touch_locked()
+            try:
+                path = self._normalized_path(
+                    await asyncio.to_thread(
+                        self._compute_path_for_route, recovery["goal"], recovery["waypoints"]
+                    )
+                )
+                if len(path) < 2:
+                    raise NavigationControlError(
+                        "PATH_NOT_FOUND", "Recovery planner found no safe path.",
+                    )
+                with self._lock:
+                    if (
+                        self._sensor_recovery is not recovery
+                        or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "RESUMING"
+                    ):
+                        return
+                    # Sensor data may be lost again while the planner runs.
+                    # Re-arm the 1s stable window instead of leaving a
+                    # permanently stuck RESUMING/replanning=True episode.
+                    if self._watchdog_issue_locked(time.time()) is not None:
+                        recovery["replanning"] = False
+                        recovery["stable_since"] = None
+                        self._state["navigation_state"] = "NAVIGATING"
+                        self._touch_locked()
+                        return
+                    if time.time() - recovery["started_at"] >= 5.0:
+                        raise NavigationControlError(
+                            "SENSOR_RECOVERY_TIMEOUT",
+                            "Sensor recovery deadline expired during planning.",
+                        )
+                navigation = await asyncio.to_thread(
+                    self._navigate_route, recovery["goal"], recovery["waypoints"]
+                )
+                if not isinstance(navigation, dict) or navigation.get("accepted") is not True:
+                    raise NavigationControlError(
+                        "NAVIGATION_REJECTED", "Nav2 rejected recovered Goal.",
+                    )
+            except Exception:
+                with self._lock:
+                    if self._sensor_recovery is recovery:
+                        self._sensor_recovery = None
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = "SENSOR_RECOVERY_REPLAN_FAILED"
+                        self._arm_pending_stop_locked()
+                        self._touch_locked()
+                return
+            with self._lock:
+                interrupted = (
+                    self._sensor_recovery is not recovery
+                    or self._state["emergency_stop"]
+                    or self._state["navigation_state"] != "RESUMING"
+                    or time.time() - recovery["started_at"] >= 5.0
+                    or self._watchdog_issue_locked(time.time()) is not None
+                )
+                if not interrupted:
+                    self._sensor_recovery = None
+                    self._state["planned_path"] = path
+                    self._state["navigation_state"] = "NAVIGATING"
+                    self._state["last_error"] = None
+                    self._stop_commanded_at = None
+                    self._stop_encoder_ticks = None
+                    self._stop_confirmation_after_sequence = None
+                    self._start_navigation_progress_locked(
+                        self._safe_live_pose(), time.time(),
+                    )
+                    self._touch_locked()
+            if interrupted:
+                # Cancellation, timeout or new sensor failure may have won
+                # after NavigateToPose accepted its action.
+                await asyncio.to_thread(self._ros.cancel_navigation)
+                with self._lock:
+                    if (
+                        self._sensor_recovery is recovery
+                        and not self._state["emergency_stop"]
+                        and self._state["navigation_state"] == "RESUMING"
+                    ):
+                        recovery["replanning"] = False
+                        recovery["stable_since"] = None
+                        recovery["stop_delivered"] = False
+                        recovery["stop_attempt_at"] = None
+                        self._state["navigation_state"] = "NAVIGATING"
+                        # A canceled late action must be followed by a fresh
+                        # Pi STOP before retrying any subsequent Goal.
+                        self._arm_pending_stop_locked()
+                        self._touch_locked()
+
+    async def _deliver_terminal_stop(self) -> bool:
+        """Best-effort physical STOP after Nav2 fails or cancels itself.
+
+        At most three UART delivery attempts, spaced by 1s. Hardware safety
+        faults still take priority. Missing STOP acknowledgement permanently
+        holds the pending STOP gate and reports FAILED, not a synthetic E-STOP.
+        """
+        with self._lock:
+            pending = self._pending_terminal_stop
+            if (
+                pending is None
+                or pending["processing"]
+                or self._state["emergency_stop"]
+            ):
+                return False
+            now = time.monotonic()
+            if (
+                pending["last_attempt_at"] is not None
+                and now - pending["last_attempt_at"] < 1.0
+            ):
+                return False
+            if pending["attempts"] >= 3:
+                return False
+            pending["processing"] = True
+            pending["attempts"] += 1
+            pending["last_attempt_at"] = now
+        delivered = False
+        try:
+            try:
+                response = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": pending["reason"]},
+                )
+                delivered = self._pi_command_delivered(response)
+            except Exception:
+                delivered = False
+            with self._lock:
+                if self._pending_terminal_stop is not pending:
+                    return False
+                if delivered:
+                    self._stop_commanded_at = time.time()
+                    self._stop_encoder_ticks = self._encoder_ticks
+                    self._stop_confirmation_after_sequence = self._encoder_sequence
+                    self._stop_confirmation_ticks = None
+                    self._stop_confirmation_started_at = None
+                    self._stop_confirmation_last_at = None
+                    self._stop_confirmation_samples = 0
+                    self._pending_terminal_stop = None
+                elif pending["attempts"] >= 3:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "STOP_NOT_DELIVERED"
+                    self._touch_locked()
+                return delivered
+        finally:
+            with self._lock:
+                if self._pending_terminal_stop is pending:
+                    pending["processing"] = False
+
+    @staticmethod
+    def _original_goal_pose_confirmed(
+        goal: dict,
+        pose: dict | None,
+        *,
+        now: float | None = None,
+        max_age_sec: float = 0.5,
+        min_received_at: float | None = None,
+    ) -> bool:
+        """Prove arrival at the original Goal with a fresh server-received pose.
+
+        The cached pose must have been received *after* the Pi STOP ACK:
+        encoder stability alone cannot validate a pose from an old goal.
+        """
+        if not isinstance(goal, dict) or not isinstance(pose, dict):
+            return False
+        try:
+            gx, gy, gyaw = float(goal["x"]), float(goal["y"]), float(goal["yaw"])
+            px, py, pyaw = float(pose["x"]), float(pose["y"]), float(pose["yaw"])
+            received_at = float(pose["received_at"])
+            current = time.time() if now is None else float(now)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if not all(math.isfinite(v) for v in (
+            gx, gy, gyaw, px, py, pyaw, received_at, current
+        )):
+            return False
+        if (received_at <= 0.0 or
+            received_at > current or
+            current - received_at > max_age_sec):
+            return False
+        if min_received_at is not None and received_at < min_received_at:
+            return False
+        yaw_error = math.atan2(math.sin(pyaw - gyaw), math.cos(pyaw - gyaw))
+        return math.hypot(px - gx, py - gy) <= 0.50 and abs(yaw_error) <= 0.20
+
+    async def _resolve_pending_nav_success(self) -> None:
+        """Finalize Nav2 success only after STOP delivery and stable encoders."""
+        with self._lock:
+            pending = self._pending_nav_success
+            if (
+                pending is None
+                or pending["processing"]
+                or self._state["navigation_state"] != "NAVIGATING"
+                or self._state["emergency_stop"]
+                or self._encoder_stop_violation
+            ):
+                return
+            pending["processing"] = True
+
+        delivered = False
+        try:
+            try:
+                stop_response = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "navigation_goal_succeeded"},
+                )
+                delivered = self._pi_command_delivered(stop_response)
+            except Exception:
+                delivered = False
+
+            with self._lock:
+                if self._pending_nav_success is not pending:
+                    return
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                # A success requires ACK delivery followed by *new*
+                # encoder samples. Never accept pre-STOP telemetry.
+                self._stop_confirmation_after_sequence = (
+                    (self._encoder_sequence or 0) if delivered else None
+                )
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
+
+            deadline = time.monotonic() + self.STOP_CONFIRM_TIMEOUT_SEC
+            while delivered and time.monotonic() < deadline:
+                # Fetch live localization without holding the state lock.
+                # Require it only in live motor mode; dry-run/demo tests
+                # have no physically verified odometry or arrival.
+                physical_pose = (
+                    self._safe_live_pose() if self._motor_output_enabled else None
+                )
+                with self._lock:
+                    if self._pending_nav_success is not pending:
+                        return
+                    if self._state["emergency_stop"] or self._encoder_stop_violation:
+                        return
+                    if self._stop_confirmed_locked(time.time()):
+                        if self._motor_output_enabled and not self._original_goal_pose_confirmed(
+                            self._state["active_goal"], physical_pose,
+                            now=time.time(),
+                            max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
+                            min_received_at=self._stop_commanded_at,
+                        ):
+                            self._state["navigation_state"] = "FAILED"
+                            self._state["last_error"] = "ORIGINAL_GOAL_NOT_REACHED"
+                            self._reset_navigation_progress_locked()
+                            self._touch_locked()
+                            return
+                        self._state["navigation_state"] = "SUCCEEDED"
+                        self._state["active_goal"] = None
+                        self._state["waypoints"] = []
+                        self._state["planned_path"] = []
+                        self._state["last_error"] = None
+                        self._reset_navigation_progress_locked()
+                        self._touch_locked()
+                        return
+                await asyncio.sleep(0.02)
+
+            with self._lock:
+                if self._pending_nav_success is pending and not self._state["emergency_stop"]:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = (
+                        "STOP_NOT_CONFIRMED" if delivered else "STOP_NOT_DELIVERED"
+                    )
+                    # Preserve the active Goal for an explicit operator Retry.
+                    self._reset_navigation_progress_locked()
+                    self._touch_locked()
+        finally:
+            with self._lock:
+                if self._pending_nav_success is pending:
+                    self._pending_nav_success = None
 
     async def _fail_blocked_navigation(self) -> bool:
         try:
@@ -1270,10 +1966,11 @@ class NavigationControlApi:
                     )
                 return False
 
-            delivered = await self._send_robot_command(
+            stop_response = await self._send_robot_command(
                 self._robot_id,
                 {"type": "stop", "reason": "navigation_blocked_timeout"},
             )
+            delivered = self._pi_command_delivered(stop_response)
             failed = False
             with self._lock:
                 self._stop_commanded_at = time.time()
@@ -1300,7 +1997,15 @@ class NavigationControlApi:
                     )
                 if superseded:
                     return False
-                await self.emergency_stop("BLOCKED_TIMEOUT", automatic=True)
+                # A Nav2 cancellation exception does not establish a
+                # physically blocked route. The Pi STOP was already sent;
+                # keep its command gate armed and report FAILED, not E-STOP.
+                with self._lock:
+                    self._arm_pending_stop_locked()
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "NAV_CANCEL_FAILED"
+                    self._reset_navigation_progress_locked()
+                    self._touch_locked()
                 return True
             if not delivered:
                 # Nav2 is canceled, so the route is no longer producing commands.
@@ -1354,12 +2059,21 @@ class NavigationControlApi:
         return terminal if terminal in {"SUCCEEDED", "FAILED", "CANCELED"} else None
 
     def _apply_cancel_terminal_locked(self, terminal: str) -> None:
+        if terminal == "SUCCEEDED":
+            # A cancel/success race cannot bypass physical-stop verification.
+            if self._pending_nav_success is None:
+                self._pending_nav_success = {
+                    "started_at": time.time(), "processing": False,
+                }
+            return
         self._state["navigation_state"] = terminal
-        if terminal in {"SUCCEEDED", "CANCELED"}:
+        if terminal == "CANCELED":
             self._state["active_goal"] = None
+            self._state["waypoints"] = []
             self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
+        self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
         self._rotation_extension_sec = 0.0
@@ -1560,6 +2274,55 @@ class NavigationControlApi:
         goal["yaw"] = math.atan2(math.sin(goal["yaw"]), math.cos(goal["yaw"]))
         return goal
 
+    def _validated_waypoints(
+        self, raw: Any, final_goal: dict[str, float]
+    ) -> list[dict[str, float]]:
+        """Intermediate points need XY only; route headings are planning hints."""
+        if raw is None:
+            return []
+        if not isinstance(raw, list) or len(raw) > 24:
+            raise NavigationControlError(
+                "INVALID_WAYPOINTS", "waypoints must be a list of at most 24 points.", 400,
+            )
+        points: list[dict[str, float]] = []
+        for value in raw:
+            if not isinstance(value, dict) or isinstance(value.get("x"), bool) or isinstance(value.get("y"), bool):
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Each waypoint requires numeric x and y.", 400,
+                )
+            try:
+                x, y = float(value["x"]), float(value["y"])
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Each waypoint requires finite x and y.", 400,
+                ) from exc
+            if not math.isfinite(x) or not math.isfinite(y):
+                raise NavigationControlError(
+                    "INVALID_WAYPOINTS", "Waypoint coordinates must be finite.", 400,
+                )
+            points.append({"x": x, "y": y})
+        for i, point in enumerate(points):
+            following = points[i + 1] if i + 1 < len(points) else final_goal
+            dx, dy = following["x"] - point["x"], following["y"] - point["y"]
+            # Humble planner requires a PoseStamped yaw even though arrival at
+            # intermediate points is determined exclusively by 0.50m XY.
+            point["yaw"] = math.atan2(dy, dx) if math.hypot(dx, dy) > 1e-6 else final_goal["yaw"]
+        return points
+
+    def _compute_path_for_route(
+        self, final_goal: dict[str, float], waypoints: list[dict[str, float]]
+    ) -> Any:
+        if waypoints:
+            return self._ros.compute_path_through_poses([*waypoints, final_goal])
+        return self._ros.compute_path(final_goal)
+
+    def _navigate_route(
+        self, final_goal: dict[str, float], waypoints: list[dict[str, float]]
+    ) -> Any:
+        if waypoints:
+            return self._ros.navigate_through_poses([*waypoints, final_goal])
+        return self._ros.navigate_to_pose(final_goal)
+
     def _validate_goal_in_active_map(self, goal: dict[str, float]) -> None:
         with self._lock:
             active = self._state.get("active_map") or {}
@@ -1576,20 +2339,12 @@ class NavigationControlApi:
             raise NavigationControlError("GOAL_OUT_OF_BOUNDS", "The goal is outside the active map.", 422)
 
     @staticmethod
-    def _normalized_path(path: Any) -> list[dict[str, float]]:
+    def _normalized_path(path: Any) -> list[dict[str, float | str]]:
         if not isinstance(path, list):
             return []
-        output = []
-        for point in path[:5000]:
-            if not isinstance(point, dict):
-                continue
-            try:
-                x, y = float(point["x"]), float(point["y"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if math.isfinite(x) and math.isfinite(y):
-                output.append({"x": x, "y": y})
-        return output
+        # Keep the 32-heading lattice's pose orientations and zero-distance
+        # rotation primitives. XY-only paths from legacy mocks remain valid.
+        return annotate_path(path)
 
     @staticmethod
     def _bounded_int(value: Any, minimum: int, maximum: int, field: str) -> int:
@@ -1609,6 +2364,7 @@ class NavigationControlApi:
         return {
             **self._state,
             "active_goal": dict(self._state["active_goal"]) if self._state["active_goal"] else None,
+            "waypoints": [dict(p) for p in self._state["waypoints"]],
             "planned_path": [dict(point) for point in self._state["planned_path"]],
             "active_map": dict(self._state["active_map"]) if self._state["active_map"] else None,
         }
@@ -1619,6 +2375,9 @@ class NavigationControlApi:
             self._robot_mode != "manual"
             or self._state.get("navigation_mode") != "DRIVING"
             or self._state.get("emergency_stop")
+            # A manual arrival at the final XY must not skip ordered
+            # intermediate waypoints that are still pending.
+            or bool(self._state.get("waypoints"))
             or not isinstance(goal, dict)
             or not isinstance(payload, dict)
         ):
@@ -1635,6 +2394,7 @@ class NavigationControlApi:
         if math.hypot(robot_x - goal_x, robot_y - goal_y) > self._goal_reached_tolerance_m:
             return
         self._state["active_goal"] = None
+        self._state["waypoints"] = []
         self._state["planned_path"] = []
         self._state["navigation_state"] = "SUCCEEDED"
         self._state["last_error"] = None

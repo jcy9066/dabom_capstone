@@ -11,13 +11,22 @@ from urllib.request import Request, urlopen
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 from patrol_navigation.env_config import env_bool, env_float, env_text
+from patrol_navigation.rear_reverse_guard import RearReverseGuard
+from patrol_navigation.nav2_twist_guard import valid_differential_twist
 
 
 class Nav2CommandBridge(Node):
+    # On transport/ACK failures continue attempting STOP at a bounded rate.
+    # Physical output stays disabled until Pi acknowledges a STOP.
+    STOP_RETRY_INTERVAL_SEC = 0.50
+    SHUTDOWN_STOP_MAX_ATTEMPTS = 3
+    SHUTDOWN_STOP_RETRY_SEC = 0.10
+
     def __init__(self) -> None:
         super().__init__("nav2_command_bridge")
 
@@ -108,14 +117,12 @@ class Nav2CommandBridge(Node):
 
         self.control_token = env_text("ROBOT_CONTROL_TOKEN")
 
-        self.request_timeout_sec = max(
-            0.05,
-            float(
-                self.get_parameter(
-                    "request_timeout_sec"
-                ).value
-            ),
+        request_timeout_sec = float(
+            self.get_parameter("request_timeout_sec").value
         )
+        if not math.isfinite(request_timeout_sec) or request_timeout_sec <= 0.0:
+            raise ValueError("request_timeout_sec must be finite and positive")
+        self.request_timeout_sec = max(0.05, request_timeout_sec)
 
         self.odom_topic = str(
             self.get_parameter(
@@ -143,9 +150,9 @@ class Nav2CommandBridge(Node):
             ).value
         )
 
-        if self.wheel_track_m <= 0.0:
+        if not math.isfinite(self.wheel_track_m) or self.wheel_track_m <= 0.0:
             raise ValueError(
-                "wheel_track_m must be positive"
+                "wheel_track_m must be finite and positive"
             )
 
         if (
@@ -158,9 +165,9 @@ class Nav2CommandBridge(Node):
                 "max_wheel_mps must match MAX_WHEEL_MPS on both hosts"
             )
 
-        if self.twist_timeout_sec <= 0.0:
+        if not math.isfinite(self.twist_timeout_sec) or self.twist_timeout_sec <= 0.0:
             raise ValueError(
-                "twist_timeout_sec must be positive"
+                "twist_timeout_sec must be finite and positive"
             )
 
         if not 0.0 <= self.min_auto_drive_pwm <= 1.0:
@@ -195,6 +202,7 @@ class Nav2CommandBridge(Node):
         self.last_server_log_at = 0.0
         self.last_error_log_at = 0.0
         self.latest_odom: Odometry | None = None
+        self.rear_reverse_guard = RearReverseGuard()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(
@@ -209,8 +217,27 @@ class Nav2CommandBridge(Node):
         self.send_error_count = 0
 
         self._command_condition = threading.Condition()
-        self._pending_command: dict | None = None
+        # In live-motor mode, a newly started/restarted Nav2 bridge must
+        # establish a Pi-acknowledged STOP before accepting ANY drive.
+        # This does not affect DRY_RUN launches.
+        self._pending_command: dict | None = (
+            {
+                "type": "stop",
+                "reason": "nav2_command_bridge_startup",
+                "source": "nav2_command_bridge",
+                "dry_run": False,
+            }
+            if self.motor_output_enabled else None
+        )
         self._worker_shutdown = False
+        # A physical STOP may supersede a pending drive, but no later drive
+        # may erase a queued or currently transmitting STOP command.
+        self._stop_command_in_flight = False
+        # A failed physical STOP must be explicitly retried/acknowledged
+        # before accepting any subsequent auto_drive.
+        self._stop_delivery_failed = bool(self.motor_output_enabled)
+        self._stop_retry_command: dict | None = None
+        self._stop_retry_due_at: float | None = None
 
         self._command_worker_thread = threading.Thread(
             target=self._command_worker,
@@ -230,6 +257,12 @@ class Nav2CommandBridge(Node):
             self.odom_topic,
             self.on_odom,
             20,
+        )
+        self.create_subscription(
+            LaserScan,
+            "/scan",
+            self.on_scan,
+            10,
         )
 
         self.create_timer(
@@ -265,8 +298,28 @@ class Nav2CommandBridge(Node):
             if self._worker_shutdown:
                 return False
 
-            # 아직 전송되지 않은 이전 명령은 폐기하고
-            # 가장 최근 명령만 서버에 전송한다.
+            is_stop = command.get("type") in ("stop", "emergency_stop")
+            pending_is_stop = (
+                self._pending_command is not None
+                and self._pending_command.get("type") in ("stop", "emergency_stop")
+            )
+            # STOP is a safety barrier. Never allow auto_drive to erase
+            # pending, in-flight, or unacknowledged STOP.
+            if not is_stop and (
+                pending_is_stop or self._stop_command_in_flight
+                or self._stop_delivery_failed
+            ):
+                return False
+            if is_stop and (self._stop_command_in_flight or self._stop_delivery_failed):
+                # Repeated zero-Twist / timeout callbacks must not bypass
+                # the retry rate limit or flood the HTTP/Pi ACK path.
+                # Update the reason without delaying a scheduled retry.
+                if self._stop_delivery_failed:
+                    self._stop_retry_command = command
+                    if self._stop_retry_due_at is None:
+                        self._stop_retry_due_at = time.monotonic()
+                    self._command_condition.notify_all()
+                return True
             self._pending_command = command
             self._command_condition.notify()
 
@@ -275,47 +328,116 @@ class Nav2CommandBridge(Node):
     def _command_worker(self) -> None:
         while True:
             with self._command_condition:
-                self._command_condition.wait_for(
-                    lambda: (
-                        self._worker_shutdown
-                        or self._pending_command
-                        is not None
-                    )
-                )
+                while True:
+                    # Shutdown may enqueue one final STOP; do not spawn
+                    # additional retries after the worker is being destroyed.
+                    if self._pending_command is not None:
+                        payload = self._pending_command
+                        self._pending_command = None
+                        break
+                    if self._worker_shutdown:
+                        return
+                    if self._stop_delivery_failed and self._stop_retry_command is not None:
+                        due_at = self._stop_retry_due_at
+                        remaining = max(0.0, (due_at or 0.0) - time.monotonic())
+                        if remaining <= 0.0:
+                            payload = self._stop_retry_command
+                            self._stop_retry_command = None
+                            self._stop_retry_due_at = None
+                            break
+                        self._command_condition.wait(timeout=remaining)
+                    else:
+                        self._command_condition.wait()
 
-                if (
-                    self._worker_shutdown
-                    and self._pending_command is None
-                ):
-                    return
+                is_stop = payload.get("type") in ("stop", "emergency_stop")
+                shutdown_stop = is_stop and self._worker_shutdown
+                if is_stop:
+                    self._stop_command_in_flight = True
 
-                payload = self._pending_command
-                self._pending_command = None
-
-            if payload is not None:
-                self._post_command(payload)
+            stop_confirmed = False
+            # At shutdown, send a bounded number of final STOP attempts
+            # serially after any in-flight drive has completed. Neither
+            # timers nor a second HTTP thread may overtake this command.
+            max_attempts = (
+                self.SHUTDOWN_STOP_MAX_ATTEMPTS if shutdown_stop else 1
+            )
+            try:
+                for attempt in range(max_attempts):
+                    try:
+                        sent = self._post_command(payload)
+                        stop_confirmed = sent is True
+                    except Exception as exc:
+                        # Never kill the sole command worker on a bad payload
+                        # or failed socket; preserve subsequent STOP delivery.
+                        self.send_error_count += 1
+                        try:
+                            self._log_send_error(f"command worker failure: {exc}")
+                        except Exception:
+                            pass
+                    if stop_confirmed:
+                        break
+                    if shutdown_stop and attempt + 1 < max_attempts:
+                        time.sleep(self.SHUTDOWN_STOP_RETRY_SEC)
+            finally:
+                if not is_stop and payload.get("type") == "auto_drive" and not stop_confirmed:
+                    # A timed-out/negative Pi ACK does not prove that the
+                    # wheels stayed still. The Pi may have executed the drive
+                    # and lost its ACK. Discard queued drives, latch motion,
+                    # and serialize a STOP behind the in-flight request.
+                    with self._command_condition:
+                        self._stop_delivery_failed = True
+                        pending_is_stop = (
+                            self._pending_command is not None
+                            and self._pending_command.get("type") in ("stop", "emergency_stop")
+                        )
+                        if not self._worker_shutdown and not pending_is_stop:
+                            self._pending_command = {
+                                "type": "stop",
+                                "reason": "nav2_drive_ack_unconfirmed",
+                                "source": "nav2_command_bridge",
+                                "dry_run": not self.motor_output_enabled,
+                            }
+                        self._command_condition.notify_all()
+                elif is_stop:
+                    with self._command_condition:
+                        self._stop_delivery_failed = not stop_confirmed
+                        self._stop_command_in_flight = False
+                        if stop_confirmed:
+                            self._stop_retry_command = None
+                            self._stop_retry_due_at = None
+                        elif not self._worker_shutdown:
+                            # Persistent, rate-limited retries; keep motion
+                            # latched off until a Pi STOP ACK is received.
+                            self._stop_retry_command = dict(payload)
+                            self._stop_retry_due_at = (
+                                time.monotonic() + self.STOP_RETRY_INTERVAL_SEC
+                            )
+                        self._command_condition.notify_all()
 
     def _post_command(
         self,
         payload: dict,
     ) -> bool:
-        body = json.dumps(
-            payload,
-            allow_nan=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-
-        request = Request(
-            self.command_url,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Robot-Control-Token": self.control_token,
-            },
-            method="POST",
-        )
-
         try:
+            # json.dumps(allow_nan=False), Request construction and the
+            # HTTP response parser must all live inside the exception gate.
+            # Otherwise a malformed payload can kill the STOP worker.
+            body = json.dumps(
+                payload,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+            request = Request(
+                self.command_url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Robot-Control-Token": self.control_token,
+                },
+                method="POST",
+            )
+
             with urlopen(
                 request,
                 timeout=self.request_timeout_sec,
@@ -330,9 +452,17 @@ class Nav2CommandBridge(Node):
                     else {}
                 )
 
-                if not response_data.get(
-                    "ok",
-                    False,
+                if (
+                    not isinstance(response_data, dict)
+                    or response_data.get("ok") is not True
+                    or (
+                        payload.get("type") in ("auto_drive", "stop", "emergency_stop")
+                        and self.motor_output_enabled
+                        and (
+                            response_data.get("delivered") is not True
+                            or response_data.get("blocked") is True
+                        )
+                    )
                 ):
                     raise RuntimeError(
                         "server rejected command: "
@@ -381,6 +511,8 @@ class Nav2CommandBridge(Node):
             json.JSONDecodeError,
             RuntimeError,
             ValueError,
+            TypeError,
+            OverflowError,
         ) as exc:
             self.send_error_count += 1
             self._log_send_error(
@@ -433,6 +565,37 @@ class Nav2CommandBridge(Node):
         msg: Odometry,
     ) -> None:
         self.latest_odom = msg
+        pose = msg.pose.pose
+        self.rear_reverse_guard.update_odometry(
+            float(pose.position.x),
+            float(pose.position.y),
+            self._yaw_from_quaternion(pose.orientation),
+            time.monotonic(),
+        )
+
+    def on_scan(self, msg: LaserScan) -> None:
+        frame_id = str(msg.header.frame_id or "").lstrip("/")
+        base_frame = self.base_frame.lstrip("/")
+        laser_yaw = None
+        if frame_id == base_frame:
+            laser_yaw = 0.0
+        elif frame_id:
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    base_frame, frame_id, Time(),
+                )
+                laser_yaw = self._yaw_from_quaternion(transform.transform.rotation)
+            except TransformException:
+                pass
+        self.rear_reverse_guard.update_scan(
+            msg.ranges,
+            angle_min=float(msg.angle_min),
+            angle_increment=float(msg.angle_increment),
+            range_min=float(msg.range_min),
+            range_max=float(msg.range_max),
+            laser_yaw=laser_yaw,
+            now=time.monotonic(),
+        )
 
     def _estimate_pwm(
         self,
@@ -569,20 +732,33 @@ class Nav2CommandBridge(Node):
         linear_x = float(msg.linear.x)
         angular_z = float(msg.angular.z)
 
-        if (
-            not math.isfinite(linear_x)
-            or not math.isfinite(angular_z)
+        # Validate all six axes, not only the two we convert to wheel
+        # speeds. Otherwise lateral/vertical commands can be silently
+        # accepted, or mistaken for a physically verified zero STOP.
+        if not valid_differential_twist(
+            linear_x, msg.linear.y, msg.linear.z,
+            msg.angular.x, msg.angular.y, angular_z,
         ):
             self.rejected_count += 1
 
             self.get_logger().warning(
-                "Twist rejected: NaN or Infinity"
+                "Twist rejected: non-finite or unsupported motion axis"
             )
-
-            self._queue_stop(
-                "nav2_invalid_twist"
-            )
+            self._queue_stop("nav2_invalid_twist")
             return
+
+        now = time.monotonic()
+        rear_blind_limited = False
+        if linear_x < 0.0:
+            linear_x, rear_blind_limited, rear_stop_reason = (
+                self.rear_reverse_guard.limit_reverse(
+                    linear_x, max_wheel_mps=self.max_wheel_mps, now=now,
+                )
+            )
+            if rear_stop_reason is not None:
+                self.last_twist_at = now
+                self._queue_stop(rear_stop_reason)
+                return
 
         half_track = (
             self.wheel_track_m / 2.0
@@ -613,8 +789,14 @@ class Nav2CommandBridge(Node):
 
         left_mps = left_raw * scale
         right_mps = right_raw * scale
-
-        now = time.monotonic()
+        if rear_blind_limited:
+            # Angular steering can enlarge individual wheel speeds after the
+            # linear_x cap. Enforce the 30% limit on both wheels.
+            rear_limit = self.max_wheel_mps * 0.30
+            rear_peak = max(abs(left_mps), abs(right_mps))
+            if rear_peak > rear_limit:
+                left_mps *= rear_limit / rear_peak
+                right_mps *= rear_limit / rear_peak
 
         self.last_twist_at = now
         self.timed_out = False
@@ -633,6 +815,7 @@ class Nav2CommandBridge(Node):
                     "type": "auto_drive",
                     "left_mps": left_mps,
                     "right_mps": right_mps,
+                    "rear_blind_limited": rear_blind_limited,
                 }
             )
 
@@ -691,28 +874,39 @@ class Nav2CommandBridge(Node):
         )
 
     def destroy_node(self):
-        if self.motor_output_enabled:
-            # 종료 시에는 대기열을 거치지 않고 즉시 정지 요청한다.
-            self._post_command(
-                {
-                    "type": "stop",
-                    "reason": (
-                        "nav2_command_bridge_shutdown"
-                    ),
-                }
-            )
-
+        # Serialize the final STOP behind any in-flight drive on the SAME
+        # worker. A synchronous STOP from this thread could be delivered
+        # before a blocked drive request and then undone by that old drive.
+        # If the join deadline expires, the daemon worker will still send
+        # this queued STOP after its bounded HTTP request finishes; server
+        # and Pi watchdogs independently handle network outages.
         with self._command_condition:
-            self._pending_command = None
+            self._pending_command = (
+                {"type": "stop", "reason": "nav2_command_bridge_shutdown"}
+                if self.motor_output_enabled else None
+            )
             self._worker_shutdown = True
             self._command_condition.notify_all()
 
+        # Budget for one in-flight drive, up to three final STOP requests,
+        # and the bounded retry intervals. A kernel/socket hang can still
+        # exceed this, so the independent Pi/Pico watchdogs are essential.
         self._command_worker_thread.join(
             timeout=(
-                self.request_timeout_sec
+                (1 + self.SHUTDOWN_STOP_MAX_ATTEMPTS) * self.request_timeout_sec
+                + (self.SHUTDOWN_STOP_MAX_ATTEMPTS - 1) * self.SHUTDOWN_STOP_RETRY_SEC
                 + 0.5
             )
         )
+        if self._command_worker_thread.is_alive():
+            self.get_logger().error(
+                "Nav2 command worker still active during shutdown; "
+                "remote STOP delivery remains unconfirmed"
+            )
+        elif self._stop_delivery_failed:
+            self.get_logger().error(
+                "Nav2 shutdown STOP was not acknowledged by the server"
+            )
 
         return super().destroy_node()
 
