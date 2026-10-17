@@ -1806,20 +1806,37 @@ class NavigationControlApi:
                     pending["processing"] = False
 
     @staticmethod
-    def _original_goal_pose_confirmed(goal: dict, pose: dict | None) -> bool:
-        """Evaluate the actual robot pose against the user's original goal.
+    def _original_goal_pose_confirmed(
+        goal: dict,
+        pose: dict | None,
+        *,
+        now: float | None = None,
+        max_age_sec: float = 0.5,
+        min_received_at: float | None = None,
+    ) -> bool:
+        """Prove arrival at the original Goal with a fresh server-received pose.
 
-        A Smac alternate endpoint and a permissive Nav2 XY goal checker
-        must not combine into a synthetic success far from the request.
+        The cached pose must have been received *after* the Pi STOP ACK:
+        encoder stability alone cannot validate a pose from an old goal.
         """
         if not isinstance(goal, dict) or not isinstance(pose, dict):
             return False
         try:
             gx, gy, gyaw = float(goal["x"]), float(goal["y"]), float(goal["yaw"])
             px, py, pyaw = float(pose["x"]), float(pose["y"]), float(pose["yaw"])
+            received_at = float(pose["received_at"])
+            current = time.time() if now is None else float(now)
         except (KeyError, TypeError, ValueError, OverflowError):
             return False
-        if not all(math.isfinite(v) for v in (gx, gy, gyaw, px, py, pyaw)):
+        if not all(math.isfinite(v) for v in (
+            gx, gy, gyaw, px, py, pyaw, received_at, current
+        )):
+            return False
+        if (received_at <= 0.0 or
+            received_at > current or
+            current - received_at > max_age_sec):
+            return False
+        if min_received_at is not None and received_at < min_received_at:
             return False
         yaw_error = math.atan2(math.sin(pyaw - gyaw), math.cos(pyaw - gyaw))
         return math.hypot(px - gx, py - gy) <= 0.50 and abs(yaw_error) <= 0.20
@@ -1879,7 +1896,10 @@ class NavigationControlApi:
                         return
                     if self._stop_confirmed_locked(time.time()):
                         if self._motor_output_enabled and not self._original_goal_pose_confirmed(
-                            self._state["active_goal"], physical_pose
+                            self._state["active_goal"], physical_pose,
+                            now=time.time(),
+                            max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
+                            min_received_at=self._stop_commanded_at,
                         ):
                             self._state["navigation_state"] = "FAILED"
                             self._state["last_error"] = "ORIGINAL_GOAL_NOT_REACHED"

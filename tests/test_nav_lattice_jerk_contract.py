@@ -204,3 +204,34 @@ def test_target_speed_settles_without_breaking_jerk_limit():
             assert abs(value) <= 1.000001
             previous_velocity, previous_accel = value, accel
         assert abs(previous_velocity - target) < 1e-4
+
+
+@pytest.mark.parametrize("start,target", [
+    (1.0, -1.0), (-1.0, 1.0), (0.5, -0.5), (-0.5, 0.5),
+])
+def test_jerk_reversal_has_no_artificial_zero_acceleration_impulse(start, target):
+    limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+    last_v, last_a = 0.0, 0.0
+    for tick in range(40):
+        # Drive to a stable initial speed before changing target direction.
+        command = start if tick < 15 else target
+        velocity, right = limiter.step(command, -command, tick * 0.1)
+        acceleration = (velocity - last_v) / 0.1
+        assert abs(acceleration) <= 1.000001
+        assert abs(acceleration - last_a) <= 0.200002
+        assert right == pytest.approx(-velocity)
+        last_v, last_a = velocity, acceleration
+
+
+def test_nonexact_zero_crossing_preserves_acceleration_continuity():
+    limiter = WheelJerkLimiter(max_accel=1.0, max_jerk=2.0)
+    last_v, last_a = 0.0, 0.0
+    # An early reversal crosses zero between two commands, unlike a fully
+    # settled 1.0 -> -1.0 reversal; it must not insert an abrupt zero.
+    for tick in range(45):
+        target = 0.5 if tick < 8 else -0.5
+        v, _ = limiter.step(target, target, tick * 0.1)
+        actual_a = (v - last_v) / 0.1
+        assert abs(actual_a - last_a) <= 0.200002
+        last_v, last_a = v, actual_a
+    assert last_v == pytest.approx(-0.5, abs=0.001)

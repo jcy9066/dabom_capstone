@@ -76,11 +76,20 @@ class WheelJerkLimiter:
             # Do NOT snap to target while acceleration is nonzero.
             # That implicit acceleration impulse would exceed max_jerk.
             # Small smooth corrections may overshoot the target briefly.
-            # Never drive straight from positive to negative (or vice versa)
-            # without first commanding a zero-velocity boundary.
+            # Do not erase acceleration on a zero crossing. The resulting
+            # velocity would have a discontinuous acceleration impulse
+            # larger than max_jerk. Snap numerical roundoff to exactly zero
+            # only when the acceleration needed to hit zero is reachable
+            # from the previous acceleration under this timestep's limit.
+            # For other crossings, retain the smooth, jerk-limited velocity;
+            # MotorController's encoder-confirmed direction interlock owns
+            # the physical STOP between forward and reverse motor commands.
             if previous_v * target < 0 and previous_v * velocity <= 0:
-                velocity = 0.0
-                limited_a = 0.0
+                if abs(velocity) <= 1e-10:
+                    zero_accel = -previous_v / dt
+                    if abs(zero_accel - previous_a) <= self.max_jerk * dt + 1e-9:
+                        velocity = 0.0
+                        limited_a = zero_accel
             next_velocity.append(max(-1.0, min(1.0, velocity)))
             next_acceleration.append(limited_a)
 
