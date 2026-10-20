@@ -74,7 +74,9 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertIn("stopAllLocalInputs(false)", self.script_source)
         self.assertIn("window.setDashboardRobotConnection?.(payload?.connected === true)", navigation_source)
         self.assertIn("window.applyServerPatrolMode?.(payload?.robot_mode)", navigation_source)
-        self.assertIn("payload.connected !== true || state.warningPending", navigation_source)
+        self.assertIn("warningButton.disabled = state.warningPending;", navigation_source)
+        self.assertIn("beepButton.disabled = state.beepPending;", navigation_source)
+        self.assertIn("if (state.control?.connected !== true)", navigation_source)
 
     def test_changed_assets_have_matching_cache_busters(self):
         version = "v="
