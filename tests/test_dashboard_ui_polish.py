@@ -58,14 +58,12 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("mappingLabel.textContent = 'Mapping'", NAV_MODE)
         self.assertIn("drivingLabel.textContent = 'Driving'", NAV_MODE)
 
-    def test_saved_map_actions_and_location_callbacks_preserved(self):
-        self.assertIn('saved-map-two-column', MAP)
-        self.assertIn('const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);', MAP)
-        self.assertIn('locationColumn.append(locationPanel);', MAP)
-        self.assertNotIn("create('div', 'saved-map-location-footer-spacer')", MAP)
-        self.assertIn('locationColumn.append(locationActions);', MAP)
-        self.assertIn('return { panel, actions };', MAP)
-        self.assertIn('return { panel, actions: null };', MAP)
+    def test_saved_map_actions_preserved_without_location_controls(self):
+        self.assertIn("const layout = create('div', 'saved-map-content');", MAP)
+        self.assertIn("layout.append(mapColumn);", MAP)
+        self.assertNotIn('saved-map-secondary-column', MAP)
+        self.assertNotIn('renderLocationPanel', MAP)
+        self.assertNotIn("requestJson('/api/navigation/locations')", MAP)
         self.assertIn("loadSelectedMap(container, progress)", MAP)
         self.assertIn("startMappingFromModal(container, progress)", MAP)
         self.assertIn("saveCurrentNavigationMap?.(save)", MAP)
@@ -220,10 +218,8 @@ class DashboardUiPolishContract(unittest.TestCase):
     def test_latest_map_and_viewer_refinements(self):
         self.assertIn("${labels.description}", MAP)
         self.assertNotIn("${labels.description} ${labels.selectRequired} ${labels.renameHint}", MAP)
-        self.assertIn("const choice = create('div', 'saved-map-location-choice');", MAP)
-        self.assertIn("selector.hidden = true;", MAP)
-        self.assertIn("saved-map-location-option", CSS)
-        self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", CSS)
+        self.assertIn("grid-template-columns:minmax(0,1fr)", CSS)
+        self.assertNotIn("saved-map-location-choice", MAP)
         self.assertIn("flex:1 1 0!important;height:auto!important;max-height:none!important", CSS)
         self.assertIn("dashboard-drawer-handle-pill--vertical", DASHBOARD)
         self.assertIn("data-drawer-target=\"serverStateCard\"", DASHBOARD)
@@ -231,8 +227,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         led_source = source("frontend/components/controls/led_toggle.js")
         self.assertIn("enabled: false,", led_source)
         self.assertIn("this.enabled = typeof options.enabled === 'boolean'", led_source)
-        self.assertIn("selector.hidden = true;", MAP)
-        self.assertIn("syncPicker();", MAP)
+        self.assertNotIn('saved-map-location-picker', MAP)
 
     def test_legacy_first_paint_is_removed(self):
         self.assertIn('class="dashboard-model-toggle unknown"', DASHBOARD)
@@ -293,7 +288,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("element.style.setProperty('--elastic-scroll-offset', '0px')", elastic)
         self.assertIn(".elastic-scroll-active.elastic-scroll-returning:not(body)", return_css)
 
-    def test_october_15_dashboard_compact_actions_and_location_layout(self):
+    def test_october_15_dashboard_compact_actions_and_map_only_layout(self):
         feedback = source("frontend/services/static/action_feedback.css")
         self.assertIn("header { padding-top: 3px; }", CSS)
         self.assertIn("#topSystemStatusBar { top: 3px; }", CSS)
@@ -308,23 +303,16 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn('.saved-map-primary-column > .saved-map-progress {\n    position:absolute;', CSS)
         self.assertIn('bottom:calc(10px + 44px + 9px + 7px);', CSS)
         self.assertIn('max-height:min(96px,18vh);', CSS)
-        # The new alignment patch may reference the left column only.
-        self.assertNotIn('.saved-map-secondary-column', CSS.split('/* Saved maps: the left progress message', 1)[1])
-        self.assertNotIn('.saved-map-secondary-column > .saved-map-location-footer-spacer', CSS)
-        self.assertIn('.saved-map-secondary-column > .saved-map-location-actions', CSS)
-        self.assertIn('flex:0 0 auto;min-height:44px;align-items:center;', CSS)
-        self.assertIn('margin-top:0!important;padding-block:5px!important;', CSS)
+        self.assertNotIn('.saved-map-secondary-column', CSS)
+        self.assertNotIn('.saved-map-two-column', CSS)
+        self.assertIn('.saved-map-content{display:grid;grid-template-columns:minmax(0,1fr);', CSS)
         self.assertNotIn('.saved-map-modal .dashboard-control-button{', CSS)
         self.assertNotIn('#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) button {', CSS)
-        self.assertIn('panel.append(picker, fields);', MAP)
-        self.assertNotIn('panel.append(picker, fields, actions);', MAP)
         self.assertNotIn('height:100%!important;min-height:0;align-self:stretch;', CSS)
         self.assertNotIn('height:max-content!important;min-height:0;align-self:start;', CSS)
         self.assertIn('flex:1 1 0!important;min-height:0;max-height:none!important;', CSS)
         self.assertIn("display:flex;flex-direction:row;flex-wrap:nowrap;", CSS)
-        self.assertNotIn("panel.append(create('div', 'saved-map-section-title', labels.locationTitle));", MAP)
-        self.assertIn("const newNameInput = create('input', 'saved-map-location-new');", MAP)
-        self.assertIn("inputs['saved-map-location-name'].value = draftName;", MAP)
+        self.assertNotIn("saved-map-location-new", MAP)
 
     def test_filter_bar_buttons_share_the_normal_control_radius(self):
         # Filter controls use the same 8px token as ordinary buttons.
@@ -339,7 +327,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("border-radius: var(--ui-radius-control);", CSS)
 
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261016-map-action-roles-v6", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261020-map-only-v7", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
@@ -350,8 +338,8 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
         self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261016-map-action-semantic-v10', DASHBOARD)
-        self.assertIn('selected_ui.css?v=20261016-map-action-semantic-v10', LOGIN)
+        self.assertIn('selected_ui.css?v=20261020-single-map-column-v11', DASHBOARD)
+        self.assertIn('selected_ui.css?v=20261020-single-map-column-v11', LOGIN)
 
 
 if __name__ == "__main__":
