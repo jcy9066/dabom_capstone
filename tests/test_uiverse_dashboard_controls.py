@@ -89,7 +89,7 @@ class UiverseDashboardControlsTest(unittest.TestCase):
             self.assertIn(f"uiverse-moon-dot-{i}", moon_content)
             self.assertIn(f"uiverse-light-ray-{i}", moon_content)
         self.assertRegex(
-            HTML, r'(?s)uiverse-cloud-6[^>]*>.*?</svg>\\s*</div>\\s*<div class="uiverse-stars">'
+            HTML, r'(?s)uiverse-cloud-6[^>]*>.*?</svg>\s*</div>\s*<div class="uiverse-stars">'
         )
         for prop in ("flex: 0 0 54px;", "width: 54px;", "height: 30.6px;",
                      "width: 60px;", "height: 34px;", "transform: scale(.9);",
