@@ -1,0 +1,219 @@
+/* Dashboard-scoped interpretations of:
+ * Voxybuns: https://uiverse.io/Voxybuns/lucky-fireant-71
+ * RiccardoRapelli: https://uiverse.io/RiccardoRapelli/jolly-chicken-91
+ * UI references are MIT licensed. Original event handlers and Telegram
+ * feedback markup remain owned by their existing controllers.
+ */
+
+/* Raised, tactile Uiverse action buttons: no change to the three-row grid. */
+.dashboard-action-controls .action-btn.uiverse-press-button {
+    --uiverse-button-face: #f5f7fa;
+    --uiverse-button-edge: #697c92;
+    --uiverse-button-ink: #25364b;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 4px 6px;
+    background: var(--uiverse-button-face);
+    border: 1px solid var(--uiverse-button-edge);
+    border-radius: 8px;
+    box-shadow: 0 3px 0 var(--uiverse-button-edge), 0 5px 8px rgba(12,24,40,.1);
+    transform: translateY(-2px);
+    transition: transform .12s ease, box-shadow .12s ease, background-color .18s ease, border-color .18s ease;
+    isolation: isolate;
+}
+.dashboard-action-controls .action-beep.uiverse-press-button {
+    --uiverse-button-face: #e6eef5;
+    --uiverse-button-edge: #638097;
+    color: #24445c;
+}
+.dashboard-action-controls .action-warning.uiverse-press-button {
+    --uiverse-button-face: #f3ebe0;
+    --uiverse-button-edge: #a27e4d;
+    color: #705027;
+}
+.dashboard-action-controls .action-report.uiverse-press-button {
+    --uiverse-button-face: #f5e5e8;
+    --uiverse-button-edge: #ab6472;
+    /* Report label/icons and sending/success/error animations are untouched. */
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--uiverse-button-face) 86%, white);
+    border-color: var(--uiverse-button-edge);
+    box-shadow: 0 4px 0 var(--uiverse-button-edge), 0 6px 10px rgba(12,24,40,.14);
+    transform: translateY(-3px);
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled) {
+    box-shadow: 0 0 0 var(--uiverse-button-edge), 0 1px 3px rgba(12,24,40,.1);
+    transform: translateY(1px);
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:disabled {
+    transform: translateY(-2px);
+    box-shadow: 0 3px 0 var(--uiverse-button-edge);
+}
+/* Preserve the original report feedback's non-dimmed sending state. */
+.dashboard-action-controls .action-report.uiverse-press-button[data-report-state="sending"]:disabled {
+    opacity: 1;
+    cursor: progress;
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+body.dark-mode .dashboard-action-controls .action-beep.uiverse-press-button {
+    --uiverse-button-face: #293c4e;
+    --uiverse-button-edge: #789eaf;
+    color: #c9e4f1;
+}
+body.dark-mode .dashboard-action-controls .action-warning.uiverse-press-button {
+    --uiverse-button-face: #3d3429;
+    --uiverse-button-edge: #b69661;
+    color: #f3d9a6;
+}
+body.dark-mode .dashboard-action-controls .action-report.uiverse-press-button {
+    --uiverse-button-face: #402c35;
+    --uiverse-button-edge: #ba7185;
+}
+body.dark-mode .dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--uiverse-button-face) 88%, #c4cbd8);
+}
+
+/* RiccardoRapelli day/night switch, controlled by the existing .active class.
+ * The existing role=switch/aria-checked/onClick/keyboard handling is retained. */
+#darkToggle.uiverse-day-night {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 60px;
+    width: 60px;
+    min-width: 60px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 34px;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+    cursor: pointer;
+}
+#darkToggle.uiverse-day-night.active,
+body.dark-mode #darkToggle.uiverse-day-night {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+#darkToggle.uiverse-day-night::before { display: none; }
+#darkToggle.uiverse-day-night .uiverse-toggle-scene {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    background: #2196f3;
+    transition: background-color .4s ease;
+}
+#darkToggle.uiverse-day-night.active .uiverse-toggle-scene {
+    background: #121521;
+}
+#darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
+    position: absolute;
+    z-index: 3;
+    left: 4px;
+    top: 4px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #ffdb32;
+    box-shadow: none;
+    transform: translateX(0);
+    transition: transform .4s ease, background-color .4s ease;
+}
+#darkToggle.uiverse-day-night.active .dark-toggle-slider.uiverse-sun-moon,
+body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
+    left: 4px;
+    top: 4px;
+    width: 26px;
+    height: 26px;
+    background: #e9eefa;
+    box-shadow: none;
+    transform: translateX(26px);
+}
+#darkToggle.uiverse-day-night .uiverse-moon-dot,
+#darkToggle.uiverse-day-night .uiverse-light-ray {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+}
+#darkToggle.uiverse-day-night .uiverse-moon-dot {
+    z-index: 4;
+    fill: #919bac;
+    opacity: 0;
+    transition: opacity .4s ease;
+}
+#darkToggle.uiverse-day-night.active .uiverse-moon-dot { opacity: 1; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-1 { left: 10px; top: 3px; width: 6px; height: 6px; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-2 { left: 2px; top: 10px; width: 10px; height: 10px; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-3 { left: 16px; top: 18px; width: 3px; height: 3px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray { z-index: -1; fill: #fff; opacity: .18; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-1 { left: -8px; top: -8px; width: 43px; height: 43px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-2 { left: -50%; top: -50%; width: 55px; height: 55px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-3 { left: -18px; top: -18px; width: 60px; height: 60px; }
+#darkToggle.uiverse-day-night .uiverse-cloud {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+    animation: uiverse-cloud-drift 6s ease-in-out infinite;
+}
+#darkToggle.uiverse-day-night .uiverse-cloud-dark { fill: #c6d4dc; animation-delay: 1s; }
+#darkToggle.uiverse-day-night .uiverse-cloud-light { fill: #f7f9ff; }
+#darkToggle.uiverse-day-night .uiverse-cloud-1 { left: 30px; top: 15px; width: 40px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-2 { left: 44px; top: 10px; width: 20px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-3 { left: 18px; top: 24px; width: 30px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-4 { left: 36px; top: 18px; width: 40px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-5 { left: 48px; top: 14px; width: 20px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-6 { left: 22px; top: 26px; width: 30px; }
+#darkToggle.uiverse-day-night .uiverse-stars {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transform: translateY(-32px);
+    transition: transform .4s ease, opacity .4s ease;
+    pointer-events: none;
+}
+#darkToggle.uiverse-day-night.active .uiverse-stars { opacity: 1; transform: translateY(0); }
+#darkToggle.uiverse-day-night .uiverse-star {
+    position: absolute;
+    display: block;
+    fill: white;
+    animation: uiverse-star-twinkle 2s ease-in-out infinite;
+}
+#darkToggle.uiverse-day-night .uiverse-star-1 { width: 20px; top: 2px; left: 3px; animation-delay: .3s; }
+#darkToggle.uiverse-day-night .uiverse-star-2 { width: 6px; top: 16px; left: 3px; }
+#darkToggle.uiverse-day-night .uiverse-star-3 { width: 12px; top: 20px; left: 10px; animation-delay: .6s; }
+#darkToggle.uiverse-day-night .uiverse-star-4 { width: 18px; top: 0; left: 18px; animation-delay: 1.3s; }
+#darkToggle.uiverse-day-night:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+@keyframes uiverse-cloud-drift {
+    0%, 100% { transform: translateX(0); }
+    40% { transform: translateX(4px); }
+    80% { transform: translateX(-4px); }
+}
+@keyframes uiverse-star-twinkle {
+    0%, 100% { transform: scale(1); }
+    40% { transform: scale(1.2); }
+    80% { transform: scale(.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-action-controls .action-btn.uiverse-press-button,
+    #darkToggle.uiverse-day-night .uiverse-toggle-scene,
+    #darkToggle.uiverse-day-night .dark-toggle-slider,
+    #darkToggle.uiverse-day-night .uiverse-moon-dot,
+    #darkToggle.uiverse-day-night .uiverse-stars {
+        transition: none;
+    }
+    #darkToggle.uiverse-day-night .uiverse-cloud,
+    #darkToggle.uiverse-day-night .uiverse-star { animation: none; }
+}
