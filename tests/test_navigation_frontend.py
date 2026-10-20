@@ -338,7 +338,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
     def test_saved_map_requires_explicit_or_server_active_selection(self):
         self.assertNotIn("maps[0]", self.map_control)
         self.assertNotIn("map === maps[0]", self.map_control)
-        self.assertIn("const selectedName = snapshot?.selectedName || activeName", self.map_control)
+        self.assertIn("const selectedName = snapshot?.selectedName !== undefined ? snapshot.selectedName : activeName", self.map_control)
+        self.assertIn("currentSelection = currentSelection === map.map_name ? null : map.map_name", self.map_control)
+        self.assertIn("if (event.target !== radio) event.preventDefault()", self.map_control)
+        self.assertIn("for (const input of radioButtons)", self.map_control)
+        self.assertIn("if (loadButton) loadButton.disabled = !currentSelection", self.map_control)
+        self.assertIn("currentSelection = selectedMapName(container)", self.map_control)
         self.assertIn("radio.checked = map.map_name === selectedName", self.map_control)
         self.assertIn("load.disabled = !selectedMapName(container)", self.map_control)
         self.assertIn("labels.selectRequired", self.map_control)
