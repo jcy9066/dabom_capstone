@@ -22,6 +22,15 @@
  * their existing controllers.
  */
 
+/* Align the raised faces with the left control card without moving its rows.
+   Top padding compensates for the 2px raised offset; the final shadow stays
+   inside the same vertical boundary. */
+.dashboard-action-controls.split-btn-container {
+    padding: 6px 0 2px;
+    row-gap: 8px;
+    box-sizing: border-box;
+    min-height: 0;
+}
 /* Raised, tactile Uiverse action buttons: no change to the three-row grid. */
 .dashboard-action-controls .action-btn.uiverse-press-button {
     --uiverse-button-face: #f5f7fa;
@@ -63,14 +72,20 @@
     box-shadow: 0 4px 0 var(--uiverse-button-edge), 0 6px 10px rgba(12,24,40,.14);
     transform: translateY(-3px);
 }
-.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled) {
+.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled),
+.dashboard-action-controls .action-btn.uiverse-press-button.uiverse-action-clicked {
     box-shadow: 0 0 0 var(--uiverse-button-edge), 0 1px 3px rgba(12,24,40,.1);
     transform: translateY(1px);
 }
-.dashboard-action-controls .action-btn.uiverse-press-button:disabled {
+.dashboard-action-controls .action-btn.uiverse-press-button:disabled:not(.uiverse-action-clicked) {
     transform: translateY(-2px);
     box-shadow: 0 3px 0 var(--uiverse-button-edge);
 }
+.dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked {
+    background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
+    border-color: var(--uiverse-button-edge);
+}
+/* The existing 650ms ripple remains visible after the short press animation. */
 /* Preserve the original report feedback's non-dimmed sending state. */
 .dashboard-action-controls .action-report.uiverse-press-button[data-report-state="sending"]:disabled {
     opacity: 1;
@@ -103,10 +118,10 @@ body.dark-mode .dashboard-action-controls .action-btn.uiverse-press-button:hover
 #darkToggle.uiverse-day-night {
     position: relative;
     display: inline-block;
-    flex: 0 0 60px;
-    width: 60px;
-    min-width: 60px;
-    height: 34px;
+    flex: 0 0 54px;
+    width: 54px;
+    min-width: 54px;
+    height: 30.6px;
     padding: 0;
     border: 0;
     border-radius: 34px;
@@ -124,14 +139,20 @@ body.dark-mode #darkToggle.uiverse-day-night {
 #darkToggle.uiverse-day-night::before { display: none; }
 #darkToggle.uiverse-day-night .uiverse-toggle-scene {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
+    width: 60px;
+    height: 34px;
     overflow: hidden;
-    border-radius: inherit;
+    border-radius: 34px;
+    transform: scale(.9);
+    transform-origin: top left;
     background: #2196f3;
     transition: background-color .4s ease;
 }
-#darkToggle.uiverse-day-night.active .uiverse-toggle-scene {
-    background: #121521;
+#darkToggle.uiverse-day-night.active .uiverse-toggle-scene,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-toggle-scene {
+    background: #000;
 }
 #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
     position: absolute;
@@ -141,10 +162,10 @@ body.dark-mode #darkToggle.uiverse-day-night {
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    background: #ffdb32;
+    background: yellow;
     box-shadow: none;
     transform: translateX(0);
-    transition: transform .4s ease, background-color .4s ease;
+    transition: transform .4s ease, background-color .4s ease, rotate .4s ease;
 }
 #darkToggle.uiverse-day-night.active .dark-toggle-slider.uiverse-sun-moon,
 body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
@@ -152,9 +173,10 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
     top: 4px;
     width: 26px;
     height: 26px;
-    background: #e9eefa;
+    background: #fff;
     box-shadow: none;
     transform: translateX(26px);
+    animation: uiverse-moon-rotate .6s ease-in-out both;
 }
 #darkToggle.uiverse-day-night .uiverse-moon-dot,
 #darkToggle.uiverse-day-night .uiverse-light-ray {
@@ -164,11 +186,12 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
 }
 #darkToggle.uiverse-day-night .uiverse-moon-dot {
     z-index: 4;
-    fill: #919bac;
+    fill: gray;
     opacity: 0;
     transition: opacity .4s ease;
 }
-#darkToggle.uiverse-day-night.active .uiverse-moon-dot { opacity: 1; }
+#darkToggle.uiverse-day-night.active .uiverse-moon-dot,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-moon-dot { opacity: 1; }
 #darkToggle.uiverse-day-night .uiverse-moon-dot-1 { left: 10px; top: 3px; width: 6px; height: 6px; }
 #darkToggle.uiverse-day-night .uiverse-moon-dot-2 { left: 2px; top: 10px; width: 10px; height: 10px; }
 #darkToggle.uiverse-day-night .uiverse-moon-dot-3 { left: 16px; top: 18px; width: 3px; height: 3px; }
@@ -182,8 +205,8 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
     pointer-events: none;
     animation: uiverse-cloud-drift 6s ease-in-out infinite;
 }
-#darkToggle.uiverse-day-night .uiverse-cloud-dark { fill: #c6d4dc; animation-delay: 1s; }
-#darkToggle.uiverse-day-night .uiverse-cloud-light { fill: #f7f9ff; }
+#darkToggle.uiverse-day-night .uiverse-cloud-dark { fill: #ccc; animation-delay: 1s; }
+#darkToggle.uiverse-day-night .uiverse-cloud-light { fill: #eee; }
 #darkToggle.uiverse-day-night .uiverse-cloud-1 { left: 30px; top: 15px; width: 40px; }
 #darkToggle.uiverse-day-night .uiverse-cloud-2 { left: 44px; top: 10px; width: 20px; }
 #darkToggle.uiverse-day-night .uiverse-cloud-3 { left: 18px; top: 24px; width: 30px; }
@@ -198,7 +221,11 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
     transition: transform .4s ease, opacity .4s ease;
     pointer-events: none;
 }
-#darkToggle.uiverse-day-night.active .uiverse-stars { opacity: 1; transform: translateY(0); }
+#darkToggle.uiverse-day-night.active .uiverse-stars,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-stars {
+    opacity: 1;
+    transform: translateY(0);
+}
 #darkToggle.uiverse-day-night .uiverse-star {
     position: absolute;
     display: block;
@@ -212,6 +239,10 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
 #darkToggle.uiverse-day-night:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 4px;
+}
+@keyframes uiverse-moon-rotate {
+    from { rotate: -25deg; }
+    to { rotate: 0deg; }
 }
 @keyframes uiverse-cloud-drift {
     0%, 100% { transform: translateX(0); }
@@ -232,5 +263,6 @@ body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moo
         transition: none;
     }
     #darkToggle.uiverse-day-night .uiverse-cloud,
-    #darkToggle.uiverse-day-night .uiverse-star { animation: none; }
+    #darkToggle.uiverse-day-night .uiverse-star,
+    #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon { animation: none; }
 }
