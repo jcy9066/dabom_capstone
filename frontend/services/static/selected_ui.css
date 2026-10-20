@@ -1979,7 +1979,7 @@ body:not(.login-page) { padding-top: 0; }
 header { padding-top: 3px; }
 #topSystemStatusBar { top: 3px; }
 
-/* Fill the remaining left pane until its action row, regardless of map count.
+/* Fill the single map pane until its action row, regardless of map count.
    Radio cards keep their intrinsic height and the list scrolls independently. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
   flex:1 1 0!important;height:auto!important;max-height:none!important;
@@ -2100,9 +2100,8 @@ body.dark-mode #darkToggle .dark-toggle-slider { left:calc(100% - 19px); }
   .dashboard-ui-startup-error{width:calc(100% - 32px);box-sizing:border-box;}
 }
 
-/* Saved maps: the left progress message must not reserve a row between the
-   white scrollable list and its button footer. The right form/card/footer
-   remain untouched; active feedback overlays the left list's lower edge. */
+/* Saved maps: progress messages overlay the scrollable list without reserving
+   extra space between the map list and its button footer. */
 @media (min-width:801px) {
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
     position:relative;
