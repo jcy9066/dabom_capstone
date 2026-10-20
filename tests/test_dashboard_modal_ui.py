@@ -86,7 +86,10 @@ const responses = {
     '/api/navigation/maps/active': { ok: true, state: 'active', active_map: { map_name: 'alpha' } },
     '/api/navigation/maps': {
         ok: true,
-        maps: [{ map_name: 'alpha', saved_at: '2026-08-28T10:00:00Z', width: 10, height: 20, resolution: 0.05 }],
+        maps: [
+            { map_name: 'alpha', saved_at: '2026-08-28T10:00:00Z', width: 10, height: 20, resolution: 0.05 },
+            { map_name: 'beta', saved_at: '2026-08-29T10:00:00Z', width: 12, height: 22, resolution: 0.05 },
+        ],
     },
     '/api/navigation/locations': {
         ok: true, gps: { fix: false }, locations: [
@@ -127,7 +130,7 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     const pose = primary.querySelector('.saved-map-pose');
     const list = primary.querySelector('.saved-map-list');
     assert.ok(primary.children.indexOf(pose) < primary.children.indexOf(list));
-    assert.strictEqual(list.children.length, 1);
+    assert.strictEqual(list.children.length, 2);
     assert.ok(list.children.every(node => node.className === 'saved-map-option'));
     const layout = manager.body.querySelector('.saved-map-content');
     assert.ok(layout);
@@ -145,6 +148,47 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
         assert.ok(button.className.split(/\s+/).includes('mb-btn'));
     }
     assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+
+    // Clicking the selected card clears its radio and disables loading.
+    const alphaCard = list.children[0];
+    const betaCard = list.children[1];
+    let preventedLabelDefault = false;
+    alphaCard.listeners.click({
+        target: alphaCard.children[1],
+        preventDefault() { preventedLabelDefault = true; },
+    });
+    assert.strictEqual(preventedLabelDefault, true);
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
+
+    // An explicit "none selected" snapshot must not reselect the active map.
+    const snapshot = manager.views.get('savedNavigationMaps').captureState();
+    assert.strictEqual(snapshot.selectedName, null);
+    const rerendered = manager.views.get('savedNavigationMaps').render(manager.activeView.context, snapshot);
+    assert.strictEqual(rerendered.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(rerendered.querySelector('.saved-map-load').disabled, true);
+
+    // Selecting another card and clicking its radio again toggles it off.
+    betaCard.listeners.click({ target: betaCard.children[1], preventDefault() {} });
+    assert.strictEqual(betaCard.children[0].checked, true);
+    assert.strictEqual(alphaCard.children[0].checked, false);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+    let preventedRadioDefault = false;
+    betaCard.listeners.click({
+        target: betaCard.children[0],
+        preventDefault() { preventedRadioDefault = true; },
+    });
+    assert.strictEqual(preventedRadioDefault, false);
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
+
+    // Native radio changes (e.g. keyboard arrow selection) resync toggle state.
+    alphaCard.children[0].checked = true;
+    manager.body.listeners.change({ target: alphaCard.children[0] });
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+    alphaCard.listeners.click({ target: alphaCard.children[1], preventDefault() {} });
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
     assert.ok(!requestedUrls.includes('/api/navigation/locations'));
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
