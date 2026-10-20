@@ -1003,17 +1003,16 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 /* Process switches: hide plain ON/OFF text, retain other state labels and aria-label. */
 .system-control-switch:is(.state-on,.state-off,.state-unreachable) .ui-process-label{display:none;}
 .system-control-switch:is(.state-on,.state-off){min-width:44px;}
-/* Map modal uses two equally sized panes. Layout only; existing map and GPS IDs remain. */
+/* Saved-map modal uses a single full-width map workspace. */
 #commonModal[data-modal-view="savedNavigationMaps"] .modal-content{
   width:min(94vw,1120px);max-width:1120px;max-height:calc(100dvh - 30px);
 }
 .saved-map-modal{gap:5px;min-height:0;}
-.saved-map-two-column{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:12px;min-height:0;}
-.saved-map-primary-column,.saved-map-secondary-column{display:flex;flex-direction:column;gap:9px;min-width:0;
+.saved-map-content{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;min-height:0;}
+.saved-map-primary-column{display:flex;flex-direction:column;gap:9px;min-width:0;
   border:1px solid var(--border-color);border-radius:9px;padding:10px;box-sizing:border-box;background:var(--card-bg2);}
 .saved-map-primary-column .saved-map-list{max-height:min(23vh,190px);scrollbar-width:none;}
 .saved-map-primary-column .saved-map-list::-webkit-scrollbar{display:none;}
-.saved-map-secondary-column .saved-map-location-panel{min-width:0;}
 .saved-map-title-hint{display:inline-block;margin-left:12px;font-size:10px;font-weight:400;color:var(--text-muted);
   line-height:1.45;letter-spacing:0;text-transform:none;vertical-align:middle;}
 #commonModal[data-modal-view="savedNavigationMaps"] .modal-header h2{display:flex;align-items:center;min-width:0;flex-wrap:wrap;}
@@ -1021,7 +1020,6 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
 
 
 @media(max-width:800px){
-  .saved-map-two-column{grid-template-columns:1fr;}
   .saved-map-primary-column .saved-map-list{max-height:min(25vh,220px);}
 }
 /* Patrol history table: center event type, fit full dates without clipping. */
@@ -1165,18 +1163,16 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
   box-shadow:none!important;
 }
 
-/* The map and GPS panels extend together to utilize the available modal height. */
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{align-items:stretch;}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
+/* The map workspace expands to the available modal height. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-content{align-items:stretch;}
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column{
   min-height:min(60vh,550px);box-sizing:border-box;
 }
 
 
 
 @media(max-width:800px){
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{min-height:0;}
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column{min-height:0;}
 }
 
 /* Normal state explanations are redundant; error/unreachable details stay. */
@@ -1254,7 +1250,7 @@ body.dark-mode .d-center-split .dpad-estop-button.active{color:#161B22;}
  * These insets do not change hover/active transitions or click handlers. */
 .gallery-view .gallery-grid,
 .records-view .record-filter-controls,
-.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions,.saved-map-location-actions) {
+.saved-map-modal :is(.saved-map-actions,.saved-map-mode-actions) {
   padding-block: 5px;
   box-sizing: border-box;
 }
@@ -1485,13 +1481,6 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   gap:8px;margin-top:auto;flex-wrap:wrap;padding-block:4px;
 }
 
-.saved-map-secondary-column .saved-map-location-panel {
-  display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
-  padding-bottom:0;box-sizing:border-box;
-}
-.saved-map-secondary-column .saved-map-location-actions {
-  margin-top:auto;padding-top:10px;padding-bottom:0;
-}
 /* Guide cards share row height even when the content counts differ. */
 .system-control-guide {align-items:stretch;grid-template-rows:repeat(3,minmax(0,1fr));}
 .system-control-guide-section {height:100%;box-sizing:border-box;display:flex;flex-direction:column;}
@@ -1556,19 +1545,17 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
   flex:none;
 }
 
-/* Map: fill the existing modal body with the two columns, removing the large
- * empty footer. Both columns keep equal height and inner bottom padding. */
+/* Map: fill the modal body with one map workspace and a bottom action row. */
 #commonModal[data-modal-view="savedNavigationMaps"] .modal-body{
   display:flex;flex-direction:column;min-height:0;
 }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal{
   display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
 }
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-content{
   flex:1 1 auto;min-height:0;align-items:stretch;
 }
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column{
   height:auto;min-height:0;
 }
 .saved-map-primary-column .saved-map-primary-actions{
@@ -1596,17 +1583,11 @@ body.dark-mode .records-view-statusModal .record-drive-mode-badge.is-manual{colo
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#F3EBE0; }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#E7EDF5; }
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#ECE9F3; }
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#E8F1F3; }
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#E2F0ED; }
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#F5E5E8; }
 
 body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-start-mapping { --saved-map-action-bg:#21372D; }
 body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-clear-current { --saved-map-action-bg:#3B332A; }
 body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-current { --saved-map-action-bg:#283748; }
 body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-load { --saved-map-action-bg:#353246; }
-body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-use-current { --saved-map-action-bg:#283841; }
-body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-save-location { --saved-map-action-bg:#203934; }
-body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-delete-location { --saved-map-action-bg:#432C34; }
 
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-modal .mb-btn:not(:disabled) {
   background-color:var(--saved-map-action-bg,var(--card-bg2));
@@ -1621,9 +1602,8 @@ body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-de
  .saved-map-primary-column .saved-map-primary-actions .saved-map-actions{flex:1 1 auto;justify-content:center;}
 }
 @media(max-width:800px){
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column{height:auto;flex:0 0 auto;}
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column{height:auto;min-height:0;}
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-content{height:auto;flex:0 0 auto;}
+ #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column{height:auto;min-height:0;}
 }
 
 /* The offline (paused) animation presents only one centered row of 3 dots.
@@ -1753,16 +1733,9 @@ body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-de
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-primary-actions {
   flex:0 0 auto;order:3;
 }
-/* Keep both footer rows aligned while buttons use the shared control component. */
-#commonModal[data-modal-view="savedNavigationMaps"] :is(.saved-map-primary-actions,.saved-map-location-actions) {
+/* Keep the map action row aligned with the shared bookmark controls. */
+#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-actions {
   min-height:34px;align-items:center;padding-block:5px!important;margin-bottom:0!important;
-}
-
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-panel {
-  padding-bottom:0;
-}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
-  padding-top:5px!important;
 }
 
 /* Shrink current pagination controls to about 70%, including fixed center slots. */
@@ -1963,25 +1936,6 @@ body.dark-mode #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-de
   background:var(--primary-glow);border-color:var(--accent);
 }
 
-/* New-place textbox on the left, saved-place dropdown on the right. */
-.saved-map-location-picker{
-  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-  gap:8px;align-items:center;min-width:0;
-}
-.saved-map-location-picker :is(.saved-map-location-new,.saved-map-location-select){
-  display:block;width:100%;min-width:0;min-height:34px;
-  box-sizing:border-box;padding:7px 9px;border:1px solid var(--border-color);
-  border-radius:7px;background:var(--card-bg);color:var(--text-dark);
-  font:inherit;
-}
-.saved-map-location-picker .saved-map-location-new::placeholder{
-  color:var(--text-muted);opacity:1;
-}
-@media(max-width:540px){
-  .saved-map-location-picker{grid-template-columns:minmax(0,1fr);}
-}
-
-
 /* Dashboard 2026-10-14: center headers on their unsorted/default labels.
  * Sort arrows float inside the same button box without shifting its text. */
 .records-view .record-data-table thead th .record-sort-button {
@@ -2025,21 +1979,6 @@ body:not(.login-page) { padding-top: 0; }
 header { padding-top: 3px; }
 #topSystemStatusBar { top: 3px; }
 
-/* Place picker typography matches the 11px '현재 장소' status row. */
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
-:is(.saved-map-location-new,.saved-map-location-select) {
-  font-family:inherit!important;font-size:11px!important;
-  font-weight:400!important;line-height:1.4!important;
-}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker
-.saved-map-location-new::placeholder {font-size:11px!important;}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-picker select option {
-  font-size:11px;
-}
-
-
-/* Server status now reuses the circular drawer-handle component. */
-
 /* Fill the remaining left pane until its action row, regardless of map count.
    Radio cards keep their intrinsic height and the list scrolls independently. */
 #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list{
@@ -2058,71 +1997,6 @@ header { padding-top: 3px; }
    max-height:none!important;
  }
 }
-
-/* Three pairs: current location, GPS and security occupy one desktop row. */
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:8px;align-items:center;
-}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-row{
-  display:flex;align-items:baseline;gap:6px;
-  min-width:0;font-size:11px;white-space:nowrap;
-}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-label{
-  flex:0 0 auto;
-}
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status-value{
-  display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;
-}
-@media(max-width:540px){
- #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-location-status{
-   grid-template-columns:1fr;gap:4px;
- }
-}
-
-/* Native select remains as a hidden backing value. The visible listbox and
-   options use the same inset surface and hover language as the outer field. */
-.saved-map-location-picker > .saved-map-location-select{
-  display:none!important;
-}
-.saved-map-location-choice{position:relative;min-width:0;z-index:4;}
-.saved-map-location-trigger{
-  position:relative;width:100%;height:34px;min-width:0;padding:7px 27px 7px 9px;
-  border:1px solid var(--border-color);border-radius:7px;
-  background:var(--card-bg);color:var(--text-dark);
-  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
-  overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
-}
-.saved-map-location-trigger::after{
-  content:"";position:absolute;top:calc(50% - 4px);right:12px;
-  width:7px;height:7px;border-right:1.5px solid currentColor;
-  border-bottom:1.5px solid currentColor;transform:rotate(45deg);
-}
-.saved-map-location-trigger:focus-visible,
-.saved-map-location-trigger[aria-expanded="true"]{
-  outline:none;border-color:var(--accent);
-}
-.saved-map-location-options{
-  position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;
-  display:flex;flex-direction:column;gap:3px;
-  max-height:220px;overflow-y:auto;padding:5px;
-  border:1px solid var(--border-color);border-radius:7px;
-  background:var(--card-bg);box-shadow:var(--shadow-md);
-  scrollbar-width:none;-ms-overflow-style:none;
-}
-.saved-map-location-options[hidden]{display:none!important;}
-.saved-map-location-options::-webkit-scrollbar{display:none;width:0;height:0;}
-.saved-map-location-option{
-  box-sizing:border-box;width:100%;padding:8px 9px;min-height:30px;
-  border:1px solid transparent;border-radius:6px;
-  background:transparent;color:var(--text-dark);
-  font:400 11px/1.4 var(--mono);text-align:left;cursor:pointer;
-  overflow-wrap:anywhere;
-}
-.saved-map-location-option:is(:hover,:focus-visible,[aria-selected="true"]){
-  outline:none;background:var(--card-bg2);border-color:var(--accent);
-}
-.saved-map-location-option[hidden]{display:none!important;}
 
 /* Match upper/lower padding of the viewer action strip; keep button sizes. */
 .lidar-control-drawer .lidar-control-strip{
@@ -2162,15 +2036,14 @@ header { padding-top: 3px; }
 }
 
 
-/* A definite, single desktop grid track controls BOTH map panes.
+/* A single desktop grid track stretches the saved-map workspace.
    Do not use height:100% on grid children when the containing track is auto. */
 @media (min-width: 801px) {
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-two-column {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-content {
     height:auto!important;flex:1 1 0!important;min-height:0;
     grid-template-rows:minmax(0,1fr);align-items:stretch;
   }
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column,
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column {
+  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
     height:auto!important;min-height:0;align-self:stretch;
   }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column {
@@ -2179,23 +2052,6 @@ header { padding-top: 3px; }
   #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-primary-column > .saved-map-list {
     flex:1 1 0!important;min-height:0;max-height:none!important;
   }
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-panel {
-    flex:1 1 0;min-height:0;
-  }
-  #commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column .saved-map-location-actions {
-    margin-top:auto!important;padding-top:5px;
-  }
-}
-
-/* Place location buttons in the GREY column footer, not inside the white
-   form card. Without placeholder rows, both white surfaces fill the space
-   down to a single 9px column gap above the aligned action footers. */
-#commonModal[data-modal-view="savedNavigationMaps"] .saved-map-secondary-column > .saved-map-location-actions {
-  /* 34px buttons + 5px vertical padding on each side = 44px, matching the
-     intrinsic height of the left .saved-map-primary-actions footer. */
-  flex:0 0 auto;min-height:44px;align-items:center;
-  margin-top:0!important;padding-block:5px!important;
-  justify-content:flex-end;
 }
 
 /* A single compact row for the radio, map name, timestamp and resolution.
