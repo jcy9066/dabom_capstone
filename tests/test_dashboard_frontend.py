@@ -53,6 +53,17 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertEqual(rendered.count('id="logoutBtn"'), 1)
         self.assertIn('id="systemControlPanelSlot"', rendered)
 
+    def test_gpu_server_usage_is_separate_from_pi_telemetry(self):
+        # The status bar preserves the CPU / RAM / GPU / PING order.
+        ram = self.template_source.index('id="sys-ram"')
+        gpu = self.template_source.index('id="sys-gpu-usage"')
+        ping = self.template_source.index('id="sys-internet"')
+        self.assertLess(ram, gpu)
+        self.assertLess(gpu, ping)
+        self.assertIn('gpu_utilization_sampler.snapshot(CUDA_DEVICE_INDEX)', self.app_source)
+        self.assertIn('gpu_usage_percent', self.script_source)
+        self.assertIn("gpuRaw == null || gpuRaw === ''", self.script_source)
+
     def test_initial_robot_mode_is_unknown_and_manual_controls_are_disabled(self):
         self.assertIn('id="robot-mode-status">UNKNOWN</span>', self.template_source)
         self.assertIn('class="toggle-switch unknown"', self.template_source)
