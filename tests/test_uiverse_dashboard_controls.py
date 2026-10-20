@@ -72,6 +72,11 @@ class UiverseDashboardControlsTest(unittest.TestCase):
 
     def test_equal_action_insets_and_click_animation(self):
         self.assertIn(".dashboard-action-controls.split-btn-container {", THEME_CSS)
+        self.assertIn("document?.addEventListener('pointerdown'", FEEDBACK_JS)
+        self.assertIn("document?.addEventListener('click'", FEEDBACK_JS)
+        self.assertIn("button.closest('.dashboard-action-controls')", FEEDBACK_JS)
+        self.assertIn("outline-offset: -3px;", THEME_CSS)
+        self.assertIn("background: color-mix(in srgb, var(--uiverse-button-face) 64%, var(--uiverse-button-edge));", THEME_CSS)
         self.assertIn("padding: 4px 0 2px;", THEME_CSS)
         self.assertIn("row-gap: 8px;", THEME_CSS)
         self.assertIn("uiverse-action-clicked", FEEDBACK_JS)
@@ -148,7 +153,10 @@ const controls = {
     addEventListener(name, listener) { handlers[name] = listener; }
 };
 const context = {
-    document: { querySelector() { return controls; } },
+    document: {
+        querySelector() { return controls; },
+        addEventListener(name, listener) { handlers[name] = listener; }
+    },
     setTimeout(handler, delay) { const id = ++nextId; scheduled.set(id, { handler, delay }); return id; },
     clearTimeout(id) { scheduled.delete(id); },
     matchMedia() { return { matches: false }; },
@@ -158,6 +166,11 @@ context.window = context;
 vm.runInNewContext(fs.readFileSync('frontend/services/static/action_feedback.js', 'utf8'), context);
 assert.ok(handlers.click);
 assert.ok(handlers.pointerdown);
+// A newly mounted button must work even though the original controls instance
+// was captured during initialization; handlers live on document.
+const remountedBeep = makeButton();
+handlers.pointerdown({ target: remountedBeep, button: 0, detail: 1, clientX: 16, clientY: 8 });
+assert.strictEqual(remountedBeep.classList.contains('uiverse-action-clicked'), true);
 assert.strictEqual(label.textContent, '신고');
 // Pointerdown must start the motion before the actual command callback.
 handlers.pointerdown({ target: beep, button: 0, detail: 1, clientX: 30, clientY: 20 });
