@@ -73,7 +73,7 @@
     transform: translateY(-3px);
 }
 .dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled),
-.dashboard-action-controls .action-btn.uiverse-press-button.uiverse-action-clicked {
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
     box-shadow: 0 0 0 var(--uiverse-button-edge), 0 1px 3px rgba(12,24,40,.1);
     transform: translateY(1px);
 }
@@ -81,7 +81,7 @@
     transform: translateY(-2px);
     box-shadow: 0 3px 0 var(--uiverse-button-edge);
 }
-.dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked {
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
     background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
     border-color: var(--uiverse-button-edge);
 }
