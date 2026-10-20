@@ -94,11 +94,12 @@ const responses = {
         ],
     },
 };
+const requestedUrls = [];
 const context = {
     console,
     document,
     CustomEvent: class { constructor(name, options) { this.type = name; this.detail = options.detail; } },
-    fetch: async url => ({ ok: true, status: 200, json: async () => responses[url] }),
+    fetch: async url => { requestedUrls.push(url); return { ok: true, status: 200, json: async () => responses[url] }; },
     setInterval: () => 1,
     clearTimeout,
     setTimeout,
@@ -128,55 +129,23 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.ok(primary.children.indexOf(pose) < primary.children.indexOf(list));
     assert.strictEqual(list.children.length, 1);
     assert.ok(list.children.every(node => node.className === 'saved-map-option'));
-    const secondary = manager.body.querySelector('.saved-map-secondary-column');
-    const locationCard = secondary.querySelector('.saved-map-location-panel');
-    const locationActions = secondary.querySelector('.saved-map-location-actions');
-    assert.strictEqual(secondary.children[0], locationCard);
-    assert.strictEqual(secondary.children.length, 2);
-    assert.strictEqual(secondary.children[1], locationActions);
-    assert.strictEqual(locationCard.querySelector('.saved-map-location-actions'), null);
-    assert.strictEqual(locationActions.children.length, 3);
-    const bookmarkButtons = [...primary.querySelectorAll('.mb-btn'), ...locationActions.querySelectorAll('.mb-btn')];
-    assert.strictEqual(bookmarkButtons.length, 7);
+    const layout = manager.body.querySelector('.saved-map-content');
+    assert.ok(layout);
+    assert.strictEqual(layout.children.length, 1);
+    assert.strictEqual(layout.children[0], primary);
+    assert.strictEqual(manager.body.querySelector('.saved-map-secondary-column'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-location-panel'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-location-actions'), null);
+    const bookmarkButtons = primary.querySelectorAll('.mb-btn');
+    assert.strictEqual(bookmarkButtons.length, 4);
     for (const button of bookmarkButtons) {
         assert.strictEqual(button.tagName, 'BUTTON');
         assert.strictEqual(button.type, 'button');
         assert.strictEqual(button.dataset.controlButton, undefined);
         assert.ok(button.className.split(/\s+/).includes('mb-btn'));
     }
-    assert.strictEqual(locationActions.children[0].disabled, true); // GPS without fix
-    assert.strictEqual(locationActions.children[2].disabled, true); // no place selected
-    const picker = manager.body.querySelector('.saved-map-location-picker');
-    assert.ok(picker);
-    const newName = picker.querySelector('.saved-map-location-new');
-    const select = picker.querySelector('.saved-map-location-select');
-    assert.strictEqual(picker.children[0], newName);
-    assert.strictEqual(picker.children[1], select);
-    const triggerChoice = picker.querySelector('.saved-map-location-trigger');
-    const customMenu = picker.querySelector('.saved-map-location-options');
-    assert.ok(select.hidden);
-    assert.ok(customMenu.hidden);
-    triggerChoice.listeners.click();
-    assert.strictEqual(customMenu.hidden, false);
-    const existingChoice = customMenu.children.find(node => node.dataset.locationValue === 'existing');
-    assert.ok(existingChoice);
-    existingChoice.listeners.click();
-    assert.strictEqual(select.value, 'existing');
-    assert.strictEqual(triggerChoice.textContent, '기존 장소');
-    assert.ok(customMenu.hidden);
-    const draft = select.children.find(node => node.value === '__draft_location__');
-    assert.ok(draft.hidden);
-    newName.value = '검증 장소';
-    newName.listeners.input();
-    assert.strictEqual(draft.hidden, false);
-    assert.strictEqual(select.value, '__draft_location__');
-    assert.strictEqual(draft.textContent, '검증 장소');
-    const draftChoice = customMenu.children.find(node => node.dataset.locationValue === '__draft_location__');
-    assert.ok(draftChoice);
-    assert.strictEqual(draftChoice.hidden, false);
-    assert.strictEqual(draftChoice.textContent, '검증 장소');
-    assert.strictEqual(triggerChoice.textContent, '검증 장소');
-    assert.strictEqual(manager.body.querySelector('#saved-map-location-name').value, '검증 장소');
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+    assert.ok(!requestedUrls.includes('/api/navigation/locations'));
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
         completed = subprocess.run(
