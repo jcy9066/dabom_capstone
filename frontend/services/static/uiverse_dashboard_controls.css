@@ -72,20 +72,46 @@
     box-shadow: 0 4px 0 var(--uiverse-button-edge), 0 6px 10px rgba(12,24,40,.14);
     transform: translateY(-3px);
 }
-.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled),
-.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled) {
     box-shadow: 0 0 0 var(--uiverse-button-edge), 0 1px 3px rgba(12,24,40,.1);
     transform: translateY(1px);
+}
+/* Pointer-down starts immediately; click (including keyboard activation)
+   completes a visible motion cycle even after native :active disappears. */
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+    animation: uiverse-button-depress 680ms cubic-bezier(.22,.72,.26,1) both;
+    border-color: var(--uiverse-button-edge);
 }
 .dashboard-action-controls .action-btn.uiverse-press-button:disabled:not(.uiverse-action-clicked) {
     transform: translateY(-2px);
     box-shadow: 0 3px 0 var(--uiverse-button-edge);
 }
-.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
-    background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
-    border-color: var(--uiverse-button-edge);
+/* Bright inset flash runs under the text and over the button face. */
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button::before {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    background: radial-gradient(circle at var(--action-ripple-x,50%) var(--action-ripple-y,50%),
+                                color-mix(in srgb, var(--uiverse-button-edge) 30%, white), transparent 68%);
+    opacity: 0;
+    pointer-events: none;
 }
-/* The existing 650ms ripple remains visible after the short press animation. */
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked::before {
+    animation: uiverse-press-flash 680ms ease-out both;
+}
+@keyframes uiverse-button-depress {
+    0%   { transform: translateY(-2px); box-shadow: 0 3px 0 var(--uiverse-button-edge),0 5px 8px rgba(12,24,40,.1); }
+    17%  { transform: translateY(2px); box-shadow: 0 0 0 var(--uiverse-button-edge),0 1px 3px rgba(12,24,40,.1); }
+    52%  { transform: translateY(1px); box-shadow: 0 1px 0 var(--uiverse-button-edge),0 2px 4px rgba(12,24,40,.1); }
+    100% { transform: translateY(-2px); box-shadow: 0 3px 0 var(--uiverse-button-edge),0 5px 8px rgba(12,24,40,.1); }
+}
+@keyframes uiverse-press-flash {
+    0% { opacity: 0; }
+    20% { opacity: .95; }
+    100% { opacity: 0; }
+}
+/* Existing wave ripple remains independent of the press animation. */
 /* Preserve the original report feedback's non-dimmed sending state. */
 .dashboard-action-controls .action-report.uiverse-press-button[data-report-state="sending"]:disabled {
     opacity: 1;
@@ -112,19 +138,17 @@ body.dark-mode .dashboard-action-controls .action-report.uiverse-press-button {
 body.dark-mode .dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
     background: color-mix(in srgb, var(--uiverse-button-face) 88%, #c4cbd8);
 }
-body.dark-mode .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
-    background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
-}
+
 
 /* RiccardoRapelli day/night switch, controlled by the existing .active class.
  * The existing role=switch/aria-checked/onClick/keyboard handling is retained. */
 #darkToggle.uiverse-day-night {
     position: relative;
     display: inline-block;
-    flex: 0 0 54px;
-    width: 54px;
-    min-width: 54px;
-    height: 30.6px;
+    flex: 0 0 48.6px;
+    width: 48.6px;
+    min-width: 48.6px;
+    height: 27.54px;
     padding: 0;
     border: 0;
     border-radius: 34px;
@@ -148,7 +172,7 @@ body.dark-mode #darkToggle.uiverse-day-night {
     height: 34px;
     overflow: hidden;
     border-radius: 34px;
-    transform: scale(.9);
+    transform: scale(.81);
     transform-origin: top left;
     background: #2196f3;
     transition: background-color .4s ease;
@@ -258,6 +282,10 @@ body.dark-mode #darkToggle.uiverse-day-night .uiverse-stars {
     80% { transform: scale(.8); }
 }
 @media (prefers-reduced-motion: reduce) {
+    .dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked,
+    .dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked::before {
+        animation: none;
+    }
     .dashboard-action-controls .action-btn.uiverse-press-button,
     #darkToggle.uiverse-day-night .uiverse-toggle-scene,
     #darkToggle.uiverse-day-night .dark-toggle-slider,
