@@ -218,8 +218,8 @@ assert.strictEqual(report.title, 'failed');
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_style_only_and_cache_are_scoped(self):
-        self.assertIn("uiverse_dashboard_controls.css?v=20261020-press-animation-v3", HTML)
-        self.assertIn("action_feedback.js?v=20261020-pointer-press-v3", HTML)
+        self.assertIn("uiverse_dashboard_controls.css?v=20261020-verified-press-v4", HTML)
+        self.assertIn("action_feedback.js?v=20261020-delegated-press-v4", HTML)
         self.assertLess(HTML.index("action_feedback.css?v="), HTML.index("uiverse_dashboard_controls.css?v="))
         self.assertIn(".dashboard-action-controls .action-btn.uiverse-press-button", THEME_CSS)
         self.assertIn("#darkToggle.uiverse-day-night", THEME_CSS)
