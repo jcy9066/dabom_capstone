@@ -12,6 +12,7 @@
     });
     let resetTimer = null;
     const pressTimers = new WeakMap();
+    const pendingPointerClicks = new WeakSet();
 
     function setReportState(state, message = '') {
         if (!report || !reportLabel) return;
@@ -30,36 +31,59 @@
         }
     }
 
-    function ripple(event) {
+    function actionButton(event) {
         const button = event.target?.closest?.('.action-beep, .action-warning');
-        if (!button || !controls.contains(button) || button.disabled) return;
+        if (!button || !controls.contains(button) || button.disabled) return null;
+        return button;
+    }
+
+    function animatePress(event, button) {
         if (global.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
 
-        // :active disappears at pointer release, so hold the pressed surface
-        // briefly after click. This affects visuals only, never command dispatch.
+        // CSS :active vanishes on release. A full keyframe cycle is visible
+        // for both mouse/touch presses and keyboard-generated clicks.
         const previous = pressTimers.get(button);
         if (previous != null) global.clearTimeout(previous);
-        button.classList.remove('uiverse-action-clicked');
-        void button.offsetWidth;
-        button.classList.add('uiverse-action-clicked');
+        button.classList.remove('uiverse-action-clicked', 'action-ripple-running');
+        void button.offsetWidth; // restart consecutive presses
+        const bounds = button.getBoundingClientRect();
+        const pointer = event.detail !== 0 && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
+        button.style.setProperty('--action-ripple-x', (pointer ? event.clientX - bounds.left : bounds.width / 2) + 'px');
+        button.style.setProperty('--action-ripple-y', (pointer ? event.clientY - bounds.top : bounds.height / 2) + 'px');
+        button.classList.add('uiverse-action-clicked', 'action-ripple-running');
         pressTimers.set(button, global.setTimeout(() => {
             button.classList.remove('uiverse-action-clicked');
             pressTimers.delete(button);
-        }, 200));
-
-        const bounds = button.getBoundingClientRect();
-        const pointer = event.detail !== 0 && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
-        const x = pointer ? event.clientX - bounds.left : bounds.width / 2;
-        const y = pointer ? event.clientY - bounds.top : bounds.height / 2;
-        button.style.setProperty('--action-ripple-x', x + 'px');
-        button.style.setProperty('--action-ripple-y', y + 'px');
-        button.classList.remove('action-ripple-running');
-        void button.offsetWidth;
-        button.classList.add('action-ripple-running');
+        }, 680));
     }
 
-    // Capture precedes action handlers that can synchronously disable a pending button.
-    controls.addEventListener('click', ripple, { capture: true });
+    // Start at pointerdown to show a press even when the control handler
+    // synchronously disables its button on click.
+    controls.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+        const button = actionButton(event);
+        if (!button) return;
+        pendingPointerClicks.add(button);
+        animatePress(event, button);
+    }, { capture: true });
+
+    // Click also covers keyboard activation and programmatic accessible clicks.
+    controls.addEventListener('click', event => {
+        const button = actionButton(event);
+        if (!button) return;
+        if (pendingPointerClicks.has(button)) {
+            pendingPointerClicks.delete(button);
+            return;
+        }
+        animatePress(event, button);
+    }, { capture: true });
+
+    controls.addEventListener('pointercancel', event => {
+        const button = event.target?.closest?.('.action-beep, .action-warning');
+        if (button) pendingPointerClicks.delete(button);
+    }, { capture: true });
+
+    // The feedback animations have no effect on the existing command callbacks.
     controls.addEventListener('animationend', event => {
         if (event.animationName === 'dashboard-action-ripple') {
             event.target.classList.remove('action-ripple-running');
