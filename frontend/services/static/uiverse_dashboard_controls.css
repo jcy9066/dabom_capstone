@@ -26,7 +26,7 @@
    Top padding compensates for the 2px raised offset; the final shadow stays
    inside the same vertical boundary. */
 .dashboard-action-controls.split-btn-container {
-    padding: 6px 0 2px;
+    padding: 4px 0 2px;
     row-gap: 8px;
     box-sizing: border-box;
     min-height: 0;
