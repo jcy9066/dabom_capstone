@@ -58,6 +58,7 @@ const elements = new Map([
     ['sys-cpu-usage', new FakeElement()],
     ['sys-cpu-temp', new FakeElement()],
     ['sys-ram', new FakeElement()],
+    ['sys-gpu-usage', new FakeElement()],
     ['sys-internet', new FakeElement()],
     ['video-wrapper', new FakeElement()],
     ['camera-stream', new FakeElement()],
@@ -144,7 +145,8 @@ vm.runInContext(`${polling}\n${visibility}`, context, { filename: 'script-pollin
     assert.strictEqual(requestCount('/get_status'), 1);
 
     resolveRequest(requests.find(request => request.url === '/get_status'), {
-        cpu_usage: '10', cpu_temp: '40', ram_usage: '20', internet: 'ok', mode: 'auto',
+        cpu_usage: '10', cpu_temp: '40', ram_usage: '20',
+        gpu_usage_percent: 37, internet: 'ok', mode: 'auto',
     });
     resolveRequest(requests.find(request => request.url === '/api/stream_status'), {
         camera_state: 'live', message: 'camera live',
@@ -152,6 +154,7 @@ vm.runInContext(`${polling}\n${visibility}`, context, { filename: 'script-pollin
     await flush();
     assert.deepStrictEqual([...timers.values()].map(timer => timer.delay).sort(), [2000, 4000]);
     assert.strictEqual(badge.textContent, 'LIVE');
+    assert.strictEqual(elements.get('sys-gpu-usage').innerText, '37');
     assert.strictEqual(elements.get('camera-stream').style.display, '');
 
     document.hidden = true;
@@ -171,18 +174,26 @@ vm.runInContext(`${polling}\n${visibility}`, context, { filename: 'script-pollin
     const secondTelemetry = requests.filter(request => request.url === '/get_status')[1];
     const secondCamera = requests.filter(request => request.url === '/api/stream_status')[1];
     resolveRequest(secondTelemetry, {
-        cpu_usage: '11', cpu_temp: '41', ram_usage: '21', internet: 'ok', mode: 'auto',
+        cpu_usage: '11', cpu_temp: '41', ram_usage: '21',
+        gpu_usage_percent: null, internet: 'ok', mode: 'auto',
     });
     resolveRequest(secondCamera, { camera_state: 'offline', message: 'waiting' });
     await flush();
     assert.deepStrictEqual([...timers.values()].map(timer => timer.delay).sort(), [0, 0]);
     assert.strictEqual(badge.textContent, 'OFFLINE');
+    assert.strictEqual(elements.get('sys-gpu-usage').innerText, '--');
 
     runTimersWithDelay(0);
     assert.strictEqual(requestCount('/get_status'), 3);
     assert.strictEqual(requestCount('/api/stream_status'), 3);
     assert.strictEqual(maximumActive.get('/get_status'), 1);
     assert.strictEqual(maximumActive.get('/api/stream_status'), 1);
+
+    // Zero is a valid GPU utilization reading, distinct from unavailable.
+    const thirdTelemetry = requests.filter(request => request.url === '/get_status')[2];
+    resolveRequest(thirdTelemetry, { gpu_usage_percent: 0 });
+    await flush();
+    assert.strictEqual(elements.get('sys-gpu-usage').innerText, '0');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;
