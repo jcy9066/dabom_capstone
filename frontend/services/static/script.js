@@ -1252,6 +1252,11 @@ function warnTrespasser() {
         window.navigationControl.warning();
         return;
     }
+    // The fallback must not send a robot command before the Pi state is known.
+    if (window.dabomNavigationControlState?.connected !== true) {
+        alert('Pi 연결을 확인할 수 없어 경고 명령을 전송하지 않았습니다.');
+        return;
+    }
     sendRobotCommand({ type: 'speak', text: '경고합니다. 즉시 물러나십시오.' })
         .then(ok => {
             if (ok) alert("⚠️ 경고 방송 명령을 전송했습니다.");
