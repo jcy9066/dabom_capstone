@@ -4,6 +4,8 @@ These tests are intentionally static: action requests must never be triggered by
 a UI regression test, especially Telegram reporting or robot speech.
 """
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -100,6 +102,92 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertIn("animation: uiverse-moon-rotate .6s", THEME_CSS)
         self.assertIn("uiverse-cloud-drift", THEME_CSS)
         self.assertIn("uiverse-star-twinkle", THEME_CSS)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is unavailable")
+    def test_beep_warning_ui_and_report_state_runtime(self):
+        # A DOM stub verifies visual handlers without sending robot or Telegram commands.
+        source = r"""
+const assert = require('assert');
+const fs = require('fs');
+const vm = require('vm');
+const handlers = {};
+const scheduled = new Map();
+let nextId = 0;
+const makeButton = () => {
+    const names = new Set();
+    return {
+        disabled: false,
+        classList: {
+            add(name) { names.add(name); },
+            remove(name) { names.delete(name); },
+            contains(name) { return names.has(name); }
+        },
+        style: { setProperty() {} },
+        offsetWidth: 100,
+        closest() { return this; },
+        getBoundingClientRect() { return { left: 0, top: 0, width: 120, height: 48 }; }
+    };
+};
+const beep = makeButton();
+const warning = makeButton();
+const label = { textContent: '' };
+const report = {
+    dataset: {},
+    querySelector() { return label; },
+    setAttribute(name, value) { this[name] = value; },
+    removeAttribute(name) { delete this[name]; }
+};
+const controls = {
+    contains(node) { return [beep, warning, report].includes(node); },
+    querySelector() { return report; },
+    addEventListener(name, listener) { handlers[name] = listener; }
+};
+const context = {
+    document: { querySelector() { return controls; } },
+    setTimeout(handler, delay) { const id = ++nextId; scheduled.set(id, { handler, delay }); return id; },
+    clearTimeout(id) { scheduled.delete(id); },
+    matchMedia() { return { matches: false }; },
+    console
+};
+context.window = context;
+vm.runInNewContext(fs.readFileSync('frontend/services/static/action_feedback.js', 'utf8'), context);
+assert.ok(handlers.click);
+assert.strictEqual(label.textContent, '신고');
+for (const button of [beep, warning]) {
+    handlers.click({ target: button, detail: 0 });
+    assert.strictEqual(button.classList.contains('uiverse-action-clicked'), true);
+    assert.strictEqual(button.classList.contains('action-ripple-running'), true);
+}
+const firstBeepId = [...scheduled.keys()][0];
+handlers.click({ target: beep, detail: 0 });
+assert.strictEqual(scheduled.has(firstBeepId), false, 'repeat clicks cancel the old timer');
+assert.strictEqual(beep.classList.contains('uiverse-action-clicked'), true);
+for (const [id, timer] of [...scheduled]) {
+    if (timer.delay === 200) {
+        scheduled.delete(id);
+        timer.handler();
+    }
+}
+assert.strictEqual(beep.classList.contains('uiverse-action-clicked'), false);
+assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
+warning.disabled = true;
+handlers.click({ target: warning, detail: 0 });
+assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
+context.DabomActionFeedback.setReportState('sending');
+assert.strictEqual(report.dataset.reportState, 'sending');
+assert.strictEqual(label.textContent, '전송 중');
+context.DabomActionFeedback.setReportState('success');
+assert.strictEqual(report.dataset.reportState, 'success');
+assert.strictEqual(label.textContent, '신고 완료');
+context.DabomActionFeedback.setReportState('error', 'failed');
+assert.strictEqual(label.textContent, '전송 실패');
+assert.strictEqual(report.title, 'failed');
+"""
+        result = subprocess.run(
+            ["node", "-e", source], cwd=ROOT,
+            capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_style_only_and_cache_are_scoped(self):
         self.assertIn("uiverse_dashboard_controls.css?v=20261020-matched-controls-v2", HTML)
