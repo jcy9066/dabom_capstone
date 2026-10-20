@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HTML = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
 THEME_CSS = (ROOT / "frontend/services/static/uiverse_dashboard_controls.css").read_text(encoding="utf-8")
 FEEDBACK_CSS = (ROOT / "frontend/services/static/action_feedback.css").read_text(encoding="utf-8")
+SELECTED_CSS = (ROOT / "frontend/services/static/selected_ui.css").read_text(encoding="utf-8")
 FEEDBACK_JS = (ROOT / "frontend/services/static/action_feedback.js").read_text(encoding="utf-8")
 DASHBOARD_JS = (ROOT / "frontend/services/static/script.js").read_text(encoding="utf-8")
 
@@ -31,6 +32,20 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertIn('onclick="reportDanger()"', HTML)
         self.assertIn("box-shadow: 0 3px 0 var(--uiverse-button-edge)", THEME_CSS)
         self.assertIn("transform: translateY(1px);", THEME_CSS)
+
+    def test_beep_raised_surface_is_not_overridden_by_enterprise_preset(self):
+        """The Beep and Warning surfaces share the same raised CSS box model."""
+        enterprise_preset = SELECTED_CSS.split(
+            "/* 2026-10-14 enterprise UI.", 1
+        )[1].split("/* Loader component", 1)[0]
+        self.assertNotIn(".action-beep", enterprise_preset)
+        for role in ("beep", "warning"):
+            with self.subTest(role=role):
+                self.assertIn(
+                    f".dashboard-action-controls .action-{role}.uiverse-press-button {{",
+                    THEME_CSS,
+                )
+        self.assertIn("box-shadow: 0 3px 0 var(--uiverse-button-edge)", THEME_CSS)
 
     def test_telegram_feedback_states_and_markup_are_untouched(self):
         for part in (
