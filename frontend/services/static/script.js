@@ -97,6 +97,15 @@ function fetchRobotStatus() {
                 'sys-ram',
             ).innerText = displayMetric(data.ram_usage);
 
+            // Unlike Number(null), an unavailable GPU reading must not display 0%.
+            const gpuRaw = data.gpu_usage_percent;
+            const gpuUsage = gpuRaw == null || gpuRaw === '' ? NaN : Number(gpuRaw);
+            document.getElementById(
+                'sys-gpu-usage',
+            ).innerText = Number.isFinite(gpuUsage) && gpuUsage >= 0 && gpuUsage <= 100
+                ? String(Math.round(gpuUsage))
+                : '--';
+
             document.getElementById(
                 'sys-internet',
             ).innerText = Number.isFinite(ping)
@@ -109,6 +118,7 @@ function fetchRobotStatus() {
             ));
         })
         .catch(error => {
+            document.getElementById('sys-gpu-usage').innerText = '--';
             document.dispatchEvent(new CustomEvent(
                 'dabom:telemetry-status',
                 { detail: { available: false, error: error.message } },
