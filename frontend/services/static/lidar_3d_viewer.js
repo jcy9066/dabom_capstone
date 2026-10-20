@@ -1542,9 +1542,10 @@ if (root && canvas) {
             const x = Number(point?.x);
             const y = Number(point?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            // Keep existing path geometry above schematic occupied cells,
-            // but allow the chassis to occlude paths passing behind it.
-            positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04));
+            // A ground-adjacent display elevation does not change ROS path
+            // coordinates. With depth testing, chassis and real obstacle
+            // meshes occlude the corresponding visual segments naturally.
+            positions.push(x, y, 0.026);
         }
         if (positions.length < 6) return;
 
@@ -1588,9 +1589,9 @@ if (root && canvas) {
             Number.isFinite(Number(point?.x))
             && Number.isFinite(Number(point?.y))
         );
-        const height = Math.max(
-            0.18, obstacleHeightM + 0.055, DYNAMIC_OBSTACLE_HEIGHT_M + 0.055,
-        );
+        // The existing heading/segment arrow glyphs follow the same
+        // near-floor depth as the continuous path, never above the chassis.
+        const height = 0.038;
         let distanceSinceArrow = 0;
         let lastRotationAt = null;
         for (let i = 0; i + 1 < valid.length; i += 1) {
