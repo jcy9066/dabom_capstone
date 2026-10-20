@@ -633,22 +633,24 @@ body.dark-mode .signup-dialog .auth-btn.primary {
 
 
 /* 2026-10-14 enterprise UI. Preserve underlying controls, handlers and layout. */
+/* Beep shares the Uiverse raised surface with Warning: do not override its
+   face, edge, elevation, or hover transitions using the global preset. */
 :root { --ui-soft-elevation: 0 3px 0 var(--border-color),0 5px 9px rgba(15,23,42,.08); }
 :is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
 .login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
-.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled) {
+.ui-confirm-actions button:not(.ui-confirm-delete)):not(:disabled) {
   border-radius: 8px; border:1px solid var(--border-bright); background:var(--card-bg2);
   color:var(--text-dark); box-shadow:var(--ui-soft-elevation);
   transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;
 }
 :is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
 .login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
-.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled):hover {
+.ui-confirm-actions button:not(.ui-confirm-delete)):not(:disabled):hover {
   transform:translateY(-1px); border-color:var(--accent);
 }
 :is(.mb-btn,.filter-btn[data-action="reset"],.filter-btn[data-action="delete-cancel"],.gallery-detail-back,.gallery-detail-actions button:not(.gallery-delete-btn),
 .login-page .auth-btn,.signup-dialog .auth-btn,.signup-dialog .email-send-btn,.system-control-manual,
-.ui-confirm-actions button:not(.ui-confirm-delete),.action-beep):not(:disabled):active {
+.ui-confirm-actions button:not(.ui-confirm-delete)):not(:disabled):active {
   transform:translateY(2px); box-shadow:0 1px 0 var(--border-color);
 }
 /* Loader component — rotating tile motif, animated exclusively in busy states. */
