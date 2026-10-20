@@ -247,7 +247,7 @@ class CompactUiContracts(unittest.TestCase):
         self.assertIn("selected_ui.css?v=20261020-single-map-column-v11", INDEX)
         self.assertIn("selected_ui.css?v=20261020-single-map-column-v11", LOGIN)
         self.assertIn("login_email_auth.js?v=20261014-signup-input-v1", LOGIN)
-        self.assertIn("saved_map_modal.js?v=20261020-map-only-v7", INDEX)
+        self.assertIn("saved_map_modal.js?v=20261020-toggle-selection-v8", INDEX)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", INDEX)
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", INDEX)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", INDEX)
