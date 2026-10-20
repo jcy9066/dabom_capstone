@@ -59,7 +59,7 @@ class ActionPressChromiumTest(unittest.TestCase):
 
                 # Replace the whole control panel after initialization.
                 page.eval_on_selector(".dashboard-action-controls", """node => {
-                    node.innerHTML = '<button id="remounted" class="action-btn action-beep uiverse-press-button">Beep</button>';
+                    node.outerHTML = '<div class="dashboard-action-controls"><button id="remounted" class="action-btn action-beep uiverse-press-button">Beep</button></div>';
                 }""")
                 page.locator("#remounted").click()
                 self.assertTrue(page.locator("#remounted").evaluate(
