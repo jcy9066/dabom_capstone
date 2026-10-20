@@ -68,8 +68,42 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertIn("#darkToggle.uiverse-day-night.active .uiverse-toggle-scene", THEME_CSS)
         self.assertIn("@media (prefers-reduced-motion: reduce)", THEME_CSS)
 
+    def test_equal_action_insets_and_click_animation(self):
+        self.assertIn(".dashboard-action-controls.split-btn-container {", THEME_CSS)
+        self.assertIn("padding: 4px 0 2px;", THEME_CSS)
+        self.assertIn("row-gap: 8px;", THEME_CSS)
+        self.assertIn("uiverse-action-clicked", FEEDBACK_JS)
+        self.assertIn("pressTimers.set(button, global.setTimeout", FEEDBACK_JS)
+        self.assertIn("}, 200));", FEEDBACK_JS)
+        self.assertIn("uiverse-action-clicked {", THEME_CSS)
+        self.assertIn("transform: translateY(1px);", THEME_CSS)
+        self.assertIn("action-ripple-running", FEEDBACK_JS)
+        self.assertIn("dashboard-action-ripple", FEEDBACK_CSS)
+
+    def test_full_day_night_scene_and_ninety_percent_scale(self):
+        # Clouds must move with the sun/moon, not remain fixed on the track.
+        moon_content = HTML.split('class="dark-toggle-slider uiverse-sun-moon">', 1)[1].split("</div>", 1)[0]
+        for i in range(1, 7):
+            self.assertIn(f"uiverse-cloud-{i}", moon_content)
+        for i in range(1, 4):
+            self.assertIn(f"uiverse-moon-dot-{i}", moon_content)
+            self.assertIn(f"uiverse-light-ray-{i}", moon_content)
+        self.assertRegex(
+            HTML, r'(?s)uiverse-cloud-6[^>]*>.*?</svg>\\s*</div>\\s*<div class="uiverse-stars">'
+        )
+        for prop in ("flex: 0 0 54px;", "width: 54px;", "height: 30.6px;",
+                     "width: 60px;", "height: 34px;", "transform: scale(.9);",
+                     "transform-origin: top left;", "transform: translateX(26px);",
+                     "background: #2196f3;", "background: #000;"):
+            with self.subTest(prop=prop):
+                self.assertIn(prop, THEME_CSS)
+        self.assertIn("animation: uiverse-moon-rotate .6s", THEME_CSS)
+        self.assertIn("uiverse-cloud-drift", THEME_CSS)
+        self.assertIn("uiverse-star-twinkle", THEME_CSS)
+
     def test_style_only_and_cache_are_scoped(self):
-        self.assertIn("uiverse_dashboard_controls.css?v=20261020-uiverse-vox-and-sky-v1", HTML)
+        self.assertIn("uiverse_dashboard_controls.css?v=20261020-matched-controls-v2", HTML)
+        self.assertIn("action_feedback.js?v=20261020-press-feedback-v2", HTML)
         self.assertLess(HTML.index("action_feedback.css?v="), HTML.index("uiverse_dashboard_controls.css?v="))
         self.assertIn(".dashboard-action-controls .action-btn.uiverse-press-button", THEME_CSS)
         self.assertIn("#darkToggle.uiverse-day-night", THEME_CSS)
