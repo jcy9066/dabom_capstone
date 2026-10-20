@@ -1542,8 +1542,8 @@ if (root && canvas) {
             const x = Number(point?.x);
             const y = Number(point?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            // Draw above the occupancy wall height and disable depth testing so
-            // the planned Global Path stays readable over Map/LiDAR layers.
+            // Keep existing path geometry above schematic occupied cells,
+            // but allow the chassis to occlude paths passing behind it.
             positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04));
         }
         if (positions.length < 6) return;
@@ -1559,27 +1559,27 @@ if (root && canvas) {
                 color: COLORS.globalPath,
                 transparent: true,
                 opacity: 1.0,
-                depthTest: false,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         line.frustumCulled = false;
-        line.renderOrder = 100;
+        line.renderOrder = 20;
 
         const points = new THREE.Points(
             geometry,
             new THREE.PointsMaterial({
                 color: COLORS.globalPath,
-                size: 0.055,
+                size: viewerExpanded ? 0.038 : 0.060,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
-                depthTest: false,
+                opacity: 0.90,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         points.frustumCulled = false;
-        points.renderOrder = 101;
+        points.renderOrder = 21;
         pathRoot.add(line, points);
 
         // Arrowheads show the motion direction; reverse segments are amber.
@@ -1609,12 +1609,12 @@ if (root && canvas) {
                     new THREE.MeshBasicMaterial({
                         color: COLORS.globalPath,
                         side: THREE.DoubleSide,
-                        depthTest: false,
+                        depthTest: true,
                         depthWrite: false,
                     }),
                 );
                 ring.position.copy(center);
-                ring.renderOrder = 102;
+                ring.renderOrder = 22;
                 pathRoot.add(ring);
                 const left = motion === 'rotate_left';
                 const tangent = new THREE.Vector3(left ? -1 : 1, 0, 0);
@@ -1625,10 +1625,10 @@ if (root && canvas) {
                 );
                 rotationArrow.traverse(part => {
                     if (part.material) {
-                        part.material.depthTest = false;
+                        part.material.depthTest = true;
                         part.material.depthWrite = false;
                     }
-                    part.renderOrder = 103;
+                    part.renderOrder = 23;
                 });
                 pathRoot.add(rotationArrow);
                 continue;
@@ -1651,16 +1651,16 @@ if (root && canvas) {
             );
             arrow.traverse(part => {
                 if (part.material) {
-                    part.material.depthTest = false;
+                    part.material.depthTest = true;
                     part.material.depthWrite = false;
                 }
-                part.renderOrder = 102;
+                part.renderOrder = 22;
             });
             pathRoot.add(arrow);
         }
     }
 
-    function createGoalMarker(goal, color) {
+    function createGoalMarker(goal, color, isDraft = false) {
         const x = Number(goal?.x);
         const y = Number(goal?.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -1670,17 +1670,37 @@ if (root && canvas) {
         marker.position.set(x, y, 0.045);
         marker.rotation.z = yaw;
 
-        const ring = new THREE.Mesh(
-            new THREE.RingGeometry(0.07, 0.105, 32),
-            new THREE.MeshBasicMaterial({
-                color,
-                side: THREE.DoubleSide,
-                transparent: true,
-                opacity: 0.95,
-                depthWrite: false,
-            }),
-        );
-        marker.add(ring);
+        if (isDraft) {
+            // Purely graphic dashed ring: not a tolerance or collision radius.
+            const vertices = [];
+            for (let index = 0; index < 64; index += 1) {
+                const angle = 2 * Math.PI * index / 64;
+                vertices.push(new THREE.Vector3(
+                    0.095 * Math.cos(angle), 0.095 * Math.sin(angle), 0,
+                ));
+            }
+            const ring = new THREE.LineLoop(
+                new THREE.BufferGeometry().setFromPoints(vertices),
+                new THREE.LineDashedMaterial({
+                    color, dashSize: 0.038, gapSize: 0.027,
+                    transparent: true, opacity: 0.98, depthWrite: false,
+                }),
+            );
+            ring.computeLineDistances();
+            marker.add(ring);
+        } else {
+            // Two concentric rings visually distinguish an active goal.
+            for (const [inner, outer] of [[0.072, 0.099], [0.040, 0.052]]) {
+                const ring = new THREE.Mesh(
+                    new THREE.RingGeometry(inner, outer, 48),
+                    new THREE.MeshBasicMaterial({
+                        color, side: THREE.DoubleSide,
+                        transparent: true, opacity: 0.98, depthWrite: false,
+                    }),
+                );
+                marker.add(ring);
+            }
+        }
 
         const direction = new THREE.ArrowHelper(
             new THREE.Vector3(1, 0, 0),
@@ -1719,7 +1739,7 @@ if (root && canvas) {
             COLORS.goal,
         );
         if (active) goalRoot.add(active);
-        const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal);
+        const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal, true);
         if (draft) goalRoot.add(draft);
     }
 
@@ -1738,23 +1758,28 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.trajectory,
                 transparent: true,
-                opacity: 0.9,
+                opacity: 0.98,
+                depthTest: true,
+                depthWrite: false,
             }),
         );
         line.frustumCulled = false;
+        line.renderOrder = 12;
 
         const points = new THREE.Points(
             trajectoryGeometry,
             new THREE.PointsMaterial({
                 color: COLORS.trajectory,
-                size: 0.045,
+                size: viewerExpanded ? 0.048 : 0.065,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
+                opacity: 0.98,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         points.frustumCulled = false;
+        points.renderOrder = 13;
         trajectoryRoot.add(line, points);
     }
 
@@ -2161,7 +2186,25 @@ if (root && canvas) {
         }
     });
 
+    function applyTechnicalDensity() {
+        // Appearance only: keep all geometry, poses, FOV and Orbit settings.
+        const compact = !viewerExpanded;
+        for (const grid of gridRoot.children) {
+            if (grid.material) grid.material.opacity = compact ? 0.10 : 0.18;
+        }
+        for (const child of pathRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.060 : 0.038;
+        }
+        for (const child of trajectoryRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.065 : 0.048;
+        }
+        for (const child of pointsRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.048 : 0.038;
+        }
+    }
+
     function resize() {
+        applyTechnicalDensity();
         const rect = root.getBoundingClientRect();
         const width = Math.max(1, Math.floor(rect.width));
         const height = Math.max(1, Math.floor(rect.height));
