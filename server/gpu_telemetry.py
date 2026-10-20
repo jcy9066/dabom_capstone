@@ -67,7 +67,8 @@ class GpuUtilizationSampler:
                     parsed = int(lines[0].strip())
                     if 0 <= parsed <= 100:
                         value = parsed
-        except (OSError, subprocess.SubprocessError, ValueError):
+        except Exception:
+            # Optional NVIDIA telemetry must never disrupt dashboard status.
             pass
 
         with self._lock:
