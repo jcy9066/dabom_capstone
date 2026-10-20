@@ -81,6 +81,11 @@
 .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
     animation: uiverse-button-depress 680ms cubic-bezier(.22,.72,.26,1) both;
     border-color: var(--uiverse-button-edge);
+    /* Independent of the keyframe transform: a clearly visible click response,
+       even on a slow frame, without changing the button's command handler. */
+    background: color-mix(in srgb, var(--uiverse-button-face) 64%, var(--uiverse-button-edge));
+    outline: 2px solid color-mix(in srgb, var(--uiverse-button-edge) 65%, transparent);
+    outline-offset: -3px;
 }
 .dashboard-action-controls .action-btn.uiverse-press-button:disabled:not(.uiverse-action-clicked) {
     transform: translateY(-2px);
