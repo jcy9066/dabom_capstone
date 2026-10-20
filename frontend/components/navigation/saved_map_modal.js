@@ -353,7 +353,11 @@
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name
             || null;
-        const selectedName = snapshot?.selectedName || activeName;
+        // An explicit null means the user cleared the selection; do not
+        // silently restore the currently active map after a view refresh.
+        const selectedName = snapshot?.selectedName !== undefined ? snapshot.selectedName : activeName;
+        let currentSelection = selectedName;
+        const radioButtons = [];
         let progress = null;
         for (const map of maps) {
             const option = create('label', 'saved-map-option');
@@ -363,6 +367,7 @@
             radio.name = 'saved-navigation-map';
             radio.value = map.map_name;
             radio.checked = map.map_name === selectedName;
+            radioButtons.push(radio);
             const details = create('div');
             const heading = create('div', 'saved-map-name-row');
             heading.append(create('span', 'saved-map-name', map.map_name));
@@ -379,6 +384,19 @@
                 details.append(create('div', 'saved-map-location-meta', `장소: ${savedPlace}${coords}`));
             }
             option.append(radio, details);
+            option.addEventListener('click', event => {
+                if (state.busy) return;
+                // Prevent a label click from synthesizing a second radio click.
+                // A direct input click must retain its native keyboard behavior.
+                if (event.target !== radio) event.preventDefault();
+                currentSelection = currentSelection === map.map_name ? null : map.map_name;
+                for (const input of radioButtons) {
+                    input.checked = input.value === currentSelection;
+                }
+                const loadButton = container.querySelector('.saved-map-load');
+                if (loadButton) loadButton.disabled = !currentSelection;
+                showMessage(progress, '');
+            });
             option.addEventListener('contextmenu', event => {
                 event.preventDefault();
                 renameSavedMap(map, container, progress);
@@ -441,7 +459,8 @@
 
         container.addEventListener('change', event => {
             if (event.target?.name !== 'saved-navigation-map') return;
-            load.disabled = !selectedMapName(container);
+            currentSelection = selectedMapName(container);
+            load.disabled = !currentSelection;
             showMessage(progress, '');
         });
 
