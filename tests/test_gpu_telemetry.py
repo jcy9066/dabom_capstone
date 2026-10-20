@@ -68,7 +68,9 @@ class GpuUtilizationSamplerTests(unittest.TestCase):
         with patch("server.gpu_telemetry.threading.Thread") as thread:
             self.assertIsNone(sampler.snapshot("1"), "GPU selection clears old sample")
             thread.assert_called_once()
-            sampler._sample("0")  # Late old-device result must not overwrite new GPU.
+            with patch("server.gpu_telemetry.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout="77\
+")):
+                sampler._sample("0")  # Late old-device result must not overwrite new GPU.
             self.assertIsNone(sampler.snapshot("1"))
 
 
