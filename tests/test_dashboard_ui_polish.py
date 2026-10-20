@@ -327,7 +327,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("border-radius: var(--ui-radius-control);", CSS)
 
     def test_asset_versions(self):
-        self.assertIn("saved_map_modal.js?v=20261020-map-only-v7", DASHBOARD)
+        self.assertIn("saved_map_modal.js?v=20261020-toggle-selection-v8", DASHBOARD)
         self.assertIn("current_situation.js?v=20261014-finish-ui-v2", DASHBOARD)
         self.assertIn("image_detail.js?v=20261014-compact-ui-v2", DASHBOARD)
         self.assertIn("pagination.js?v=20261014-numbered-pages-v1", DASHBOARD)
