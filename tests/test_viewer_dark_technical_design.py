@@ -35,8 +35,8 @@ class DarkTechnicalDesignTests(unittest.TestCase):
             "function costmapKey(", 1,
         )[0]
         for snippet in (
-            "new THREE.InstancedMesh(", "topMaterial", "sideMaterial",
-            "new THREE.LineLoop(", "widthM, heightM, 0.012",
+            "new THREE.InstancedMesh(", "topColor", "sideColor",
+            "vertexColors: true", "new THREE.LineLoop(", "widthM, heightM, 0.012",
             "outline.raycast = () => {};", "mapRoot.rotation.z = transform.yaw;",
             "MAP_OCCUPIED_THRESHOLD",
         ):

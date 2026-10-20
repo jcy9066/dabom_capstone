@@ -550,19 +550,26 @@ if (root && canvas) {
                 resolution * 0.94,
                 obstacleHeightM,
             );
-            // BoxGeometry assigns material index 4 to the +Z face.
-            // Existing cell height is a schematic display height, not a
-            // measurement. Instancing, transforms and thresholds are intact.
-            const sideMaterial = new THREE.MeshStandardMaterial({
-                color: COLORS.occupiedWall, roughness: 0.90, metalness: 0.01,
-            });
-            const topMaterial = new THREE.MeshStandardMaterial({
-                color: COLORS.occupiedTop, roughness: 0.83, metalness: 0.02,
-            });
+            // Face-local vertex colors give a bright +Z top and darker
+            // sides without six material groups / draw calls. BoxGeometry
+            // uses four distinct vertices per face: +Z is face index 4.
+            // Extrusion height stays a schematic, not a measurement.
+            const faceColors = new Float32Array(boxGeometry.attributes.position.count * 3);
+            const topColor = new THREE.Color(COLORS.occupiedTop);
+            const sideColor = new THREE.Color(COLORS.occupiedWall);
+            for (let vertex = 0; vertex < boxGeometry.attributes.position.count; vertex += 1) {
+                const color = Math.floor(vertex / 4) === 4 ? topColor : sideColor;
+                faceColors[vertex * 3] = color.r;
+                faceColors[vertex * 3 + 1] = color.g;
+                faceColors[vertex * 3 + 2] = color.b;
+            }
+            boxGeometry.setAttribute('color', new THREE.BufferAttribute(faceColors, 3));
             const occupied = new THREE.InstancedMesh(
                 boxGeometry,
-                [sideMaterial, sideMaterial, sideMaterial, sideMaterial,
-                    topMaterial, sideMaterial],
+                new THREE.MeshStandardMaterial({
+                    color: 0xffffff, vertexColors: true,
+                    roughness: 0.87, metalness: 0.01,
+                }),
                 occupiedCount,
             );
             occupied.name = 'occupied-cells';
