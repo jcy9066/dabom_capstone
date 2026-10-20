@@ -76,13 +76,16 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertIn("row-gap: 8px;", THEME_CSS)
         self.assertIn("uiverse-action-clicked", FEEDBACK_JS)
         self.assertIn("pressTimers.set(button, global.setTimeout", FEEDBACK_JS)
-        self.assertIn("}, 200));", FEEDBACK_JS)
+        self.assertIn("}, 680));", FEEDBACK_JS)
+        self.assertIn("controls.addEventListener('pointerdown'", FEEDBACK_JS)
+        self.assertIn("@keyframes uiverse-button-depress", THEME_CSS)
+        self.assertIn("@keyframes uiverse-press-flash", THEME_CSS)
         self.assertIn("uiverse-action-clicked {", THEME_CSS)
         self.assertIn("transform: translateY(1px);", THEME_CSS)
         self.assertIn("action-ripple-running", FEEDBACK_JS)
         self.assertIn("dashboard-action-ripple", FEEDBACK_CSS)
 
-    def test_full_day_night_scene_and_ninety_percent_scale(self):
+    def test_full_day_night_scene_and_eighty_one_percent_original_scale(self):
         # Clouds must move with the sun/moon, not remain fixed on the track.
         moon_content = HTML.split('class="dark-toggle-slider uiverse-sun-moon">', 1)[1].split("</div>", 1)[0]
         for i in range(1, 7):
@@ -93,8 +96,8 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertRegex(
             HTML, r'(?s)uiverse-cloud-6[^>]*>.*?</svg>\s*</div>\s*<div class="uiverse-stars">'
         )
-        for prop in ("flex: 0 0 54px;", "width: 54px;", "height: 30.6px;",
-                     "width: 60px;", "height: 34px;", "transform: scale(.9);",
+        for prop in ("flex: 0 0 48.6px;", "width: 48.6px;", "height: 27.54px;",
+                     "width: 60px;", "height: 34px;", "transform: scale(.81);",
                      "transform-origin: top left;", "transform: translateX(26px);",
                      "background: #2196f3;", "background: #000;"):
             with self.subTest(prop=prop):
@@ -118,8 +121,8 @@ const makeButton = () => {
     return {
         disabled: false,
         classList: {
-            add(name) { names.add(name); },
-            remove(name) { names.delete(name); },
+            add(...values) { values.forEach(name => names.add(name)); },
+            remove(...values) { values.forEach(name => names.delete(name)); },
             contains(name) { return names.has(name); }
         },
         style: { setProperty() {} },
@@ -152,18 +155,23 @@ const context = {
 context.window = context;
 vm.runInNewContext(fs.readFileSync('frontend/services/static/action_feedback.js', 'utf8'), context);
 assert.ok(handlers.click);
+assert.ok(handlers.pointerdown);
 assert.strictEqual(label.textContent, '신고');
-for (const button of [beep, warning]) {
-    handlers.click({ target: button, detail: 0 });
-    assert.strictEqual(button.classList.contains('uiverse-action-clicked'), true);
-    assert.strictEqual(button.classList.contains('action-ripple-running'), true);
-}
-const firstBeepId = [...scheduled.keys()][0];
-handlers.click({ target: beep, detail: 0 });
-assert.strictEqual(scheduled.has(firstBeepId), false, 'repeat clicks cancel the old timer');
+// Pointerdown must start the motion before the actual command callback.
+handlers.pointerdown({ target: beep, button: 0, detail: 1, clientX: 30, clientY: 20 });
 assert.strictEqual(beep.classList.contains('uiverse-action-clicked'), true);
+assert.strictEqual(beep.classList.contains('action-ripple-running'), true);
+const firstBeepId = [...scheduled.keys()][0];
+handlers.click({ target: beep, detail: 1 });
+assert.strictEqual(scheduled.has(firstBeepId), true, 'click must not restart pointer motion');
+handlers.click({ target: beep, detail: 0 });
+assert.strictEqual(scheduled.has(firstBeepId), false, 'keyboard click can restart motion');
+// Warning keyboard click must also animate.
+handlers.click({ target: warning, detail: 0 });
+assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), true);
+assert.strictEqual(warning.classList.contains('action-ripple-running'), true);
 for (const [id, timer] of [...scheduled]) {
-    if (timer.delay === 200) {
+    if (timer.delay === 680) {
         scheduled.delete(id);
         timer.handler();
     }
@@ -171,6 +179,7 @@ for (const [id, timer] of [...scheduled]) {
 assert.strictEqual(beep.classList.contains('uiverse-action-clicked'), false);
 assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
 warning.disabled = true;
+handlers.pointerdown({ target: warning, button: 0, detail: 1 });
 handlers.click({ target: warning, detail: 0 });
 assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
 context.DabomActionFeedback.setReportState('sending');
@@ -190,8 +199,8 @@ assert.strictEqual(report.title, 'failed');
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_style_only_and_cache_are_scoped(self):
-        self.assertIn("uiverse_dashboard_controls.css?v=20261020-matched-controls-v2", HTML)
-        self.assertIn("action_feedback.js?v=20261020-press-feedback-v2", HTML)
+        self.assertIn("uiverse_dashboard_controls.css?v=20261020-press-animation-v3", HTML)
+        self.assertIn("action_feedback.js?v=20261020-pointer-press-v3", HTML)
         self.assertLess(HTML.index("action_feedback.css?v="), HTML.index("uiverse_dashboard_controls.css?v="))
         self.assertIn(".dashboard-action-controls .action-btn.uiverse-press-button", THEME_CSS)
         self.assertIn("#darkToggle.uiverse-day-night", THEME_CSS)
