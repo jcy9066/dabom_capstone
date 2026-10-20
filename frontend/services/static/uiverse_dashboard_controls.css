@@ -112,6 +112,9 @@ body.dark-mode .dashboard-action-controls .action-report.uiverse-press-button {
 body.dark-mode .dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
     background: color-mix(in srgb, var(--uiverse-button-face) 88%, #c4cbd8);
 }
+body.dark-mode .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+    background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
+}
 
 /* RiccardoRapelli day/night switch, controlled by the existing .active class.
  * The existing role=switch/aria-checked/onClick/keyboard handling is retained. */
