@@ -38,7 +38,8 @@
     }
 
     function animatePress(event, button) {
-        if (global.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+        // Even with reduced-motion enabled, expose a visible static pressed
+        // state; CSS suppresses the animated motion in that preference.
 
         // CSS :active vanishes on release. A full keyframe cycle is visible
         // for both mouse/touch presses and keyboard-generated clicks.
