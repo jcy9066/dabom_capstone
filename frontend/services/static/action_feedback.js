@@ -11,6 +11,7 @@
         idle: '신고', sending: '전송 중', success: '신고 완료', error: '전송 실패'
     });
     let resetTimer = null;
+    const pressTimers = new WeakMap();
 
     function setReportState(state, message = '') {
         if (!report || !reportLabel) return;
@@ -33,6 +34,18 @@
         const button = event.target?.closest?.('.action-beep, .action-warning');
         if (!button || !controls.contains(button) || button.disabled) return;
         if (global.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+
+        // :active disappears at pointer release, so hold the pressed surface
+        // briefly after click. This affects visuals only, never command dispatch.
+        const previous = pressTimers.get(button);
+        if (previous != null) global.clearTimeout(previous);
+        button.classList.remove('uiverse-action-clicked');
+        void button.offsetWidth;
+        button.classList.add('uiverse-action-clicked');
+        pressTimers.set(button, global.setTimeout(() => {
+            button.classList.remove('uiverse-action-clicked');
+            pressTimers.delete(button);
+        }, 200));
 
         const bounds = button.getBoundingClientRect();
         const pointer = event.detail !== 0 && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
