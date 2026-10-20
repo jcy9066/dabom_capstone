@@ -282,8 +282,15 @@ body.dark-mode #darkToggle.uiverse-day-night .uiverse-stars {
     80% { transform: scale(.8); }
 }
 @media (prefers-reduced-motion: reduce) {
-    .dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked,
-    .dashboard-action-controls :is(.action-beep,.action-warning).uiverse-press-button.uiverse-action-clicked::before {
+    /* Retain an obvious, non-animated button state without disregarding the
+       operating system's reduced-motion preference. */
+    .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+        animation: none;
+        transform: translateY(1px);
+        box-shadow: 0 0 0 var(--uiverse-button-edge),0 1px 3px rgba(12,24,40,.1);
+        background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
+    }
+    .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked::before {
         animation: none;
     }
     .dashboard-action-controls .action-btn.uiverse-press-button,
