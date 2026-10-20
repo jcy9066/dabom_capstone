@@ -32,27 +32,11 @@
         renameSuccess: '\uc9c0\ub3c4 \uc774\ub984\uc744 \ubcc0\uacbd\ud588\uc2b5\ub2c8\ub2e4.',
         selectRequired: '\uc800\uc7a5 \uc9c0\ub3c4\ub97c \uc9c1\uc811 \uc120\ud0dd\ud558\uc138\uc694.',
         mapPrefix: 'MAP: ',
-        currentLocation: '현재 장소',
-        gpsStatus: 'GPS',
-        securityStatus: '보안 구역',
-        noFix: 'NO FIX',
-        unknown: '확인 불가',
-        normal: '정상',
-        outside: '구역 이탈',
-        newLocation: '새 장소',
-        locationName: '장소 이름',
-        latitude: '위도',
-        longitude: '경도',
-        radius: '허용 반경 (m)',
-        useCurrentGps: '현재 위치 사용',
-        saveLocation: '장소 저장',
-        deleteLocation: '장소 삭제'
     };
     const state = {
         maps: [],
         active: null,
         activeApiAvailable: true,
-        locationStatus: null,
         busy: false,
         closeTimer: null,
         progressTimers: [],
@@ -159,303 +143,9 @@
         return messages[error.code] || error.message || labels.unavailable;
     }
 
-    function locationFallback(error = '') {
-        return {
-            unavailable: true,
-            error,
-            gps: { fix: false },
-            security_state: 'UNKNOWN',
-            last_location_id: null,
-            last_location_name: null,
-            locations: [],
-        };
-    }
-
     function coordinateText(value) {
         const number = Number(value);
         return Number.isFinite(number) ? number.toFixed(6) : '--';
-    }
-
-    function renderLocationPanel(status = locationFallback()) {
-        const panel = create('section', 'saved-map-location-panel');
-
-        const gps = status?.gps || { fix: false };
-        const liveName = gps.matched_location_name;
-        const lastName = status?.last_location_name;
-        const placeText = liveName || (lastName ? `${lastName} (마지막 확인)` : labels.unknown);
-        const satelliteText = Number.isFinite(Number(gps.satellites)) ? ` · 위성 ${Number(gps.satellites)}` : '';
-        const gpsText = gps.fix ? `FIX${satelliteText}` : labels.noFix;
-        const securityText = status?.security_state === 'OUT_OF_AREA'
-            ? labels.outside
-            : status?.security_state === 'NORMAL'
-                ? labels.normal
-                : labels.unknown;
-
-        const statusGrid = create('div', 'saved-map-location-status');
-        for (const [name, value, extraClass] of [
-            [labels.currentLocation, placeText, ''],
-            [labels.gpsStatus, gpsText, gps.fix ? 'is-ok' : ''],
-            [labels.securityStatus, securityText, status?.security_state === 'OUT_OF_AREA' ? 'is-danger' : ''],
-        ]) {
-            const row = create('div', `saved-map-location-status-row ${extraClass}`.trim());
-            row.append(create('span', 'saved-map-location-status-label', name));
-            row.append(create('span', 'saved-map-location-status-value', value));
-            statusGrid.append(row);
-        }
-        panel.append(statusGrid);
-
-        if (status?.unavailable) {
-            panel.append(create('div', 'saved-map-location-note', `GPS/장소 상태 확인 불가: ${status.error || labels.unavailable}`));
-            return { panel, actions: null };
-        }
-
-        const locations = Array.isArray(status.locations) ? status.locations : [];
-        const picker = create('div', 'saved-map-location-picker');
-        const newNameInput = create('input', 'saved-map-location-new');
-        newNameInput.type = 'text';
-        newNameInput.placeholder = '새로운 장소 이름 입력';
-        newNameInput.setAttribute('aria-label', '새 장소 이름 입력');
-        const DRAFT_LOCATION_VALUE = '__draft_location__';
-
-        const selector = create('select', 'saved-map-location-select');
-        selector.id = 'saved-map-location-select';
-        const blank = create('option', '', labels.newLocation);
-        blank.value = '';
-        selector.append(blank);
-        const draftOption = create('option', '', '');
-        draftOption.value = DRAFT_LOCATION_VALUE;
-        draftOption.hidden = true;
-        selector.append(draftOption);
-        for (const location of locations) {
-            const option = create('option', '', location.name || location.location_id);
-            option.value = location.location_id || '';
-            selector.append(option);
-        }
-        if (status.last_location_id && locations.some(item => item.location_id === status.last_location_id)) {
-            selector.value = status.last_location_id;
-        }
-
-        // A styled listbox mirrors the existing select (the latter retains its
-        // value/ID for all existing location save, edit and delete operations).
-        selector.hidden = true;
-        selector.tabIndex = -1;
-        selector.setAttribute('aria-hidden', 'true');
-        const choice = create('div', 'saved-map-location-choice');
-        const trigger = create('button', 'saved-map-location-trigger', labels.newLocation);
-        trigger.type = 'button';
-        trigger.setAttribute('aria-haspopup', 'listbox');
-        trigger.setAttribute('aria-expanded', 'false');
-        const popup = create('div', 'saved-map-location-options');
-        popup.id = 'saved-map-location-options';
-        popup.setAttribute('role', 'listbox');
-        popup.setAttribute('aria-label', '저장된 장소 선택');
-        popup.hidden = true;
-        trigger.setAttribute('aria-controls', popup.id);
-        const optionButtons = new Map();
-        for (const option of selector.children) {
-            const item = create('button', 'saved-map-location-option', option.textContent);
-            item.type = 'button';
-            item.dataset.locationValue = option.value;
-            item.setAttribute('role', 'option');
-            item.setAttribute('aria-selected', 'false');
-            item.hidden = Boolean(option.hidden);
-            popup.append(item);
-            optionButtons.set(option.value, item);
-        }
-        const syncPicker = () => {
-            const selected = Array.from(selector.children)
-                .find(option => option.value === selector.value);
-            trigger.textContent = selected?.textContent || labels.newLocation;
-            for (const [value, item] of optionButtons) {
-                const source = Array.from(selector.children).find(option => option.value === value);
-                item.hidden = Boolean(source?.hidden);
-                item.textContent = source?.textContent || '';
-                item.setAttribute('aria-selected', String(selector.value === value));
-            }
-        };
-        const closePicker = () => {
-            popup.hidden = true;
-            trigger.setAttribute('aria-expanded', 'false');
-        };
-        const openPicker = () => {
-            popup.hidden = false;
-            trigger.setAttribute('aria-expanded', 'true');
-        };
-        const pickerItems = () => Array.from(optionButtons.values()).filter(item => !item.hidden);
-        const chooseOption = value => {
-            selector.value = value;
-            loadSelectedLocation();
-            syncPicker();
-            closePicker();
-            trigger.focus?.();
-        };
-        for (const item of optionButtons.values()) {
-            item.addEventListener('click', () => chooseOption(item.dataset.locationValue));
-            item.addEventListener('keydown', event => {
-                if (event.key === 'Escape') {
-                    event.preventDefault();
-                    closePicker();
-                    trigger.focus?.();
-                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                    event.preventDefault();
-                    const items = pickerItems();
-                    const index = items.indexOf(item);
-                    items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus?.();
-                }
-            });
-        }
-        trigger.addEventListener('click', () => {
-            if (popup.hidden) openPicker(); else closePicker();
-        });
-        trigger.addEventListener('keydown', event => {
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault();
-                openPicker();
-                const items = pickerItems();
-                if (items.length) {
-                    const selected = items.find(item => item.dataset.locationValue === selector.value);
-                    (selected || items[0]).focus?.();
-                }
-            } else if (event.key === 'Escape') {
-                event.preventDefault();
-                closePicker();
-            }
-        });
-        choice.addEventListener('focusout', event => {
-            if (!choice.contains?.(event.relatedTarget)) closePicker();
-        });
-        choice.append(trigger, popup);
-
-        const fields = create('div', 'saved-map-location-fields');
-        const fieldSpecs = [
-            ['saved-map-location-name', labels.locationName, 'text'],
-            ['saved-map-location-lat', labels.latitude, 'number'],
-            ['saved-map-location-lng', labels.longitude, 'number'],
-            ['saved-map-location-radius', labels.radius, 'number'],
-        ];
-        const inputs = {};
-        for (const [id, label, type] of fieldSpecs) {
-            const field = create('label', '', label);
-            const input = create('input');
-            input.id = id;
-            input.type = type;
-            if (type === 'number') input.step = 'any';
-            field.append(input);
-            fields.append(field);
-            inputs[id] = input;
-        }
-        inputs['saved-map-location-radius'].value = '30';
-
-        const loadSelectedLocation = () => {
-            if (selector.value === DRAFT_LOCATION_VALUE) {
-                inputs['saved-map-location-name'].value = newNameInput.value.trim();
-                deleteButton.disabled = true;
-                return;
-            }
-            const location = locations.find(item => item.location_id === selector.value);
-            inputs['saved-map-location-name'].value = location?.name || '';
-            inputs['saved-map-location-lat'].value = location?.lat ?? '';
-            inputs['saved-map-location-lng'].value = location?.lng ?? '';
-            inputs['saved-map-location-radius'].value = location?.radius_m ?? '30';
-            deleteButton.disabled = !location;
-        };
-
-        const actions = create('div', 'saved-map-location-actions');
-        const useCurrent = create('button', 'mb-btn saved-map-use-current', labels.useCurrentGps);
-        useCurrent.type = 'button';
-        useCurrent.dataset.requiresGps = 'true';
-        useCurrent.disabled = gps.fix !== true;
-        useCurrent.addEventListener('click', () => {
-            if (gps.fix !== true) return;
-            inputs['saved-map-location-lat'].value = gps.lat ?? '';
-            inputs['saved-map-location-lng'].value = gps.lng ?? '';
-            if (!inputs['saved-map-location-name'].value && gps.matched_location_name) {
-                inputs['saved-map-location-name'].value = gps.matched_location_name;
-            }
-        });
-
-        const saveLocation = create('button', 'mb-btn saved-map-save-location', labels.saveLocation);
-        saveLocation.type = 'button';
-        saveLocation.addEventListener('click', async () => {
-            const name = inputs['saved-map-location-name'].value.trim();
-            const latText = inputs['saved-map-location-lat'].value.trim();
-            const lngText = inputs['saved-map-location-lng'].value.trim();
-            const radiusText = inputs['saved-map-location-radius'].value.trim();
-            if (!name || !latText || !lngText || !radiusText) {
-                global.alert('장소 이름, 좌표, 허용 반경을 확인하세요.');
-                return;
-            }
-            const lat = Number(latText);
-            const lng = Number(lngText);
-            const radius = Number(radiusText);
-            if (![lat, lng, radius].every(Number.isFinite)) {
-                global.alert('장소 이름, 좌표, 허용 반경을 확인하세요.');
-                return;
-            }
-            try {
-                saveLocation.disabled = true;
-                const token = await csrfToken();
-                await requestJson('/api/navigation/locations', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-                    body: JSON.stringify({
-                        location_id: selector.value && selector.value !== DRAFT_LOCATION_VALUE ? selector.value : null,
-                        name,
-                        lat,
-                        lng,
-                        radius_m: radius,
-                    })
-                });
-                await controller?.open?.();
-            } catch (error) {
-                global.alert(`장소 저장 실패: ${error.message || labels.unavailable}`);
-            } finally {
-                saveLocation.disabled = false;
-            }
-        });
-
-        const deleteButton = create('button', 'mb-btn saved-map-delete-location', labels.deleteLocation);
-        deleteButton.type = 'button';
-        deleteButton.disabled = true;
-        deleteButton.addEventListener('click', async () => {
-            if (!selector.value || selector.value === DRAFT_LOCATION_VALUE) return;
-            const selected = locations.find(item => item.location_id === selector.value);
-            if (!global.confirm(`${selected?.name || selector.value} 장소를 삭제하시겠습니까?`)) return;
-            try {
-                deleteButton.disabled = true;
-                const token = await csrfToken();
-                await requestJson(`/api/navigation/locations/${encodeURIComponent(selector.value)}`, {
-                    method: 'DELETE',
-                    headers: { 'X-CSRF-Token': token }
-                });
-                await controller?.open?.();
-            } catch (error) {
-                global.alert(`장소 삭제 실패: ${error.message || labels.unavailable}`);
-            }
-        });
-
-        newNameInput.addEventListener('input', () => {
-            const draftName = newNameInput.value.trim();
-            draftOption.textContent = draftName;
-            draftOption.hidden = !draftName;
-            if (draftName) {
-                selector.value = DRAFT_LOCATION_VALUE;
-                inputs['saved-map-location-name'].value = draftName;
-                deleteButton.disabled = true;
-            } else if (selector.value === DRAFT_LOCATION_VALUE) {
-                selector.value = '';
-                inputs['saved-map-location-name'].value = '';
-                deleteButton.disabled = true;
-            }
-            syncPicker();
-        });
-        selector.addEventListener('change', () => { loadSelectedLocation(); syncPicker(); });
-        picker.append(newNameInput, selector, choice);
-        actions.append(useCurrent, saveLocation, deleteButton);
-        panel.append(picker, fields);
-        loadSelectedLocation();
-        syncPicker();
-        return { panel, actions };
     }
 
     function captureViewState(container = manager?.body) {
@@ -476,9 +166,6 @@
         if (!disabled) {
             const load = container?.querySelector?.('.saved-map-load');
             if (load) load.disabled = !selectedMapName(container);
-            container?.querySelectorAll?.('[data-requires-gps="true"]').forEach(element => {
-                element.disabled = state.locationStatus?.gps?.fix !== true;
-            });
         }
     }
 
@@ -658,18 +345,10 @@
         }
 
         const maps = context.maps || [];
-        const locationStatus = context.locationStatus || state.locationStatus || locationFallback();
-        const layout = create('div', 'saved-map-two-column');
+        const layout = create('div', 'saved-map-content');
         const mapColumn = create('section', 'saved-map-primary-column');
-        const locationColumn = create('section', 'saved-map-secondary-column');
-        layout.append(mapColumn, locationColumn);
+        layout.append(mapColumn);
         container.append(layout);
-        const { panel: locationPanel, actions: locationActions } = renderLocationPanel(locationStatus);
-        locationColumn.append(locationPanel);
-        if (locationActions) {
-            // Keep the action footer outside the white location form.
-            locationColumn.append(locationActions);
-        }
         const list = create('div', 'saved-map-list');
         const activeName = context.active?.active_map?.map_name
             || maps.find(map => map.active === true)?.map_name
@@ -795,15 +474,13 @@
             async open() {
                 if (state.busy) return null;
                 try {
-                    const [active, maps, locationStatus] = await Promise.all([
+                    const [active, maps] = await Promise.all([
                         refreshActiveMap(),
                         requestJson('/api/navigation/maps'),
-                        requestJson('/api/navigation/locations').catch(error => locationFallback(error.message))
                     ]);
                     state.maps = maps.maps || [];
-                    state.locationStatus = locationStatus;
                     manager.close();
-                    return manager.open(VIEW_NAME, { maps: state.maps, active, locationStatus }, { replace: true });
+                    return manager.open(VIEW_NAME, { maps: state.maps, active }, { replace: true });
                 } catch (error) {
                     manager.close();
                     return manager.open(VIEW_NAME, { error: error.message }, { replace: true });
