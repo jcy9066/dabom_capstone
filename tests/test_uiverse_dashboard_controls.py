@@ -166,11 +166,6 @@ context.window = context;
 vm.runInNewContext(fs.readFileSync('frontend/services/static/action_feedback.js', 'utf8'), context);
 assert.ok(handlers.click);
 assert.ok(handlers.pointerdown);
-// A newly mounted button must work even though the original controls instance
-// was captured during initialization; handlers live on document.
-const remountedBeep = makeButton();
-handlers.pointerdown({ target: remountedBeep, button: 0, detail: 1, clientX: 16, clientY: 8 });
-assert.strictEqual(remountedBeep.classList.contains('uiverse-action-clicked'), true);
 assert.strictEqual(label.textContent, '신고');
 // Pointerdown must start the motion before the actual command callback.
 handlers.pointerdown({ target: beep, button: 0, detail: 1, clientX: 30, clientY: 20 });
@@ -197,6 +192,11 @@ warning.disabled = true;
 handlers.pointerdown({ target: warning, button: 0, detail: 1 });
 handlers.click({ target: warning, detail: 0 });
 assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
+// A newly mounted button must work even though the original controls instance
+// was captured during initialization; handlers live on document.
+const remountedBeep = makeButton();
+handlers.pointerdown({ target: remountedBeep, button: 0, detail: 1, clientX: 16, clientY: 8 });
+assert.strictEqual(remountedBeep.classList.contains('uiverse-action-clicked'), true);
 // Reduced motion still shows a static pressed state.
 context.matchMedia = () => ({ matches: true });
 handlers.click({ target: beep, detail: 0 });
