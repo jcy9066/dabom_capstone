@@ -7,14 +7,16 @@ const canvas = document.getElementById('lidar-3d-canvas');
 
 if (root && canvas) {
     const COLORS = {
-        background: 0x101821,
-        mapFree: [62, 76, 88, 255],
-        mapUnknown: [30, 40, 51, 255],
-        mapOccupied: [86, 104, 118, 255],
-        occupiedWall: 0x70869a,
-        lowerChassis: 0x667582,
-        upperChassis: 0x98a6b1,
-        wheel: 0x222a31,
+        background: 0x0b1420,
+        mapFree: [56, 83, 103, 255],
+        mapUnknown: [29, 42, 56, 255],
+        mapOccupied: [82, 104, 123, 255],
+        occupiedTop: 0x8297a9,
+        occupiedWall: 0x52687b,
+        mapOutline: 0x577184,
+        lowerChassis: 0x687a89,
+        upperChassis: 0xa5b2bd,
+        wheel: 0x14191e,
         robotFront: 0x5b9bd5,
         scanRay: 0x7dd3fc,
         scanPoint: 0x2dd4bf,
@@ -119,10 +121,10 @@ if (root && canvas) {
         world.add(group);
     }
 
-    const ambient = new THREE.HemisphereLight(0xd8e5ef, 0x1d2832, 1.05);
+    const ambient = new THREE.HemisphereLight(0xd8e5ef, 0x1d2832, 1.10);
     scene.add(ambient);
 
-    const keyLight = new THREE.DirectionalLight(0xf2f7fa, 1.15);
+    const keyLight = new THREE.DirectionalLight(0xf2f7fa, 1.30);
     keyLight.position.set(3, -4, 7);
     scene.add(keyLight);
 
@@ -470,9 +472,9 @@ if (root && canvas) {
         const heightM = hasMapExtent ? height * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
         const size = Math.max(1, Math.ceil(Math.max(widthM, heightM)));
         const divisions = Math.min(100, Math.max(4, size * 2));
-        const helper = new THREE.GridHelper(size, divisions, 0x64748b, 0x334155);
+        const helper = new THREE.GridHelper(size, divisions, 0x577184, 0x253c4e);
         helper.material.transparent = true;
-        helper.material.opacity = 0.3;
+        helper.material.opacity = viewerExpanded ? 0.18 : 0.10;
         helper.material.depthWrite = false;
         helper.rotation.x = Math.PI / 2;
         helper.position.set(
@@ -548,14 +550,19 @@ if (root && canvas) {
                 resolution * 0.94,
                 obstacleHeightM,
             );
-            const boxMaterial = new THREE.MeshStandardMaterial({
-                color: COLORS.occupiedWall,
-                roughness: 0.88,
-                metalness: 0.02,
+            // BoxGeometry assigns material index 4 to the +Z face.
+            // Existing cell height is a schematic display height, not a
+            // measurement. Instancing, transforms and thresholds are intact.
+            const sideMaterial = new THREE.MeshStandardMaterial({
+                color: COLORS.occupiedWall, roughness: 0.90, metalness: 0.01,
+            });
+            const topMaterial = new THREE.MeshStandardMaterial({
+                color: COLORS.occupiedTop, roughness: 0.83, metalness: 0.02,
             });
             const occupied = new THREE.InstancedMesh(
                 boxGeometry,
-                boxMaterial,
+                [sideMaterial, sideMaterial, sideMaterial, sideMaterial,
+                    topMaterial, sideMaterial],
                 occupiedCount,
             );
             occupied.name = 'occupied-cells';
@@ -578,6 +585,24 @@ if (root && canvas) {
             occupied.instanceMatrix.needsUpdate = true;
             mapRoot.add(occupied);
         }
+
+        // Thin schematic map extent: no collision, costmap, or raycast role.
+        // Inherits the exact map origin and yaw from the occupancy-map root.
+        const outline = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0.012),
+                new THREE.Vector3(widthM, 0, 0.012),
+                new THREE.Vector3(widthM, heightM, 0.012),
+                new THREE.Vector3(0, heightM, 0.012),
+            ]),
+            new THREE.LineBasicMaterial({
+                color: COLORS.mapOutline, transparent: true,
+                opacity: 0.85, depthWrite: false, toneMapped: false,
+            }),
+        );
+        outline.name = 'occupancy-extent-outline';
+        outline.raycast = () => {};
+        mapRoot.add(outline);
 
         const transform = mapTransform(map);
         mapRoot.position.set(transform.x, transform.y, transform.z);
@@ -660,7 +685,7 @@ if (root && canvas) {
                 {
                     height: DYNAMIC_OBSTACLE_HEIGHT_M,
                     color: COLORS.dynamicObstacle,
-                    opacity: 0.92,
+                    opacity: 0.96,
                     cellScale: 0.92,
                     depthWrite: true,
                     renderOrder: 25,
@@ -677,7 +702,7 @@ if (root && canvas) {
             {
                 height: INFLATION_HEIGHT_M,
                 color: COLORS.inflation,
-                opacity: 0.22,
+                opacity: 0.17,
                 cellScale: 0.98,
                 depthWrite: false,
                 renderOrder: 10,
@@ -699,8 +724,8 @@ if (root && canvas) {
     function applyNeutralMaterial(object, color) {
         const material = new THREE.MeshStandardMaterial({
             color,
-            roughness: 0.78,
-            metalness: 0.04,
+            roughness: 0.56,
+            metalness: 0.32,
         });
         object.traverse(child => {
             if (!child.isMesh) return;
@@ -730,8 +755,8 @@ if (root && canvas) {
             new THREE.CylinderGeometry(radius, radius, width, 20),
             new THREE.MeshStandardMaterial({
                 color: COLORS.wheel,
-                roughness: 0.92,
-                metalness: 0.02,
+                roughness: 0.97,
+                metalness: 0.00,
             }),
         );
         wheel.add(tire);
@@ -836,7 +861,7 @@ if (root && canvas) {
             alpha: false,
             desynchronized: true,
         });
-        cameraTextureContext.fillStyle = '#101821';
+        cameraTextureContext.fillStyle = '#0b1420';
         cameraTextureContext.fillRect(
             0,
             0,
@@ -897,7 +922,7 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.cameraViewBorder,
                 transparent: true,
-                opacity: 0.78,
+                opacity: 0.90,
                 depthTest: false,
                 depthWrite: false,
             }),
@@ -1036,6 +1061,20 @@ if (root && canvas) {
             const upperBox = placePartAtBottom(upper, lowerBox.max.z + 0.012);
             cad.add(lower, upper);
             model.add(cad);
+            // A flat contact shadow costs no realtime shadow-map pass.
+            const contactShadow = new THREE.Mesh(
+                new THREE.CircleGeometry(1, 32),
+                new THREE.MeshBasicMaterial({
+                    color: 0x02060b,
+                    transparent: true,
+                    opacity: 0.23,
+                    depthWrite: false,
+                }),
+            );
+            contactShadow.name = 'robot-contact-shadow';
+            contactShadow.scale.set(chassisLength * 0.58, chassisWidth * 0.65, 1);
+            contactShadow.position.z = 0.007;
+            model.add(contactShadow);
 
             const wheelX = chassisLength * 0.35;
             const wheelY = chassisWidth * 0.5 + wheelWidth * 0.18;
@@ -1351,7 +1390,7 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.scanRay,
                 transparent: true,
-                opacity: 0.34,
+                opacity: 0.26,
                 depthWrite: false,
             }),
         );
@@ -1368,10 +1407,10 @@ if (root && canvas) {
             scanPointGeometry,
             new THREE.PointsMaterial({
                 color: COLORS.scanPoint,
-                size: 0.035,
+                size: viewerExpanded ? 0.038 : 0.048,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
+                opacity: 1.0,
                 depthWrite: false,
             }),
         );
