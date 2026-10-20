@@ -80,6 +80,8 @@ class UiverseDashboardControlsTest(unittest.TestCase):
         self.assertIn("controls.addEventListener('pointerdown'", FEEDBACK_JS)
         self.assertIn("@keyframes uiverse-button-depress", THEME_CSS)
         self.assertIn("@keyframes uiverse-press-flash", THEME_CSS)
+        self.assertIn("transform: translateY(1px);", THEME_CSS)
+        self.assertNotIn("if (global.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;", FEEDBACK_JS)
         self.assertIn("uiverse-action-clicked {", THEME_CSS)
         self.assertIn("transform: translateY(1px);", THEME_CSS)
         self.assertIn("action-ripple-running", FEEDBACK_JS)
@@ -182,6 +184,10 @@ warning.disabled = true;
 handlers.pointerdown({ target: warning, button: 0, detail: 1 });
 handlers.click({ target: warning, detail: 0 });
 assert.strictEqual(warning.classList.contains('uiverse-action-clicked'), false);
+// Reduced motion still shows a static pressed state.
+context.matchMedia = () => ({ matches: true });
+handlers.click({ target: beep, detail: 0 });
+assert.strictEqual(beep.classList.contains('uiverse-action-clicked'), true);
 context.DabomActionFeedback.setReportState('sending');
 assert.strictEqual(report.dataset.reportState, 'sending');
 assert.strictEqual(label.textContent, '전송 중');
