@@ -72,6 +72,7 @@ from server.location_security_notifications import build_location_transition_mes
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
+from server.gpu_telemetry import GpuUtilizationSampler
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -390,6 +391,7 @@ TELEGRAM_TOKEN = env_text("TELEGRAM_TOKEN", allow_empty=True)
 TELEGRAM_CHAT_ID = env_text("TELEGRAM_CHAT_ID", allow_empty=True)
 
 state_lock = threading.Lock()
+gpu_utilization_sampler = GpuUtilizationSampler()
 frame_condition = threading.Condition(state_lock)
 server_started_at = time.time()
 current_frame = None
@@ -3711,6 +3713,8 @@ async def update_status(request: Request):
 async def get_status():
     with state_lock:
         status = dict(robot_status)
+    # GPU Server telemetry is sampled independently from the Pi status.
+    status["gpu_usage_percent"] = gpu_utilization_sampler.snapshot(CUDA_DEVICE_INDEX)
     live_gps = location_security_service.snapshot().get("gps") or {}
     status.update(
         {
