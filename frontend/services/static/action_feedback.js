@@ -2,10 +2,11 @@
 (function dashboardActionFeedback(global) {
     'use strict';
 
-    const controls = global.document?.querySelector('.dashboard-action-controls');
-    if (!controls) return;
-
-    const report = controls.querySelector('.action-report');
+    const document = global.document;
+    // Event delegation survives control-panel hydration/replacement.
+    // The report state is still bound to the existing report button.
+    const controls = document?.querySelector('.dashboard-action-controls');
+    const report = controls?.querySelector('.action-report');
     const reportLabel = report?.querySelector('.action-report-label');
     const captions = Object.freeze({
         idle: '신고', sending: '전송 중', success: '신고 완료', error: '전송 실패'
@@ -33,7 +34,7 @@
 
     function actionButton(event) {
         const button = event.target?.closest?.('.action-beep, .action-warning');
-        if (!button || !controls.contains(button) || button.disabled) return null;
+        if (!button || !button.closest('.dashboard-action-controls') || button.disabled) return null;
         return button;
     }
 
@@ -60,7 +61,7 @@
 
     // Start at pointerdown to show a press even when the control handler
     // synchronously disables its button on click.
-    controls.addEventListener('pointerdown', event => {
+    document?.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
         const button = actionButton(event);
         if (!button) return;
@@ -69,7 +70,7 @@
     }, { capture: true });
 
     // Click also covers keyboard activation and programmatic accessible clicks.
-    controls.addEventListener('click', event => {
+    document?.addEventListener('click', event => {
         const button = actionButton(event);
         if (!button) return;
         if (pendingPointerClicks.has(button)) {
@@ -79,13 +80,13 @@
         animatePress(event, button);
     }, { capture: true });
 
-    controls.addEventListener('pointercancel', event => {
+    document?.addEventListener('pointercancel', event => {
         const button = event.target?.closest?.('.action-beep, .action-warning');
         if (button) pendingPointerClicks.delete(button);
     }, { capture: true });
 
     // The feedback animations have no effect on the existing command callbacks.
-    controls.addEventListener('animationend', event => {
+    document?.addEventListener('animationend', event => {
         if (event.animationName === 'dashboard-action-ripple') {
             event.target.classList.remove('action-ripple-running');
         }
