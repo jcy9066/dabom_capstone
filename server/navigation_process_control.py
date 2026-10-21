@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from server.env_config import env_float, env_text
+from server.env_config import env_bool, env_float, env_text
 
 
 class NavigationProcessError(RuntimeError):
@@ -396,6 +396,9 @@ class NavigationProcessControl:
             command.append("start_rviz:=false")
         if mode == "DRIVING":
             command.append(f"map:={map_yaml}")
+            # Dry-run must not start the Nav2-to-Pi command bridge.
+            if not env_bool("MOTOR_OUTPUT_ENABLED", default=False):
+                command.append("start_nav2_command_bridge:=false")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"navigation_{mode.lower()}.log"
         process_env = os.environ.copy()
