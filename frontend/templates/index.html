@@ -5,17 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 순찰 관제 센터</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="static/style.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/system_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/navigation_map_control.css?v=20261001-map-modal-controls">
+    <link rel="stylesheet" href="static/style.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
+    <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261014-ux-refine-v17">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20261006-model-pipeline-toggle-v1">
-    <link rel="stylesheet" href="static/selected_ui.css?v=20261013-enterprise-accent-v4">
+    <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-flat-drawer-v4">
+    <link rel="stylesheet" href="static/selected_ui.css?v=20261020-beep-raised-v12">
+    <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-border-v2">
+    <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
+    <link rel="stylesheet" href="static/uiverse_dashboard_controls.css?v=20261020-verified-press-v4">
+    <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-return-animation-v4">
 </head>
 <body>
+    <script>
+        // Apply the persisted theme before any dashboard controls are painted.
+        try {
+            if (localStorage.getItem('darkMode') === '1') document.body.classList.add('dark-mode');
+        } catch (_) { /* Storage access is optional; use the light theme. */ }
+    </script>
 
     <!-- 사이드 메뉴 오버레이 -->
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
@@ -24,30 +34,42 @@
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">설정</span>
-            <button class="sidebar-close" onclick="closeSidebar()">✕</button>
+            <div class="sidebar-theme-control">
+                <span class="sidebar-item-label">다크 모드</span>
+                <div class="dark-toggle uiverse-day-night" id="darkToggle" role="switch" tabindex="0" aria-label="다크 모드" aria-checked="false" onclick="toggleDarkMode()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDarkMode();}">
+                    <div class="uiverse-toggle-scene" aria-hidden="true">
+                        <div class="dark-toggle-slider uiverse-sun-moon">
+                            <svg class="uiverse-moon-dot uiverse-moon-dot-1" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-moon-dot uiverse-moon-dot-2" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-moon-dot uiverse-moon-dot-3" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-light-ray uiverse-light-ray-1" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-light-ray uiverse-light-ray-2" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-light-ray uiverse-light-ray-3" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-1 uiverse-cloud-dark" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-2 uiverse-cloud-dark" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-3 uiverse-cloud-dark" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-4 uiverse-cloud-light" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-5 uiverse-cloud-light" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                            <svg class="uiverse-cloud uiverse-cloud-6 uiverse-cloud-light" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50"></circle></svg>
+                        </div>
+                        <div class="uiverse-stars">
+                            <svg class="uiverse-star uiverse-star-1" viewBox="0 0 20 20"><path d="M 0 10 C 10 10,10 10 ,0 10 C 10 10 , 10 10 , 10 20 C 10 10 , 10 10 , 20 10 C 10 10,10 10 , 10 0 C 10 10,10 10 ,0 10 Z"></path></svg>
+                            <svg class="uiverse-star uiverse-star-2" viewBox="0 0 20 20"><path d="M 0 10 C 10 10,10 10 ,0 10 C 10 10 , 10 10 , 10 20 C 10 10 , 10 10 , 20 10 C 10 10,10 10 , 10 0 C 10 10,10 10 ,0 10 Z"></path></svg>
+                            <svg class="uiverse-star uiverse-star-3" viewBox="0 0 20 20"><path d="M 0 10 C 10 10,10 10 ,0 10 C 10 10 , 10 10 , 10 20 C 10 10 , 10 10 , 20 10 C 10 10,10 10 , 10 0 C 10 10,10 10 ,0 10 Z"></path></svg>
+                            <svg class="uiverse-star uiverse-star-4" viewBox="0 0 20 20"><path d="M 0 10 C 10 10,10 10 ,0 10 C 10 10 , 10 10 , 10 20 C 10 10 , 10 10 , 20 10 C 10 10,10 10 , 10 0 C 10 10,10 10 ,0 10 Z"></path></svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-header-actions">
+                <span id="sidebarGuideMount"></span>
+                <button class="sidebar-close" onclick="closeSidebar()">✕</button>
+            </div>
         </div>
 
         <div class="sidebar-body">
-            <div class="sidebar-item">
-                <span class="sidebar-item-label">다크 모드</span>
-
-                <div class="dark-toggle" id="darkToggle" role="switch" tabindex="0" aria-label="다크 모드" aria-checked="false" onclick="toggleDarkMode()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDarkMode();}">
-                    <div class="dark-toggle-slider"></div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <div class="sidebar-info">
-                <span class="sidebar-info-label">시스템</span>
-                <span class="sidebar-info-value">AI 순찰 로봇 v1.0</span>
-            </div>
-            <div class="sidebar-divider"></div>
-            <div id="systemControlPanelSlot"></div>
-
             {% set current_user = request.session.get('user') or {} %}
             <div class="sidebar-account" id="sidebarAccount" aria-label="현재 로그인 계정">
-                <span class="sidebar-info-label">현재 로그인</span>
                 <strong class="sidebar-account-name" id="sidebarAccountName">
                     {{ current_user.get('name') or '사용자' }}
                 </strong>
@@ -58,33 +80,46 @@
                     &#xB85C;&#xADF8;&#xC544;&#xC6C3;
                 </button>
             </div>
+
+            <div id="systemControlPanelSlot"></div>
+
         </div>
     </div>
 
-    <div class="system-status-bar">
+    <div class="system-status-bar" id="topSystemStatusBar" data-open="true">
+        <div class="system-status-items">
         <span>
             CPU:
-            <span id="sys-cpu-usage">0.0</span>%
+            <span id="sys-cpu-usage">--</span>%
             /
-            <span id="sys-cpu-temp">0.0</span>°C
+            <span id="sys-cpu-temp">--</span>°C
         </span>
 
         <span>
             RAM:
-            <span id="sys-ram">0.0</span>%
+            <span id="sys-ram">--</span>%
+        </span>
+        <span>
+            GPU:
+            <span id="sys-gpu-usage">--</span>%
         </span>
         <span>
             PING:
-            <span id="sys-internet">0</span>
+            <span id="sys-internet">--</span>
         </span>
         <span class="system-state-item">
-            PI:
+            Pi:
             <span class="state-value state-unknown" id="pi-connection-status">UNKNOWN</span>
         </span>
         <span class="system-state-item">
-            MODE:
+            Mode:
             <span class="state-value state-unknown" id="robot-mode-status">UNKNOWN</span>
-        </span>
+        </span>        </div>
+        <button type="button" class="system-status-drawer-handle dashboard-drawer-handle-pill"
+            id="topSystemStatusToggle" data-drawer-toggle data-drawer-target="topSystemStatusBar"
+            data-drawer-open-label="시스템 상태 접기" data-drawer-closed-label="시스템 상태 펼치기"
+            aria-controls="topSystemStatusBar" aria-expanded="true"
+            aria-label="시스템 상태 접기"><span class="dashboard-drawer-handle-pill-icon" aria-hidden="true">❮</span></button>
     </div>
 
     <header>
@@ -100,7 +135,7 @@
         </button>
 
         <div class="header-center">
-            <div class="live-badge" id="pi-live-badge" role="status" aria-live="polite"><span class="ui-pi-light" aria-hidden="true"></span><span class="ui-pi-label">PI UNKNOWN</span></div>
+            <div class="live-badge" id="pi-live-badge" role="status" aria-live="polite"><span class="ui-pi-light" aria-hidden="true"></span><span class="ui-pi-label" hidden>PI UNKNOWN</span></div>
             <h1>AI 순찰 로봇 관제 센터</h1>
         </div>
     </header>
@@ -112,12 +147,36 @@
                 <h2 class="card-title">
                     실시간 카메라 (RTMO-M + BotSORT + X3D-M)
                 </h2>
-                <div
+                <div class="camera-header-actions">
+                    <div class="speaker-volume-control" id="speaker-volume-control"
+                         data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
+                        <label class="speaker-volume-slider">
+                            <input id="speaker-volume-slider" class="speaker-volume-level"
+                                   type="range" min="0" max="100" step="1" value="20"
+                                   aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
+                            <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
+                                 viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
+                            </svg>
+                        </label>
+                        <output class="speaker-volume-value" id="speaker-volume-value"
+                                for="speaker-volume-slider">20%</output>
+                    </div>
+                    <div
                     id="model-pipeline-toggle-mount"
                     class="dashboard-model-control-mount"
                     data-dashboard-mount="model-pipeline-toggle"
                     aria-label="Model pipeline control"
-                ></div>
+                >
+                    <button type="button" class="dashboard-model-toggle unknown" aria-label="Model pipeline ON / OFF" aria-pressed="false" aria-busy="false" disabled>
+                        <span class="dashboard-model-toggle-label">MODEL</span>
+                        <span class="ui-toggle-side ui-toggle-side-off">OFF</span>
+                        <span class="dashboard-model-toggle-track" aria-hidden="true"><span class="dashboard-model-toggle-slider"></span></span>
+                        <span class="ui-toggle-side ui-toggle-side-on">ON</span>
+                        <span class="dashboard-model-toggle-state">--</span>
+                    </button>
+                    </div>
+                </div>
             </div>
 
             <div class="screen-content" id="video-wrapper">
@@ -195,11 +254,17 @@
                                                 class="viewer-navigation-mode-controls"
                                                 data-dashboard-mount="navigation-viewer-mode-controls"
                                                 aria-label="Navigation mode"
-                                            ></div>
+                                            >
+                                                <button type="button" class="navigation-mode-toggle unknown" aria-label="Navigation mode 선택" aria-busy="false" disabled>
+                                                    <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Mapping</span>
+                                                    <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                                                    <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Driving</span>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div class="navigation-control-row">
                                             <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
-                                            <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>목표 취소</button>
+                                            <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>goal 취소</button>
                                         </div>
                                     </div>
 
@@ -378,7 +443,7 @@
                     data-record-view="patrolModal"
                     onclick="openModal('patrolModal')"
                 >
-                    순찰 기록 조회
+                    순찰 내역
                 </button>
 
                 <button
@@ -386,7 +451,7 @@
                     data-record-view="galleryModal"
                     onclick="openModal('galleryModal')"
                 >
-                    이미지 갤러리
+                    갤러리
                 </button>
 
                 <span id="current-situation-mount" class="dashboard-component-mount" data-dashboard-mount="current-situation">
@@ -395,7 +460,7 @@
                         data-record-view="currentSituation"
                         onclick="openCurrentSituationModal()"
                     >
-                        현재 상황 작성
+                        상황 기록
                     </button>
                 </span>
 
@@ -404,7 +469,7 @@
                     data-record-view="actionsModal"
                     onclick="openModal('actionsModal')"
                 >
-                    관리자 조치 조회
+                    조치 내역
                 </button>
 
                 <button
@@ -412,7 +477,7 @@
                     data-record-view="statusModal"
                     onclick="openModal('statusModal')"
                 >
-                    기기 상태 조회
+                    기기 상태 내역
                 </button>
 
             </div>
@@ -422,14 +487,20 @@
 
             <section class="card server-state-card" id="serverStateCard" aria-label="서버 기준 로봇 상태">
                 <div class="card-header server-state-header">
-                    <h2 class="card-title">SERVER STATE</h2>
-                    <span class="server-state-updated" id="server-state-updated">확인 중</span>
-                </div>
-                <div class="server-state-grid">
-                    <div class="server-state-field">
-                        <span>주행 구분</span>
-                        <strong id="operation-mode-status">UNKNOWN</strong>
+                    <h2 class="card-title">Server status</h2>
+                    <div class="server-state-heading-actions">
+                        <span class="server-state-updated" id="server-state-updated">불러오는 중</span>
+                        <button type="button" id="serverStateDrawerToggle"
+                            class="server-state-drawer-toggle dashboard-drawer-handle-pill dashboard-drawer-handle-pill--vertical"
+                            data-drawer-toggle data-drawer-target="serverStateCard"
+                            data-drawer-collapse-class="is-collapsed" data-drawer-panel="serverStateGrid"
+                            data-drawer-open-label="Server status 접기" data-drawer-closed-label="Server status 펼치기"
+                            aria-controls="serverStateGrid" aria-expanded="true" aria-label="Server status 접기"
+                            title="Server status 접기"><span class="dashboard-drawer-handle-pill-icon" aria-hidden="true">❮</span></button>
                     </div>
+                </div>
+                <div class="server-state-grid" id="serverStateGrid">
+                    <span id="operation-mode-status" hidden>UNKNOWN</span>
                     <div class="server-state-field">
                         <span>활성 지도</span>
                         <strong id="active-map-status">UNAVAILABLE</strong>
@@ -494,12 +565,13 @@
                         data-dashboard-control="drive-mode"
                         type="button"
                         onclick="togglePatrolMode()"
+                        disabled aria-busy="false"
                     >
                         <span
                             id="label-auto"
                             class="mode-text inactive"
                         >
-                            자동
+                            Auto
                         </span>
 
                         <div
@@ -513,7 +585,7 @@
                             id="label-manual"
                             class="mode-text inactive"
                         >
-                            수동
+                            Manual
                         </span>
                     </button>
 
@@ -522,27 +594,41 @@
                         class="dashboard-navigation-mode-controls"
                         data-dashboard-mount="navigation-mode-controls"
                         aria-label="Navigation mode"
-                    ></div>
+                    >
+                        <button type="button" class="navigation-mode-toggle unknown" aria-label="Navigation mode 선택" aria-busy="false" disabled>
+                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Mapping</span>
+                            <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Driving</span>
+                        </button>
+                    </div>
 
                     <div
                         id="dashboard-led-control-mount"
                         class="dashboard-led-control-mount"
                         data-dashboard-mount="dashboard-led-control"
                         aria-label="LED control"
-                    ></div>
+                    >
+                        <button type="button" class="dashboard-led-toggle" aria-label="LED ON / OFF" aria-pressed="false" aria-busy="false" disabled>
+                            <span class="dashboard-led-toggle-label">LED</span>
+                            <span class="ui-toggle-side ui-toggle-side-off active">OFF</span>
+                            <span class="dashboard-led-toggle-track" aria-hidden="true"><span class="dashboard-led-toggle-slider"></span></span>
+                            <span class="ui-toggle-side ui-toggle-side-on">ON</span>
+                            <span class="dashboard-led-toggle-state">OFF</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="split-btn-container dashboard-action-controls">
                     <button
-                        class="card action-btn action-beep"
+                        class="card auth-btn action-btn action-beep uiverse-press-button"
                         id="dashboardBeepBtn"
                         type="button"
                     >
-                        BEEP
+                        Beep
                     </button>
 
                     <button
-                        class="card action-btn action-warning"
+                        class="card auth-btn action-btn action-warning uiverse-press-button"
                         type="button"
                         onclick="warnTrespasser()"
                     >
@@ -550,11 +636,23 @@
                     </button>
 
                     <button
-                        class="card action-btn action-report"
+                        class="card auth-btn action-btn action-report uiverse-press-button"
                         type="button"
                         onclick="reportDanger()"
                     >
-                        신고
+                        <span class="action-report-content">
+                            <svg class="action-report-mail-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 11a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 1 1 17-4Z"/>
+                                <path d="M12 7v5m0 3h.01"/>
+                            </svg>
+                            <svg class="action-report-success-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 6 9 17l-5-5"/>
+                            </svg>
+                            <svg class="action-report-error-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M18 6 6 18M6 6l12 12"/>
+                            </svg>
+                            <span class="action-report-label" aria-live="polite" aria-atomic="true">신고</span>
+                        </span>
                     </button>
                 </div>
 
@@ -670,22 +768,26 @@
         </div>
     </div>
 
+    <div id="dashboardUiStartupError" class="dashboard-ui-startup-error" role="alert" hidden>
+        대시보드 UI 초기화에 실패했습니다.
+        <button type="button" onclick="window.location.reload()">다시 시도</button>
+    </div>
     <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/navigation/saved_map_modal.js?v=20261001-mapping-restart-v1"></script>
+    <script src="/components/navigation/saved_map_modal.js?v=20261020-toggle-selection-v8"></script>
     <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/records/record_table.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/records/record_table.js?v=20261014-ui-polish-v1"></script>
+    <script src="/components/records/pagination.js?v=20261014-numbered-pages-v1"></script>
+    <script src="/components/records/record_modal.js?v=20261014-detail-overlay-v1"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drawer_toggle.js?v=20261014-shared-drawer-v2"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/model_pipeline_toggle.js?v=20261006-model-pipeline-toggle-v1"></script>
+    <script src="/components/controls/led_toggle.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/controls/model_pipeline_toggle.js?v=20261014-stable-hydration-v1"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20261013-selected-ui-v3"></script>
-    <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/navigation_mode_control.js?v=20261001-nav-mode-map-reset"></script>
-    <script src="/components/gallery/image_detail.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/current_situation/current_situation.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drive_mode_control.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/controls/navigation_mode_control.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/gallery/image_detail.js?v=20261014-compact-ui-v2"></script>
+    <script src="/components/current_situation/current_situation.js?v=20261014-finish-ui-v2"></script>
     <script type="importmap">
         {
             "imports": {
@@ -695,11 +797,35 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
-    <script src="static/script.js?v=20261007-dynamic-obstacle-v32"></script>
-    <script src="static/system_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/script.js?v=20261020-gpu-status-v2"></script>
+    <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
-    <script src="static/selected_ui.js?v=20261013-selected-ui-v3"></script>
+    <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
+    <script src="static/navigation_control.js?v=20261020-clickable-offline-v1"></script>
+    <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
+    <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
+    <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
+    <script src="/static/elastic_scroll.js?v=20261014-return-animation-v4"></script>
+    <script>
+        window.addEventListener('load', () => {
+            const ready = [
+                'dashboard-mode-controls-mount',
+                'dashboard-navigation-mode-controls-mount',
+                'navigation-viewer-mode-controls-mount',
+                'dashboard-led-control-mount',
+                'model-pipeline-toggle-mount',
+            ].every(id => {
+                const mount = document.getElementById(id);
+                return mount && (
+                    mount._dabomDriveModeController ||
+                    mount._dabomNavigationModeController ||
+                    mount._dabomLedToggleController ||
+                    mount._dabomModelPipelineToggleController
+                );
+            });
+            document.body.dataset.dashboardUiReady = String(Boolean(ready));
+            if (!ready) document.getElementById('dashboardUiStartupError').hidden = false;
+        }, { once: true });
+    </script>
 </body>
 </html>

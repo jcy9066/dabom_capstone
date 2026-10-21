@@ -210,7 +210,10 @@ assert.deepStrictEqual(diagonal.stops, ['key_release']);
 
     def test_warning_is_connection_aware_but_report_is_independent(self):
         self.assertIn("document.querySelector('.action-warning')", self.navigation)
-        self.assertIn("payload.connected !== true || state.warningPending", self.navigation)
+        self.assertIn("warningButton.disabled = state.warningPending;", self.navigation)
+        self.assertIn("beepButton.disabled = state.beepPending;", self.navigation)
+        self.assertIn("beepButton.disabled = false;", self.navigation)
+        self.assertIn("if (warningButton) warningButton.disabled = false;", self.navigation)
         self.assertIn("if (state.control?.connected !== true)", self.navigation)
         self.assertNotIn(".action-report", self.navigation)
         self.assertIn("document.querySelector('.action-report')", self.script)

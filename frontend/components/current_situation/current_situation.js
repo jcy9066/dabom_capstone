@@ -12,30 +12,34 @@
     function autoGrowTextarea(textarea) {
         if (!textarea) return;
         textarea.style.resize = 'none';
-        textarea.style.overflowY = 'hidden';
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
+        // Keep a fixed, scrollable text area instead of expanding over the camera.
+        textarea.style.overflowY = 'auto';
+        textarea.style.height = '280px';
     }
 
     function renderForm() {
         return `
             <form class="current-situation-form">
-                <label class="record-field-label">현재 카메라 이미지</label>
-                <div class="privacy-preview-frame">
+                <div class="current-situation-layout">
+                    <div class="current-situation-media-box">
+                        <div class="privacy-preview-frame" aria-label="현재 카메라 이미지">
                     <img id="currentSituationPreview" alt="개인정보 보호 처리된 현재 카메라 미리보기" hidden>
                     <div id="currentSituationPreviewState" class="preview-state is-loading">개인정보 보호 미리보기를 불러오는 중입니다.</div>
+                        </div>
+                    </div>
+                    <div class="current-situation-entry-box">
+                        <label class="record-field-label" for="currentSituationDescription">상황 기록</label>
+                <textarea id="currentSituationDescription" rows="5" placeholder="현재 상황을 입력하세요.&#10;예: 1층 출입구 주변 확인 필요"></textarea>
+                <div class="current-situation-bottom-row">
+                    <label class="record-image-option">
+                        <input id="currentSituationIncludeImage" type="checkbox" disabled>
+                        <span>위 이미지를 함께 저장</span>
+                    </label>
+                    <p class="record-requirement">※ 텍스트 또는 이미지 중 최소 하나는 기록해야 합니다.</p>
+                    <div class="record-form-actions"><button id="currentSituationSubmit" type="submit" class="filter-btn">기록</button></div>
                 </div>
-                <label class="record-field-label" for="currentSituationDescription">상황 내용</label>
-                <textarea id="currentSituationDescription" rows="5" placeholder="현재 상황을 입력하세요. 예: 1층 출입구 주변 확인 필요"></textarea>
-                <label class="record-image-option">
-                    <input id="currentSituationIncludeImage" type="checkbox" disabled>
-                    <span>위 이미지를 함께 저장</span>
-                </label>
-                <p class="record-requirement">※ 텍스트 또는 이미지 중 최소 하나는 기록해야 합니다.</p>
                 <div id="currentSituationError" class="record-error" role="alert"></div>
-                <div class="record-form-actions">
-                    <button type="button" class="filter-btn secondary" data-current-situation-close>취소</button>
-                    <button id="currentSituationSubmit" type="submit" class="filter-btn">기록</button>
+                    </div>
                 </div>
             </form>`;
     }
@@ -144,7 +148,7 @@
                 if (!isActive(generation) || error?.name === 'AbortError') return;
                 elements.previewState.className = 'preview-state is-unavailable';
                 elements.previewState.textContent = error.message === 'PREVIEW_UNAVAILABLE'
-                    ? '현재 카메라 이미지를 사용할 수 없습니다. 텍스트 기록은 계속할 수 있습니다.'
+                    ? '현재 카메라 이미지를 사용할 수 없습니다.\n텍스트 기록은 계속할 수 있습니다.'
                     : '미리보기를 불러오지 못했습니다. 텍스트 기록은 계속할 수 있습니다.';
                 resetPreviewOption(elements);
             }
@@ -230,7 +234,7 @@
                     return manager.open(VIEW_NAME, {}, { replace: true });
                 }
                 invalidate();
-                if (modalTitle) modalTitle.textContent = '현재 상황 기록';
+                if (modalTitle) modalTitle.textContent = '상황 기록';
                 if (modalBody) modalBody.innerHTML = renderForm();
                 if (modalRoot) modalRoot.style.display = 'flex';
                 return activateForm();
@@ -241,7 +245,7 @@
 
         if (manager) {
             manager.register(VIEW_NAME, {
-                title: '현재 상황 기록',
+                title: '상황 기록',
                 render: renderForm,
                 onOpen: activateForm,
                 onClose: invalidate,

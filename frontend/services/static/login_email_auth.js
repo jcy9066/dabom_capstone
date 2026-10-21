@@ -47,7 +47,7 @@
     const sync = () => { submit.disabled = !canSubmit(); };
     const reset = () => {
       state.verified = false; state.email = ''; state.employeeAvailable = false;
-      byId('verifyRow').hidden = true; protectedFields.disabled = true;
+      byId('verifyRow').hidden = true; protectedFields.disabled = false;
       byId('verifiedEmailLabel').hidden = true; byId('verificationCode').value = '';
       text(employeeHint); sync();
     };

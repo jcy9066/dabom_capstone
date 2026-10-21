@@ -162,16 +162,20 @@
 
   /* Small dot loader is attached to existing loading text, not to new fake states. */
   function installExistingLoaders() {
-    const selector = '.gallery-empty.is-loading,.table-empty.is-loading,.saved-map-progress,.record-delete-status,.modal-body .record-loading,.modal-body [aria-busy="true"]';
+    const selector = '.gallery-empty.is-loading,.table-empty.is-loading,.saved-map-progress,.record-delete-status,.modal-body .record-loading,[aria-busy="true"],#server-state-updated,.system-control-refresh';
     function sync(root) {
       if (!root?.querySelectorAll) return;
       root.querySelectorAll(selector).forEach(element => {
+        // MODEL is a four-column toggle; preserve its child count while pending.
+        if (element.matches('.dashboard-model-toggle')) return;
+        // State-driven switches must keep their original number of grid/flex children.
+        if (element.matches('.navigation-mode-toggle,.dashboard-led-toggle,.dashboard-drive-mode-control,.system-control-switch,.dark-toggle')) return;
         if (element.dataset.uiLoadingReady !== '1') {
           element.dataset.uiLoadingReady = '1';
           const dots = document.createElement('span');
           dots.className = 'ui-dots';
           dots.setAttribute('aria-hidden','true');
-          dots.innerHTML='<i></i><i></i><i></i>';
+          dots.innerHTML='<i></i><i></i><i></i><b></b><b></b><b></b>';
           element.prepend(dots);
         }
         const text = element.textContent.replace(/\s+/g,' ').trim();
@@ -179,15 +183,65 @@
           /중입니다|불러오는 중|확인 중|대기 중|LOADING/i.test(text);
         element.classList.toggle('ui-is-loading',busy);
         const dots=element.querySelector('.ui-dots');
-        if(dots) dots.hidden = !busy;
+        if(dots && dots.hidden !== !busy) dots.hidden = !busy;
       });
     }
-    const modal=$('#modalBody');
-    if(modal){
-      const observer=new MutationObserver(() => sync(modal));
-      observer.observe(modal,{childList:true,characterData:true,subtree:true});
-      sync(modal);
+    for (const scope of [$('#modalBody'),$('#sidebar'),$('#serverStateCard'),$('#camera-card'),$('.signup-modal')]) {
+      if (!scope) continue;
+      const observer=new MutationObserver(() => sync(scope));
+      observer.observe(scope,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['aria-busy','class']});
+      sync(scope);
     }
+  }
+
+  /* Presentation-only status visuals from existing connection messages. */
+  function installConnectionVisuals() {
+    function makeLoader(target) {
+      let visual=target.querySelector(':scope > .ui-loading-visual');
+      if (!visual) {
+        visual=document.createElement('span');
+        visual.className='ui-loading-visual';
+        visual.setAttribute('aria-hidden','true');
+        visual.innerHTML='<span class="ui-dots"><i></i><i></i><i></i><b></b><b></b><b></b></span>';
+        target.append(visual);
+      }
+      return visual;
+    }
+    function observeStatus(root, getText, live) {
+      if (!root) return;
+      let syncing=false;
+      function sync() {
+        if (syncing) return;
+        syncing=true;
+        try {
+          const text=String(getText() || '').toLowerCase();
+          const pending=/연결\s*중|연결\s*시도|시작\s*중|확인\s*중|대기\s*중|connecting|starting|waiting|retry/.test(text);
+          const online=live();
+          const visual=makeLoader(root);
+          visual.hidden=online;
+          visual.classList.toggle('is-offline',!pending);
+          root.dataset.connectionVisual=online?'online':pending?'connecting':'offline';
+        } finally {syncing=false;}
+      }
+      const observer=new MutationObserver(sync);
+      observer.observe(root,{attributes:true,attributeFilter:['class','style'],characterData:true,childList:true,subtree:true});
+      sync();
+    }
+    const camera=$('#no-camera-msg');
+    observeStatus(camera,()=>camera?.textContent || '',()=>$('#video-wrapper')?.classList.contains('camera-offline')!==true);
+    // The minimap already displays NO SCAN DATA. Do not overlay a redundant loader.
+  }
+
+  function installNullPlaceholders() {
+    const bar=$('.system-status-bar');
+    if (!bar) return;
+    function update() {
+      bar.querySelectorAll('span[id]').forEach(node=>{
+        if ((node.textContent||'').trim().toLowerCase()==='null') node.textContent='--';
+      });
+    }
+    new MutationObserver(update).observe(bar,{subtree:true,childList:true,characterData:true});
+    update();
   }
 
   function installModalEscape() {
@@ -208,6 +262,8 @@
     installAlertEntrance();
     installStatusMarks();
     installExistingLoaders();
+    installConnectionVisuals();
+    installNullPlaceholders();
     installModalEscape();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',boot,{once:true});

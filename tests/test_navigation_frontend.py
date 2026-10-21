@@ -271,14 +271,14 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertNotIn("<summary>DISPLAY</summary>", template)
         self.assertNotIn('id="lidarMapSaveBtn"', template)
         self.assertIn("saved-map-save-current", self.map_control)
-        self.assertIn("createControlButton(labels.saveCurrent, 'accent', 'saved-map-save-current')", self.map_control)
-        self.assertIn("components.controls?.controlButton?.enhance?.(button)", self.map_control)
+        self.assertIn("create('button', 'mb-btn saved-map-save-current', labels.saveCurrent)", self.map_control)
+        self.assertNotIn("saved-map-delete-location", self.map_control)
         self.assertIn("saved-map-start-mapping", self.map_control)
         self.assertIn("saved-map-clear-current", self.map_control)
         self.assertIn("request('MAPPING', { restart: true })", self.map_control)
         self.assertIn("global.navigationMapView?.clearMapDisplay?.()", self.map_control)
-        self.assertIn("components.controls?.controlButton?.enhance?.(startMapping)", self.map_control)
-        self.assertIn("components.controls?.controlButton?.enhance?.(clearCurrentMap)", self.map_control)
+        self.assertIn("create('button', 'mb-btn saved-map-start-mapping', labels.startMapping)", self.map_control)
+        self.assertIn("create('button', 'mb-btn saved-map-clear-current', labels.clearCurrentMap)", self.map_control)
         self.assertIn("scanVisualHeightM = topZ + ORIGINAL_CAMERA_HEIGHT_OFFSET_M", viewer)
         self.assertIn("cameraMountLocal.set(", viewer)
         self.assertIn("LIDAR_HEIGHT_M,", viewer)
@@ -338,7 +338,12 @@ class NavigationFrontendContractTests(unittest.TestCase):
     def test_saved_map_requires_explicit_or_server_active_selection(self):
         self.assertNotIn("maps[0]", self.map_control)
         self.assertNotIn("map === maps[0]", self.map_control)
-        self.assertIn("const selectedName = snapshot?.selectedName || activeName", self.map_control)
+        self.assertIn("const selectedName = snapshot?.selectedName !== undefined ? snapshot.selectedName : activeName", self.map_control)
+        self.assertIn("currentSelection = currentSelection === map.map_name ? null : map.map_name", self.map_control)
+        self.assertIn("if (event.target !== radio) event.preventDefault()", self.map_control)
+        self.assertIn("for (const input of radioButtons)", self.map_control)
+        self.assertIn("if (loadButton) loadButton.disabled = !currentSelection", self.map_control)
+        self.assertIn("currentSelection = selectedMapName(container)", self.map_control)
         self.assertIn("radio.checked = map.map_name === selectedName", self.map_control)
         self.assertIn("load.disabled = !selectedMapName(container)", self.map_control)
         self.assertIn("labels.selectRequired", self.map_control)
@@ -362,25 +367,26 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("currentFullscreenElement", modal_source)
         self.assertIn("fullscreenElement.appendChild(this.root)", modal_source)
 
-    def test_saved_map_location_panel_is_optional_and_uses_shared_buttons(self):
+    def test_saved_map_dialog_omits_location_editor_but_keeps_metadata(self):
         for contract in (
-            "'/api/navigation/locations'",
-            "requestJson('/api/navigation/locations').catch",
-            "labels.useCurrentGps",
-            "labels.saveLocation",
-            "labels.deleteLocation",
             "map.location",
-            "gps.matched_location_name",
-            "last_location_name",
-            "components.controls?.controlButton?.enhance?.(button)",
+            "coordinateText(savedGps.lat)",
+            "create('div', 'saved-map-content')",
+            "create('section', 'saved-map-primary-column')",
+            "requestJson('/api/navigation/maps')",
         ):
             self.assertIn(contract, self.map_control)
-        self.assertIn(".saved-map-location-panel", self.map_control_css)
-        self.assertIn("data-requires-gps", self.map_control)
-        self.assertIn("const latText = inputs['saved-map-location-lat'].value.trim()", self.map_control)
-        self.assertIn("const lngText = inputs['saved-map-location-lng'].value.trim()", self.map_control)
-        self.assertIn("if (!name || !latText || !lngText || !radiusText)", self.map_control)
-        self.assertNotIn("lidar-control-drawer", self.map_control)
+        for obsolete in (
+            "renderLocationPanel",
+            "locationFallback",
+            "saved-map-secondary-column",
+            "saved-map-location-panel",
+            "'/api/navigation/locations'",
+            "data-requires-gps",
+        ):
+            self.assertNotIn(obsolete, self.map_control)
+        self.assertNotIn(".saved-map-location-panel", self.map_control_css)
+        self.assertIn(".saved-map-location-meta", self.map_control_css)
 
     def test_saved_map_contracts_and_pending_cursor_remain_scoped(self):
         for contract in (
@@ -397,7 +403,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "labels.clearCurrentMap",
         ):
             self.assertIn(contract, self.map_control)
-        self.assertIn(".saved-map-actions button:disabled { cursor: not-allowed;", self.map_control_css)
+        self.assertNotIn(".saved-map-actions button:disabled { cursor: not-allowed;", self.map_control_css)
         self.assertIn(".saved-map-modal.is-pending .saved-map-actions button:disabled { cursor: progress;", self.map_control_css)
         self.assertNotIn("button:disabled { cursor: wait;", self.map_control_css)
 

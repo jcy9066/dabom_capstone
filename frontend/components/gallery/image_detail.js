@@ -197,15 +197,85 @@
         const listLength = Number(context.listLength) || 1;
         const allowNavigation = context.origin === 'gallery';
         return `<section class="gallery-detail" data-dashboard-modal-view aria-label="이미지 상세">
-            <div class="gallery-detail-header"><strong>${escapeHtml(sourceLabel(item))} 이미지 상세</strong><button type="button" class="gallery-detail-back" data-detail-back>← 이전 화면</button></div>
-            ${imageMarkup(item, 'gallery-detail-image', `${sourceLabel(item)} detail image`)}
-            <dl class="gallery-metadata"><div><dt>기록 시각</dt><dd>${escapeHtml(timestamp(item))}</dd></div>${metadata(item).map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '-')}</dd></div>`).join('')}</dl>
+            <div class="gallery-image-zoom">
+                <div class="gallery-image-viewport" data-image-viewport tabindex="0" aria-label="이미지 확대 및 이동">
+                    ${imageMarkup(item, 'gallery-detail-image', `${sourceLabel(item)} detail image`)}
+                </div>
+                <div class="gallery-zoom-toolbar" aria-label="이미지 확대 축소">
+                    <button type="button" data-image-zoom="-1" aria-label="축소">−</button>
+                    <output data-image-zoom-value>100%</output>
+                    <button type="button" data-image-zoom="1" aria-label="확대">+</button>
+                    <button type="button" data-image-zoom-reset aria-label="기본 크기로 복원">Raw</button>
+                </div>
+            </div>
+            <section class="gallery-metadata">
+                <div class="gallery-metadata-top"><button type="button" class="gallery-detail-back" data-detail-back>← 이전 화면</button></div>
+                <dl class="gallery-metadata-fields"><div><dt>기록 시각</dt><dd>${escapeHtml(timestamp(item))}</dd></div>${metadata(item).map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? '-')}</dd></div>`).join('')}</dl>
+            </section>
             <div class="gallery-detail-actions">
                 ${allowNavigation ? `<button type="button" data-detail-change="-1" ${index <= 0 ? 'disabled' : ''}>← 이전</button>` : '<span></span>'}
-                <button type="button" class="gallery-delete-btn" data-detail-delete>이미지 삭제</button>
+                <button type="button" class="gallery-delete-btn" data-detail-delete>삭제</button>
                 ${allowNavigation ? `<button type="button" data-detail-change="1" ${index >= listLength - 1 ? 'disabled' : ''}>다음 →</button>` : '<span></span>'}
             </div>
         </section>`;
+    }
+
+    function bindImageZoom(root) {
+        const viewport = root?.querySelector('[data-image-viewport]');
+        const image = viewport?.querySelector('img.gallery-detail-image');
+        if (!viewport || !image) return;
+        image.draggable = false;
+        const output = root.querySelector('[data-image-zoom-value]');
+        const down = root.querySelector('[data-image-zoom="-1"]');
+        const up = root.querySelector('[data-image-zoom="1"]');
+        let scale = 1, x = 0, y = 0, pointer = null;
+        const bound = (value, max) => Math.max(-max, Math.min(max, value));
+        function apply() {
+            const maxX = viewport.clientWidth * (scale - 1) / 2;
+            const maxY = viewport.clientHeight * (scale - 1) / 2;
+            x = bound(x, maxX); y = bound(y, maxY);
+            image.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+            if (output) output.value = `${Math.round(scale * 100)}%`;
+            if (down) down.disabled = scale <= 1;
+            if (up) up.disabled = scale >= 4;
+        }
+        function zoom(delta) {
+            scale = Math.min(4, Math.max(1, Math.round((scale + delta) * 100) / 100));
+            if (scale <= 1) { x = 0; y = 0; }
+            apply();
+        }
+        down?.addEventListener('click', () => zoom(-.25));
+        up?.addEventListener('click', () => zoom(.25));
+        root.querySelector('[data-image-zoom-reset]')?.addEventListener('click', () => {
+            scale = 1; x = 0; y = 0; apply();
+        });
+        viewport.addEventListener('wheel', event => {
+            event.preventDefault();
+            zoom(event.deltaY < 0 ? .1 : -.1);
+        }, { passive: false });
+        viewport.addEventListener('pointerdown', event => {
+            if (scale <= 1 || event.button !== 0) return;
+            pointer = { id: event.pointerId, clientX: event.clientX, clientY: event.clientY };
+            viewport.setPointerCapture?.(event.pointerId);
+            viewport.classList.add('is-panning');
+        });
+        viewport.addEventListener('pointermove', event => {
+            if (!pointer || pointer.id !== event.pointerId) return;
+            x += event.clientX - pointer.clientX;
+            y += event.clientY - pointer.clientY;
+            pointer.clientX = event.clientX; pointer.clientY = event.clientY;
+            apply();
+        });
+        const release = () => { pointer = null; viewport.classList.remove('is-panning'); };
+        viewport.addEventListener('pointerup', release);
+        viewport.addEventListener('pointercancel', release);
+        viewport.addEventListener('lostpointercapture', release);
+        viewport.addEventListener('keydown', event => {
+            if (event.key === '+' || event.key === '=') { event.preventDefault(); zoom(.25); }
+            else if (event.key === '-') { event.preventDefault(); zoom(-.25); }
+            else if (event.key === '0') { event.preventDefault(); scale = 1; x = 0; y = 0; apply(); }
+        });
+        apply();
     }
 
     function bindDetail(context) {
@@ -219,6 +289,7 @@
             button.addEventListener('click', () => changeDetail(Number(button.dataset.detailChange)));
         });
         root?.querySelector('[data-detail-delete]')?.addEventListener('click', event => deleteItem(context, event.currentTarget));
+        bindImageZoom(root);
     }
 
     async function openDetail(index) {
@@ -288,14 +359,14 @@
         if (!manager || registeredManager === manager) return;
         registeredManager = manager;
         manager.register('galleryModal', {
-            title: '이미지 갤러리',
+            title: '갤러리',
             render: (context, snapshot) => { restoreGallery(snapshot); return galleryHtml(); },
             onOpen: async (context, snapshot) => { bindGallery(); if (!snapshot) await loadGallery(context.source || 'all'); },
             captureState: gallerySnapshot,
             restoreState: () => bindGallery(),
         });
         manager.register('recordImageDetail', {
-            title: context => context.origin === 'gallery' ? '이미지 갤러리 상세' : '기록 이미지 상세',
+            title: '이미지 상세',
             render: context => detailHtml(context),
             onOpen: context => bindDetail(context),
             restoreState: (snapshot, context) => bindDetail(context),

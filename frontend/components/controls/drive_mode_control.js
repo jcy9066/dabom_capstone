@@ -31,7 +31,6 @@
 
     function render(root, controller) {
         if (!canRender(root)) return;
-        root.querySelector('.dashboard-drive-mode-group')?.remove();
         const lever = root.querySelector('[data-dashboard-control="drive-mode"]');
         const navigationMount = ensureNavigationMount(root);
         [lever, navigationMount].filter(Boolean).forEach(child => {
@@ -114,7 +113,7 @@
                 if (!this.button) return;
                 const remainingMs = Math.max(0, this.cooldownUntil - Date.now());
                 const remainingSec = Math.ceil(remainingMs / 1000);
-                this.button.textContent = this.active ? '정지 해제' : '긴급 정지';
+                this.button.textContent = this.active ? 'PLAY' : 'STOP';
                 if (remainingSec) this.button.textContent += ` (${remainingSec})`;
                 this.button.classList.toggle('active', this.active);
                 this.button.disabled = this.connected !== true || this.pending || remainingMs > 0;
@@ -134,7 +133,7 @@
         if (canRender(root)) {
             root.replaceChildren();
             root.removeAttribute?.('aria-hidden');
-            const button = createButton(root.ownerDocument, '긴급 정지', 'ESTOP', 'dpad-estop-button');
+            const button = createButton(root.ownerDocument, 'STOP', 'ESTOP', 'dpad-estop-button');
             button.setAttribute('aria-label', '긴급 정지');
             button.addEventListener('click', event => {
                 event.preventDefault();

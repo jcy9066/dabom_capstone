@@ -5,6 +5,7 @@
     const DASHBOARD_CONTROL_POLL_INTERVAL_MS = 500;
     const DASHBOARD_CLIENT_STORAGE_KEY = 'dabom.dashboardClientId';
     const AUTOMATIC_ESTOP_REASONS = new Set(['window_blur', 'page_hidden']);
+    const SETTINGS_HIDDEN_COMPONENT_IDS = new Set(['wheel_odometry', 'map_bridge', 'lidar_ros']);
 
     const state = {
         status: null,
@@ -22,8 +23,8 @@
     const guideViewName = 'dashboard-usage-guide';
 
     const text = {
-        gpu: '\u0047\u0050\u0055 \uc11c\ubc84 \uc81c\uc5b4',
-        pi: '\u0050\u0049 \uc81c\uc5b4',
+        gpu: 'SERVER',
+        pi: 'PI',
         checking: '\ud655\uc778 \uc911',
         unavailable: '\ud655\uc778 \ubd88\uac00',
         processing: '\ucc98\ub9ac \uc911',
@@ -71,31 +72,34 @@
         gpu.append(gpuHeading, make('div', 'system-control-list'));
         gpu.lastChild.id = 'gpuSystemControls';
 
-        const divider = make('div', 'sidebar-divider system-control-divider');
-        const pi = make('section', 'system-control-panel');
-        pi.append(make('div', 'system-control-heading', text.pi), make('div', 'system-control-list'));
-        pi.lastChild.id = 'piSystemControls';
-
-        const guide = make('button', 'system-control-manual', text.guide);
+        // Pi LiDAR collection is launched by the Pi stack and has no dashboard
+        // control agent; keep its API status but omit the dead PI settings panel.
+        const guide = make('button', 'sidebar-guide-trigger', '?');
         guide.type = 'button';
+        guide.setAttribute('aria-label', text.guide);
         guide.addEventListener('click', openGuide);
-        wrapper.append(gpu, divider, pi, guide);
+        wrapper.append(gpu);
         (slot || body).append(wrapper);
+        const guideMount = document.getElementById('sidebarGuideMount');
+        (guideMount || wrapper).append(guide);
     }
 
     function renderGroup(targetId, components, group) {
         const target = document.getElementById(targetId);
         if (!target) return;
         target.replaceChildren();
-        if (!Array.isArray(components) || !components.length) {
+        const visibleComponents = Array.isArray(components)
+            ? components.filter(component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id))
+            : [];
+        if (!visibleComponents.length) {
             target.append(make('div', 'system-control-message', text.noStatus));
             return;
         }
-        for (const component of components) {
+        for (const component of visibleComponents) {
             const key = `${group}:${component.id}`;
             const pending = state.pending.has(key);
             const unreachable = component.control_available === false || component.state === 'unreachable';
-            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}`);
+            const card = make('article', `system-control-card${unreachable ? ' is-unreachable' : ''}${component.state === 'error' ? ' has-error' : ''}${component.duplicate || component.state === 'duplicate' ? ' is-duplicate' : ''}${pending ? ' is-pending' : ''}`);
             const row = make('div', 'system-control-row');
             const details = make('div');
             details.append(make('div', 'system-control-name', component.label || component.id));
@@ -105,9 +109,15 @@
             const button = make(
                 'button',
                 `system-control-switch state-${component.state || 'error'}${availabilityClass}`,
-                pending ? text.processing : stateLabel(component),
+                pending ? text.processing : unreachable ? 'OFF' : stateLabel(component),
             );
             button.type = 'button';
+            button.setAttribute('aria-label', `${component.label || component.id}: ${button.textContent}`);
+            button.title = unreachable ? text.unavailable : component.label || component.id;
+            const switchTrack = make('span', 'ui-process-track');
+            switchTrack.setAttribute('aria-hidden', 'true');
+            const switchLabel = make('span', 'ui-process-label', button.textContent);
+            button.replaceChildren(switchTrack, switchLabel);
             button.disabled = pending || unreachable;
             button.addEventListener('click', () => control(group, component.id, action));
             row.append(details, button);
@@ -136,7 +146,6 @@
     function render(status, available = true) {
         state.status = available ? status : null;
         renderGroup('gpuSystemControls', status.gpu, 'gpu');
-        renderGroup('piSystemControls', status.pi, 'pi');
         const updated = document.getElementById('systemControlUpdated');
         if (updated) {
             updated.textContent = status.updated_at
@@ -274,7 +283,7 @@
         }
     }
 
-    function appendGuideSection(container, titleValue, items, ordered = true) {
+    function appendGuideSection(container, titleValue, items, ordered = false) {
         const section = make('section', 'system-control-guide-section');
         section.append(make('h3', 'system-control-guide-heading', titleValue));
         const list = make(
@@ -290,55 +299,43 @@
         if (!state.status) return [text.processUnavailable];
         const piComponents = Array.isArray(state.status.pi) ? state.status.pi : [];
         const gpuComponents = Array.isArray(state.status.gpu) ? state.status.gpu : [];
-        const components = [...piComponents, ...gpuComponents];
+        const components = [...piComponents, ...gpuComponents].filter(
+            component => !SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id),
+        );
         if (!components.length) return [text.processUnavailable];
-        const normalStartOrder = components.filter(component => component.id !== 'map_bridge');
-        const items = normalStartOrder.map(component => component.label || component.id).filter(Boolean);
-        const mapBridge = components.find(component => component.id === 'map_bridge');
-        if (mapBridge) {
-            const label = mapBridge.label || mapBridge.id;
-            items.push(`\ucc38\uace0: SLAM Mapping\uc740 ${label}\ub97c \ud568\uaed8 \uc2dc\uc791. ${label}\ub294 \ubcf5\uad6c\u00b7\ub3c5\ub9bd \uc2e4\ud589 \uc2dc\uc5d0\ub9cc \uc0ac\uc6a9`);
-        }
-        return items;
+        return components.map(component => component.label || component.id).filter(Boolean);
     }
 
     function renderGuide() {
         const guide = make('div', 'system-control-guide');
-        appendGuideSection(guide, '상태 정보 출처', [
-            '시스템 상태 — CPU / 온도 / RAM / Ping: Pi 상태 정보',
-            '카메라 상태 — LIVE / OFFLINE: Camera Stream 상태',
-            '로봇·주행 상태 — Pi 연결 / 자동·수동 / Mapping·Driving / Navigation / 긴급 정지 / Goal / Path / 활성 지도: Navigation Control 상태',
-            '프로세스 상태 — LiDAR ROS Bridge / Encoder ROS Bridge / Wheel Odometry / SLAM Mapping / Map Bridge: 시스템 제어 상태',
-            '기록 — 기기 상태 / 순찰 기록 / 관리자 조치: 서버 DB 기록',
-        ], false);
-        appendGuideSection(guide, 'Mapping', [
-            '[Mapping] \uc120\ud0dd',
-            '[\uc218\ub3d9] \uc120\ud0dd',
-            'D-Pad \uc774\ub3d9',
-            'LiDAR Mapping \uc218\ud589',
-            '[SAVE] \uc9c0\ub3c4 \uc800\uc7a5',
+        appendGuideSection(guide, '1. 연결 확인', [
+            '설정에서 SERVER·PI 상태를 확인하세요. 연결되지 않았다면 주행을 시작하지 마세요.',
+            '카메라와 LiDAR가 정상 표시되는지 확인하세요.',
         ]);
-        appendGuideSection(guide, 'Driving', [
-            '[Driving] \uc120\ud0dd',
-            '[\uae30\uc874 \uc9c0\ub3c4 \uc120\ud0dd]',
-            'Initial Pose \uc9c0\uc815',
-            'Goal \uc9c0\uc815',
-            '\uacbd\ub85c \ud655인',
-            '[\uc8fc\ud589 \uc2dc\uc791]',
+        appendGuideSection(guide, '2. 새 지도 만들기', [
+            'Mapping을 선택하고 Manual 모드로 전환하세요.',
+            'D-pad로 천천히 이동하며 주변 지도를 만드세요.',
+            '지도 선택에서 현재 지도를 저장하세요.',
         ]);
-        appendGuideSection(guide, '\uc704\ud5d8 \ub300\uc751', [
-            '\uc2e4\uc2dc\uac04 \uc704\ud5d8/\uacbd\uace0 \uc54c\ub9bc \ud655\uc778',
-            '[\uc21c\ucc30 \uae30\ub85d \uc870\ud68c]',
-            '[\uc774\ubbf8\uc9c0 \uac24\ub7ec\ub9ac]',
-            '\ud544\uc694 \uc2dc [\uc2e0\uace0] \ub610\ub294 [\u26a0\ufe0f \uacbd\uace0]',
-            '\ud544\uc694 \uc2dc [\uae34\uae09 \uc815\uc9c0]',
-            '[\ud604\uc7ac \uc0c1\ud669 \uc791\uc131]',
-            '[\uad00\ub9ac\uc790 \uc870\uce58 \uc870\ud68c]',
+        appendGuideSection(guide, '3. 저장 지도에서 주행', [
+            'Driving을 선택하고 저장 지도를 불러오세요.',
+            '지도에서 시작 위치(Initial Pose)와 목표(Goal)를 지정하세요.',
+            '경로를 확인한 뒤 주행을 시작하세요. 필요하면 goal 취소를 누르세요.',
         ]);
-        appendGuideSection(guide, '\uae30\uae30 \uc0c1\ud0dc', [
-            '\uc2dc\uc2a4\ud15c \uc9c4\ub2e8: [\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]',
+        appendGuideSection(guide, '4. 위험 알림 대응', [
+            '실시간 알림과 카메라 화면을 확인하세요.',
+            '필요한 경우 경고·신고를 선택하세요. 긴급 상황이면 STOP을 누르세요.',
         ]);
-        appendGuideSection(guide, '\ud504\ub85c\uc138\uc2a4 \uc2e4\ud589 \uc21c\uc11c', processGuideItems());
+        appendGuideSection(guide, '5. 기록 확인', [
+            '순찰 내역·갤러리에서 탐지 내용과 이미지를 확인하세요.',
+            '상황 기록을 작성하고 조치 내역에서 처리 결과를 확인하세요.',
+            '기기 상태 내역에서 시작·종료 기간을 지정해 조회하세요.',
+        ]);
+        appendGuideSection(guide, '6. 장비 제어', [
+            '설정의 SERVER·PI 토글로 각 프로세스 상태를 확인하세요.',
+            '오류나 중복 실행 표시가 있으면 상태를 먼저 확인하세요.',
+            '프로세스 시작 순서: ' + processGuideItems().join(' → '),
+        ]);
         return guide;
     }
 

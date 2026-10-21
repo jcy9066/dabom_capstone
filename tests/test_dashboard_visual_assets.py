@@ -12,19 +12,14 @@ RECORD_STYLE = (ROOT / "frontend/components/records/records.css").read_text(enco
 
 
 def test_dashboard_guide_explains_state_information_sources():
-    expected = (
-        "상태 정보 출처",
-        "CPU / 온도 / RAM / Ping",
-        "Camera Stream 상태",
-        "Navigation Control 상태",
-        "LiDAR ROS Bridge / Encoder ROS Bridge / Wheel Odometry / SLAM Mapping / Map Bridge",
-        "서버 DB 기록",
-    )
-    for text in expected:
-        assert text in SYSTEM_CONTROL
-
-    for preserved_heading in ("'Mapping'", "'Driving'", "'\\uc704\\ud5d8 \\ub300\\uc751'", "'\\uae30\\uae30 \\uc0c1\\ud0dc'", "'\\ud504\\ub85c\\uc138\\uc2a4 \\uc2e4\\ud589 \\uc21c\\uc11c'"):
-        assert preserved_heading in SYSTEM_CONTROL
+    # Compact six-step manual preserves the operational paths for new users.
+    for title in ("1. 연결 확인", "2. 새 지도 만들기", "3. 저장 지도에서 주행",
+                  "4. 위험 알림 대응", "5. 기록 확인", "6. 장비 제어"):
+        assert title in SYSTEM_CONTROL
+    for feature in ("SERVER·PI", "LiDAR", "Mapping", "Driving", "D-pad",
+                    "Goal", "STOP", "순찰 내역", "기기 상태 내역"):
+        assert feature in SYSTEM_CONTROL
+    assert "ordered = false" in SYSTEM_CONTROL or "ordered = False" in SYSTEM_CONTROL
 
 
 def test_all_component_assets_share_cache_busting_key():
