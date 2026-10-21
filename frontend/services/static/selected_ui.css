@@ -355,14 +355,12 @@ button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
    Only the accent/semantic color roles use the selected Figma palettes.
 ================================================================ */
 
-/* Light: Salt & Pepper accents on the original dev light surfaces. */
+/* Light: Salt & Pepper secondary accents on dev neutral surfaces. Primary stays dev blue. */
 :root {
-  --primary-color: #65556B;
   --accent: #49697B;
   --success-color: #287658;
   --warning-color: #9A641F;
   --danger-color: #B43B4E;
-  --primary-glow: rgba(101,85,107,.15);
   --success-glow: rgba(40,118,88,.15);
   --danger-glow: rgba(180,59,78,.15);
   --ui-elevation: 0 2px 8px rgba(15,23,42,.055);
@@ -371,9 +369,8 @@ button.gallery-delete-btn:disabled { opacity:.55; transform:none; }
   --ui-radius-panel: 11px;
 }
 
-/* Dark: Gothic Noir accents on the original dev dark surfaces. */
+/* Dark: Gothic Noir secondary accents on dev dark surfaces. Primary stays dev blue. */
 body.dark-mode {
-  --primary-color: #CEB6C7;
   --accent: #9FBBC9;
   --success-color: #7ECAA7;
   --warning-color: #E9B76C;
@@ -563,8 +560,6 @@ header {
 }
 
 /* Light-on-dark accessibility for the pale Gothic Noir accents. */
-body.dark-mode.login-page .auth-btn.primary,
-body.dark-mode .signup-dialog .auth-btn.primary,
 body.dark-mode .ui-confirm-actions .ui-confirm-delete,
 body.dark-mode .record-delete-actions .filter-btn.danger,
 body.dark-mode .gallery-delete-btn:hover:not(:disabled) {
@@ -578,6 +573,12 @@ body.dark-mode .ui-confirm-symbol {
 }
 body.dark-mode .sidebar .dark-toggle {
   border-color: var(--border-bright);
+}
+
+/* Original dev blue is the primary action color in both modes. */
+body.dark-mode.login-page .auth-btn.primary,
+body.dark-mode .signup-dialog .auth-btn.primary {
+  color: #161B22 !important;
 }
 
 /* Reduced motion never changes operation or state. */
