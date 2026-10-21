@@ -180,7 +180,7 @@
             this.rows = [];
             this.loadState = 'idle';
             this.message = '';
-            this.metadata = { page: 1, page_size: 50, total: 0, total_pages: 0 };
+            this.metadata = { page: 1, page_size: records.DEFAULT_PAGE_SIZE, total: 0, total_pages: 0 };
             this.requestVersion = 0;
             this.deleteRequestVersion = 0;
             this.deletePreview = null;
@@ -221,7 +221,7 @@
                 this.rows = [];
                 this.loadState = 'idle';
                 this.message = '';
-                this.metadata = { page: 1, page_size: 50, total: 0, total_pages: 0 };
+                this.metadata = { page: 1, page_size: records.DEFAULT_PAGE_SIZE, total: 0, total_pages: 0 };
                 this.resetDeletePreview();
                 this.tableScrollTop = 0;
                 return;
@@ -263,7 +263,7 @@
             const columns = columnsFor(this.type);
             return `<section class="records-view records-view-${this.type}" data-dashboard-modal-view data-record-type="${this.type}">
                 <div class="modal-filter-bar record-filter-bar">
-                    ${this.filterControls()}
+                    <div class="record-filter-controls">${this.filterControls()}</div>
                     <button type="button" class="filter-btn secondary" data-action="reset">초기화</button>
                     <span class="filter-count" data-record-count>총 <span>${Number(this.metadata.total) || 0}</span> 건</span>
                 </div>
@@ -549,7 +549,7 @@
                 <td class="${valueClass(row.cpu_temperature, 65, 80)}">${records.formatValue(row.cpu_temperature, '°C')}</td>
                 <td class="${valueClass(row.ram_usage, 60, 80)}">${records.formatValue(row.ram_usage, '%')}</td>
                 <td class="${valueClass(row.ping, 100, 150)}">${records.formatValue(row.ping, 'ms')}</td>
-                <td>${records.formatBoolean(row.is_autonomous, 'AUTO', 'MANUAL')}</td>
+                <td><span class="record-drive-mode-badge ${row.is_autonomous === true || row.is_autonomous === 1 || row.is_autonomous === '1' ? 'is-auto' : row.is_autonomous === false || row.is_autonomous === 0 || row.is_autonomous === '0' ? 'is-manual' : 'is-unknown'}">${records.formatBoolean(row.is_autonomous, 'Auto', 'Manual')}</span></td>
                 <td>${records.formatValue(row.speed)}</td>
                 <td class="muted">${gpsPrecision(row.gps_lat)} / ${gpsPrecision(row.gps_lng)} / ${gpsPrecision(row.gps_alt)}</td>
                 <td class="muted">${records.formatValue(row.lidar_x)} / ${records.formatValue(row.lidar_y)}</td>
@@ -567,7 +567,7 @@
                     <td>${records.formatBoolean(row.is_resolved, '완료', '미조치')}</td>
                     <td>${records.formatBoolean(row.is_reported, '신고', '미신고')}</td>
                     <td>${records.formatBoolean(row.is_alerted, '경고', '미경고')}</td>
-                    <td><span class="false-alarm-state ${row.is_false_alarm ? 'is-active' : ''}">${row.is_false_alarm ? '오탐' : '정상'}</span><button type="button" class="false-alarm-btn" data-false-alarm-row="${index}" ${Number.isFinite(eventId) ? '' : 'disabled'}>${row.is_false_alarm ? '오탐 취소' : '오탐 처리'}</button></td>
+                    <td><div class="record-false-alarm-controls"><span class="false-alarm-state ${row.is_false_alarm ? 'is-active' : ''}">${row.is_false_alarm ? '오탐' : '정상'}</span><button type="button" class="false-alarm-btn" data-false-alarm-row="${index}" ${Number.isFinite(eventId) ? '' : 'disabled'}>${row.is_false_alarm ? '오탐 취소' : '오탐 처리'}</button></div></td>
                     <td>${imageCell(row, 'event', index)}</td>
                 </tr>`;
             }
@@ -577,7 +577,7 @@
                 <td>${records.escapeHtml(row.administrator_name)}</td>
                 <td><span class="status-badge record-type-badge ${records.actionBadgeClass(row.action_type)}">${records.escapeHtml(ACTION_LABELS[row.action_type] || row.action_type)}</span></td>
                 <td>${row.event_id == null ? '-' : records.escapeHtml(row.event_id)}</td>
-                <td class="record-description">${records.escapeHtml(row.description_content)}</td>
+                <td class="record-description"><button type="button" class="record-description-open" data-action-description-row="${index}" aria-label="조치 내용 전체 보기"><span class="record-description-ellipsis">${records.escapeHtml(row.description_content || '-')}</span></button></td>
                 <td>${imageCell(row, 'action', index)}</td>
             </tr>`;
         }
@@ -615,6 +615,15 @@
             });
             root.querySelectorAll('[data-image-row]').forEach(button => {
                 button.addEventListener('click', () => components.gallery?.openRecordDetail?.(this.rows[Number(button.dataset.imageRow)], this.type));
+            });
+            root.querySelectorAll('[data-action-description-row]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const index = Number(button.dataset.actionDescriptionRow);
+                    const description = this.rows[index]?.description_content;
+                    if (Number.isInteger(index) && index >= 0 && description != null) {
+                        records.openActionDescriptionDetail(this.manager, String(description), button);
+                    }
+                });
             });
             root.querySelectorAll('[data-false-alarm-row]').forEach(button => {
                 button.addEventListener('click', () => this.toggleFalseAlarm(Number(button.dataset.falseAlarmRow), button));
@@ -680,7 +689,7 @@
             if (impact) {
                 impact.hidden = !this.deletePreview;
                 impact.innerHTML = this.deletePreview
-                    ? `<strong>삭제 영향</strong><span>이벤트 ${this.deletePreview.counts.events}건 · 관리자 조치 ${this.deletePreview.counts.actions}건 · 이미지 ${this.deletePreview.counts.images}건</span><p>${records.escapeHtml(this.deletePreview.message)}</p>`
+                    ? `<div class="record-delete-impact-heading"><strong>삭제 영향</strong><span class="record-delete-tooltip-wrap"><button type="button" class="record-delete-tooltip-trigger" aria-label="삭제 영향 설명" aria-describedby="record-delete-tooltip">!</button><span id="record-delete-tooltip" class="record-delete-tooltip" role="tooltip">${records.escapeHtml(this.deletePreview.message)}</span></span></div><span>이벤트 ${this.deletePreview.counts.events}건 · 관리자 조치 ${this.deletePreview.counts.actions}건 · 이미지 ${this.deletePreview.counts.images}건</span><p>${records.escapeHtml(this.deletePreview.message)}</p>`
                     : '';
             }
             if (status) status.textContent = this.deleteMessage;
@@ -714,6 +723,92 @@
         }
     }
 
+    // Render an independent child dialog over the still-mounted Actions modal.
+    // The ModalManager view/filters/selection and scroll position remain untouched.
+    records.openActionDescriptionDetail = function openActionDescriptionDetail(manager, description, trigger) {
+        const host = manager?.root;
+        if (!host || manager.activeView?.name !== 'actionsModal') return null;
+        records.activeActionDetail?.close();
+        const parent = host.querySelector(':scope > .modal-content');
+        const previouslyFocused = document.activeElement;
+        const backdrop = document.createElement('div');
+        backdrop.className = 'record-description-overlay';
+        backdrop.setAttribute('data-record-description-overlay', '');
+        const dialog = document.createElement('section');
+        dialog.className = 'record-description-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-labelledby', 'action-description-heading');
+
+        const header = document.createElement('div');
+        header.className = 'record-description-dialog-header';
+        const heading = document.createElement('h2');
+        heading.id = 'action-description-heading';
+        heading.textContent = '조치 내용';
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'record-description-dialog-close';
+        closeButton.setAttribute('aria-label', '조치 내용 닫기');
+        closeButton.textContent = '×';
+        header.append(heading, closeButton);
+
+        const body = document.createElement('div');
+        body.className = 'record-description-dialog-body';
+        const text = document.createElement('div');
+        text.className = 'record-description-detail-text';
+        text.textContent = String(description ?? '');
+        body.append(text);
+        const footer = document.createElement('div');
+        footer.className = 'record-description-detail-actions';
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'filter-btn secondary';
+        back.textContent = '목록으로';
+        footer.append(back);
+        dialog.append(header, body, footer);
+        backdrop.append(dialog);
+
+        let closed = false;
+        function close() {
+            if (closed) return;
+            closed = true;
+            document.removeEventListener('keydown', onKeydown, true);
+            backdrop.remove();
+            if (parent) parent.inert = false;
+            if (records.activeActionDetail?.close === close) records.activeActionDetail = null;
+            const focusTarget = trigger?.isConnected ? trigger : previouslyFocused;
+            focusTarget?.focus?.();
+        }
+        function onKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                close();
+            } else if (event.key === 'Tab') {
+                const items = [closeButton, back];
+                const active = document.activeElement;
+                if (event.shiftKey && active === items[0]) {
+                    event.preventDefault();
+                    items[1].focus();
+                } else if (!event.shiftKey && active === items[1]) {
+                    event.preventDefault();
+                    items[0].focus();
+                }
+            }
+        }
+        closeButton.addEventListener('click', close);
+        back.addEventListener('click', close);
+        backdrop.addEventListener('click', event => {
+            if (event.target === backdrop) close();
+        });
+        host.append(backdrop);
+        document.addEventListener('keydown', onKeydown, true);
+        closeButton.focus();
+        if (parent) parent.inert = true;
+        records.activeActionDetail = { close, backdrop, dialog };
+        return records.activeActionDetail;
+    };
+
     records.mount = function mountRecords(root, handlers = {}) {
         if (!root) return null;
         root.dataset.dashboardComponent = 'records-toolbar';
@@ -736,6 +831,9 @@
                         view.bind();
                         if (snapshot) view.renderRows();
                         else await view.load();
+                    },
+                    onClose: () => {
+                        if (type === 'actionsModal') records.activeActionDetail?.close();
                     },
                     captureState: () => view.snapshot(),
                     restoreState: () => {

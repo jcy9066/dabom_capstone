@@ -14,41 +14,53 @@
         }
 
         const document = root.ownerDocument;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'dashboard-led-toggle';
-        button.setAttribute('aria-label', 'LED ON / OFF');
+        // Preserve the initially rendered UI; attach behavior without DOM swap.
+        let button = root.querySelector('.dashboard-led-toggle');
+        let label = button?.querySelector('.dashboard-led-toggle-label');
+        let track = button?.querySelector('.dashboard-led-toggle-track');
+        let slider = track?.querySelector('.dashboard-led-toggle-slider');
+        let stateLabel = button?.querySelector('.dashboard-led-toggle-state');
+        let offLabel = button?.querySelector('.ui-toggle-side-off');
+        let onLabel = button?.querySelector('.ui-toggle-side-on');
+        if (!button || !label || !track || !slider || !stateLabel || !offLabel || !onLabel) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'dashboard-led-toggle';
+            button.setAttribute('aria-label', 'LED ON / OFF');
 
-        const label = document.createElement('span');
-        label.className = 'dashboard-led-toggle-label';
-        label.textContent = 'LED';
+            label = document.createElement('span');
+            label.className = 'dashboard-led-toggle-label';
+            label.textContent = 'LED';
 
-        const track = document.createElement('span');
-        track.className = 'dashboard-led-toggle-track';
-        track.setAttribute('aria-hidden', 'true');
+            track = document.createElement('span');
+            track.className = 'dashboard-led-toggle-track';
+            track.setAttribute('aria-hidden', 'true');
 
-        const slider = document.createElement('span');
-        slider.className = 'dashboard-led-toggle-slider';
-        track.append(slider);
+            slider = document.createElement('span');
+            slider.className = 'dashboard-led-toggle-slider';
+            track.append(slider);
 
-        const stateLabel = document.createElement('span');
-        stateLabel.className = 'dashboard-led-toggle-state';
-        stateLabel.textContent = '--';
+            stateLabel = document.createElement('span');
+            stateLabel.className = 'dashboard-led-toggle-state';
+            stateLabel.textContent = '--';
 
-        const offLabel = document.createElement('span');
-        offLabel.className = 'ui-toggle-side ui-toggle-side-off';
-        offLabel.textContent = 'OFF';
-        const onLabel = document.createElement('span');
-        onLabel.className = 'ui-toggle-side ui-toggle-side-on';
-        onLabel.textContent = 'ON';
-        button.append(label, offLabel, track, onLabel, stateLabel);
-        root.replaceChildren(button);
+            offLabel = document.createElement('span');
+            offLabel.className = 'ui-toggle-side ui-toggle-side-off';
+            offLabel.textContent = 'OFF';
+            onLabel = document.createElement('span');
+            onLabel.className = 'ui-toggle-side ui-toggle-side-on';
+            onLabel.textContent = 'ON';
+            button.append(label, offLabel, track, onLabel, stateLabel);
+            root.replaceChildren(button);
+
+
+        }
 
         const controller = {
             root,
             button,
             handlers,
-            enabled: null,
+            enabled: false,
             connected: null,
             pending: false,
 
@@ -60,9 +72,12 @@
 
             sync(options = {}) {
                 if (Object.prototype.hasOwnProperty.call(options, 'enabled')) {
+                    // The Pi firmware starts with LED OFF. Use OFF for missing
+                    // telemetry until a real boolean state arrives; never send
+                    // an automatic control command from this display fallback.
                     this.enabled = typeof options.enabled === 'boolean'
                         ? options.enabled
-                        : null;
+                        : false;
                 }
                 if (Object.prototype.hasOwnProperty.call(options, 'connected')) {
                     this.connected = options.connected;

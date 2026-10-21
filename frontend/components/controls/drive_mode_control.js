@@ -31,7 +31,6 @@
 
     function render(root, controller) {
         if (!canRender(root)) return;
-        root.querySelector('.dashboard-drive-mode-group')?.remove();
         const lever = root.querySelector('[data-dashboard-control="drive-mode"]');
         const navigationMount = ensureNavigationMount(root);
         [lever, navigationMount].filter(Boolean).forEach(child => {

@@ -257,7 +257,7 @@
         });
         const beepButton = $('dashboardBeepBtn');
         if (beepButton) {
-            beepButton.disabled = payload.connected !== true || state.beepPending;
+            beepButton.disabled = state.beepPending;
             beepButton.setAttribute('aria-busy', String(state.beepPending));
             beepButton.title = payload.connected === true
                 ? '짧은 비프음을 1회 재생합니다.'
@@ -265,7 +265,7 @@
         }
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) {
-            warningButton.disabled = payload.connected !== true || state.warningPending;
+            warningButton.disabled = state.warningPending;
             warningButton.setAttribute('aria-busy', String(state.warningPending));
             warningButton.title = payload.connected === true
                 ? 'Pi 스피커와 LED로 경고합니다.'
@@ -781,11 +781,11 @@
         controls?.mountLedToggle?.($('dashboard-led-control-mount'), { request: requestLedToggle });
         const beepButton = $('dashboardBeepBtn');
         if (beepButton) {
-            beepButton.disabled = true;
+            beepButton.disabled = false;
             beepButton.addEventListener('click', beep);
         }
         const warningButton = document.querySelector('.action-warning');
-        if (warningButton) warningButton.disabled = true;
+        if (warningButton) warningButton.disabled = false;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
         document.addEventListener('dabom:alerts-cleared', clearDisplayedAlerts);
         document.addEventListener('visibilitychange', () => {

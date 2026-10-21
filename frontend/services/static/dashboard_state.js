@@ -40,7 +40,7 @@
         const element = byId('server-state-updated');
         if (!element) return;
         const parsed = parseDate(timestamp) || new Date();
-        element.textContent = `확인 ${parsed.toLocaleTimeString('ko-KR', { hour12: false })}`;
+        element.textContent = parsed.toLocaleTimeString('ko-KR', { hour12: false });
     }
 
     function setPiState(value, available = true) {
@@ -282,12 +282,26 @@
         };
     }
 
+    // Keep the 50-row log API contract; paginate the 10-row view locally.
+    const LOG_API_PAGE_SIZE = 50;
+    const LOG_DISPLAY_PAGE_SIZE = 10;
+
+    function logPaging(filters = {}) {
+        const displayPage = Math.max(1, Math.floor(Number(filters.page) || 1));
+        const startIndex = (displayPage - 1) * LOG_DISPLAY_PAGE_SIZE;
+        return {
+            displayPage,
+            apiPage: Math.floor(startIndex / LOG_API_PAGE_SIZE) + 1,
+            offset: startIndex % LOG_API_PAGE_SIZE,
+        };
+    }
+
     function buildLogQuery(type, filters = {}) {
         const query = new URLSearchParams();
         if (filters.startAt) query.set('start_at', filters.startAt);
         if (filters.endAt) query.set('end_at', filters.endAt);
-        query.set('page', String(Math.max(1, Number(filters.page) || 1)));
-        query.set('page_size', String(50));
+        query.set('page', String(logPaging(filters).apiPage));
+        query.set('page_size', String(LOG_API_PAGE_SIZE));
         if (filters.sortBy) query.set('sort_by', filters.sortBy);
         if (filters.sortDirection) query.set('sort_direction', filters.sortDirection);
         if (type === 'patrolModal') {
@@ -323,6 +337,7 @@
                 message: '조회 API가 아직 연결되지 않았습니다.'
             };
         }
+        const paging = logPaging(filters);
         const query = buildLogQuery(type, filters);
         const queryString = query.toString();
         const requestEndpoint = queryString ? `${endpoint}?${queryString}` : endpoint;
@@ -338,19 +353,20 @@
         if (!Array.isArray(rows)) {
             return { state: 'error', rows: [], message: '서버 응답 형식을 확인할 수 없습니다.' };
         }
+        const total = Math.max(0, Number(result.payload?.total) || 0);
         return {
             state: 'ready',
-            rows: rows.map(
+            rows: rows.slice(paging.offset, paging.offset + LOG_DISPLAY_PAGE_SIZE).map(
                 type === 'statusModal'
                     ? normalizeStatusRow
                     : type === 'patrolModal'
                         ? normalizePatrolRow
                         : normalizeActionRow
             ),
-            page: Math.max(1, Number(result.payload?.page) || 1),
-            page_size: Math.max(1, Number(result.payload?.page_size) || 50),
-            total: Math.max(0, Number(result.payload?.total) || 0),
-            total_pages: Math.max(0, Number(result.payload?.total_pages) || 0),
+            page: paging.displayPage,
+            page_size: LOG_DISPLAY_PAGE_SIZE,
+            total,
+            total_pages: Math.ceil(total / LOG_DISPLAY_PAGE_SIZE),
             message: ''
         };
     }

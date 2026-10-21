@@ -166,12 +166,16 @@
     function sync(root) {
       if (!root?.querySelectorAll) return;
       root.querySelectorAll(selector).forEach(element => {
+        // MODEL is a four-column toggle; preserve its child count while pending.
+        if (element.matches('.dashboard-model-toggle')) return;
+        // State-driven switches must keep their original number of grid/flex children.
+        if (element.matches('.navigation-mode-toggle,.dashboard-led-toggle,.dashboard-drive-mode-control,.system-control-switch,.dark-toggle')) return;
         if (element.dataset.uiLoadingReady !== '1') {
           element.dataset.uiLoadingReady = '1';
           const dots = document.createElement('span');
           dots.className = 'ui-dots';
           dots.setAttribute('aria-hidden','true');
-          dots.innerHTML='<i></i><i></i><i></i>';
+          dots.innerHTML='<i></i><i></i><i></i><b></b><b></b><b></b>';
           element.prepend(dots);
         }
         const text = element.textContent.replace(/\s+/g,' ').trim();
@@ -198,7 +202,7 @@
         visual=document.createElement('span');
         visual.className='ui-loading-visual';
         visual.setAttribute('aria-hidden','true');
-        visual.innerHTML='<span class="ui-dots"><i></i><i></i><i></i></span>';
+        visual.innerHTML='<span class="ui-dots"><i></i><i></i><i></i><b></b><b></b><b></b></span>';
         target.append(visual);
       }
       return visual;
@@ -225,9 +229,7 @@
     }
     const camera=$('#no-camera-msg');
     observeStatus(camera,()=>camera?.textContent || '',()=>$('#video-wrapper')?.classList.contains('camera-offline')!==true);
-    const lidar=$('#lidar-stale-overlay');
-    observeStatus(lidar,()=>$('#lidar-stale-title')?.textContent+' '+$('#lidar-stale-detail')?.textContent,
-      ()=>!lidar?.classList.contains('visible'));
+    // The minimap already displays NO SCAN DATA. Do not overlay a redundant loader.
   }
 
   function installNullPlaceholders() {

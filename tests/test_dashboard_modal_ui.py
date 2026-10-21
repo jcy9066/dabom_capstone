@@ -37,6 +37,7 @@ class FakeElement {
     }
     append(...children) { this.children.push(...children); }
     addEventListener(name, handler) { this.listeners[name] = handler; }
+    setAttribute(name, value) { this[name] = value; }
     removeAttribute(name) { if (name === 'onclick') this.onclick = null; }
     descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
     matches(selector) {
@@ -85,14 +86,23 @@ const responses = {
     '/api/navigation/maps/active': { ok: true, state: 'active', active_map: { map_name: 'alpha' } },
     '/api/navigation/maps': {
         ok: true,
-        maps: [{ map_name: 'alpha', saved_at: '2026-08-28T10:00:00Z', width: 10, height: 20, resolution: 0.05 }],
+        maps: [
+            { map_name: 'alpha', saved_at: '2026-08-28T10:00:00Z', width: 10, height: 20, resolution: 0.05 },
+            { map_name: 'beta', saved_at: '2026-08-29T10:00:00Z', width: 12, height: 22, resolution: 0.05 },
+        ],
+    },
+    '/api/navigation/locations': {
+        ok: true, gps: { fix: false }, locations: [
+            { location_id: 'existing', name: '기존 장소', lat: 37.1, lng: 127.1, radius_m: 30 }
+        ],
     },
 };
+const requestedUrls = [];
 const context = {
     console,
     document,
     CustomEvent: class { constructor(name, options) { this.type = name; this.detail = options.detail; } },
-    fetch: async url => ({ ok: true, status: 200, json: async () => responses[url] }),
+    fetch: async url => { requestedUrls.push(url); return { ok: true, status: 200, json: async () => responses[url] }; },
     setInterval: () => 1,
     clearTimeout,
     setTimeout,
@@ -116,7 +126,147 @@ vm.runInContext(fs.readFileSync('frontend/components/navigation/saved_map_modal.
     assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
     assert.strictEqual(manager.body.querySelector('#saved-map-pose-x').value, '');
     assert.strictEqual(manager.body.querySelector('.saved-map-active').textContent, 'ACTIVE');
+    const primary = manager.body.querySelector('.saved-map-primary-column');
+    const pose = primary.querySelector('.saved-map-pose');
+    const list = primary.querySelector('.saved-map-list');
+    assert.ok(primary.children.indexOf(pose) < primary.children.indexOf(list));
+    assert.strictEqual(list.children.length, 2);
+    assert.ok(list.children.every(node => node.className === 'saved-map-option'));
+    const layout = manager.body.querySelector('.saved-map-content');
+    assert.ok(layout);
+    assert.strictEqual(layout.children.length, 1);
+    assert.strictEqual(layout.children[0], primary);
+    assert.strictEqual(manager.body.querySelector('.saved-map-secondary-column'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-location-panel'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-location-actions'), null);
+    const bookmarkButtons = primary.querySelectorAll('.mb-btn');
+    assert.strictEqual(bookmarkButtons.length, 4);
+    for (const button of bookmarkButtons) {
+        assert.strictEqual(button.tagName, 'BUTTON');
+        assert.strictEqual(button.type, 'button');
+        assert.strictEqual(button.dataset.controlButton, undefined);
+        assert.ok(button.className.split(/\s+/).includes('mb-btn'));
+    }
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+
+    // Clicking the selected card clears its radio and disables loading.
+    const alphaCard = list.children[0];
+    const betaCard = list.children[1];
+    let preventedLabelDefault = false;
+    alphaCard.listeners.click({
+        target: alphaCard.children[1],
+        preventDefault() { preventedLabelDefault = true; },
+    });
+    assert.strictEqual(preventedLabelDefault, true);
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
+
+    // An explicit "none selected" snapshot must not reselect the active map.
+    const snapshot = manager.views.get('savedNavigationMaps').captureState();
+    assert.strictEqual(snapshot.selectedName, null);
+    const rerendered = manager.views.get('savedNavigationMaps').render(manager.activeView.context, snapshot);
+    assert.strictEqual(rerendered.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(rerendered.querySelector('.saved-map-load').disabled, true);
+
+    // Selecting another card and clicking its radio again toggles it off.
+    betaCard.listeners.click({ target: betaCard.children[1], preventDefault() {} });
+    assert.strictEqual(betaCard.children[0].checked, true);
+    assert.strictEqual(alphaCard.children[0].checked, false);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+    let preventedRadioDefault = false;
+    betaCard.listeners.click({
+        target: betaCard.children[0],
+        preventDefault() { preventedRadioDefault = true; },
+    });
+    assert.strictEqual(preventedRadioDefault, false);
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
+
+    // Native radio changes (e.g. keyboard arrow selection) resync toggle state.
+    alphaCard.children[0].checked = true;
+    manager.body.listeners.change({ target: alphaCard.children[0] });
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, false);
+    alphaCard.listeners.click({ target: alphaCard.children[1], preventDefault() {} });
+    assert.strictEqual(manager.body.querySelector('input[name="saved-navigation-map"]:checked'), null);
+    assert.strictEqual(manager.body.querySelector('.saved-map-load').disabled, true);
+    assert.ok(!requestedUrls.includes('/api/navigation/locations'));
 })().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(
+            ["node", "-e", source], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+
+    def test_action_description_overlay_does_not_replace_records_modal(self):
+        source = r"""
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+
+class FakeElement {
+    constructor(tag = 'div') {
+        this.tagName = tag.toUpperCase();
+        this.children = [];
+        this.listeners = {};
+        this.attrs = {};
+        this.className = '';
+        this.dataset = {};
+        this.textContent = '';
+        this.inert = false;
+        this.isConnected = true;
+    }
+    append(...children) {
+        children.forEach(child => { child.parent = this; this.children.push(child); });
+    }
+    remove() {
+        this.isConnected = false;
+        if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this);
+    }
+    setAttribute(key, value) { this.attrs[key] = value; }
+    addEventListener(name, fn) { this.listeners[name] = fn; }
+    focus() { document.activeElement = this; }
+    matches(name) { return name === '.modal-content' && this.className === 'modal-content'; }
+    querySelector(selector) {
+        return selector === ':scope > .modal-content'
+            ? this.children.find(child => child.matches('.modal-content')) || null
+            : null;
+    }
+}
+const document = {
+    activeElement: null,
+    handlers: {},
+    createElement: tag => new FakeElement(tag),
+    addEventListener(name, fn) { this.handlers[name] = fn; },
+    removeEventListener(name, fn) { if (this.handlers[name] === fn) delete this.handlers[name]; },
+};
+const host = new FakeElement();
+const parent = new FakeElement();
+parent.className = 'modal-content';
+host.append(parent);
+const manager = { root: host, activeView: { name: 'actionsModal' } };
+const context = { console, document };
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync('frontend/components/records/record_modal.js', 'utf8'), context);
+const records = context.DabomDashboardComponents.records;
+const trigger = new FakeElement('button');
+trigger.focus();
+const text = '<script>alert(1)</script>\nLong description';
+const child = records.openActionDescriptionDetail(manager, text, trigger);
+assert.strictEqual(manager.activeView.name, 'actionsModal');
+assert.strictEqual(parent.inert, true);
+assert.strictEqual(host.children.length, 2);
+assert.strictEqual(child.dialog.children[1].children[0].textContent, text);
+const escape = { key: 'Escape', preventDefault() {}, stopImmediatePropagation() {} };
+document.handlers.keydown(escape);
+assert.strictEqual(host.children.length, 1);
+assert.strictEqual(parent.inert, false);
+assert.strictEqual(document.activeElement, trigger);
+assert.strictEqual(manager.activeView.name, 'actionsModal');
+const child2 = records.openActionDescriptionDetail(manager, 'Again', trigger);
+child2.dialog.children[2].children[0].listeners.click();
+assert.strictEqual(parent.inert, false);
+assert.strictEqual(host.children.length, 1);
 """
         completed = subprocess.run(
             ["node", "-e", source], cwd=ROOT, capture_output=True, text=True, check=False
