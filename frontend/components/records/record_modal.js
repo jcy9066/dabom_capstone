@@ -26,9 +26,9 @@
         NOTE: 'record-action-note',
     });
     const TITLES = Object.freeze({
-        statusModal: '기기 상태 조회',
-        patrolModal: '순찰 기록 조회',
-        actionsModal: '관리자 조치 조회',
+        statusModal: '기기 상태 내역',
+        patrolModal: '순찰 내역',
+        actionsModal: '조치 내역',
     });
     const DEFAULT_SORT = Object.freeze({
         statusModal: 'recorded_at',
@@ -126,6 +126,9 @@
         return `<button type="button" class="record-thumbnail-button" data-image-row="${index}" aria-label="${label}"><img class="record-thumbnail" data-thumbnail-image src="${records.escapeHtml(row.image_url)}" alt="${label}" loading="lazy"></button>`;
     }
 
+    const gpsPrecision = value => (value == null || value === '' || !Number.isFinite(Number(value)))
+        ? '-' : Number(value).toFixed(1);
+
     function rowTimestamp(row) {
         return `${records.escapeHtml(row.date || '-')}<br><span class="muted">${records.escapeHtml(row.time || '-')}</span>`;
     }
@@ -150,8 +153,8 @@
             { label: 'LiDAR (X/Y)' },
             { label: 'GPS (위도/경도/고도)' },
             { label: '조치', sort: 'is_resolved' },
-            { label: '신고', sort: 'is_reported' },
-            { label: '경고', sort: 'is_alerted' },
+            { label: '신고 여부', sort: 'is_reported' },
+            { label: '경고 여부', sort: 'is_alerted' },
             { label: '오탐', sort: 'is_false_alarm' },
             { label: '이미지' },
         ];
@@ -251,7 +254,7 @@
                 <button type="button" class="filter-btn secondary" data-cycle="alerted"></button>
                 <button type="button" class="filter-btn secondary" data-cycle="falseAlarm"></button>`;
             if (this.type === 'actionsModal') return `${dateRange}
-                <label>관리자 <input type="search" data-filter="userName" placeholder="이름 일부 검색"></label>
+                <label>관리자 <input type="search" data-filter="userName" placeholder="이름"></label>
                 <button type="button" class="filter-btn secondary" data-cycle="actionType"></button>`;
             return dateRange;
         }
@@ -286,6 +289,18 @@
 
         root() { return this.manager.body?.querySelector('[data-dashboard-modal-view]'); }
 
+        updateTitleCount() {
+            const title = this.manager?.title;
+            if (!title) return;
+            let count = title.querySelector('.ui-record-count');
+            if (!count) {
+                count = document.createElement('span');
+                count.className = 'ui-record-count';
+                title.append(count);
+            }
+            count.textContent = `총 ${Number(this.metadata.total) || 0}건`;
+        }
+
         setInputValues() {
             const root = this.root();
             const values = this.filters.values;
@@ -319,6 +334,7 @@
             if (!root) return;
             this.cycleControllers = [];
             this.setInputValues();
+            this.updateTitleCount();
             root.querySelectorAll('[data-cycle]').forEach(button => {
                 const key = button.dataset.cycle;
                 const options = records.CYCLE_FILTER_OPTIONS[key] || [];
@@ -533,9 +549,9 @@
                 <td class="${valueClass(row.cpu_temperature, 65, 80)}">${records.formatValue(row.cpu_temperature, '°C')}</td>
                 <td class="${valueClass(row.ram_usage, 60, 80)}">${records.formatValue(row.ram_usage, '%')}</td>
                 <td class="${valueClass(row.ping, 100, 150)}">${records.formatValue(row.ping, 'ms')}</td>
-                <td>${records.formatBoolean(row.is_autonomous, '자동', '수동')}</td>
+                <td>${records.formatBoolean(row.is_autonomous, 'AUTO', 'MANUAL')}</td>
                 <td>${records.formatValue(row.speed)}</td>
-                <td class="muted">${records.formatValue(row.gps_lat)} / ${records.formatValue(row.gps_lng)} / ${records.formatValue(row.gps_alt)}</td>
+                <td class="muted">${gpsPrecision(row.gps_lat)} / ${gpsPrecision(row.gps_lng)} / ${gpsPrecision(row.gps_alt)}</td>
                 <td class="muted">${records.formatValue(row.lidar_x)} / ${records.formatValue(row.lidar_y)}</td>
             </tr>`;
             if (this.type === 'patrolModal') {
@@ -547,7 +563,7 @@
                     <td><span class="status-badge record-type-badge ${records.eventBadgeClass(row.event_type)}">${records.escapeHtml(row.event_type)}</span></td>
                     <td>${confidence}</td>
                     <td class="muted">${records.formatValue(row.lidar_x)} / ${records.formatValue(row.lidar_y)}</td>
-                    <td class="muted">${records.formatValue(row.gps_lat)} / ${records.formatValue(row.gps_lng)} / ${records.formatValue(row.gps_alt)}</td>
+                    <td class="muted">${gpsPrecision(row.gps_lat)} / ${gpsPrecision(row.gps_lng)} / ${gpsPrecision(row.gps_alt)}</td>
                     <td>${records.formatBoolean(row.is_resolved, '완료', '미조치')}</td>
                     <td>${records.formatBoolean(row.is_reported, '신고', '미신고')}</td>
                     <td>${records.formatBoolean(row.is_alerted, '경고', '미경고')}</td>
@@ -572,6 +588,7 @@
             const count = root?.querySelector('[data-record-count] span');
             if (!tbody) return;
             if (count) count.textContent = String(this.metadata.total || 0);
+            this.updateTitleCount();
             if (this.loadState !== 'ready') {
                 records.renderTableState(tbody, { state: this.loadState === 'idle' ? 'loading' : this.loadState, message: this.message, colspan: columnsFor(this.type).length });
             } else if (!this.rows.length) {

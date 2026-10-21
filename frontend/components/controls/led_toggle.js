@@ -35,7 +35,13 @@
         stateLabel.className = 'dashboard-led-toggle-state';
         stateLabel.textContent = '--';
 
-        button.append(label, track, stateLabel);
+        const offLabel = document.createElement('span');
+        offLabel.className = 'ui-toggle-side ui-toggle-side-off';
+        offLabel.textContent = 'OFF';
+        const onLabel = document.createElement('span');
+        onLabel.className = 'ui-toggle-side ui-toggle-side-on';
+        onLabel.textContent = 'ON';
+        button.append(label, offLabel, track, onLabel, stateLabel);
         root.replaceChildren(button);
 
         const controller = {
@@ -73,6 +79,8 @@
                 button.setAttribute('aria-busy', String(this.pending));
                 button.disabled = this.connected !== true || this.pending;
                 stateLabel.textContent = known ? (active ? 'ON' : 'OFF') : '--';
+                offLabel.classList.toggle('active', known && !active);
+                onLabel.classList.toggle('active', known && active);
                 button.title = this.connected !== true
                     ? 'Pi 연결 후 LED를 제어할 수 있습니다.'
                     : active

@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 순찰 관제 센터</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="static/style.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/system_control.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/style.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="static/system_control.css?v=20261014-enterprise-ui-v1">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261001-map-modal-controls">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20261006-model-pipeline-toggle-v1">
-    <link rel="stylesheet" href="static/selected_ui.css?v=20261013-enterprise-accent-v5">
+    <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="static/selected_ui.css?v=20261014-enterprise-ui-v1">
 </head>
 <body>
 
@@ -24,30 +24,15 @@
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">설정</span>
-            <button class="sidebar-close" onclick="closeSidebar()">✕</button>
+            <div class="sidebar-header-actions">
+                <span id="sidebarGuideMount"></span>
+                <button class="sidebar-close" onclick="closeSidebar()">✕</button>
+            </div>
         </div>
 
         <div class="sidebar-body">
-            <div class="sidebar-item">
-                <span class="sidebar-item-label">다크 모드</span>
-
-                <div class="dark-toggle" id="darkToggle" role="switch" tabindex="0" aria-label="다크 모드" aria-checked="false" onclick="toggleDarkMode()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDarkMode();}">
-                    <div class="dark-toggle-slider"></div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <div class="sidebar-info">
-                <span class="sidebar-info-label">시스템</span>
-                <span class="sidebar-info-value">AI 순찰 로봇 v1.0</span>
-            </div>
-            <div class="sidebar-divider"></div>
-            <div id="systemControlPanelSlot"></div>
-
             {% set current_user = request.session.get('user') or {} %}
             <div class="sidebar-account" id="sidebarAccount" aria-label="현재 로그인 계정">
-                <span class="sidebar-info-label">현재 로그인</span>
                 <strong class="sidebar-account-name" id="sidebarAccountName">
                     {{ current_user.get('name') or '사용자' }}
                 </strong>
@@ -58,24 +43,37 @@
                     &#xB85C;&#xADF8;&#xC544;&#xC6C3;
                 </button>
             </div>
+
+            <div class="sidebar-item">
+                <span class="sidebar-item-label">다크 모드</span>
+
+                <div class="dark-toggle" id="darkToggle" role="switch" tabindex="0" aria-label="다크 모드" aria-checked="false" onclick="toggleDarkMode()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDarkMode();}">
+                    <div class="dark-toggle-slider"></div>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div id="systemControlPanelSlot"></div>
+
         </div>
     </div>
 
     <div class="system-status-bar">
         <span>
             CPU:
-            <span id="sys-cpu-usage">0.0</span>%
+            <span id="sys-cpu-usage">--</span>%
             /
-            <span id="sys-cpu-temp">0.0</span>°C
+            <span id="sys-cpu-temp">--</span>°C
         </span>
 
         <span>
             RAM:
-            <span id="sys-ram">0.0</span>%
+            <span id="sys-ram">--</span>%
         </span>
         <span>
             PING:
-            <span id="sys-internet">0</span>
+            <span id="sys-internet">--</span>
         </span>
         <span class="system-state-item">
             PI:
@@ -100,7 +98,7 @@
         </button>
 
         <div class="header-center">
-            <div class="live-badge" id="pi-live-badge" role="status" aria-live="polite"><span class="ui-pi-light" aria-hidden="true"></span><span class="ui-pi-label">PI UNKNOWN</span></div>
+            <div class="live-badge" id="pi-live-badge" role="status" aria-live="polite"><span class="ui-pi-light" aria-hidden="true"></span><span class="ui-pi-label" hidden>PI UNKNOWN</span></div>
             <h1>AI 순찰 로봇 관제 센터</h1>
         </div>
     </header>
@@ -378,7 +376,7 @@
                     data-record-view="patrolModal"
                     onclick="openModal('patrolModal')"
                 >
-                    순찰 기록 조회
+                    순찰 내역
                 </button>
 
                 <button
@@ -386,7 +384,7 @@
                     data-record-view="galleryModal"
                     onclick="openModal('galleryModal')"
                 >
-                    이미지 갤러리
+                    갤러리
                 </button>
 
                 <span id="current-situation-mount" class="dashboard-component-mount" data-dashboard-mount="current-situation">
@@ -395,7 +393,7 @@
                         data-record-view="currentSituation"
                         onclick="openCurrentSituationModal()"
                     >
-                        현재 상황 작성
+                        상황 기록
                     </button>
                 </span>
 
@@ -404,7 +402,7 @@
                     data-record-view="actionsModal"
                     onclick="openModal('actionsModal')"
                 >
-                    관리자 조치 조회
+                    조치 내역
                 </button>
 
                 <button
@@ -412,7 +410,7 @@
                     data-record-view="statusModal"
                     onclick="openModal('statusModal')"
                 >
-                    기기 상태 조회
+                    기기 상태 내역
                 </button>
 
             </div>
@@ -426,10 +424,7 @@
                     <span class="server-state-updated" id="server-state-updated">확인 중</span>
                 </div>
                 <div class="server-state-grid">
-                    <div class="server-state-field">
-                        <span>주행 구분</span>
-                        <strong id="operation-mode-status">UNKNOWN</strong>
-                    </div>
+                    <span id="operation-mode-status" hidden>UNKNOWN</span>
                     <div class="server-state-field">
                         <span>활성 지도</span>
                         <strong id="active-map-status">UNAVAILABLE</strong>
@@ -499,7 +494,7 @@
                             id="label-auto"
                             class="mode-text inactive"
                         >
-                            자동
+                            AUTO
                         </span>
 
                         <div
@@ -513,7 +508,7 @@
                             id="label-manual"
                             class="mode-text inactive"
                         >
-                            수동
+                            MANUAL
                         </span>
                     </button>
 
@@ -675,16 +670,16 @@
     <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/records/record_table.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/records/record_modal.js?v=20261014-enterprise-ui-v1"></script>
     <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16"></script>
-    <script src="/components/controls/model_pipeline_toggle.js?v=20261006-model-pipeline-toggle-v1"></script>
+    <script src="/components/controls/led_toggle.js?v=20261014-enterprise-ui-v1"></script>
+    <script src="/components/controls/model_pipeline_toggle.js?v=20261014-enterprise-ui-v1"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20261013-selected-ui-v3"></script>
-    <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drive_mode_control.js?v=20261014-enterprise-ui-v1"></script>
     <script src="/components/controls/navigation_mode_control.js?v=20261001-nav-mode-map-reset"></script>
-    <script src="/components/gallery/image_detail.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/gallery/image_detail.js?v=20261014-enterprise-ui-v1"></script>
     <script src="/components/current_situation/current_situation.js?v=20260930-lidar3d-controls-v16"></script>
     <script type="importmap">
         {
@@ -695,11 +690,11 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
-    <script src="static/script.js?v=20261007-dynamic-obstacle-v32"></script>
-    <script src="static/system_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/script.js?v=20261014-enterprise-ui-v1"></script>
+    <script src="static/system_control.js?v=20261014-enterprise-ui-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
-    <script src="static/selected_ui.js?v=20261013-selected-ui-v3"></script>
+    <script src="static/selected_ui.js?v=20261014-enterprise-ui-v1"></script>
 </body>
 </html>

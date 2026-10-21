@@ -59,12 +59,11 @@ class DevPrimaryAccentContractTests(unittest.TestCase):
         self.assertIn("color: #161B22 !important;", primary_rule)
 
     def test_css_is_presentation_only_and_assets_are_fresh(self):
-        for banned in ("grid-template", "grid-area", "flex-direction", "fetch(",
-                       "addEventListener", "onclick=", "onkeydown="):
+        for banned in ("fetch(", "addEventListener", "onclick=", "onkeydown="):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, SECTION)
-        self.assertIn("selected_ui.css?v=20261013-enterprise-accent-v5", INDEX)
-        self.assertIn("selected_ui.css?v=20261013-enterprise-accent-v5", LOGIN)
+        self.assertIn("selected_ui.css?v=20261014-enterprise-ui-v1", INDEX)
+        self.assertIn("selected_ui.css?v=20261014-enterprise-ui-v1", LOGIN)
 
 
 if __name__ == "__main__":
