@@ -254,6 +254,16 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(disconnected["pi_safety"]["fresh"])
         self.assertIsNone(disconnected["pi_safety"]["emergency_stop"])
 
+    async def test_pi_mode_telemetry_does_not_override_gpu_mode(self):
+        self.api.note_pi_status({
+            "mode": "manual",
+            "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        state = self.api.state_response()
+        self.assertEqual("MAPPING", state["navigation_mode"])
+        self.assertEqual("DRIVING", state["pi_navigation_mode"])
+
     async def driving_ready(self):
         result = await self.api.switch_mode(
             {

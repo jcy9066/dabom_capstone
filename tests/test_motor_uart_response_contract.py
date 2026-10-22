@@ -50,6 +50,18 @@ def test_move_drive_and_reconfiguration_ack_cannot_cross_match():
     assert not valid("ENC_GET", "OK,ENC,one,2,3,4,5")
 
 
+def test_strict_volume_ack_matches_existing_pico_protocol():
+    valid = _validator()
+    for volume in (0, 20, 100):
+        assert valid("VOLUME_GET", f"OK,VOLUME,{volume}")
+        assert valid(f"VOLUME,{volume}", f"OK,VOLUME,{volume}")
+    for invalid in ("OK,STOP", "OK,VOLUME,-1", "OK,VOLUME,101", "OK,VOLUME,abc", "OK,VOLUME,20,extra"):
+        assert not valid("VOLUME_GET", invalid)
+    assert not valid("VOLUME,20", "OK,VOLUME,21")
+    assert not valid("VOLUME,20", "OK,STOP")
+    assert not valid("VOLUME,101", "OK,VOLUME,101")
+
+
 def test_exchange_fails_closed_on_mismatched_response():
     source = SRC.read_text(encoding="utf-8")
     part = source.split("    def _exchange_locked(", 1)[1].split(

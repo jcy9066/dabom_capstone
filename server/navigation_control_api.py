@@ -270,8 +270,8 @@ class NavigationControlApi:
                 self._robot_mode = reported_mode
             reported_navigation = str(payload.get("navigation_mode", "")).strip().upper()
             if reported_navigation in self.MODES:
+                # Pi telemetry cannot override the GPU-owned active Nav2 mode.
                 self._pi_navigation_mode = reported_navigation
-                self._state["navigation_mode"] = reported_navigation
             if isinstance(payload.get("emergency_stop"), bool):
                 if new_safety_stop or (payload["emergency_stop"] and self._pi_estop_latched is False):
                     self._estop_generation += 1
