@@ -19,6 +19,14 @@ class NavigationFrontendContractTests(unittest.TestCase):
         cls.navigation_component = (ROOT / "frontend/components/controls/navigation_mode_control.js").read_text(encoding="utf-8")
         cls.controls_css = (ROOT / "frontend/components/controls/controls.css").read_text(encoding="utf-8")
 
+    def test_global_path_retained_while_manual_pauses_or_cancel_waits_for_stop(self):
+        js = (ROOT / "frontend/services/static/script.js").read_text(encoding="utf-8")
+        allowed = js.split("document.addEventListener('dabom:navigation-control-state'", 1)[1]
+        for status in ("READY", "PAUSING_FOR_MANUAL", "CANCELING", "CANCELING_STOP"):
+            self.assertIn(f"'{status}'", allowed)
+        self.assertIn("&& control.active_goal", allowed)
+        self.assertIn("control.planned_path", allowed)
+
     def test_consumes_frozen_dashboard_navigation_contract(self):
         for contract in (
             "payload?.dashboard_config",

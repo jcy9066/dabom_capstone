@@ -784,7 +784,7 @@ function applyNavigationStreamMessage(message) {
 document.addEventListener('dabom:navigation-control-state', event => {
     const control = event.detail || {};
     const navState = String(control.navigation_state || '').toUpperCase();
-    const active = ['PATH_READY', 'NAVIGATING', 'RESUMING', 'CANCELING_STOP'].includes(navState)
+    const active = ['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING', 'PAUSING_FOR_MANUAL', 'REPLACING_GOAL', 'CANCELING', 'CANCELING_STOP'].includes(navState)
         && control.active_goal;
     if (active) {
         const nextRunKey = navigationControlGoalKey(control);
