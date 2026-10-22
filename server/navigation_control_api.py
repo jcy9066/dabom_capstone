@@ -799,10 +799,13 @@ class NavigationControlApi:
         return payload
 
     async def _await_pi_navigation_telemetry(
-        self, expected: str, after: float | None, timeout_sec: float = 1.5
+        self, expected: str, after: float | None, timeout_sec: float | None = None
     ) -> bool:
-        """Require a fresh actual Pi report *after* the mode request."""
-        deadline = time.monotonic() + timeout_sec
+        """Require fresh Pi telemetry, bounded by the configured watchdog."""
+        # Status reports are periodic and may not arrive within 1.5 seconds.
+        # Never loosen the freshness check itself.
+        wait = max(1.5, self._watchdog.pi_timeout_sec) if timeout_sec is None else timeout_sec
+        deadline = time.monotonic() + wait
         while True:
             with self._lock:
                 confirmed = (
@@ -883,7 +886,7 @@ class NavigationControlApi:
             )
             if not self._pi_command_delivered(ack):
                 raise NavigationControlError("PI_MODE_ACK_FAILED", "Pi did not acknowledge mode.", 503)
-            deadline = time.monotonic() + 1.5
+            deadline = time.monotonic() + max(1.5, self._watchdog.pi_timeout_sec)
             while True:
                 with self._lock:
                     confirmed = (
