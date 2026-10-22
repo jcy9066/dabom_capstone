@@ -454,6 +454,8 @@ class NavigationControlApi:
                 "safety_epoch": self._pi_safety_epoch,
                 "estop_generation": self._estop_generation,
                 "goal_generation": self._goal_motion_generation,
+                "robot_mode": self._robot_mode,
+                "pi_navigation_mode": self._pi_navigation_mode,
             }
 
     def note_authorized_motion(
@@ -479,6 +481,8 @@ class NavigationControlApi:
                 or self._pi_safety_epoch != expected_safety.get("safety_epoch")
                 or self._estop_generation != expected_safety.get("estop_generation")
                 or self._goal_motion_generation != expected_safety.get("goal_generation")
+                or self._robot_mode != expected_safety.get("robot_mode")
+                or self._pi_navigation_mode != expected_safety.get("pi_navigation_mode")
             ):
                 return False
 
