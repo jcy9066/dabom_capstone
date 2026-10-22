@@ -25,7 +25,7 @@ namespace
 // Nav2 Humble's NodeLattice motion table is process-global. Different
 // planner requests must not interleave configuration/search with different
 // candidate penalties, even if each action has its own Smac instance.
-std::mutex lattice_candidate_search_mutex;
+std::timed_mutex lattice_candidate_search_mutex;
 
 // Smac verified the candidate against the costmap when it was created.
 // Two subsequent searches may have allowed an obstacle update, so verify
@@ -209,7 +209,16 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   // Serialize all time-ranked searches in this process to isolate Smac's
   // static motion table. Waiting consumes the 5-second planning deadline;
   // no motion is permitted when this budget is exhausted.
-  std::unique_lock<std::mutex> search_lock(lattice_candidate_search_mutex);
+  // Waiting for another candidate must consume the SAME planning deadline.
+  // An unbounded mutex wait could otherwise exceed the advertised 5s cap.
+  const auto deadline = started + std::chrono::duration_cast<
+    std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(max_total_planning_sec_));
+  std::unique_lock<std::timed_mutex> search_lock(
+    lattice_candidate_search_mutex, std::defer_lock);
+  if (!search_lock.try_lock_until(deadline)) {
+    return nav_msgs::msg::Path{};
+  }
   const auto node = parent_.lock();
   nav_msgs::msg::Path best;
   double best_seconds = std::numeric_limits<double>::infinity();
