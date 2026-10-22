@@ -19,6 +19,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         cls.navigation_component = (ROOT / "frontend/components/controls/navigation_mode_control.js").read_text(encoding="utf-8")
         cls.controls_css = (ROOT / "frontend/components/controls/controls.css").read_text(encoding="utf-8")
 
+    def test_cancel_success_race_and_estop_are_not_displayed_as_cancel_success(self):
+        source = self.control
+        self.assertIn("response.cancel?.terminal === 'SUCCEEDED'", source)
+        self.assertIn("response.navigation_state === 'EMERGENCY_STOPPED'", source)
+        self.assertIn("response.cancel_completed === true && response.physical_stop_confirmed === true", source)
+        self.assertIn("취소 부분 실패", source)
+
     def test_global_path_retained_while_manual_pauses_or_cancel_waits_for_stop(self):
         js = (ROOT / "frontend/services/static/script.js").read_text(encoding="utf-8")
         allowed = js.split("document.addEventListener('dabom:navigation-control-state'", 1)[1]

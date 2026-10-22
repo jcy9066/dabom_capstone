@@ -626,8 +626,12 @@
             if (path.endsWith('/cancel')) {
                 if (response.cancel_completed === true && response.physical_stop_confirmed === true) {
                     setFeedback('Goal 취소와 엔코더 정지가 확인되었습니다.');
+                } else if (response.navigation_state === 'EMERGENCY_STOPPED') {
+                    setFeedback('Goal 취소가 E-STOP에 의해 중단되었습니다. 안전 상태를 확인해주세요.', true);
                 } else if (response.stop_delivered !== true || response.navigation_state === 'FAILED') {
                     setFeedback(`취소 부분 실패: ${response.last_error || 'Pi STOP 확인 실패'}`, true);
+                } else if (response.cancel?.terminal === 'SUCCEEDED') {
+                    setFeedback('Nav2 Goal이 취소보다 먼저 종료되었습니다. Pi 정지 확인 중...');
                 } else {
                     setFeedback('Nav2 취소 후 Pi 엔코더 정지 확인 중...');
                 }
