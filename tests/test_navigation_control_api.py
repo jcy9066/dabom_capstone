@@ -2203,6 +2203,27 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.api.motion_allowed())
         self.assertEqual([], result["planned_path"])
 
+    async def test_cancel_success_winning_race_without_cancel_ack(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def real_nav2_success_race():
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": True, "confirmed": False,
+                "completed": True, "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = real_nav2_success_race
+        canceled = await self.api.cancel_goal()
+        self.assertEqual("NAVIGATING", canceled["navigation_state"])
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertTrue(canceled["stop_delivered"])
+        self.assertFalse(canceled["cancel_completed"])
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertFalse(self.api.motion_allowed())
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

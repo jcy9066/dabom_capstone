@@ -1380,8 +1380,13 @@ class NavigationControlApi:
             terminal = self._cancel_terminal(cancel)
             nav_confirmed = (
                 isinstance(cancel, dict)
-                and cancel.get("confirmed") is True
-                and (cancel.get("completed") is True or cancel.get("requested") is False)
+                and (
+                    (cancel.get("confirmed") is True
+                     and (cancel.get("completed") is True or cancel.get("requested") is False))
+                    # A Nav2 result may win the cancel race. The cancel ACK
+                    # is false, but a SUCCEEDED action terminal is authoritative.
+                    or (terminal == "SUCCEEDED" and cancel.get("completed") is True)
+                )
             )
             if self._state["emergency_stop"]:
                 self._state["navigation_state"] = "EMERGENCY_STOPPED"
