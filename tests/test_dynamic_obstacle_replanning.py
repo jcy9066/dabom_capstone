@@ -41,8 +41,13 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn('"terminal": "SUCCEEDED"', ros)
         self.assertIn('terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}', ros)
         self.assertIn('if event_type == "global_path":', app)
-        self.assertIn("Authenticated planned_path comes from ComputePathToPose", app)
+        self.assertIn("navigation_control_api.note_nav2_replan_signal()", app)
         self.assertNotIn("navigation_control_api.note_replanned_path(normalized)", app)
+        navigation = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+        self.assertIn("def _refresh_approved_replan(", navigation)
+        self.assertIn("self._goal_motion_generation == generation", navigation)
+        self.assertIn("self._pending_goal_cancel is None", navigation)
+
         self.assertIn('"global_path_updated_at": global_path_updated_at', app)
         self.assertIn('data-lidar-display="obstacles" checked>Dynamic Obstacle', template)
         self.assertIn('data-lidar-display="inflation">Inflation', template)
@@ -61,7 +66,7 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("const authorizedPath = control.planned_path;", viewer)
         self.assertIn("Array.isArray(authorizedPath)", viewer)
         self.assertIn(
-            'static/script.js?v=20261007-dynamic-obstacle-v32',
+            'static/script.js?v=20261022-pr90-owned-goal-v1',
             template,
         )
 
