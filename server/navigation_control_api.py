@@ -123,6 +123,8 @@ class NavigationControlApi:
         self._connected = False
         self._pi_updated_at: float | None = None
         self._robot_mode = "manual"
+        self._patrol_transition: str | None = None
+        self._patrol_transition_error: str | None = None
         self._pi_navigation_mode: str | None = None
         self._pi_estop_latched: bool | None = None
         self._pi_safety_session: str | None = None
@@ -383,7 +385,8 @@ class NavigationControlApi:
                     self._estop_generation += 1
 
     def _motion_allowed_locked(self, now: float) -> bool:
-        if self._state["emergency_stop"] or self._encoder_stop_violation:
+        if (self._state["emergency_stop"] or self._encoder_stop_violation
+                or self._patrol_transition is not None):
             return False
         if self._sensor_recovery is not None:
             return False
@@ -603,6 +606,17 @@ class NavigationControlApi:
                 "connected": self._connected,
                 "robot_mode": self._robot_mode,
                 "pi_navigation_mode": self._pi_navigation_mode,
+                "patrol_transition": self._patrol_transition,
+                "patrol_transition_error": self._patrol_transition_error,
+                "patrol_ready": bool(
+                    self._patrol_transition is None
+                    and self._connected and self._pi_updated_at is not None
+                    and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    and self._robot_mode == "auto" and self._pi_navigation_mode == "DRIVING"
+                    and self._state["navigation_mode"] == "DRIVING"
+                    and self._state["localization_ready"] and self._state["nav2_ready"]
+                    and not self._state["emergency_stop"]
+                ),
                 # Pi telemetry is distinct from the GPU's local E-STOP latch.
                 # Do not report a stale or disconnected Pi as safely stopped.
                 "pi_safety": {
@@ -653,6 +667,81 @@ class NavigationControlApi:
                 },
             }
         return payload
+
+    async def switch_patrol_mode(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Switch Pi motor authority only after independent Nav2/Pi checks."""
+        target = str(payload.get("mode") or "").strip().lower()
+        if target not in {"auto", "manual"}:
+            raise NavigationControlError("INVALID_PATROL_MODE", "mode must be auto or manual.", 400)
+        with self._lock:
+            if self._patrol_transition is not None:
+                raise NavigationControlError("PATROL_TRANSITION_BUSY", "Mode change in progress.", 409)
+            if not self._connected or self._age(time.time(), self._pi_updated_at) > self._watchdog.pi_timeout_sec:
+                raise NavigationControlError("PI_CONNECTION_LOSS", "Fresh Pi status is required.", 503)
+            if self._state["emergency_stop"] or self._pi_estop_latched is not False:
+                raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Release the safety stop first.", 409)
+            if target == "auto" and (
+                self._state["navigation_mode"] != "DRIVING"
+                or self._pi_navigation_mode != "DRIVING"
+                or not self._state["localization_ready"]
+                or not self._state["nav2_ready"]
+                or not self._state["active_map"]
+            ):
+                raise NavigationControlError(
+                    "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
+                )
+            if self._robot_mode == target:
+                return self.state_response()
+            self._patrol_transition = target
+            self._patrol_transition_error = None
+            self._touch_locked()
+        try:
+            if target == "auto":
+                self._assert_watchdogs_healthy()
+                if hasattr(self._ros, "navigation_ready") and not await asyncio.to_thread(self._ros.navigation_ready):
+                    raise NavigationControlError("NAV2_NOT_READY", "Nav2 is unavailable.", 503)
+            else:
+                paused = await self.pause_for_manual()
+                if paused.get("stop_delivered") is not True or paused.get("navigation_state") in {
+                    "FAILED", "NAVIGATING", "RESUMING"
+                }:
+                    raise NavigationControlError("MANUAL_STOP_FAILED", "Navigation could not be safely paused.", 409)
+            ack = await self._send_robot_command(
+                self._robot_id, {"type": "mode", "mode": target}
+            )
+            if not self._pi_command_delivered(ack):
+                raise NavigationControlError("PI_MODE_ACK_FAILED", "Pi did not acknowledge mode.", 503)
+            deadline = time.monotonic() + 1.5
+            while True:
+                with self._lock:
+                    confirmed = (
+                        self._connected and self._pi_updated_at is not None
+                        and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                        and self._robot_mode == target and self._pi_estop_latched is False
+                        and not self._state["emergency_stop"]
+                        and (target != "auto" or self._pi_navigation_mode == "DRIVING")
+                    )
+                if confirmed:
+                    break
+                if time.monotonic() >= deadline:
+                    raise NavigationControlError("PI_MODE_TELEMETRY_TIMEOUT", "Pi mode telemetry unconfirmed.", 504)
+                await asyncio.sleep(0.05)
+        except Exception as exc:
+            with self._lock:
+                self._patrol_transition_error = getattr(exc, "error_code", type(exc).__name__)
+                self._arm_pending_stop_locked()
+                self._touch_locked()
+            # Ambiguous ACK failures can still mean the Pi changed mode.
+            # Never release the motion gate before a separate physical STOP.
+            await self._send_robot_command(
+                self._robot_id, {"type": "stop", "reason": "patrol_mode_sync_failed"}
+            )
+            raise
+        finally:
+            with self._lock:
+                self._patrol_transition = None
+                self._touch_locked()
+        return self.state_response()
 
     async def switch_mode(self, payload: dict[str, Any], user: str = "unknown") -> dict[str, Any]:
         mode = str(payload.get("mode", "")).strip().upper()
@@ -2488,6 +2577,10 @@ class NavigationControlApi:
         async def get_navigation_control_state(request: Request):
             denied = self._access(request)
             return denied if denied else await asyncio.to_thread(self.state_response)
+
+        @self._app.post("/api/navigation/control/patrol-mode")
+        async def set_patrol_mode(request: Request):
+            return await self._mutation(request, self.switch_patrol_mode)
 
         @self._app.post("/api/navigation/control/mode")
         async def set_navigation_control_mode(request: Request):
