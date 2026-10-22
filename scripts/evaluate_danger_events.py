@@ -43,12 +43,53 @@ def evaluate_events(events: list[dict]) -> dict:
             "coverage": (len(events) - counts["unavailable"]) / len(events) if events else None}
 
 
+def evaluate_runtime(frames: list[dict], wall_time_sec: float | None = None) -> dict:
+    """Summarize recorded inference performance without inventing GPU benchmarks.
+
+    `frames`: elapsed_ms per processed frame, optional vram_mb observed then.
+    Actual throughput is only reported when wall_time_sec was measured.
+    """
+    elapsed: list[float] = []
+    vram: list[float] = []
+    for frame in frames:
+        milliseconds = float(frame["elapsed_ms"])
+        if not math.isfinite(milliseconds) or milliseconds < 0:
+            raise ValueError("elapsed_ms must be finite and nonnegative")
+        elapsed.append(milliseconds)
+        if frame.get("vram_mb") is not None:
+            value = float(frame["vram_mb"])
+            if not math.isfinite(value) or value < 0:
+                raise ValueError("vram_mb must be finite and nonnegative")
+            vram.append(value)
+    if wall_time_sec is not None:
+        wall_time_sec = float(wall_time_sec)
+        if not math.isfinite(wall_time_sec) or wall_time_sec <= 0:
+            raise ValueError("wall_time_sec must be positive and finite")
+    ordered = sorted(elapsed)
+    p95 = ordered[math.ceil(0.95 * len(ordered)) - 1] if ordered else None
+    return {
+        "frame_count": len(elapsed),
+        "mean_inference_ms": (sum(elapsed) / len(elapsed)) if elapsed else None,
+        "p95_inference_ms": p95,
+        "achieved_fps": len(elapsed) / wall_time_sec
+        if wall_time_sec is not None else None,
+        "peak_recorded_vram_mb": max(vram) if vram else None,
+        "vram_samples": len(vram),
+    }
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset", type=Path, help="JSON with labeled events and predictions")
     args = parser.parse_args()
     payload = json.loads(args.dataset.read_text(encoding="utf-8"))
-    print(json.dumps(evaluate_events(payload["events"]), indent=2))
+    report = {"detection": evaluate_events(payload["events"])}
+    if "runtime_frames" in payload:
+        report["runtime"] = evaluate_runtime(
+            payload["runtime_frames"], payload.get("wall_time_sec")
+        )
+    print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":
