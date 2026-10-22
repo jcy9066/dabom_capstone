@@ -2316,6 +2316,22 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             "DRIVING", prior, timeout_sec=0.01
         ))
 
+    async def test_cancel_stop_timeout_progresses_without_dashboard_polling(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        await self.api.cancel_goal()
+        with self.api._lock:
+            started_at = self.api._pending_goal_cancel["started_at"]
+        await self.api.evaluate_watchdog(
+            now=started_at + self.api.STOP_CONFIRM_TIMEOUT_SEC + 0.2
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", state["last_error"])
+        self.assertIsNotNone(state["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

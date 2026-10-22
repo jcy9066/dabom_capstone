@@ -1902,6 +1902,9 @@ class NavigationControlApi:
         # terminal and the regular active-navigation watchdog would return.
         with self._lock:
             self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            # A canceled Goal must time out even with no dashboard readers
+            # and no further encoder messages from a disconnected Pi.
+            self._expire_pending_cancel_locked(current)
             pending_terminal_stop = self._pending_terminal_stop is not None
             hard_fault = bool(self._encoder_stop_violation or self._pi_session_stop_pending)
             recovering = self._sensor_recovery is not None
