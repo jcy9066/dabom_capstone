@@ -49,7 +49,8 @@ def main():
         return
 
     pipeline_name = pipeline["name"]
-    processor = FrameProcessor(pipeline["detector"], pipeline["action_analyzer"])
+    processor = FrameProcessor(pipeline["detector"], pipeline["action_analyzer"],
+                               weapon_detector=pipeline.get("weapon_detector"))
     reader = LocalVideoReader(args.source)
 
     out_dir = os.path.join("output", pipeline_name)

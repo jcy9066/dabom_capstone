@@ -1093,6 +1093,9 @@ RUNTIME_MODEL_ENV_KEYS = (
     "TRIGGER_SUSPICIOUS_VISUAL_ENABLED",
     "INFERENCE_MAX_RESULT_AGE_SEC",
     "INFERENCE_DROP_OLDER_THAN_SEC",
+    "WEAPON_DETECTION_ENABLED",
+    "WEAPON_MODEL_PATH",
+    "WEAPON_CONFIDENCE",
 )
 
 
@@ -1345,6 +1348,7 @@ def reload_model_pipeline(config, reason="env", initial=False):
         new_processor = FrameProcessor(
             detector=pipeline["detector"],
             action_analyzer=pipeline["action_analyzer"],
+            weapon_detector=pipeline.get("weapon_detector"),
         )
         with processing_lock:
             global frame_processor
@@ -2420,12 +2424,28 @@ def process_frame_for_dashboard(frame):
                 ):
                     detection["confidence_level"] = "trigger_suspicious"
                     detection["visual_state"] = "suspicious"
-        else:
-            danger = True
-            detection["label"] = "WEAPON"
-            detection["danger"] = True
-
+        # A non-person class is NOT proof of a weapon.
         detections.append(detection)
+
+    weapon_predictions = frame_processor.detect_weapons(frame) if scene_level else []
+    weapon_status = (
+        "unavailable" if frame_processor.weapon_detection_error else
+        "disabled" if frame_processor.weapon_detector is None else "ok"
+    )
+    if weapon_predictions:
+        danger = True
+        detections.extend(weapon_predictions)
+        # Throttle repeated alerts per actual weapon class.
+        for prediction in weapon_predictions:
+            label = prediction["label"]
+            at = time.monotonic()
+            last = frame_processor._weapon_alert_at.get(label, float("-inf"))
+            if at - last >= 10.0:
+                frame_processor._weapon_alert_at[label] = at
+                automatic_notifier.send_event_alert_async(
+                    f"흉기 감지: {label}", robot_id=SERVER_ROBOT_ID,
+                    event_type=f"WEAPON_{label}",
+                )
 
     for detection in detections:
         if detection.get("box"):
@@ -2508,6 +2528,7 @@ def process_frame_for_dashboard(frame):
         "pair_actions": serialize_pair_actions(pair_actions),
         "danger": danger,
         "scene": scene_result,
+        "weapon_status": weapon_status,
         "timings": {
             "detector_ms": round(detector_ms, 1),
             "trigger_ms": round(trigger_ms, 1),
@@ -2705,6 +2726,8 @@ def activate_stream_generation(robot_id, infer):
                 reset_detector_tracking()
             processor.action_display_buffer.clear()
             processor.pair_action_display_buffer.clear()
+            processor._weapon_alert_at.clear()
+            processor.weapon_detection_error = None
             processor.violence_heuristic.reset()
         reset_interaction_incidents()
 

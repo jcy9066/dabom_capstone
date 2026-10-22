@@ -103,8 +103,20 @@ def create_pipeline(choice, device=None):
         from .models.scene_x3d import SceneViolenceRecognizer
 
         assets = ensure_pipeline_assets(choice)
+        import os
+        weapon_detector = None
+        if os.getenv("WEAPON_DETECTION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+            from .models.weapon_detector import WeaponDetector
+            checkpoint = os.getenv("WEAPON_MODEL_PATH", "").strip()
+            if not checkpoint:
+                raise ValueError("WEAPON_MODEL_PATH is required when weapon detection is enabled")
+            weapon_detector = WeaponDetector(
+                checkpoint, device=device,
+                confidence=float(os.getenv("WEAPON_CONFIDENCE", "0.5")),
+            )
         return {
             "name": PIPELINE_OPTIONS[choice],
+            "weapon_detector": weapon_detector,
             "detector": RTMOPoseDetector(
                 onnx_model=assets["rtmo_onnx"],
                 tracker="perception/config/botsort_recall.yaml",
