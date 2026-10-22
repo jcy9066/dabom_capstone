@@ -2244,6 +2244,22 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         after = len([c for _, c in self.commands if c["type"] == "mode"])
         self.assertEqual(before, after)
 
+    async def test_manual_request_stops_orphaned_nav_goal_even_if_pi_already_manual(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        before = self.map_api.ros_control.cancel_calls
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertGreater(self.map_api.ros_control.cancel_calls, before)
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(any(command["type"] == "stop" for _, command in self.commands))
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

@@ -818,7 +818,10 @@ class NavigationControlApi:
                 raise NavigationControlError(
                     "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
                 )
-            if self._robot_mode == target:
+            if (self._robot_mode == target and not (
+                target == "manual"
+                and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
+            )):
                 # A timeout can leave the Pi reporting target mode while
                 # physical STOP remains unconfirmed. Do not mask that failure.
                 if self._patrol_transition_error or not self._motion_allowed_locked(time.time()):
