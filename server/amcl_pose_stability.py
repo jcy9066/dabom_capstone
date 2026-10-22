@@ -8,8 +8,13 @@ def stable_amcl_observations(samples: list[dict[str, Any]], initial: dict[str, f
                              minimum_samples: int = 3, minimum_span: float = 0.25) -> bool:
     if len(samples) < minimum_samples:
         return False
-    recent = samples[-minimum_samples:]
     try:
+        newest_at = float(samples[-1]["at"])
+        # A high-rate AMCL stream can span <0.25s in its last three
+        # messages. Use the most recent 1s and check every sample.
+        recent = [item for item in samples if 0 <= newest_at - float(item["at"]) <= 1.0]
+        if len(recent) < minimum_samples:
+            return False
         timestamps = [float(item["at"]) for item in recent]
         if any(not math.isfinite(t) for t in timestamps):
             return False

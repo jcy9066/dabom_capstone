@@ -102,3 +102,9 @@ def test_amcl_requires_three_post_initialpose_samples():
     data=[{'x':1.02,'y':2.0,'yaw':0.1,'at':t,'xy_variance':.05,'yaw_variance':.02}
           for t in (1.,1.4)]
     assert not stable_amcl_observations(data,initial)
+
+def test_amcl_high_rate_still_converges():
+    initial={'x':1.0,'y':2.0,'yaw':0.1}
+    samples=[{'x':1.01,'y':2.0,'yaw':0.1,'at':1.0+i*.05,
+              'xy_variance':.05,'yaw_variance':.02} for i in range(16)]
+    assert stable_amcl_observations(samples,initial)
