@@ -300,7 +300,13 @@
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
-        const viewerStateText = `MODE ${mode} / NAV ${navState}`;
+        const viewerStateText = payload?.cancel_progress
+            ? 'Goal 취소 중 / Pi 엔코더 정지 확인 대기'
+            : navState === 'FAILED' && payload?.last_error
+                ? `MODE ${mode} / NAV FAILED: ${payload.last_error}`
+                : payload?.cancel_completed && !payload?.active_goal
+                    ? 'Goal 취소 및 엔코더 정지 확인 완료'
+                    : `MODE ${mode} / NAV ${navState}`;
         if (viewerStateText !== state.lastViewerStateText) {
             state.lastViewerStateText = viewerStateText;
             setFeedback(viewerStateText);

@@ -77,7 +77,7 @@ class FakeRos:
     def cancel_navigation(self):
         self.cancel_calls += 1
         self.state = "CANCELED"
-        return {"requested": True, "confirmed": True}
+        return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self):
         return {"state": self.state, "error": None}
@@ -1442,12 +1442,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         canceled = await self.api.cancel_goal()
         self.assertTrue(canceled["stop_delivered"])
 
-        await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
         with self.assertRaises(NavigationControlError) as raised:
-            await self.api.start_navigation()
-        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+            await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("CANCEL_IN_PROGRESS", raised.exception.error_code)
 
         await self.confirm_pending_stop_for_test()
+        self.assertTrue(self.api.state_response()["cancel_completed"])
+        await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
         started = await self.api.start_navigation()
         self.assertEqual("NAVIGATING", started["navigation_state"])
         self.assertEqual(2, self.map_api.ros_control.navigate_calls)
@@ -1882,7 +1883,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(complete["active_goal"])
         self.assertEqual([], complete["planned_path"])
 
-    async def test_manual_takeover_does_not_retain_terminal_canceled_goal(self):
+    async def test_manual_takeover_preserves_goal_when_ros_was_already_canceled(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
@@ -1901,10 +1902,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.api.pause_for_manual()
 
-        self.assertEqual("CANCELED", result["navigation_state"])
-        self.assertIsNone(result["active_goal"])
-        self.assertEqual([], result["planned_path"])
-        self.assertFalse(result["goal_retained"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(result["planned_path"])
+        self.assertTrue(result["goal_retained"])
 
     async def test_manual_takeover_preserves_terminal_failure_and_goal(self):
         await self.driving_ready()
@@ -2032,6 +2033,80 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("manual", self.api._robot_mode)
         self.assertNotEqual(prior, self.api.motion_safety_context())
         self.assertFalse(self.api.note_authorized_motion(prior))
+
+    async def test_auto_requires_verified_driving_before_pi_mode_request(self):
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_patrol_mode({"mode": "auto"})
+        self.assertEqual("DRIVING_NOT_READY", raised.exception.error_code)
+        self.assertFalse(any(cmd["type"] == "mode" for _, cmd in self.commands))
+
+    async def test_patrol_manual_pause_retains_goal_and_never_starts_motor(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        before = list(self.api.state_response()["planned_path"])
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertEqual(before, result["planned_path"])
+        self.assertTrue(result["active_goal"])
+        self.assertFalse(any(cmd["type"] == "auto_drive" for _, cmd in self.commands))
+
+    async def test_patrol_ack_failure_preserves_motion_gate(self):
+        await self.driving_ready()
+        original = self.api._send_robot_command
+
+        async def fail_mode(robot_id, command):
+            if command.get("type") == "mode":
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = fail_mode
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("PI_MODE_ACK_FAILED", raised.exception.error_code)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual("PI_MODE_ACK_FAILED",
+                         self.api.state_response()["patrol_transition_error"])
+
+    async def test_cancel_pending_maintains_goal_until_fresh_encoder_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        first = await self.api.cancel_goal()
+        self.assertFalse(first["cancel_completed"])
+        self.assertEqual("CANCELING_STOP", first["navigation_state"])
+        self.assertIsNotNone(first["active_goal"])
+        self.assertTrue(first["planned_path"])
+        duplicate = await self.api.cancel_goal()
+        self.assertFalse(duplicate["cancel_completed"])
+        self.assertEqual(1, sum(cmd["type"] == "stop" and
+                                cmd.get("reason") == "navigation_goal_cancel"
+                                for _, cmd in self.commands))
+        await self.confirm_pending_stop_for_test()
+        final = self.api.state_response()
+        self.assertTrue(final["cancel_completed"])
+        self.assertEqual("READY", final["navigation_state"])
+        self.assertIsNone(final["active_goal"])
+        self.assertEqual([], final["planned_path"])
+        repeat = await self.api.cancel_goal()
+        self.assertTrue(repeat["cancel_completed"])
+
+    async def test_cancel_encoder_timeout_keeps_goal_and_blocks_motion(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        await self.api.cancel_goal()
+        pending = self.api.state_response()["cancel_progress"]
+        failed = self.api.state_response(
+            now=pending["started_at"] + self.api.STOP_CONFIRM_TIMEOUT_SEC + 0.2
+        )
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", failed["last_error"])
+        self.assertIsNotNone(failed["active_goal"])
+        self.assertFalse(failed["cancel_completed"])
+        self.assertFalse(self.api.motion_allowed())
 
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
