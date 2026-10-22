@@ -2146,6 +2146,38 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         self.assertEqual(previous_path, self.api.state_response()["planned_path"])
 
+    async def test_repeated_patrol_request_never_masks_unconfirmed_stop(self):
+        await self.driving_ready()
+        with self.api._lock:
+            self.api._robot_mode = "manual"
+            self.api._patrol_transition_error = "PI_MODE_ACK_FAILED"
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_confirmation_after_sequence = None
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+
+    async def test_cancel_cannot_clear_goal_without_stop_ack(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._pending_goal_cancel = {
+                "started_at": time.time(), "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING_STOP"
+            self.api._stop_confirmation_after_sequence = 1
+            self.api._stop_confirmation_ticks = (0, 0, 0, 0)
+            self.api._stop_confirmation_started_at = time.time() - 1.0
+            self.api._stop_confirmation_last_at = time.time()
+            self.api._stop_confirmation_samples = 5
+        self.api.note_encoder({
+            "sequence": 2, "left_front_ticks": 0, "left_rear_ticks": 0,
+            "right_front_ticks": 0, "right_rear_ticks": 0,
+        })
+        self.assertIsNotNone(self.api.state_response()["active_goal"])
+        self.assertFalse(self.api.state_response()["cancel_completed"])
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
