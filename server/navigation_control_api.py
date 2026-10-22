@@ -388,6 +388,8 @@ class NavigationControlApi:
                 if not self._encoder_stop_violation:
                     self._encoder_stop_violation = True
                     self._estop_generation += 1
+            # A delayed encoder sample after the cancel deadline is not success.
+            self._expire_pending_cancel_locked(received_at)
             # An ACK is not wheel stop. Finalize only with fresh stable encoders.
             if (self._pending_goal_cancel is not None
                 and not self._state["emergency_stop"]
@@ -410,6 +412,22 @@ class NavigationControlApi:
                 cancel_completed = True
         if cancel_completed and self._clear_goal_visualization is not None:
             self._clear_goal_visualization()
+
+    def _expire_pending_cancel_locked(self, now: float) -> None:
+        pending = self._pending_goal_cancel
+        if pending is None or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC:
+            return
+        self._pending_goal_cancel = None
+        self._state["navigation_state"] = "FAILED"
+        self._state["last_error"] = "STOP_NOT_CONFIRMED"
+        self._last_goal_cancel = {
+            **(self._last_goal_cancel or {}),
+            "completed": False,
+            "physical_stop_confirmed": False,
+            "error": "STOP_NOT_CONFIRMED",
+        }
+        # Keep active_goal and path for safe diagnosis; STOP gate remains armed.
+        self._touch_locked(now)
 
     def _motion_allowed_locked(self, now: float) -> bool:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
@@ -627,6 +645,7 @@ class NavigationControlApi:
             ros_nav = {"state": "UNAVAILABLE"}
         with self._lock:
             self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            self._expire_pending_cancel_locked(current)
             payload = {
                 "ok": True,
                 "robot_id": self._robot_id,
@@ -1273,6 +1292,7 @@ class NavigationControlApi:
                 self._state["navigation_state"] = "CANCELING_STOP"
                 self._state["last_error"] = None
                 self._pending_goal_cancel = {
+                    "started_at": time.time(),
                     "nav_cancel_requested": bool(cancel.get("requested")) if isinstance(cancel, dict) else False,
                     "nav_cancel_confirmed": True,
                     "nav_terminal": terminal or "CANCELED",
