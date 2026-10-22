@@ -2122,7 +2122,6 @@ class NavigationControlApi:
             self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
-        self._goal_motion_generation += 1
         self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
@@ -2136,6 +2135,7 @@ class NavigationControlApi:
         payload: dict[str, Any] | None,
         received_at: float,
     ) -> None:
+        self._goal_motion_generation += 1
         self._reset_navigation_progress_locked()
         self._navigation_progress_at = received_at
         if not isinstance(payload, dict):

@@ -1985,12 +1985,21 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(previous)
         with self.api._lock:
             # Later Goal starts with unchanged Pi session and safety epoch.
-            self.api._reset_navigation_progress_locked()
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, time.time())
         current = self.api.motion_safety_context()
         self.assertIsNotNone(current)
         self.assertNotEqual(previous["goal_generation"], current["goal_generation"])
         self.assertFalse(self.api.note_authorized_motion(previous))
         self.assertTrue(self.api.note_authorized_motion(current))
+
+    async def test_nonactive_pose_update_does_not_invalidate_manual_motion_generation(self):
+        with self.api._lock:
+            before = self.api._goal_motion_generation
+            self.api._state["navigation_state"] = "READY"
+            self.api._note_navigation_progress_locked(
+                {"x": 0.1, "y": 0.1}, time.time()
+            )
+            self.assertEqual(before, self.api._goal_motion_generation)
 
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
