@@ -309,3 +309,20 @@ def test_duplicate_launcher_lock_failure_preserves_running_stack():
 
         pid_claim = 'printf \'%s\\n\' "$$" > "${PID_FILE}"'
         assert script.index(pid_claim) < script.index("RUNTIME_OWNED=1")
+
+
+def test_gpu_late_dds_publisher_keeps_dashboard_but_not_motion_authority():
+    gpu = read("start_gpu_server.sh")
+    assert "ODOM_DISCOVERY_PENDING=1" in gpu
+    assert "wheel odometry publisher not discovered" in gpu
+    assert 'fail "wheel odometry publisher did not appear' not in gpu
+    assert "motion still requires fresh /odom and TF" in gpu
+
+
+def test_lidar_extrinsics_are_shared_between_ros_and_viewer():
+    bridge = read("server/lidar_ros_bridge.py")
+    viewer = read("frontend/services/static/lidar_3d_viewer.js")
+    assert '"mount": {' in bridge
+    assert '"yaw": self.lidar_yaw' in bridge
+    assert "const sensorX = sensorPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;" in viewer
+    assert "group.rotation.z = sensorPose.yaw + scanMountLocal.yaw;" in viewer

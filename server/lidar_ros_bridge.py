@@ -442,6 +442,13 @@ class LidarRosBridge:
             "ranges": dashboard_ranges,
             "source_points": len(raw_ranges),
             "dashboard_points": len(dashboard_ranges),
+            # Same laser->base_link extrinsics used by the ROS static TF.
+            # This is *not* a map/world transform; apply only once in Viewer.
+            "mount": {
+                "x": self.lidar_x,
+                "y": self.lidar_y,
+                "yaw": self.lidar_yaw,
+            },
         }
 
         return message, dashboard_payload

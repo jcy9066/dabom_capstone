@@ -620,7 +620,13 @@ start_odometry() {
     done
 
     if (( publisher_ready == 0 )); then
-        fail "wheel odometry publisher did not appear on ${ODOM_TOPIC}"
+        # ROS discovery can lag behind a live process (notably WSL DDS).
+        # Keep the dashboard alive, but the navigation watchdog must still
+        # reject motion until fresh /odom and TF data are actually observed.
+        ODOM_DISCOVERY_PENDING=1
+        warn "WAITING: wheel odometry publisher not discovered on ${ODOM_TOPIC}; driving remains sensor-gated"
+    else
+        ODOM_DISCOVERY_PENDING=0
     fi
 }
 
@@ -672,5 +678,12 @@ while true; do
         start_odometry
     fi
 
+    if (( ${ODOM_DISCOVERY_PENDING:-0} == 1 )) && (( SECONDS % 5 == 0 )); then
+        if timeout 2 ros2 topic info "${ODOM_TOPIC}" 2>/dev/null \
+            | grep -Eq 'Publisher count:[[:space:]]*[1-9][0-9]*'; then
+            ODOM_DISCOVERY_PENDING=0
+            log "Odometry publisher discovered; motion still requires fresh /odom and TF"
+        fi
+    fi
     sleep 1
 done

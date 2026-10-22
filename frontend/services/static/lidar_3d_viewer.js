@@ -220,6 +220,9 @@ if (root && canvas) {
     let cameraVisualReady = false;
     let cameraMountLocal = new THREE.Vector3(0.12, 0, LIDAR_HEIGHT_M);
     let scanVisualHeightM = 0.16;
+    // Default is the legacy physical 180-degree mounting correction.
+    // New scan packets carry the ROS laser->base_link mounting transform.
+    let scanMountLocal = { x: 0, y: 0, yaw: LIDAR_VISUAL_YAW_OFFSET_RAD };
     let cameraAspect = 4 / 3;
     let cameraViewPlane = null;
     let cameraViewBorder = null;
@@ -1248,11 +1251,17 @@ if (root && canvas) {
             group.rotation.z = pose.yaw;
         }
 
-        // Rotate both LiDAR layers in place around the current robot/LiDAR origin.
-        // This fixes the physical mount being reversed without altering ROS/map data.
+        // Map/Goal/obstacles remain in the world frame. The scan packet is
+        // laser-local, so apply laser extrinsics once after the latest base pose.
+        // Do not reuse an interpolated vehicle body pose for sensor alignment.
+        const sensorPose = targetPose || pose;
+        const cy = Math.cos(sensorPose.yaw);
+        const sy = Math.sin(sensorPose.yaw);
+        const sensorX = sensorPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
+        const sensorY = sensorPose.y + sy * scanMountLocal.x + cy * scanMountLocal.y;
         for (const group of [scanRoot, pointsRoot]) {
-            group.position.set(pose.x, pose.y, pose.z);
-            group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
+            group.position.set(sensorX, sensorY, sensorPose.z);
+            group.rotation.z = sensorPose.yaw + scanMountLocal.yaw;
         }
         setPoseVisibility(true);
 
@@ -1469,6 +1478,15 @@ if (root && canvas) {
     // every incoming scan replaces the previous frame. A transient obstacle
     // disappears from the live LiDAR layer on the next valid scan.
     function rebuildScan(scan) {
+        const mount = scan?.mount;
+        if (mount && [mount.x, mount.y, mount.yaw].every(v => Number.isFinite(Number(v)))) {
+            scanMountLocal = {
+                x: Number(mount.x),
+                y: Number(mount.y),
+                yaw: Number(mount.yaw),
+            };
+            if (renderedPose) applyRenderedPose(renderedPose);
+        }
         const nextKey = scanKey(scan);
         if (nextKey === currentScanKey) return;
         currentScanKey = nextKey;
