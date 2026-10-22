@@ -1541,15 +1541,18 @@ class NavigationControlApi:
         )
         delivered = self._pi_command_delivered(stop_response)
         with self._lock:
-            self._stop_commanded_at = time.time()
-            self._stop_encoder_ticks = self._encoder_ticks
-            self._stop_confirmation_after_sequence = (
-                self._encoder_sequence if delivered else None
-            )
-            self._stop_confirmation_ticks = None
-            self._stop_confirmation_started_at = None
-            self._stop_confirmation_last_at = None
-            self._stop_confirmation_samples = 0
+            # A concurrent E-STOP owns the newest physical STOP baseline.
+            # A late manual-pause acknowledgment must not replace its proof.
+            if not self._state["emergency_stop"]:
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                self._stop_confirmation_after_sequence = (
+                    self._encoder_sequence if delivered else None
+                )
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
@@ -1560,6 +1563,9 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal == "SUCCEEDED":
+                    # Keep the success STOP/pose proof alive: do not clear it
+                    # in _reset_navigation_progress_locked below.
+                    self._state["navigation_state"] = "NAVIGATING"
                     self._apply_cancel_terminal_locked(terminal)
                 elif terminal == "FAILED":
                     self._state["navigation_state"] = "FAILED"
@@ -1570,10 +1576,17 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "READY"
                 if delivered and terminal != "FAILED" and not self._state["emergency_stop"]:
                     self._state["last_error"] = None
-                self._reset_navigation_progress_locked()
+                if terminal != "SUCCEEDED" or not delivered or self._state["emergency_stop"]:
+                    self._reset_navigation_progress_locked()
             else:
-                self._state["navigation_state"] = previous_navigation_state
-                self._state["last_error"] = str(cancel_error)
+                # Cancel failure cannot restore NAVIGATING: fresh STOP encoder
+                # proof alone could then reopen automatic motor authorization.
+                if self._state["emergency_stop"]:
+                    self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                else:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "NAV_CANCEL_FAILED"
+                self._reset_navigation_progress_locked()
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
