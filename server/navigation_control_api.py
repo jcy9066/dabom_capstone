@@ -496,6 +496,7 @@ class NavigationControlApi:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
                 or self._patrol_transition is not None
                 or self._patrol_transition_error is not None
+                or self._pending_nav_success is not None
                 or self._state["navigation_state"] in {
                     "FAILED", "CANCELING", "CANCELING_STOP", "PAUSING_FOR_MANUAL",
                 }):
