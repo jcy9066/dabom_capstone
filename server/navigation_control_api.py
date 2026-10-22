@@ -628,11 +628,20 @@ class NavigationControlApi:
             "last_attempt_at": None,
             "processing": False,
         }
-        self._state["navigation_state"] = terminal
+        self._state["navigation_state"] = "CANCELING_STOP" if terminal == "CANCELED" else terminal
         if terminal == "CANCELED":
-            self._state["active_goal"] = None
-            self._state["waypoints"] = []
-            self._state["planned_path"] = []
+            self._pending_goal_cancel = {
+                "started_at": current,
+                "nav_cancel_requested": False,
+                "nav_cancel_confirmed": True,
+                "nav_terminal": "CANCELED",
+                "stop_delivered": False,
+                "physical_stop_confirmed": False,
+            }
+            self._last_goal_cancel = {
+                "completed": False, "nav_cancel_confirmed": True,
+                "stop_delivered": False, "physical_stop_confirmed": False,
+            }
         self._reset_navigation_progress_locked()
         self._touch_locked(current)
         return terminal
@@ -1243,6 +1252,10 @@ class NavigationControlApi:
             self._goal_motion_generation += 1
             self._last_goal_cancel = None
             self._arm_pending_stop_locked()
+            # Block the ROS terminal callback from clearing the Goal while
+            # cancellation and physical STOP are still in flight.
+            self._state["navigation_state"] = "CANCELING"
+            self._touch_locked()
         cancel_result, stop_result = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
             self._send_robot_command(
@@ -2057,8 +2070,15 @@ class NavigationControlApi:
                     self._stop_confirmation_started_at = None
                     self._stop_confirmation_last_at = None
                     self._stop_confirmation_samples = 0
+                    if self._pending_goal_cancel is not None:
+                        self._pending_goal_cancel["stop_delivered"] = True
+                        if self._last_goal_cancel is not None:
+                            self._last_goal_cancel["stop_delivered"] = True
                     self._pending_terminal_stop = None
                 elif pending["attempts"] >= 3:
+                    self._pending_goal_cancel = None
+                    if self._last_goal_cancel is not None:
+                        self._last_goal_cancel["error"] = "STOP_NOT_DELIVERED"
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "STOP_NOT_DELIVERED"
                     self._touch_locked()
