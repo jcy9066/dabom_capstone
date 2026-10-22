@@ -186,11 +186,41 @@ def estimate_initial_pose(
     if not refined:
         raise AutoPoseUncertain("No refined scan-match candidates")
     refined.sort(reverse=True)
-    score, x, y, yaw = refined[0]
+    # Optimize distinct candidate modes at sub-cell and sub-angle resolution.
+    # Keeping competing modes prevents false confidence in symmetric maps.
+    unique_seeds = []
+    for seed in refined:
+        if all(math.hypot(seed[1] - prior[1], seed[2] - prior[2]) > 0.35 or
+               abs(math.atan2(math.sin(seed[3] - prior[3]),
+                              math.cos(seed[3] - prior[3]))) > 0.35
+               for prior in unique_seeds):
+            unique_seeds.append(seed)
+        if len(unique_seeds) >= 12:
+            break
+    final = []
+    for seed_score, sx, sy, syaw in unique_seeds:
+        best = (seed_score, sx, sy, syaw)
+        for spacing, angle_step in ((resolution / 2, math.pi / 32),
+                                    (resolution / 4, math.pi / 64)):
+            _, bx, by, ba = best
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    x, y = bx + dx * spacing, by + dy * spacing
+                    if not free_base(x, y):
+                        continue
+                    for da in (-1, 0, 1):
+                        yaw = math.atan2(math.sin(ba + da * angle_step),
+                                         math.cos(ba + da * angle_step))
+                        candidate = (rate(x, y, yaw), x, y, yaw)
+                        if candidate[0] > best[0]:
+                            best = candidate
+        final.append(best)
+    final.sort(reverse=True)
+    score, x, y, yaw = final[0]
     # Intentionally strict: an uncertain estimate must use manual Initial Pose.
     if score < 0.78:
         raise AutoPoseUncertain("Scan/map agreement below safe confidence threshold")
-    for alternative, ax, ay, ayaw in refined[1:]:
+    for alternative, ax, ay, ayaw in final[1:]:
         separated = math.hypot(x - ax, y - ay) > 0.5 or abs(
             math.atan2(math.sin(yaw - ayaw), math.cos(yaw - ayaw))) > 0.5
         if separated and alternative >= score - 0.12:

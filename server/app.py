@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from importlib.util import module_from_spec, spec_from_file_location
 import gc
 import hashlib
@@ -475,6 +476,9 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+# Bounded in RAM; never persisted with saved maps. Only recent physical
+# stationary samples can be used for automatic Initial Pose.
+localization_scan_history = deque(maxlen=8)
 
 live_mapping_grid = LiveMappingGrid(
     resolution=0.05,
@@ -950,9 +954,18 @@ def current_navigation_scan_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def current_navigation_scans_snapshot():
+    with state_lock:
+        return [
+            {**item, "scan": dict(item["scan"])}
+            for item in list(localization_scan_history)[-5:]
+        ]
+
+
 def clear_navigation_visualization_state():
     live_mapping_grid.reset()
     with state_lock:
+        localization_scan_history.clear()
         navigation_state["map"] = None
         navigation_state["pose"] = None
         navigation_state["global_path"] = []
@@ -1001,6 +1014,7 @@ navigation_control_api = NavigationControlApi(
     get_live_map=current_navigation_map_snapshot,
     get_live_pose=current_navigation_pose_snapshot,
     get_live_scan=current_navigation_scan_snapshot,
+    get_live_scans=current_navigation_scans_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(
         payload,
         name,
@@ -5298,6 +5312,22 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     )
                 navigation_state["scan"] = stored_scan
                 navigation_state["scan_updated_at"] = received_at
+                # No auto-localization without fresh, motion-free encoder
+                # observations corresponding to every stored LiDAR frame.
+                encoder_at = encoder_state.get("updated_at")
+                wheels = None
+                if (encoder_state.get("robot_id") == robot_id
+                    and isinstance(encoder_at, (int, float))
+                    and 0 <= received_at - encoder_at <= 0.4):
+                    wheels = tuple(encoder_state[k] for k in (
+                        "left_front_ticks", "right_front_ticks",
+                        "left_rear_ticks", "right_rear_ticks"
+                    ))
+                localization_scan_history.append({
+                    "scan": dict(stored_scan),
+                    "wheel_ticks": wheels,
+                    "encoder_received_at": encoder_at,
+                })
                 status = build_navigation_status(received_at)
 
             navigation_visualization_hub.publish(
@@ -5329,6 +5359,8 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
         print(f"[lidar-ws] error robot_id={robot_id}: {exc}")
     finally:
         lidar_ros_bridge.mark_disconnected(robot_id)
+        with state_lock:
+            localization_scan_history.clear()
 
 
 @app.get("/api/lidar/bridge")

@@ -71,3 +71,21 @@ def test_amcl_jump_and_covariance_fail():
     sample[1]['x']-=.31
     sample[-1]['xy_variance']=1.0
     assert not stable_amcl_observations(sample,initial)
+
+def test_fusion_feeds_existing_map_matcher(tmp_path):
+    from test_synthetic_auto_initial_pose import make_env, synth_scan
+    from server.auto_initial_pose import estimate_initial_pose
+    env, obstacles = make_env(tmp_path)
+    truth = (3.1, 2.75, .7)
+    seed = synth_scan(env, obstacles, truth, now=200.0)
+    f=[]
+    for i in range(5):
+        scan=dict(seed)
+        scan['ranges']=list(seed['ranges'])
+        scan['received_at']=200.0+i*.25
+        f.append({'scan': scan, 'wheel_ticks': (100,100,100,100), 'encoder_received_at': scan['received_at']-.02})
+    fused=fuse_stationary_scans(f,now=201.1)
+    pose=estimate_initial_pose(env, fused, now=201.1)
+    assert math.hypot(pose['x']-truth[0], pose['y']-truth[1]) < .35
+    yaw=math.radians(pose['yaw_degrees'])
+    assert abs(math.atan2(math.sin(yaw-truth[2]),math.cos(yaw-truth[2]))) < .35

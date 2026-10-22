@@ -17,6 +17,7 @@ from server.navigation_process_control import NavigationProcessError
 from server.navigation_ros_control import NavigationRosError
 from server.navigation_motion_segments import annotate_path
 from server.auto_initial_pose import estimate_initial_pose, AutoPoseUncertain
+from server.scan_pose_fusion import fuse_stationary_scans
 from server.env_config import env_float, env_int, env_text
 
 
@@ -80,6 +81,7 @@ class NavigationControlApi:
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool | dict[str, Any]]],
         get_live_pose: Callable[[], dict[str, Any] | None] | None = None,
         get_live_scan: Callable[[], dict[str, Any] | None] | None = None,
+        get_live_scans: Callable[[], list[dict[str, Any]]] | None = None,
         clear_visualization: Callable[[], None] | None = None,
         clear_goal_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
@@ -96,6 +98,7 @@ class NavigationControlApi:
         self._get_live_map = get_live_map
         self._get_live_pose = get_live_pose or (lambda: None)
         self._get_live_scan = get_live_scan or (lambda: None)
+        self._get_live_scans = get_live_scans or (lambda: [])
         self._save_map = save_map
         self._send_robot_command = send_robot_command
         self._clear_visualization = clear_visualization
@@ -1048,7 +1051,11 @@ class NavigationControlApi:
                         "AUTO_POSE_REQUIRES_STOP", "Select manual/stopped operation before automatic localization.", 409
                     )
                 try:
-                    scan = self._get_live_scan()
+                    # Merge only fresh LiDAR frames with unchanged encoder
+                    # ticks; never align moving scans at a guessed pose.
+                    scan = await asyncio.to_thread(
+                        fuse_stationary_scans, self._get_live_scans()
+                    )
                     initial_pose_payload = await asyncio.to_thread(
                         estimate_initial_pose, selected_for_match, scan,
                         mount_x=env_float("LIDAR_X"),
