@@ -1251,18 +1251,8 @@ if (root && canvas) {
             group.rotation.z = pose.yaw;
         }
 
-        // Map/Goal/obstacles remain in the world frame. The scan packet is
-        // laser-local, so apply laser extrinsics once after the latest base pose.
-        // Do not reuse an interpolated vehicle body pose for sensor alignment.
-        const sensorPose = targetPose || pose;
-        const cy = Math.cos(sensorPose.yaw);
-        const sy = Math.sin(sensorPose.yaw);
-        const sensorX = sensorPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
-        const sensorY = sensorPose.y + sy * scanMountLocal.x + cy * scanMountLocal.y;
-        for (const group of [scanRoot, pointsRoot]) {
-            group.position.set(sensorX, sensorY, sensorPose.z);
-            group.rotation.z = sensorPose.yaw + scanMountLocal.yaw;
-        }
+        // Scan geometry is frozen at the received frame's world pose in
+        // rebuildScan(), not dragged along with interpolated robot movement.
         setPoseVisibility(true);
 
         followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
@@ -1485,7 +1475,6 @@ if (root && canvas) {
                 y: Number(mount.y),
                 yaw: Number(mount.yaw),
             };
-            if (renderedPose) applyRenderedPose(renderedPose);
         }
         const nextKey = scanKey(scan);
         if (nextKey === currentScanKey) return;
@@ -1500,6 +1489,21 @@ if (root && canvas) {
         }
 
         ensureScanCapacity(scan.ranges.length);
+
+        // Anchor this single scan at the latest available base map pose.
+        // The previous scan stays fixed while the robot moves; each new scan
+        // replaces it (LaserScan Decay Time = 0). Never translate map/costmap.
+        if (targetPose) {
+            const yaw = targetPose.yaw;
+            const cy = Math.cos(yaw);
+            const sy = Math.sin(yaw);
+            const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
+            const sensorY = targetPose.y + sy * scanMountLocal.x + cy * scanMountLocal.y;
+            for (const group of [scanRoot, pointsRoot]) {
+                group.position.set(sensorX, sensorY, targetPose.z);
+                group.rotation.z = yaw + scanMountLocal.yaw;
+            }
+        }
 
         const angleMin = Number(scan.angle_min) || 0;
         const angleIncrement = Number(scan.angle_increment) || 0;

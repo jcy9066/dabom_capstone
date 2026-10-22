@@ -324,5 +324,6 @@ def test_lidar_extrinsics_are_shared_between_ros_and_viewer():
     viewer = read("frontend/services/static/lidar_3d_viewer.js")
     assert '"mount": {' in bridge
     assert '"yaw": self.lidar_yaw' in bridge
-    assert "const sensorX = sensorPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;" in viewer
-    assert "group.rotation.z = sensorPose.yaw + scanMountLocal.yaw;" in viewer
+    assert "const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;" in viewer
+    assert "group.rotation.z = yaw + scanMountLocal.yaw;" in viewer
+    assert "Scan geometry is frozen" in viewer

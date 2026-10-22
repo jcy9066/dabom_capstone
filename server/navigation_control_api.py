@@ -454,6 +454,8 @@ class NavigationControlApi:
             self._expire_pending_cancel_locked(received_at)
             # An ACK is not wheel stop. Finalize only with fresh stable encoders.
             if (self._pending_goal_cancel is not None
+                and self._pending_goal_cancel.get("stop_delivered") is True
+                and self._stop_confirmation_after_sequence is not None
                 and not self._state["emergency_stop"]
                 and not self._encoder_stop_violation
                 and self._stop_confirmed_locked(received_at)):
@@ -741,6 +743,9 @@ class NavigationControlApi:
                     and self._robot_mode == "auto" and self._pi_navigation_mode == "DRIVING"
                     and self._state["navigation_mode"] == "DRIVING"
                     and self._state["localization_ready"] and self._state["nav2_ready"]
+                    and self._pi_estop_latched is False
+                    and self._patrol_transition_error is None
+                    and self._motion_allowed_locked(current)
                     and not self._state["emergency_stop"]
                 ),
                 # Pi telemetry is distinct from the GPU's local E-STOP latch.
@@ -817,6 +822,10 @@ class NavigationControlApi:
                     "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
                 )
             if self._robot_mode == target:
+                if self._patrol_transition_error or not self._motion_allowed_locked(time.time()):
+                    raise NavigationControlError(
+                        "STOP_NOT_CONFIRMED", "Previous mode transition is not safely settled.", 409
+                    )
                 return self.state_response()
             self._patrol_transition = target
             self._patrol_transition_error = None
@@ -911,11 +920,30 @@ class NavigationControlApi:
                 self._robot_id,
                 {"type": "navigation_mode", "mode": "mapping"},
             )
-            if not self._pi_command_delivered(delivered):
+            with self._lock:
+                pi_confirmed = (
+                    self._connected and self._pi_updated_at is not None
+                    and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    and self._pi_navigation_mode == "MAPPING"
+                )
+            if not self._pi_command_delivered(delivered) or not pi_confirmed:
                 with self._lock:
-                    self._state["navigation_state"] = "ERROR"
-                    self._state["last_error"] = "PI_MODE_SYNC_FAILED"
+                    self._arm_pending_stop_locked()
+                    self._state.update({
+                        "navigation_mode": "MAPPING",
+                        "navigation_state": "ERROR",
+                        "active_goal": None,
+                        "waypoints": [],
+                        "planned_path": [],
+                        "active_map": None,
+                        "localization_ready": False,
+                        "nav2_ready": False,
+                        "last_error": "PI_MODE_SYNC_FAILED",
+                    })
                     self._touch_locked()
+                await self._send_robot_command(
+                    self._robot_id, {"type": "stop", "reason": "mapping_pi_mode_sync_failed"}
+                )
                 raise NavigationControlError("PI_MODE_SYNC_FAILED", "Pi did not confirm MAPPING mode.", 503)
             with self._lock:
                 self._state.update(
@@ -1039,8 +1067,12 @@ class NavigationControlApi:
                 and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
             )
         if not self._pi_command_delivered(delivered) or not pi_confirmed:
-            await asyncio.to_thread(self._process.stop, "DRIVING")
+            try:
+                await asyncio.to_thread(self._process.stop, "DRIVING")
+            except Exception:
+                pass
             with self._lock:
+                self._arm_pending_stop_locked()
                 self._state["navigation_state"] = "ERROR"
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False
@@ -1349,21 +1381,26 @@ class NavigationControlApi:
         cancel = None if cancel_error is not None else cancel_result
         delivered = self._pi_command_delivered(stop_result)
         with self._lock:
-            # A newer E-STOP must not be overwritten by a delayed cancel.
-            self._stop_commanded_at = time.time()
-            self._stop_encoder_ticks = self._encoder_ticks
-            self._stop_confirmation_after_sequence = (
-                (self._encoder_sequence or 0) if delivered else None
-            )
-            self._stop_confirmation_ticks = None
-            self._stop_confirmation_started_at = None
-            self._stop_confirmation_last_at = None
-            self._stop_confirmation_samples = 0
+            # A newer E-STOP owns the physical stop baseline. Late cancel
+            # results must not replace its encoder/safety generations.
+            if not self._state["emergency_stop"]:
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                self._stop_confirmation_after_sequence = (
+                    (self._encoder_sequence or 0) if delivered else None
+                )
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
             terminal = self._cancel_terminal(cancel)
             nav_confirmed = (
                 isinstance(cancel, dict)
-                and cancel.get("confirmed") is True
-                and (cancel.get("completed") is True or cancel.get("requested") is False)
+                and (
+                    (cancel.get("confirmed") is True
+                     and (cancel.get("completed") is True or cancel.get("requested") is False))
+                    or (terminal == "SUCCEEDED" and cancel.get("completed") is True)
+                )
             )
             if self._state["emergency_stop"]:
                 self._state["navigation_state"] = "EMERGENCY_STOPPED"
