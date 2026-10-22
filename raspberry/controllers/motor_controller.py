@@ -350,6 +350,20 @@ class MotorController:
             return response == "OK,LED," + parts[1]
         if opcode == "BEEP" and len(parts) == 2:
             return response == "OK,BEEP," + parts[1]
+        if opcode == "VOLUME_GET" and len(parts) == 1:
+            fields = response.split(",")
+            return (
+                len(fields) == 3
+                and fields[:2] == ["OK", "VOLUME"]
+                and fields[2].isdigit()
+                and 0 <= int(fields[2]) <= 100
+            )
+        if opcode == "VOLUME" and len(parts) == 2:
+            return (
+                parts[1].isdigit()
+                and 0 <= int(parts[1]) <= 100
+                and response == "OK,VOLUME," + parts[1]
+            )
         if opcode == "ENC_GET":
             fields = response.split(",")
             return (
