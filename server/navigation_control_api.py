@@ -494,7 +494,10 @@ class NavigationControlApi:
 
     def _motion_allowed_locked(self, now: float) -> bool:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
-                or self._patrol_transition is not None):
+                or self._patrol_transition is not None
+                or self._patrol_transition_error is not None):
+            # A failed/ambiguous Pi mode transition cannot be repaired by
+            # encoder STOP alone; require an explicit verified new transition.
             return False
         if self._sensor_recovery is not None:
             return False

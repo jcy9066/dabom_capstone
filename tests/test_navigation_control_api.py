@@ -2332,6 +2332,17 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(state["active_goal"])
         self.assertFalse(self.api.motion_allowed())
 
+    async def test_mode_sync_failure_stays_motion_blocked_after_encoder_stop(self):
+        await self.driving_ready()
+        with self.api._lock:
+            self.api._patrol_transition_error = "PI_MODE_ACK_FAILED"
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_confirmation_after_sequence = self.api._encoder_sequence or 0
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        self.assertFalse(self.api.state_response()["patrol_ready"])
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
