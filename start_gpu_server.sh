@@ -640,7 +640,9 @@ if timeout 3 ros2 topic echo "${WHEEL_TICKS_TOPIC}" --once >/dev/null 2>&1; then
     if timeout 10 ros2 topic echo "${ODOM_TOPIC}" --once >/dev/null 2>&1; then
         log "Odometry data READY: live ${WHEEL_TICKS_TOPIC} -> ${ODOM_TOPIC} confirmed"
     else
-        fail "live encoder ticks exist but no odometry message was received on ${ODOM_TOPIC}"
+        # Dashboard remains available for diagnosis. Sensor watchdogs must
+        # continue to deny autonomous driving until fresh odom and TF arrive.
+        warn "DEGRADED: encoder ticks received but no live ${ODOM_TOPIC}; autonomous driving remains blocked"
     fi
 else
     log "WAITING: no live encoder sample yet; ${ODOM_TOPIC} will start when Pi encoder telemetry arrives"

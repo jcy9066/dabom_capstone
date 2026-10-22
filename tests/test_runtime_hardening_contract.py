@@ -327,3 +327,11 @@ def test_lidar_extrinsics_are_shared_between_ros_and_viewer():
     assert "const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;" in viewer
     assert "group.rotation.z = yaw + scanMountLocal.yaw;" in viewer
     assert "Scan geometry is frozen" in viewer
+
+def test_odom_data_delay_preserves_dashboard_without_bypassing_safety():
+    gpu = read("start_gpu_server.sh")
+    assert "DEGRADED: encoder ticks received but no live" in gpu
+    assert 'fail "live encoder ticks exist but no odometry message' not in gpu
+    navigation = read("server/navigation_control_api.py")
+    assert 'health.get("odometry_age_sec")' in navigation
+    assert 'health.get("tf_ok") is not True' in navigation

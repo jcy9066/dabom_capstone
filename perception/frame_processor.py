@@ -207,6 +207,8 @@ class FrameProcessor:
         )
 
         for obj in tracked_boxes:
+            if obj.get("cls", 0) != 0:
+                continue
             oid = obj["id"]
             cls_id = obj.get("cls", 0)
             state = obj_states.get(oid, 0)
