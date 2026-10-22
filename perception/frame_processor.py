@@ -100,12 +100,9 @@ class FrameProcessor:
                 self.pair_action_display_buffer.pop(pair_key, None)
         return resolved
 
-    def __init__(self, detector, action_analyzer, notifier=None, weapon_detector=None):
+    def __init__(self, detector, action_analyzer, notifier=None):
         self.detector = detector
         self.action_analyzer = action_analyzer
-        self.weapon_detector = weapon_detector
-        self.weapon_detection_error = None
-        self._weapon_alert_at = {}
         self.trigger = CascadingTrigger()
         self.notifier = notifier if notifier is not None else TelegramNotifier()
         self.action_display_buffer = {}
@@ -115,18 +112,6 @@ class FrameProcessor:
         self.violence_heuristic = ViolenceHeuristic()
         if getattr(self.action_analyzer, "restrict_to_target_actions", False):
             self.violence_heuristic.enabled = False
-
-    def detect_weapons(self, frame):
-        if self.weapon_detector is None:
-            return []
-        try:
-            result = self.weapon_detector.detect(frame)
-            self.weapon_detection_error = None
-            return result
-        except Exception as exc:
-            # Never turn an inference failure into a false NORMAL or WEAPON.
-            self.weapon_detection_error = str(exc)
-            return []
 
     def _process_scene_classifier(
         self,
@@ -144,6 +129,8 @@ class FrameProcessor:
         danger = False
 
         for obj in tracked_boxes:
+            if obj.get("cls", 0) != 0:
+                continue
             oid = obj["id"]
             cls_id = obj.get("cls", 0)
             state = obj_states.get(oid, 0)
@@ -165,19 +152,9 @@ class FrameProcessor:
                         skeleton,
                         (120, 220, 120),
                     )
-            # Only a dedicated, label-validated weapon model may say WEAPON.
             detections.append(detection)
 
         danger = danger or bool(scene_result.get("danger"))
-        weapons = self.detect_weapons(frame)
-        detections.extend(weapons)
-        if weapons:
-            danger = True
-            for item in weapons:
-                x1, y1, x2, y2 = map(int, item["box"])
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                cv2.putText(display_frame, item["label"], (x1, max(12, y1 - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
         analyzer.draw_scene_overlay(display_frame, scene_result)
         if (
             scene_result.get("status") == "ok"
@@ -195,8 +172,6 @@ class FrameProcessor:
             "detections": detections,
             "danger": danger,
             "scene": scene_result,
-            "weapon_status": ("unavailable" if self.weapon_detection_error else
-                              "disabled" if self.weapon_detector is None else "ok"),
         }
 
     def process(self, frame, timestamp=None):
@@ -297,12 +272,6 @@ class FrameProcessor:
                             )
                     else:
                         label = f"[{current_action['label']}] {current_action['score'] * 100:.0f}%"
-            else:
-                danger = True
-                detection["label"] = "WEAPON"
-                detection["danger"] = True
-                label = "WEAPON"
-
             x1, y1, x2, y2 = map(int, obj["box"])
             # Bounding box visualization disabled. Keep this line for easy rollback.
             # cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
