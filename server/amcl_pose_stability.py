@@ -10,7 +10,12 @@ def stable_amcl_observations(samples: list[dict[str, Any]], initial: dict[str, f
         return False
     recent = samples[-minimum_samples:]
     try:
-        if float(recent[-1]["at"]) - float(recent[0]["at"]) < minimum_span:
+        timestamps = [float(item["at"]) for item in recent]
+        if any(not math.isfinite(t) for t in timestamps):
+            return False
+        if any(timestamps[i] <= timestamps[i - 1] for i in range(1, len(timestamps))):
+            return False
+        if timestamps[-1] - timestamps[0] < minimum_span:
             return False
         cx, cy, yaw = (float(initial[k]) for k in ("x", "y", "yaw"))
         base_x, base_y, base_yaw = (float(recent[0][k]) for k in ("x", "y", "yaw"))

@@ -89,3 +89,16 @@ def test_fusion_feeds_existing_map_matcher(tmp_path):
     assert math.hypot(pose['x']-truth[0], pose['y']-truth[1]) < .35
     yaw=math.radians(pose['yaw_degrees'])
     assert abs(math.atan2(math.sin(yaw-truth[2]),math.cos(yaw-truth[2]))) < .35
+
+def test_amcl_non_monotonic_timestamps_rejected():
+    initial={'x':1.0,'y':2.0,'yaw':0.1}
+    data=[{'x':1.02,'y':2.0,'yaw':0.1,'at':t,'xy_variance':.05,'yaw_variance':.02}
+          for t in (1.,1.0,1.4)]
+    assert not stable_amcl_observations(data, initial)
+
+
+def test_amcl_requires_three_post_initialpose_samples():
+    initial={'x':1.0,'y':2.0,'yaw':0.1}
+    data=[{'x':1.02,'y':2.0,'yaw':0.1,'at':t,'xy_variance':.05,'yaw_variance':.02}
+          for t in (1.,1.4)]
+    assert not stable_amcl_observations(data,initial)
