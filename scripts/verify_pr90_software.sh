@@ -32,6 +32,8 @@ for file in \
 done
 node tests/test_dashboard_action_feedback.js
 node tests/test_dashboard_report_feedback.js
+node tests/test_pr90_goal_path_events.js
+node tests/test_pr90_cancel_feedback.js
 info 'JavaScript regression PASS'
 
 info 'Independent C++17 motion and safety regressions'
