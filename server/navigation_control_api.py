@@ -16,6 +16,7 @@ from server.navigation_map_service import NavigationMapError
 from server.navigation_process_control import NavigationProcessError
 from server.navigation_ros_control import NavigationRosError
 from server.navigation_motion_segments import annotate_path
+from server.auto_initial_pose import estimate_initial_pose, AutoPoseUncertain
 from server.env_config import env_float, env_int, env_text
 
 
@@ -78,6 +79,7 @@ class NavigationControlApi:
         save_map: Callable[[dict[str, Any], str | None], dict[str, Any]],
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool | dict[str, Any]]],
         get_live_pose: Callable[[], dict[str, Any] | None] | None = None,
+        get_live_scan: Callable[[], dict[str, Any] | None] | None = None,
         clear_visualization: Callable[[], None] | None = None,
         clear_goal_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
@@ -93,6 +95,7 @@ class NavigationControlApi:
         self._robot_id = robot_id
         self._get_live_map = get_live_map
         self._get_live_pose = get_live_pose or (lambda: None)
+        self._get_live_scan = get_live_scan or (lambda: None)
         self._save_map = save_map
         self._send_robot_command = send_robot_command
         self._clear_visualization = clear_visualization
@@ -972,12 +975,32 @@ class NavigationControlApi:
             saved = await asyncio.to_thread(self._save_map, dict(live_map), map_name)
             map_name = saved.get("map_name")
         elif source == "existing":
+            # Do not invent an arbitrary origin when a saved map is selected.
+            # Automatic localization must prove a fresh, unambiguous scan
+            # match; otherwise the operator must supply Initial Pose.
             if initial_pose_payload is None:
-                raise NavigationControlError(
-                    "INITIAL_POSE_REQUIRED",
-                    "Initial pose is required when loading a saved map.",
-                    400,
-                )
+                selected_for_match = self._map_api.resolve_map(map_name)
+                with self._lock:
+                    manual = self._robot_mode == "manual"
+                    not_moving = self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
+                if not manual or not not_moving:
+                    raise NavigationControlError(
+                        "AUTO_POSE_REQUIRES_STOP", "Select manual/stopped operation before automatic localization.", 409
+                    )
+                try:
+                    scan = self._get_live_scan()
+                    initial_pose_payload = await asyncio.to_thread(
+                        estimate_initial_pose, selected_for_match, scan,
+                        mount_x=env_float("LIDAR_X"),
+                        mount_y=env_float("LIDAR_Y"),
+                        mount_yaw=env_float("LIDAR_YAW"),
+                    )
+                except (AutoPoseUncertain, OSError, ValueError, KeyError) as exc:
+                    raise NavigationControlError(
+                        "AUTO_INITIAL_POSE_UNCERTAIN",
+                        f"Automatic localization cannot confirm a unique position: {exc}. Enter Initial Pose manually.",
+                        409,
+                    ) from exc
         else:
             raise NavigationControlError(
                 "INVALID_SOURCE",
