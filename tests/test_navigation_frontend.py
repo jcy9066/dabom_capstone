@@ -454,6 +454,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('{"type": "mode", "mode": target}', server[start:end])
 
 
+    def test_cancel_http_failure_reloads_server_state_before_error_feedback(self):
+        dashboard = (ROOT / "frontend/services/static/navigation_control.js").read_text(
+            encoding="utf-8"
+        )
+        start = dashboard.index("async function simpleAction(")
+        end = dashboard.index("async function requestLedToggle(", start)
+        handler = dashboard[start:end]
+        self.assertIn("if (path.endsWith('/cancel'))", handler)
+        self.assertIn("latest = await refreshState();", handler)
+        self.assertIn("latest?.last_error || error.message", handler)
+        self.assertIn("Goal 취소 실패", handler)
+
     def test_goal_bound_global_path_and_terminal_visibility_contract(self):
         dashboard = (
             ROOT / "frontend/services/static/script.js"

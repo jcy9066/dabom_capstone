@@ -636,7 +636,18 @@
                 setFeedback('요청이 적용되었습니다.');
             }
         } catch (error) {
-            setFeedback(`요청 실패: ${error.message}`, true);
+            if (path.endsWith('/cancel')) {
+                let latest = null;
+                try {
+                    latest = await refreshState();
+                } catch (_) {
+                    // Preserve the transport failure; status may be offline.
+                }
+                const reason = latest?.last_error || error.message;
+                setFeedback(`Goal 취소 실패·정지 확인 필요: ${reason}`, true);
+            } else {
+                setFeedback(`요청 실패: ${error.message}`, true);
+            }
         } finally {
             state.busy = false;
         }
