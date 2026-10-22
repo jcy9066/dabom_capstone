@@ -1995,6 +1995,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.api._pending_nav_success)
         self.assertIsNotNone(response["active_goal"])
         self.assertFalse(self.api.motion_allowed())
+        # Stable encoder STOP alone must not reopen motor authorization while
+        # original Goal pose/yaw proof is still pending.
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
 
     async def test_late_manual_pause_stop_cannot_replace_estop_proof(self):
         await self.driving_ready()
