@@ -149,6 +149,22 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         async def sender(robot_id, command):
             self.commands.append((robot_id, dict(command)))
+            if command["type"] == "navigation_mode":
+                self.api.note_pi_status({
+                    "navigation_mode": command["mode"],
+                    "mode": self.api._robot_mode,
+                    "emergency_stop": False,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                })
+            if command["type"] == "mode":
+                self.api.note_pi_status({
+                    "mode": command["mode"],
+                    "navigation_mode": self.api._pi_navigation_mode or "mapping",
+                    "emergency_stop": False,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                })
             if command["type"] == "emergency_stop":
                 self._fake_safety_epoch += 1
                 self.api.note_pi_status({

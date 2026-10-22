@@ -441,19 +441,17 @@ class NavigationFrontendContractTests(unittest.TestCase):
         start = self.control.index("async function requestDriveMode")
         end = self.control.index("function navigationIsMoving", start)
         request = self.control[start:end]
-        state_read = request.index("await refreshState()")
-        pause = request.index("mutate('/api/navigation/control/pause-for-manual')")
-        mode_command = request.index("mutate('/api/robots/pi-01/command'")
-        self.assertLess(state_read, pause)
-        self.assertLess(pause, mode_command)
+        self.assertIn("mutate('/api/navigation/control/patrol-mode'", request)
+        self.assertNotIn("mutate('/api/robots/pi-01/command'", request)
         self.assertNotIn("mutate('/api/navigation/control/cancel')", request)
-        self.assertIn("paused.goal_retained !== true", request)
-        self.assertIn("JSON.stringify(paused.active_goal) !== retainedGoal", request)
-        self.assertIn("JSON.stringify(paused.planned_path) !== retainedPath", request)
-        stop_delivery = request.index("paused.stop_delivered !== true")
-        self.assertLess(stop_delivery, mode_command)
-        self.assertIn("MANUAL 전환을 중단했습니다", request)
+        self.assertIn("confirmed.patrol_transition", request)
+        self.assertIn("confirmed.patrol_ready", request)
         self.assertIn("state.drivePending", request)
+        server = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+        start = server.index("async def switch_patrol_mode")
+        end = server.index("async def switch_mode(", start)
+        self.assertIn("await self.pause_for_manual()", server[start:end])
+        self.assertIn('{"type": "mode", "mode": target}', server[start:end])
 
 
     def test_goal_bound_global_path_and_terminal_visibility_contract(self):
