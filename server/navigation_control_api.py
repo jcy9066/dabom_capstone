@@ -1271,7 +1271,7 @@ class NavigationControlApi:
             self._stop_commanded_at = time.time()
             self._stop_encoder_ticks = self._encoder_ticks
             self._stop_confirmation_after_sequence = (
-                self._encoder_sequence if delivered else None
+                (self._encoder_sequence or 0) if delivered else None
             )
             self._stop_confirmation_ticks = None
             self._stop_confirmation_started_at = None
@@ -1296,6 +1296,7 @@ class NavigationControlApi:
                 self._pending_goal_cancel = None
             elif terminal == "SUCCEEDED":
                 # Success/cancel race still requires original Goal verification.
+                self._state["navigation_state"] = "NAVIGATING"
                 self._apply_cancel_terminal_locked("SUCCEEDED")
             elif terminal == "FAILED":
                 self._state["navigation_state"] = "FAILED"
@@ -1367,8 +1368,11 @@ class NavigationControlApi:
                     # takeover as READY despite a successful ROS cancel.
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "STOP_NOT_DELIVERED"
-                elif terminal is not None:
+                elif terminal == "SUCCEEDED":
                     self._apply_cancel_terminal_locked(terminal)
+                elif terminal == "FAILED":
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "NAV_GOAL_FAILED"
                 elif self._state["navigation_mode"] == "MAPPING":
                     self._state["navigation_state"] = "IDLE"
                 else:
