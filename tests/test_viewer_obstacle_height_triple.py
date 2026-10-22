@@ -11,7 +11,7 @@ class ViewerObstacleHeightTriple(unittest.TestCase):
     def test_static_and_dynamic_heights_triple_dev_baseline(self):
         js = VIEWER.read_text(encoding="utf-8")
         def constant(name):
-            match = re.search(r"const\\s+" + name + r"\\s*=\\s*([0-9.]+);", js)
+            match = re.search(r"const\s+" + name + r"\s*=\s*([0-9.]+);", js)
             self.assertIsNotNone(match, name)
             return float(match.group(1))
         # Current dev had 0.08m occupied and 0.06m dynamic obstacle walls.
