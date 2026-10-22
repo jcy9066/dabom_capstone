@@ -821,7 +821,10 @@ class NavigationControlApi:
                 raise NavigationControlError(
                     "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
                 )
-            if self._robot_mode == target:
+            if (self._robot_mode == target and not (
+                target == "manual"
+                and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
+            )):
                 if self._patrol_transition_error or not self._motion_allowed_locked(time.time()):
                     raise NavigationControlError(
                         "STOP_NOT_CONFIRMED", "Previous mode transition is not safely settled.", 409
@@ -837,10 +840,18 @@ class NavigationControlApi:
                     raise NavigationControlError("NAV2_NOT_READY", "Nav2 is unavailable.", 503)
             else:
                 paused = await self.pause_for_manual()
-                if paused.get("stop_delivered") is not True or paused.get("navigation_state") in {
-                    "FAILED", "NAVIGATING", "RESUMING"
-                }:
+                if (paused.get("stop_delivered") is not True
+                    or paused.get("emergency_stop") is True
+                    or paused.get("navigation_state") in {
+                        "FAILED", "NAVIGATING", "RESUMING", "EMERGENCY_STOPPED"
+                    }):
                     raise NavigationControlError("MANUAL_STOP_FAILED", "Navigation could not be safely paused.", 409)
+            with self._lock:
+                # Emergency stop is not serialized behind dashboard mutations.
+                if self._state["emergency_stop"] or self._pi_estop_latched is not False:
+                    raise NavigationControlError(
+                        "EMERGENCY_STOP_ACTIVE", "Emergency stop interrupted the mode switch.", 409
+                    )
             ack = await self._send_robot_command(
                 self._robot_id, {"type": "mode", "mode": target}
             )

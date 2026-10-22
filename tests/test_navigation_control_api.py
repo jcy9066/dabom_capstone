@@ -2224,6 +2224,42 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.api._pending_nav_success)
         self.assertFalse(self.api.motion_allowed())
 
+    async def test_estop_during_manual_pause_blocks_mode_command(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        original_pause = self.api.pause_for_manual
+
+        async def interrupt_pause():
+            result = await original_pause()
+            with self.api._lock:
+                self.api._state["emergency_stop"] = True
+                self.api._pi_estop_latched = True
+            result["emergency_stop"] = True
+            return result
+
+        self.api.pause_for_manual = interrupt_pause
+        before = len([c for _, c in self.commands if c["type"] == "mode"])
+        with self.assertRaises(NavigationControlError):
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        after = len([c for _, c in self.commands if c["type"] == "mode"])
+        self.assertEqual(before, after)
+
+    async def test_manual_request_stops_orphaned_nav_goal_even_if_pi_already_manual(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        before = self.map_api.ros_control.cancel_calls
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertGreater(self.map_api.ros_control.cancel_calls, before)
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(any(command["type"] == "stop" for _, command in self.commands))
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
