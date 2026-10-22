@@ -617,7 +617,18 @@
             if (response.navigation_mode && response.navigation_state) {
                 applyControlState(response);
             }
-            setFeedback('요청이 적용되었습니다.');
+            if (path.endsWith('/cancel')) {
+                if (response.cancel_completed === true && response.physical_stop_confirmed === true) {
+                    setFeedback('Goal 취소와 엔코더 정지가 확인되었습니다.');
+                } else if (response.stop_delivered !== true || response.navigation_state === 'FAILED') {
+                    setFeedback(`취소 부분 실패: ${response.last_error || 'Pi STOP 확인 실패'}`, true);
+                } else {
+                    setFeedback('Nav2 취소 후 Pi 엔코더 정지 확인 중...');
+                }
+                await refreshState();
+            } else {
+                setFeedback('요청이 적용되었습니다.');
+            }
         } catch (error) {
             setFeedback(`요청 실패: ${error.message}`, true);
         } finally {

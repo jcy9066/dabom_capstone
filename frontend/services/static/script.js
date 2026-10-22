@@ -632,6 +632,7 @@ function navigationControlGoalKey(control) {
     const goal = control?.active_goal;
     if (!goal) return null;
     return [
+        control?.goal_generation ?? 'unknown',
         Number(goal.x) || 0,
         Number(goal.y) || 0,
         Number(goal.yaw) || 0,
@@ -684,19 +685,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
-    if (navigationGlobalPathRunKey !== null
-        && Array.isArray(data.global_path) && data.global_path.length >= 2) {
-        applyNavigationGlobalPath(
-            data.global_path,
-            data.global_path_updated_at ?? null,
-            false,
-        );
-    } else if (
-        navigationGlobalPathRunKey !== null
-        && lidarState.globalPathStatus !== 'pending'
-    ) {
-        resetNavigationGlobalPath();
-    }
+    // Snapshot /plan events have no Goal execution identifier and are
+    // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
         lidarState.scan = data.scan;
@@ -756,11 +746,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'global_path') {
-        if (navigationGlobalPathRunKey === null) return;
-        applyNavigationGlobalPath(
-            message.path,
-            message.received_at ?? null,
-        );
+        // Anonymous ROS /plan packets have no Goal owner. The approved
+        // path is delivered by the navigation control-state endpoint.
         return;
     }
 
@@ -797,12 +784,16 @@ function applyNavigationStreamMessage(message) {
 document.addEventListener('dabom:navigation-control-state', event => {
     const control = event.detail || {};
     const navState = String(control.navigation_state || '').toUpperCase();
-    const active = ['NAVIGATING', 'RESUMING'].includes(navState) && control.active_goal;
+    const active = ['PATH_READY', 'NAVIGATING', 'RESUMING', 'CANCELING_STOP'].includes(navState)
+        && control.active_goal;
     if (active) {
         const nextRunKey = navigationControlGoalKey(control);
         if (nextRunKey !== navigationGlobalPathRunKey) {
             navigationGlobalPathRunKey = nextRunKey;
             beginNavigationGlobalPathPending();
+        }
+        if (Array.isArray(control.planned_path) && control.planned_path.length >= 2) {
+            applyNavigationGlobalPath(control.planned_path, control.updated_at ?? null);
         }
         return;
     }

@@ -966,6 +966,16 @@ def publish_live_mapping_map(map_payload, received_at):
     return stored_map
 
 
+def clear_navigation_goal_path():
+    # Do not reset the map, pose, camera, or local costmap on Goal cancel.
+    with state_lock:
+        navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
+    navigation_visualization_hub.publish({
+        "type": "global_path", "path": [], "goal_path_cleared": True,
+    })
+
+
 navigation_control_api = NavigationControlApi(
     app=app,
     map_api=navigation_map_api,
@@ -981,6 +991,7 @@ navigation_control_api = NavigationControlApi(
     ),
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
+    clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
 
@@ -990,18 +1001,11 @@ def publish_navigation_ros_visualization(event):
     payload = dict(event)
     event_type = str(payload.get("type") or "")
     if event_type == "global_path":
-        path = payload.get("path")
-        normalized = [dict(point) for point in path] if isinstance(path, list) else []
-        received_at = payload.get("received_at")
-        try:
-            received_at = float(received_at)
-        except (TypeError, ValueError):
-            received_at = time.time()
-        with state_lock:
-            navigation_state["global_path"] = normalized
-            navigation_state["global_path_updated_at"] = received_at
-        navigation_control_api.note_replanned_path(normalized)
-    elif event_type == "costmap":
+        # /plan carries no Nav2 action/Goal ID. A delayed event from an
+        # earlier execution cannot become the current approved path.
+        # Authenticated planned_path comes from ComputePathToPose results.
+        return
+    if event_type == "costmap":
         costmap = payload.get("costmap")
         with state_lock:
             navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
