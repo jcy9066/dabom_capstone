@@ -21,6 +21,7 @@
             this.originalNextSibling = this.root?.nextSibling || null;
             this.bindDismissEvents();
             this.bindFullscreenEvents();
+            this.closeTimer = null;
         }
 
         bindDismissEvents() {
@@ -81,13 +82,28 @@
         }
 
         show() {
+            if (this.closeTimer !== null) { clearTimeout(this.closeTimer); this.closeTimer = null; }
+            this.root?.classList.remove('ui-modal-exiting');
             if (this.root) this.root.style.display = 'flex';
             this.syncFullscreenHost();
         }
 
         hide() {
-            if (this.root) this.root.style.display = 'none';
-            this.restoreRootParent();
+            if (!this.root) return;
+            if (this.closeTimer !== null) clearTimeout(this.closeTimer);
+            if (global.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+                this.root.style.display = 'none';
+                this.root.classList.remove('ui-modal-exiting');
+                this.restoreRootParent();
+                return;
+            }
+            this.root.classList.add('ui-modal-exiting');
+            this.closeTimer = setTimeout(() => {
+                this.root.style.display = 'none';
+                this.root.classList.remove('ui-modal-exiting');
+                this.restoreRootParent();
+                this.closeTimer = null;
+            }, 160);
         }
 
         snapshot() {

@@ -6,7 +6,7 @@
 .system-control-list { display: grid; gap: 8px; margin-top: 10px; }
 .system-control-card { border: 1px solid var(--border-color); border-radius: 8px; background: var(--card-bg2); padding: 9px; }
 .system-control-card.is-unreachable { opacity: .72; }
-.system-control-row { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.system-control-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .system-control-name { color: var(--text-dark); font-size: 11px; font-weight: 700; }
 .system-control-description, .system-control-meta, .system-control-message { margin-top: 4px; color: var(--text-muted); font-size: 10px; line-height: 1.45; }
 .system-control-message { color: var(--warning-color); }

@@ -53,6 +53,17 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertEqual(rendered.count('id="logoutBtn"'), 1)
         self.assertIn('id="systemControlPanelSlot"', rendered)
 
+    def test_gpu_server_usage_is_separate_from_pi_telemetry(self):
+        # The status bar preserves the CPU / RAM / GPU / PING order.
+        ram = self.template_source.index('id="sys-ram"')
+        gpu = self.template_source.index('id="sys-gpu-usage"')
+        ping = self.template_source.index('id="sys-internet"')
+        self.assertLess(ram, gpu)
+        self.assertLess(gpu, ping)
+        self.assertIn('gpu_utilization_sampler.snapshot(CUDA_DEVICE_INDEX)', self.app_source)
+        self.assertIn('gpu_usage_percent', self.script_source)
+        self.assertIn("gpuRaw == null || gpuRaw === ''", self.script_source)
+
     def test_initial_robot_mode_is_unknown_and_manual_controls_are_disabled(self):
         self.assertIn('id="robot-mode-status">UNKNOWN</span>', self.template_source)
         self.assertIn('class="toggle-switch unknown"', self.template_source)
@@ -74,7 +85,9 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertIn("stopAllLocalInputs(false)", self.script_source)
         self.assertIn("window.setDashboardRobotConnection?.(payload?.connected === true)", navigation_source)
         self.assertIn("window.applyServerPatrolMode?.(payload?.robot_mode)", navigation_source)
-        self.assertIn("payload.connected !== true || state.warningPending", navigation_source)
+        self.assertIn("warningButton.disabled = state.warningPending;", navigation_source)
+        self.assertIn("beepButton.disabled = state.beepPending;", navigation_source)
+        self.assertIn("if (state.control?.connected !== true)", navigation_source)
 
     def test_changed_assets_have_matching_cache_busters(self):
         version = "v="
@@ -192,6 +205,29 @@ class DashboardFrontendContractTests(unittest.TestCase):
         self.assertIn("gallery.registerModalViews = function registerModalViews", self.gallery_source)
         self.assertIn("currentSituation.mount = function mountCurrentSituation", self.current_situation_source)
 
+    def test_first_paint_uses_final_hydratable_controls(self):
+        html = self.template_source
+        self.assertEqual(html.count('class="navigation-mode-toggle unknown"'), 2)
+        self.assertIn('class="dashboard-model-toggle unknown"', html)
+        self.assertIn('class="dashboard-led-toggle"', html)
+        self.assertIn("document.body.classList.add('dark-mode')", html)
+        self.assertLess(
+            html.index("document.body.classList.add('dark-mode')"),
+            html.index('id="dashboard-mode-controls-mount"'),
+        )
+        self.assertIn('id="dashboardUiStartupError"', html)
+        self.assertIn('data-dashboard-control="drive-mode"', html)
+        self.assertIn('aria-busy="false"', html)
+        for filename, css_class in (
+            ("navigation_mode_control.js", "navigation-mode-toggle"),
+            ("model_pipeline_toggle.js", "dashboard-model-toggle"),
+            ("led_toggle.js", "dashboard-led-toggle"),
+        ):
+            component = (COMPONENT_DIR / "controls" / filename).read_text(encoding="utf-8")
+            self.assertIn(f"root.querySelector('.{css_class}')", component)
+        self.assertIn("darkMode = document.body.classList.contains('dark-mode');", self.script_source)
+        self.assertNotIn("if (saved === '1') toggleDarkMode();", self.script_source)
+
     def test_dashboard_mode_group_separates_drive_and_navigation_clicks(self):
         mount_start = self.template_source.index('id="dashboard-mode-controls-mount"')
         mount_end = self.template_source.index('id="d-pad-area"', mount_start)
@@ -213,8 +249,8 @@ class DashboardFrontendContractTests(unittest.TestCase):
             COMPONENT_DIR / "controls" / "navigation_mode_control.js"
         ).read_text(encoding="utf-8")
         self.assertIn("navigation-mode-toggle", navigation_mode_source)
-        self.assertIn("mappingLabel.textContent = 'MAPPING'", navigation_mode_source)
-        self.assertIn("drivingLabel.textContent = 'DRIVING'", navigation_mode_source)
+        self.assertIn("mappingLabel.textContent = 'Mapping'", navigation_mode_source)
+        self.assertIn("drivingLabel.textContent = 'Driving'", navigation_mode_source)
 
     def test_dashboard_layout_contract_is_compact_and_consistent(self):
         toolbar_start = self.template_source.index('id="records-toolbar-mount"')
@@ -339,9 +375,9 @@ assert.strictEqual(filters.values.reported, null);
 assert.strictEqual(filters.reset().type, 'all');
 
 const pagination = components.records.createPaginationState({ total: 101 });
-assert.strictEqual(pagination.pageSize, 50);
-assert.strictEqual(pagination.totalPages, 3);
-assert.strictEqual(pagination.setPage(99), 3);
+assert.strictEqual(pagination.pageSize, 10);
+assert.strictEqual(pagination.totalPages, 11);
+assert.strictEqual(pagination.setPage(99), 11);
 pagination.setTotal(1);
 assert.strictEqual(pagination.page, 1);
 pagination.setPage(1);

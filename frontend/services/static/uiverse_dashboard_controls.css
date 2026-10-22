@@ -1,0 +1,311 @@
+/* Dashboard-scoped interpretations of:
+ * Voxybuns: https://uiverse.io/Voxybuns/lucky-fireant-71
+ * RiccardoRapelli: https://uiverse.io/RiccardoRapelli/jolly-chicken-91
+ * Adapted visual patterns: Copyright (c) 2026 Voxybuns and
+ * Copyright (c) 2026 RiccardoRapelli. MIT License.
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * Original event handlers and Telegram feedback markup remain owned by
+ * their existing controllers.
+ */
+
+/* Align the raised faces with the left control card without moving its rows.
+   Top padding compensates for the 2px raised offset; the final shadow stays
+   inside the same vertical boundary. */
+.dashboard-action-controls.split-btn-container {
+    padding: 4px 0 2px;
+    row-gap: 8px;
+    box-sizing: border-box;
+    min-height: 0;
+}
+/* Raised, tactile Uiverse action buttons: no change to the three-row grid. */
+.dashboard-action-controls .action-btn.uiverse-press-button {
+    --uiverse-button-face: #f5f7fa;
+    --uiverse-button-edge: #697c92;
+    --uiverse-button-ink: #25364b;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 4px 6px;
+    background: var(--uiverse-button-face);
+    border: 1px solid var(--uiverse-button-edge);
+    border-radius: 8px;
+    box-shadow: 0 3px 0 var(--uiverse-button-edge), 0 5px 8px rgba(12,24,40,.1);
+    transform: translateY(-2px);
+    transition: transform .12s ease, box-shadow .12s ease, background-color .18s ease, border-color .18s ease;
+    isolation: isolate;
+}
+.dashboard-action-controls .action-beep.uiverse-press-button {
+    --uiverse-button-face: #e6eef5;
+    --uiverse-button-edge: #638097;
+    color: #24445c;
+}
+.dashboard-action-controls .action-warning.uiverse-press-button {
+    --uiverse-button-face: #f3ebe0;
+    --uiverse-button-edge: #a27e4d;
+    color: #705027;
+}
+.dashboard-action-controls .action-report.uiverse-press-button {
+    --uiverse-button-face: #f5e5e8;
+    --uiverse-button-edge: #ab6472;
+    /* Report label/icons and sending/success/error animations are untouched. */
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--uiverse-button-face) 86%, white);
+    border-color: var(--uiverse-button-edge);
+    box-shadow: 0 4px 0 var(--uiverse-button-edge), 0 6px 10px rgba(12,24,40,.14);
+    transform: translateY(-3px);
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:active:not(:disabled) {
+    box-shadow: 0 0 0 var(--uiverse-button-edge), 0 1px 3px rgba(12,24,40,.1);
+    transform: translateY(1px);
+}
+/* Pointer-down starts immediately; click (including keyboard activation)
+   completes a visible motion cycle even after native :active disappears. */
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+    animation: uiverse-button-depress 680ms cubic-bezier(.22,.72,.26,1) both;
+    border-color: var(--uiverse-button-edge);
+    /* Independent of the keyframe transform: a clearly visible click response,
+       even on a slow frame, without changing the button's command handler. */
+    background: color-mix(in srgb, var(--uiverse-button-face) 64%, var(--uiverse-button-edge));
+    outline: 2px solid color-mix(in srgb, var(--uiverse-button-edge) 65%, transparent);
+    outline-offset: -3px;
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:disabled:not(.uiverse-action-clicked) {
+    transform: translateY(-2px);
+    box-shadow: 0 3px 0 var(--uiverse-button-edge);
+}
+/* Bright inset flash runs under the text and over the button face. */
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button::before {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    background: radial-gradient(circle at var(--action-ripple-x,50%) var(--action-ripple-y,50%),
+                                color-mix(in srgb, var(--uiverse-button-edge) 30%, white), transparent 68%);
+    opacity: 0;
+    pointer-events: none;
+}
+.dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked::before {
+    animation: uiverse-press-flash 680ms ease-out both;
+}
+@keyframes uiverse-button-depress {
+    0%   { transform: translateY(-2px); box-shadow: 0 3px 0 var(--uiverse-button-edge),0 5px 8px rgba(12,24,40,.1); }
+    17%  { transform: translateY(2px); box-shadow: 0 0 0 var(--uiverse-button-edge),0 1px 3px rgba(12,24,40,.1); }
+    52%  { transform: translateY(1px); box-shadow: 0 1px 0 var(--uiverse-button-edge),0 2px 4px rgba(12,24,40,.1); }
+    100% { transform: translateY(-2px); box-shadow: 0 3px 0 var(--uiverse-button-edge),0 5px 8px rgba(12,24,40,.1); }
+}
+@keyframes uiverse-press-flash {
+    0% { opacity: 0; }
+    20% { opacity: .95; }
+    100% { opacity: 0; }
+}
+/* Existing wave ripple remains independent of the press animation. */
+/* Preserve the original report feedback's non-dimmed sending state. */
+.dashboard-action-controls .action-report.uiverse-press-button[data-report-state="sending"]:disabled {
+    opacity: 1;
+    cursor: progress;
+}
+.dashboard-action-controls .action-btn.uiverse-press-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+body.dark-mode .dashboard-action-controls .action-beep.uiverse-press-button {
+    --uiverse-button-face: #293c4e;
+    --uiverse-button-edge: #789eaf;
+    color: #c9e4f1;
+}
+body.dark-mode .dashboard-action-controls .action-warning.uiverse-press-button {
+    --uiverse-button-face: #3d3429;
+    --uiverse-button-edge: #b69661;
+    color: #f3d9a6;
+}
+body.dark-mode .dashboard-action-controls .action-report.uiverse-press-button {
+    --uiverse-button-face: #402c35;
+    --uiverse-button-edge: #ba7185;
+}
+body.dark-mode .dashboard-action-controls .action-btn.uiverse-press-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--uiverse-button-face) 88%, #c4cbd8);
+}
+
+
+/* RiccardoRapelli day/night switch, controlled by the existing .active class.
+ * The existing role=switch/aria-checked/onClick/keyboard handling is retained. */
+#darkToggle.uiverse-day-night {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 48.6px;
+    width: 48.6px;
+    min-width: 48.6px;
+    height: 27.54px;
+    padding: 0;
+    border: 0;
+    border-radius: 34px;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+    cursor: pointer;
+}
+#darkToggle.uiverse-day-night.active,
+body.dark-mode #darkToggle.uiverse-day-night {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+#darkToggle.uiverse-day-night::before { display: none; }
+#darkToggle.uiverse-day-night .uiverse-toggle-scene {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 60px;
+    height: 34px;
+    overflow: hidden;
+    border-radius: 34px;
+    transform: scale(.81);
+    transform-origin: top left;
+    background: #2196f3;
+    transition: background-color .4s ease;
+}
+#darkToggle.uiverse-day-night.active .uiverse-toggle-scene,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-toggle-scene {
+    background: #000;
+}
+#darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
+    position: absolute;
+    z-index: 3;
+    left: 4px;
+    top: 4px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: yellow;
+    box-shadow: none;
+    transform: translateX(0);
+    transition: transform .4s ease, background-color .4s ease, rotate .4s ease;
+}
+#darkToggle.uiverse-day-night.active .dark-toggle-slider.uiverse-sun-moon,
+body.dark-mode #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon {
+    left: 4px;
+    top: 4px;
+    width: 26px;
+    height: 26px;
+    background: #fff;
+    box-shadow: none;
+    transform: translateX(26px);
+    animation: uiverse-moon-rotate .6s ease-in-out both;
+}
+#darkToggle.uiverse-day-night .uiverse-moon-dot,
+#darkToggle.uiverse-day-night .uiverse-light-ray {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+}
+#darkToggle.uiverse-day-night .uiverse-moon-dot {
+    z-index: 4;
+    fill: gray;
+    opacity: 0;
+    transition: opacity .4s ease;
+}
+#darkToggle.uiverse-day-night.active .uiverse-moon-dot,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-moon-dot { opacity: 1; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-1 { left: 10px; top: 3px; width: 6px; height: 6px; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-2 { left: 2px; top: 10px; width: 10px; height: 10px; }
+#darkToggle.uiverse-day-night .uiverse-moon-dot-3 { left: 16px; top: 18px; width: 3px; height: 3px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray { z-index: -1; fill: #fff; opacity: .18; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-1 { left: -8px; top: -8px; width: 43px; height: 43px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-2 { left: -50%; top: -50%; width: 55px; height: 55px; }
+#darkToggle.uiverse-day-night .uiverse-light-ray-3 { left: -18px; top: -18px; width: 60px; height: 60px; }
+#darkToggle.uiverse-day-night .uiverse-cloud {
+    position: absolute;
+    display: block;
+    pointer-events: none;
+    animation: uiverse-cloud-drift 6s ease-in-out infinite;
+}
+#darkToggle.uiverse-day-night .uiverse-cloud-dark { fill: #ccc; animation-delay: 1s; }
+#darkToggle.uiverse-day-night .uiverse-cloud-light { fill: #eee; }
+#darkToggle.uiverse-day-night .uiverse-cloud-1 { left: 30px; top: 15px; width: 40px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-2 { left: 44px; top: 10px; width: 20px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-3 { left: 18px; top: 24px; width: 30px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-4 { left: 36px; top: 18px; width: 40px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-5 { left: 48px; top: 14px; width: 20px; }
+#darkToggle.uiverse-day-night .uiverse-cloud-6 { left: 22px; top: 26px; width: 30px; }
+#darkToggle.uiverse-day-night .uiverse-stars {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transform: translateY(-32px);
+    transition: transform .4s ease, opacity .4s ease;
+    pointer-events: none;
+}
+#darkToggle.uiverse-day-night.active .uiverse-stars,
+body.dark-mode #darkToggle.uiverse-day-night .uiverse-stars {
+    opacity: 1;
+    transform: translateY(0);
+}
+#darkToggle.uiverse-day-night .uiverse-star {
+    position: absolute;
+    display: block;
+    fill: white;
+    animation: uiverse-star-twinkle 2s ease-in-out infinite;
+}
+#darkToggle.uiverse-day-night .uiverse-star-1 { width: 20px; top: 2px; left: 3px; animation-delay: .3s; }
+#darkToggle.uiverse-day-night .uiverse-star-2 { width: 6px; top: 16px; left: 3px; }
+#darkToggle.uiverse-day-night .uiverse-star-3 { width: 12px; top: 20px; left: 10px; animation-delay: .6s; }
+#darkToggle.uiverse-day-night .uiverse-star-4 { width: 18px; top: 0; left: 18px; animation-delay: 1.3s; }
+#darkToggle.uiverse-day-night:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+@keyframes uiverse-moon-rotate {
+    from { rotate: -25deg; }
+    to { rotate: 0deg; }
+}
+@keyframes uiverse-cloud-drift {
+    0%, 100% { transform: translateX(0); }
+    40% { transform: translateX(4px); }
+    80% { transform: translateX(-4px); }
+}
+@keyframes uiverse-star-twinkle {
+    0%, 100% { transform: scale(1); }
+    40% { transform: scale(1.2); }
+    80% { transform: scale(.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+    /* Retain an obvious, non-animated button state without disregarding the
+       operating system's reduced-motion preference. */
+    .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked {
+        animation: none;
+        transform: translateY(1px);
+        box-shadow: 0 0 0 var(--uiverse-button-edge),0 1px 3px rgba(12,24,40,.1);
+        background: color-mix(in srgb, var(--uiverse-button-face) 70%, var(--uiverse-button-edge));
+    }
+    .dashboard-action-controls :is(.action-beep,.action-warning).action-btn.uiverse-press-button.uiverse-action-clicked::before {
+        animation: none;
+    }
+    .dashboard-action-controls .action-btn.uiverse-press-button,
+    #darkToggle.uiverse-day-night .uiverse-toggle-scene,
+    #darkToggle.uiverse-day-night .dark-toggle-slider,
+    #darkToggle.uiverse-day-night .uiverse-moon-dot,
+    #darkToggle.uiverse-day-night .uiverse-stars {
+        transition: none;
+    }
+    #darkToggle.uiverse-day-night .uiverse-cloud,
+    #darkToggle.uiverse-day-night .uiverse-star,
+    #darkToggle.uiverse-day-night .dark-toggle-slider.uiverse-sun-moon { animation: none; }
+}

@@ -13,31 +13,31 @@
         if (!canRender(root)) return;
 
         const document = root.ownerDocument;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'navigation-mode-toggle';
-        button.setAttribute('aria-label', 'Mapping / Driving 전환');
-
-        const mappingLabel = document.createElement('span');
-        mappingLabel.className = 'navigation-mode-toggle-label';
-        mappingLabel.dataset.navigationModeTarget = 'MAPPING';
-        mappingLabel.textContent = 'MAPPING';
-
-        const track = document.createElement('span');
-        track.className = 'navigation-mode-toggle-track';
-        track.setAttribute('aria-hidden', 'true');
-
-        const slider = document.createElement('span');
-        slider.className = 'navigation-mode-toggle-slider';
-        track.append(slider);
-
-        const drivingLabel = document.createElement('span');
-        drivingLabel.className = 'navigation-mode-toggle-label';
-        drivingLabel.dataset.navigationModeTarget = 'DRIVING';
-        drivingLabel.textContent = 'DRIVING';
-
-        button.append(mappingLabel, track, drivingLabel);
-        root.replaceChildren(button);
+        // Hydrate the final server-rendered control, without replacing its DOM.
+        let button = root.querySelector('.navigation-mode-toggle');
+        let mappingLabel = button?.querySelector('[data-navigation-mode-target="MAPPING"]');
+        let track = button?.querySelector('.navigation-mode-toggle-track');
+        let drivingLabel = button?.querySelector('[data-navigation-mode-target="DRIVING"]');
+        if (!button || !mappingLabel || !track || !drivingLabel) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'navigation-mode-toggle';
+            mappingLabel = document.createElement('span');
+            mappingLabel.className = 'navigation-mode-toggle-label';
+            mappingLabel.dataset.navigationModeTarget = 'MAPPING';
+            mappingLabel.textContent = 'Mapping';
+            track = document.createElement('span');
+            track.className = 'navigation-mode-toggle-track';
+            track.setAttribute('aria-hidden', 'true');
+            track.append(Object.assign(document.createElement('span'), { className: 'navigation-mode-toggle-slider' }));
+            drivingLabel = document.createElement('span');
+            drivingLabel.className = 'navigation-mode-toggle-label';
+            drivingLabel.dataset.navigationModeTarget = 'DRIVING';
+            drivingLabel.textContent = 'Driving';
+            button.append(mappingLabel, track, drivingLabel);
+            root.replaceChildren(button);
+        }
+        button.setAttribute('aria-label', 'Navigation mode 선택');
 
         controller.button = button;
         controller.mappingLabel = mappingLabel;
