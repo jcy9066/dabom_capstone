@@ -919,11 +919,33 @@ class NavigationControlApi:
                 self._robot_id,
                 {"type": "navigation_mode", "mode": "mapping"},
             )
-            if not self._pi_command_delivered(delivered):
+            with self._lock:
+                pi_confirmed = (
+                    self._connected and self._pi_updated_at is not None
+                    and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    and self._pi_navigation_mode == "MAPPING"
+                )
+            if not self._pi_command_delivered(delivered) or not pi_confirmed:
+                # The GPU process is already in MAPPING. Preserve that truth
+                # and expose Pi divergence explicitly, never as DRIVING ready.
                 with self._lock:
-                    self._state["navigation_state"] = "ERROR"
-                    self._state["last_error"] = "PI_MODE_SYNC_FAILED"
+                    self._arm_pending_stop_locked()
+                    self._state.update({
+                        "navigation_mode": "MAPPING",
+                        "navigation_state": "ERROR",
+                        "active_goal": None,
+                        "waypoints": [],
+                        "planned_path": [],
+                        "active_map": None,
+                        "localization_ready": False,
+                        "nav2_ready": False,
+                        "last_error": "PI_MODE_SYNC_FAILED",
+                    })
                     self._touch_locked()
+                await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "mapping_pi_mode_sync_failed"},
+                )
                 raise NavigationControlError("PI_MODE_SYNC_FAILED", "Pi did not confirm MAPPING mode.", 503)
             with self._lock:
                 self._state.update(
@@ -1027,8 +1049,14 @@ class NavigationControlApi:
                 and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
             )
         if not self._pi_command_delivered(delivered) or not pi_confirmed:
-            await asyncio.to_thread(self._process.stop, "DRIVING")
+            try:
+                await asyncio.to_thread(self._process.stop, "DRIVING")
+            except Exception:
+                # The process is not guaranteed to be stopped; motor
+                # authorization remains blocked until a fresh safe state.
+                pass
             with self._lock:
+                self._arm_pending_stop_locked()
                 self._state["navigation_state"] = "ERROR"
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False

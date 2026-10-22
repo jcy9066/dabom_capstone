@@ -2182,6 +2182,27 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.api.state_response()["active_goal"])
         self.assertFalse(self.api.state_response()["cancel_completed"])
 
+    async def test_mapping_pi_mode_failure_preserves_gpu_truth_and_blocks_motion(self):
+        await self.driving_ready()
+        old_sender = self.api._send_robot_command
+
+        async def reject_mapping(robot_id, command):
+            if command.get("type") == "navigation_mode" and command.get("mode") == "mapping":
+                return False
+            return await old_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_mapping
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_mode({"mode": "MAPPING"})
+        self.assertEqual("PI_MODE_SYNC_FAILED", raised.exception.error_code)
+        result = self.api.state_response()
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual("ERROR", result["navigation_state"])
+        self.assertEqual("DRIVING", result["pi_navigation_mode"])
+        self.assertFalse(result["patrol_ready"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual([], result["planned_path"])
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
