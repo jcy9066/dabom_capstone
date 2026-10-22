@@ -314,3 +314,27 @@ def test_preflight_is_optional_for_other_commands():
         assert await manager.send_command("pi-01", {"type": "led", "enabled": True})
         assert ws.commands[-1]["type"] == "led"
     asyncio.run(scenario())
+
+
+
+def test_pi_mode_ack_must_report_actual_requested_mode():
+    async def scenario(command, reported):
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        command = dict(command, command_id="mode-check")
+        task = asyncio.create_task(manager.send_command_wait_ack("pi-01", command))
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert await manager.receive_ack("pi-01", ws, {
+            "command_id": "mode-check", "ok": True, **reported,
+        })
+        return await task
+
+    for command, good, bad in (
+        ({"type": "mode", "mode": "auto"}, {"mode": "auto"}, {"mode": "manual"}),
+        ({"type": "navigation_mode", "mode": "driving"},
+         {"navigation_mode": "driving"}, {"navigation_mode": "mapping"}),
+    ):
+        assert asyncio.run(scenario(command, good)) is True
+        assert asyncio.run(scenario(command, bad)) is False
+        assert asyncio.run(scenario(command, {})) is False

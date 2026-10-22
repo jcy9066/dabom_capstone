@@ -788,6 +788,16 @@ class RobotConnectionManager:
                     and ack.get("safety_session") == command.get("safety_session")
                     and ack.get("safety_epoch") == command.get("safety_epoch")
                 )
+            if command.get("type") in {"mode", "navigation_mode"}:
+                # ACK command IDs alone do not prove the Pi applied the
+                # requested mode. The Pi includes its *actual* mode in ACK.
+                field = "mode" if command["type"] == "mode" else "navigation_mode"
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and str(ack.get(field) or "").lower()
+                    == str(command.get("mode") or "").lower()
+                )
             # Motion ACK must come from the Pi *after* motor execution,
             # with the same safety generation that was authorized. The Pi
             # advances its epoch on STOP, so this identity check applies
