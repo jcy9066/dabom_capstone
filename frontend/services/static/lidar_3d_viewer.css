@@ -584,3 +584,23 @@
     left: 0;
     transform: none;
 }
+
+/* Viewer UI density only: mapping switch matches adjacent controls.
+ * Rendering colors and navigation behavior are unchanged. */
+.lidar-control-drawer .navigation-mode-toggle-label{
+  font-size:11px!important;line-height:1.15;letter-spacing:.1px;
+}
+.lidar-control-drawer .navigation-mode-toggle{gap:5px;min-height:29px;}
+.lidar-control-drawer .navigation-mode-toggle-track{
+  flex-basis:50px;width:50px;height:27px;
+}
+.lidar-control-drawer .navigation-mode-toggle-slider{height:19px;}
+.lidar-control-drawer .navigation-mode-toggle.driving .navigation-mode-toggle-slider{left:calc(100% - 21px);}
+.lidar-layer-drawer .lidar-layer-drawer-title{font-size:7px;}
+.lidar-layer-drawer .lidar-display-options label{font-size:7px;line-height:1.4;}
+.lidar-layer-drawer .lidar-display-options label:has(input:not(:checked)){
+  color:#8391a0;opacity:.85;
+}
+.lidar-layer-drawer .lidar-display-options label:has(input:checked){
+  color:#cbd5e1;opacity:1;
+}

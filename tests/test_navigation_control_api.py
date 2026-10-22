@@ -2255,6 +2255,33 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         self.assertEqual("GOAL_OUT_OF_BOUNDS", raised.exception.error_code)
 
+    async def test_speaker_volume_defaults_to_pico_state_and_updates_with_ack(self):
+        self.api.note_pi_status({"speaker_volume_percent": 20})
+        self.assertEqual(self.api.state_response()["speaker_volume_percent"], 20)
+        updated = await self.api.set_speaker_volume({"volume_percent": 0})
+        self.assertEqual(updated["volume_percent"], 0)
+        self.assertEqual(self.commands[-1][1], {"type": "set_volume", "volume_percent": 0})
+        self.assertEqual(self.api.state_response()["speaker_volume_percent"], 0)
+
+        with self.assertRaises(NavigationControlError):
+            await self.api.set_speaker_volume({"volume_percent": 101})
+        with self.assertRaises(NavigationControlError):
+            await self.api.set_speaker_volume({"volume_percent": True})
+        with self.assertRaises(NavigationControlError):
+            await self.api.set_speaker_volume({"volume_percent": 20.5})
+
+    async def test_speaker_volume_requires_ack_and_refreshes_status_on_reconnect(self):
+        self.api.note_pi_status({"speaker_volume_percent": 20})
+        self.api._send_robot_command = lambda *_: asyncio.sleep(0, result=False)
+        with self.assertRaises(NavigationControlError) as rejected:
+            await self.api.set_speaker_volume({"volume_percent": 90})
+        self.assertEqual(rejected.exception.error_code, "VOLUME_NOT_CONFIRMED")
+        self.assertEqual(self.api.state_response()["speaker_volume_percent"], 20)
+        self.api.note_pi_connection(False)
+        self.assertIsNone(self.api.state_response()["speaker_volume_percent"])
+        self.api.note_pi_status({"speaker_volume_percent": 20})
+        self.assertEqual(self.api.state_response()["speaker_volume_percent"], 20)
+
     async def test_beep_led_and_warning_use_single_robot_command_path(self):
         beep = await self.api.beep({"duration_ms": 350})
         led = await self.api.led_test({"duration_ms": 500})
@@ -2306,6 +2333,18 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             },
             state_response.json()["dashboard_config"],
         )
+
+        denied_volume = client.post(
+            "/api/navigation/control/speaker-volume", json={"volume_percent": 0},
+        )
+        self.assertEqual(403, denied_volume.status_code)
+        accepted_volume = client.post(
+            "/api/navigation/control/speaker-volume",
+            json={"volume_percent": 20},
+            headers={"X-CSRF-Token": "test-token"},
+        )
+        self.assertEqual(200, accepted_volume.status_code)
+        self.assertEqual(20, accepted_volume.json()["volume_percent"])
 
         denied_beep = client.post(
             "/api/navigation/control/beep",

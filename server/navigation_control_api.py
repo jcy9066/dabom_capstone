@@ -130,6 +130,8 @@ class NavigationControlApi:
         self._pi_seen_safety_sessions: set[str] = set()
         self._pi_session_stop_pending: str | None = None
         self._led_enabled: bool | None = None
+        self._speaker_volume_percent: int | None = None
+        self._volume_override_until = 0.0
         self._last_scan_at: float | None = None
         self._last_pose_at: float | None = None
         self._navigation_progress_pose: tuple[float, float] | None = None
@@ -202,6 +204,8 @@ class NavigationControlApi:
             # Require fresh telemetry before authorizing motion.
             self._pi_updated_at = None
             self._pi_estop_latched = None
+            self._speaker_volume_percent = None
+            self._volume_override_until = 0.0
             if not connected:
                 self._encoder_sequence = None
                 self._stop_confirmation_after_sequence = None
@@ -287,6 +291,16 @@ class NavigationControlApi:
                     self._state["emergency_stop"] = False
             if isinstance(payload.get("led_enabled"), bool):
                 self._led_enabled = payload["led_enabled"]
+            reported_volume = payload.get("speaker_volume_percent")
+            if type(reported_volume) is int and 0 <= reported_volume <= 100:
+                if (
+                    reported_volume == self._speaker_volume_percent
+                    or received_at >= self._volume_override_until
+                ):
+                    self._speaker_volume_percent = reported_volume
+                    self._volume_override_until = 0.0
+            elif received_at >= self._volume_override_until:
+                self._speaker_volume_percent = None
             self._touch_locked(received_at)
 
     def note_navigation_sample(
@@ -613,6 +627,13 @@ class NavigationControlApi:
                     "updated_at": self._pi_updated_at,
                 },
                 "led_enabled": self._led_enabled,
+                "speaker_volume_percent": (
+                    self._speaker_volume_percent
+                    if self._connected
+                    and self._pi_updated_at is not None
+                    and self._age(current, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    else None
+                ),
                 "motor_output_enabled": self._motor_output_enabled,
                 "dry_run": not self._motor_output_enabled,
                 **self._copy_state_locked(),
@@ -1379,6 +1400,30 @@ class NavigationControlApi:
                     return
             await asyncio.sleep(0.02)
         raise NavigationControlError("STOP_NOT_CONFIRMED", "Fresh, stable encoder samples were not received after the stop.", 409)
+
+    async def set_speaker_volume(self, payload: dict[str, Any]) -> dict[str, Any]:
+        volume = self._bounded_int(payload.get("volume_percent"), 0, 100, "volume_percent")
+        with self._lock:
+            if not self._connected:
+                raise NavigationControlError("PI_OFFLINE", "Pi is not connected.", 409)
+        reply = await self._send_robot_command(
+            self._robot_id,
+            {"type": "set_volume", "volume_percent": volume},
+        )
+        if not reply or (
+            isinstance(reply, dict)
+            and (reply.get("ok") is not True or reply.get("speaker_volume_percent") != volume)
+        ):
+            raise NavigationControlError(
+                "VOLUME_NOT_CONFIRMED",
+                "Pico W did not confirm the requested speaker volume.",
+                409,
+            )
+        with self._lock:
+            self._speaker_volume_percent = volume
+            # An in-flight older Pi status must not roll back a new ACK.
+            self._volume_override_until = time.time() + 3.0
+        return {"ok": True, "volume_percent": volume, "delivered": True}
 
     async def beep(self, payload: dict[str, Any]) -> dict[str, Any]:
         duration_ms = self._bounded_int(
@@ -2468,6 +2513,10 @@ class NavigationControlApi:
         @self._app.post("/api/navigation/control/beep")
         async def play_beep(request: Request):
             return await self._mutation(request, self.beep)
+
+        @self._app.post("/api/navigation/control/speaker-volume")
+        async def update_speaker_volume(request: Request):
+            return await self._mutation(request, self.set_speaker_volume)
 
         @self._app.post("/api/navigation/control/led")
         async def control_led(request: Request):

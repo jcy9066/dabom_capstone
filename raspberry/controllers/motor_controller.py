@@ -109,6 +109,7 @@ class MotorController:
         self.last_command_at = 0.0
         self.current_motion = "stop"
         self.led_enabled = False
+        self.volume_percent: Optional[int] = None
 
         self._serial: Optional[object] = None
 
@@ -233,6 +234,7 @@ class MotorController:
             with self._state_lock:
                 self.current_motion = "stop"
                 self.led_enabled = False
+                self.volume_percent = None
 
             self._pico_reboot_event.set()
             print(f"[motor] Pico reboot detected: {line}")
@@ -306,6 +308,7 @@ class MotorController:
             self._serial = None
             self._reader_running = False
             self._reader_thread = None
+            self.volume_percent = None
 
         if serial_device is not None:
             try:
@@ -494,6 +497,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
+            self._read_volume_locked()
 
             print(
                 f"[motor] Pico W connected: "
@@ -527,6 +531,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
+            self._read_volume_locked()
 
         self._pico_reboot_event.clear()
         print("[motor] encoder stream recovered after Pico reboot")
@@ -563,6 +568,37 @@ class MotorController:
             self._exchange_locked(f"LED,{1 if enabled else 0}")
             with self._state_lock:
                 self.led_enabled = enabled
+
+    def _read_volume_locked(self) -> int:
+        response = self._exchange_locked("VOLUME_GET")
+        if not response.startswith("OK,VOLUME,"):
+            raise MotorControllerError(f"Unexpected volume response: {response}")
+        try:
+            volume = int(response.split(",")[2])
+        except (IndexError, ValueError) as exc:
+            raise MotorControllerError(f"Invalid volume response: {response}") from exc
+        if not 0 <= volume <= 100 or response != f"OK,VOLUME,{volume}":
+            raise MotorControllerError(f"Invalid volume response: {response}")
+        with self._state_lock:
+            self.volume_percent = volume
+        return volume
+
+    def get_volume(self) -> int:
+        with self._command_lock:
+            self._ensure_connected_locked()
+            return self._read_volume_locked()
+
+    def set_volume(self, percent: int) -> int:
+        if type(percent) is not int or not 0 <= percent <= 100:
+            raise MotorControllerError("volume percent must be an integer between 0 and 100")
+        with self._command_lock:
+            self._ensure_connected_locked()
+            response = self._exchange_locked(f"VOLUME,{percent}")
+            if response != f"OK,VOLUME,{percent}":
+                raise MotorControllerError(f"Volume not confirmed by Pico W: {response}")
+            with self._state_lock:
+                self.volume_percent = percent
+            return percent
 
     def beep(self, duration_ms: int = 350) -> None:
         if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):

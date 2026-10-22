@@ -278,6 +278,38 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.messages[-1]["ok"])
         self.assertIn("unknown command type", socket.messages[-1]["error"])
 
+    async def test_speaker_volume_requires_integer_range_and_returns_ack_state(self):
+        client = self.make_client()
+        socket = FakeWebSocket()
+        client.motor.volume_percent = 20
+
+        await client.handle_command(socket, {"type": "set_volume", "volume_percent": 0, "command_id": "mute"})
+        client.motor.set_volume.assert_called_once_with(0)
+        self.assertTrue(socket.messages[-1]["ok"])
+
+        client.motor.volume_percent = 0
+        client.motor.set_volume.reset_mock()
+        for invalid in (True, 101, -1, 25.5, "10", None):
+            await client.handle_command(socket, {
+                "type": "set_volume", "volume_percent": invalid, "command_id": "invalid",
+            })
+            self.assertFalse(socket.messages[-1]["ok"])
+            client.motor.set_volume.assert_not_called()
+
+        client.motor.set_volume.side_effect = RuntimeError("pico rejected volume")
+        await client.handle_command(socket, {"type": "set_volume", "volume_percent": 100, "command_id": "fail"})
+        self.assertFalse(socket.messages[-1]["ok"])
+
+    def test_speaker_volume_is_unavailable_when_rebooting_or_invalid(self):
+        client = self.make_client()
+        client.motor.volume_percent = 20
+        self.assertEqual(client._current_speaker_volume(), 20)
+        client.motor.pico_reboot_pending.return_value = True
+        self.assertIsNone(client._current_speaker_volume())
+        client.motor.pico_reboot_pending.return_value = False
+        client.motor.volume_percent = object()
+        self.assertIsNone(client._current_speaker_volume())
+
     async def test_beep_led_and_warning_use_pico_contract(self):
         client = self.make_client()
         socket = FakeWebSocket()
