@@ -495,7 +495,10 @@ class NavigationControlApi:
     def _motion_allowed_locked(self, now: float) -> bool:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
                 or self._patrol_transition is not None
-                or self._patrol_transition_error is not None):
+                or self._patrol_transition_error is not None
+                or self._state["navigation_state"] in {
+                    "FAILED", "CANCELING", "CANCELING_STOP", "PAUSING_FOR_MANUAL",
+                }):
             # A failed/ambiguous Pi mode transition cannot be repaired by
             # encoder STOP alone; require an explicit verified new transition.
             return False
@@ -1526,13 +1529,25 @@ class NavigationControlApi:
         with self._lock:
             self._sensor_recovery = None
             self._arm_pending_stop_locked()
-            previous_navigation_state = self._state["navigation_state"]
             self._state["navigation_state"] = "PAUSING_FOR_MANUAL"
             self._touch_locked()
         cancel = None
         cancel_error = None
         try:
             cancel = await asyncio.to_thread(self._ros.cancel_navigation)
+            terminal = self._cancel_terminal(cancel)
+            confirmed = (
+                isinstance(cancel, dict)
+                and (
+                    (cancel.get("confirmed") is True
+                     and (cancel.get("completed") is True or cancel.get("requested") is False))
+                    or (terminal == "SUCCEEDED" and cancel.get("completed") is True)
+                )
+            )
+            if not confirmed:
+                cancel_error = NavigationControlError(
+                    "NAV_CANCEL_FAILED", "Nav2 did not confirm the Goal cancellation.", 409
+                )
         except Exception as exc:
             cancel_error = exc
         stop_response = await self._send_robot_command(
