@@ -1004,6 +1004,7 @@ class NavigationControlApi:
         source = str(payload.get("source", "existing")).strip().lower()
         map_name = payload.get("map_name")
         initial_pose_payload = payload.get("initial_pose")
+        auto_pose_encoder_baseline = None
 
         if source in {"current", "save_current"}:
             live_map = self._get_live_map()
@@ -1045,8 +1046,15 @@ class NavigationControlApi:
                 selected_for_match = self._map_api.resolve_map(map_name)
                 with self._lock:
                     manual = self._robot_mode == "manual"
-                    not_moving = self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
-                if not manual or not not_moving:
+                    not_moving = (
+                        self._state["navigation_state"] not in {
+                            "NAVIGATING", "RESUMING", "CANCELING", "CANCELING_STOP",
+                            "PAUSING_FOR_MANUAL", "REPLACING_GOAL", "EMERGENCY_STOPPED",
+                        }
+                        and self._motion_allowed_locked(time.time())
+                    )
+                    auto_pose_encoder_baseline = self._encoder_ticks
+                if not manual or not not_moving or auto_pose_encoder_baseline is None:
                     raise NavigationControlError(
                         "AUTO_POSE_REQUIRES_STOP", "Select manual/stopped operation before automatic localization.", 409
                     )
@@ -1068,6 +1076,16 @@ class NavigationControlApi:
                         f"Automatic localization cannot confirm a unique position: {exc}. Enter Initial Pose manually.",
                         409,
                     ) from exc
+                # A valid snapshot is not proof the RC car remained stopped
+                # while expensive global scan matching was running.
+                with self._lock:
+                    if (self._encoder_ticks != auto_pose_encoder_baseline
+                        or self._robot_mode != "manual"
+                        or self._state["emergency_stop"]
+                        or not self._motion_allowed_locked(time.time())):
+                        raise NavigationControlError(
+                            "AUTO_POSE_MOVED", "Robot moved during automatic localization; retry while stopped.", 409,
+                        )
         else:
             raise NavigationControlError(
                 "INVALID_SOURCE",
@@ -1083,6 +1101,15 @@ class NavigationControlApi:
                 user,
             )
             await self._wait_for_nav2_ready()
+            if auto_pose_encoder_baseline is not None:
+                with self._lock:
+                    if (self._encoder_ticks != auto_pose_encoder_baseline
+                        or self._robot_mode != "manual"
+                        or self._state["emergency_stop"]
+                        or not self._motion_allowed_locked(time.time())):
+                        raise NavigationControlError(
+                            "AUTO_POSE_MOVED", "Robot moved before Driving readiness; reload the map.", 409,
+                        )
         except Exception as exc:
             try:
                 await asyncio.to_thread(self._process.stop, "DRIVING")
