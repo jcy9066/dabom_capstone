@@ -154,16 +154,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                     "navigation_mode": command["mode"],
                     "mode": self.api._robot_mode,
                     "emergency_stop": False,
-                    "safety_session": "test-pi",
-                    "safety_epoch": self._fake_safety_epoch,
+                    **({
+                        "safety_session": "test-pi",
+                        "safety_epoch": self._fake_safety_epoch,
+                    } if self.api._pi_safety_session is not None else {}),
                 })
             if command["type"] == "mode":
                 self.api.note_pi_status({
                     "mode": command["mode"],
                     "navigation_mode": self.api._pi_navigation_mode or "mapping",
                     "emergency_stop": False,
-                    "safety_session": "test-pi",
-                    "safety_epoch": self._fake_safety_epoch,
+                    **({
+                        "safety_session": "test-pi",
+                        "safety_epoch": self._fake_safety_epoch,
+                    } if self.api._pi_safety_session is not None else {}),
                 })
             if command["type"] == "emergency_stop":
                 self._fake_safety_epoch += 1
