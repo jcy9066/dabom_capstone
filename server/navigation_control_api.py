@@ -476,7 +476,8 @@ class NavigationControlApi:
 
     def _expire_pending_cancel_locked(self, now: float) -> None:
         pending = self._pending_goal_cancel
-        if pending is None or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC:
+        if (pending is None or pending.get("started_at") is None
+            or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC):
             return
         self._pending_goal_cancel = None
         self._state["navigation_state"] = "FAILED"
@@ -1354,9 +1355,11 @@ class NavigationControlApi:
                 return {**self.state_response(), "stop_delivered": True,
                         "physical_stop_confirmed": True, "cancel_completed": True}
             if self._pending_goal_cancel is not None:
-                # Duplicate cancellation must not reset the encoder proof window.
+                # Includes the Nav2/ACK in-flight phase. Never dispatch a
+                # second physical STOP for the same cancel execution.
                 return {**self.state_response(), "cancel_completed": False,
-                        "stop_delivered": True, "physical_stop_confirmed": False}
+                        "stop_delivered": self._pending_goal_cancel.get("stop_delivered") is True,
+                        "physical_stop_confirmed": False}
             self._pending_nav_success = None
             self._sensor_recovery = None
             self._goal_motion_generation += 1
@@ -1365,6 +1368,17 @@ class NavigationControlApi:
             # Block the ROS terminal callback from clearing the Goal while
             # cancellation and physical STOP are still in flight.
             self._state["navigation_state"] = "CANCELING"
+            # Establish the cancellation owner before any await. Its stop
+            # timeout begins only after Nav2 completion and STOP delivery.
+            cancel_generation = self._goal_motion_generation
+            pending_cancel = {
+                "started_at": None,
+                "nav_cancel_requested": False,
+                "nav_cancel_confirmed": False,
+                "stop_delivered": False,
+                "physical_stop_confirmed": False,
+            }
+            self._pending_goal_cancel = pending_cancel
             self._touch_locked()
         cancel_result, stop_result = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
@@ -1377,6 +1391,15 @@ class NavigationControlApi:
         cancel = None if cancel_error is not None else cancel_result
         delivered = self._pi_command_delivered(stop_result)
         with self._lock:
+            if (self._pending_goal_cancel is not pending_cancel
+                or self._goal_motion_generation != cancel_generation
+                or self._state["emergency_stop"]):
+                # An E-STOP or a later execution owns this Goal now. Never
+                # reset the newer stop proof baseline or terminal state.
+                return {**self.state_response(), "cancel": cancel,
+                        "stop_delivered": delivered,
+                        "physical_stop_confirmed": False,
+                        "cancel_completed": False}
             # A newer E-STOP owns the physical stop baseline. Late cancel
             # results never replace its encoder/safety generations.
             if not self._state["emergency_stop"]:
@@ -1412,7 +1435,9 @@ class NavigationControlApi:
                 self._state["last_error"] = "STOP_NOT_DELIVERED"
                 self._pending_goal_cancel = None
             elif terminal == "SUCCEEDED":
-                # Success/cancel race still requires original Goal verification.
+                # A successful Nav2 action takes the existing pose/yaw
+                # verification flow; it does not complete a user cancel.
+                self._pending_goal_cancel = None
                 self._state["navigation_state"] = "NAVIGATING"
                 self._apply_cancel_terminal_locked("SUCCEEDED")
             elif terminal == "FAILED":
@@ -1422,14 +1447,14 @@ class NavigationControlApi:
             else:
                 self._state["navigation_state"] = "CANCELING_STOP"
                 self._state["last_error"] = None
-                self._pending_goal_cancel = {
+                pending_cancel.update({
                     "started_at": time.time(),
                     "nav_cancel_requested": bool(cancel.get("requested")) if isinstance(cancel, dict) else False,
                     "nav_cancel_confirmed": True,
                     "nav_terminal": terminal or "CANCELED",
                     "stop_delivered": True,
                     "physical_stop_confirmed": False,
-                }
+                })
             self._last_goal_cancel = {
                 "completed": False,
                 "nav_cancel_confirmed": nav_confirmed,
