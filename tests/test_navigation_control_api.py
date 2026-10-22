@@ -2343,6 +2343,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.api.motion_safety_context())
         self.assertFalse(self.api.state_response()["patrol_ready"])
 
+    async def test_mode_ack_failure_recovers_only_after_confirmed_stop_and_retry(self):
+        await self.driving_ready()
+        original = self.api._send_robot_command
+        failed_once = True
+
+        async def flaky_mode(robot_id, command):
+            nonlocal failed_once
+            if command.get("type") == "mode" and failed_once:
+                failed_once = False
+                # A lost ACK does not prove the Pi did not actually switch.
+                self.api.note_pi_status({
+                    "mode": command["mode"], "navigation_mode": "driving",
+                    "emergency_stop": False,
+                })
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = flaky_mode
+        with self.assertRaises(NavigationControlError) as first:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("PI_MODE_ACK_FAILED", first.exception.error_code)
+        self.assertFalse(self.api.motion_allowed())
+        with self.assertRaises(NavigationControlError) as early:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("STOP_NOT_CONFIRMED", early.exception.error_code)
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertIsNone(result["patrol_transition_error"])
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

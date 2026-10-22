@@ -852,13 +852,19 @@ class NavigationControlApi:
                 target == "manual"
                 and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
             )):
-                # A timeout can leave the Pi reporting target mode while
-                # physical STOP remains unconfirmed. Do not mask that failure.
-                if self._patrol_transition_error or not self._motion_allowed_locked(time.time()):
+                # Duplicates are success only when safety is settled. An
+                # ambiguous earlier ACK may have switched the Pi, but must
+                # be explicitly reverified after a fresh physical STOP.
+                if self._patrol_transition_error is None:
+                    if not self._motion_allowed_locked(time.time()):
+                        raise NavigationControlError(
+                            "STOP_NOT_CONFIRMED", "The Pi stop is not safely settled.", 409
+                        )
+                    return self.state_response()
+                if not self._stop_confirmed_locked(time.time()):
                     raise NavigationControlError(
-                        "STOP_NOT_CONFIRMED", "Previous mode transition is not safely settled.", 409
+                        "STOP_NOT_CONFIRMED", "Verify a fresh encoder STOP before retrying mode sync.", 409
                     )
-                return self.state_response()
             self._patrol_transition = target
             self._patrol_transition_error = None
             self._touch_locked()
@@ -911,10 +917,21 @@ class NavigationControlApi:
                 self._arm_pending_stop_locked()
                 self._touch_locked()
             # Ambiguous ACK failures can still mean the Pi changed mode.
-            # Never release the motion gate before a separate physical STOP.
-            await self._send_robot_command(
+            # Independently STOP and require *subsequent* encoder proof.
+            stop_ack = await self._send_robot_command(
                 self._robot_id, {"type": "stop", "reason": "patrol_mode_sync_failed"}
             )
+            with self._lock:
+                if (self._pi_command_delivered(stop_ack)
+                    and not self._state["emergency_stop"]):
+                    self._stop_commanded_at = time.time()
+                    self._stop_encoder_ticks = self._encoder_ticks
+                    self._stop_confirmation_after_sequence = self._encoder_sequence or 0
+                    self._stop_confirmation_ticks = None
+                    self._stop_confirmation_started_at = None
+                    self._stop_confirmation_last_at = None
+                    self._stop_confirmation_samples = 0
+                    self._touch_locked()
             raise
         finally:
             with self._lock:
