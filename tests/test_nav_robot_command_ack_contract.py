@@ -338,3 +338,11 @@ def test_pi_mode_ack_must_report_actual_requested_mode():
         assert asyncio.run(scenario(command, good)) is True
         assert asyncio.run(scenario(command, bad)) is False
         assert asyncio.run(scenario(command, {})) is False
+
+
+def test_ack_dispatch_never_promotes_ack_frame_to_pi_telemetry():
+    source = (ROOT / "server/app.py").read_text(encoding="utf-8")
+    ack_block = source.split('elif message.get("type") == "ack":', 1)[1]
+    ack_block = ack_block.split("except WebSocketDisconnect", 1)[0]
+    assert "connections.receive_ack" in ack_block
+    assert "navigation_control_api.note_pi_status(message)" not in ack_block

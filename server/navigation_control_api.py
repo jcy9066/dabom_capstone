@@ -228,7 +228,8 @@ class NavigationControlApi:
                     self._estop_last_attempt_at = None
 
     def note_pi_status(self, payload: dict[str, Any], now: float | None = None) -> None:
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or payload.get("type") == "ack":
+            # A command ACK cannot refresh Pi telemetry or safety state.
             return
         received_at = now or time.time()
         safety_session = str(payload.get("safety_session") or "").strip()
@@ -473,7 +474,8 @@ class NavigationControlApi:
 
     def _expire_pending_cancel_locked(self, now: float) -> None:
         pending = self._pending_goal_cancel
-        if pending is None or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC:
+        if (pending is None or pending.get("started_at") is None
+            or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC):
             return
         self._pending_goal_cancel = None
         self._state["navigation_state"] = "FAILED"
@@ -793,6 +795,28 @@ class NavigationControlApi:
             }
         return payload
 
+    async def _await_pi_navigation_telemetry(
+        self, expected: str, after: float | None, timeout_sec: float = 1.5
+    ) -> bool:
+        """Require fresh Pi mode and safety status after sending a command."""
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            with self._lock:
+                confirmed = (
+                    self._connected
+                    and self._pi_updated_at is not None
+                    and (after is None or self._pi_updated_at > after)
+                    and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                    and self._pi_navigation_mode == expected
+                    and self._pi_estop_latched is False
+                    and not self._state["emergency_stop"]
+                )
+            if confirmed:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+
     async def switch_patrol_mode(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Switch Pi motor authority only after independent Nav2/Pi checks."""
         target = str(payload.get("mode") or "").strip().lower()
@@ -846,6 +870,8 @@ class NavigationControlApi:
                     raise NavigationControlError(
                         "EMERGENCY_STOP_ACTIVE", "Emergency stop interrupted the mode switch.", 409
                     )
+            with self._lock:
+                pre_mode_telemetry = self._pi_updated_at
             ack = await self._send_robot_command(
                 self._robot_id, {"type": "mode", "mode": target}
             )
@@ -856,6 +882,7 @@ class NavigationControlApi:
                 with self._lock:
                     confirmed = (
                         self._connected and self._pi_updated_at is not None
+                        and (pre_mode_telemetry is None or self._pi_updated_at > pre_mode_telemetry)
                         and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                         and self._robot_mode == target and self._pi_estop_latched is False
                         and not self._state["emergency_stop"]
@@ -921,16 +948,16 @@ class NavigationControlApi:
             if self._clear_visualization is not None:
                 self._clear_visualization()
 
+            with self._lock:
+                pre_mode_telemetry = self._pi_updated_at
             delivered = await self._send_robot_command(
                 self._robot_id,
                 {"type": "navigation_mode", "mode": "mapping"},
             )
-            with self._lock:
-                pi_confirmed = (
-                    self._connected and self._pi_updated_at is not None
-                    and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
-                    and self._pi_navigation_mode == "MAPPING"
-                )
+            pi_confirmed = (
+                self._pi_command_delivered(delivered)
+                and await self._await_pi_navigation_telemetry("MAPPING", pre_mode_telemetry)
+            )
             if not self._pi_command_delivered(delivered) or not pi_confirmed:
                 with self._lock:
                     self._arm_pending_stop_locked()
@@ -1061,16 +1088,16 @@ class NavigationControlApi:
                 self._state["nav2_ready"] = False
                 self._touch_locked()
             raise
+        with self._lock:
+            pre_mode_telemetry = self._pi_updated_at
         delivered = await self._send_robot_command(
             self._robot_id,
             {"type": "navigation_mode", "mode": "driving"},
         )
-        with self._lock:
-            pi_confirmed = (
-                self._connected and self._pi_navigation_mode == "DRIVING"
-                and self._pi_updated_at is not None
-                and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
-            )
+        pi_confirmed = (
+            self._pi_command_delivered(delivered)
+            and await self._await_pi_navigation_telemetry("DRIVING", pre_mode_telemetry)
+        )
         if not self._pi_command_delivered(delivered) or not pi_confirmed:
             try:
                 await asyncio.to_thread(self._process.stop, "DRIVING")
@@ -1363,9 +1390,10 @@ class NavigationControlApi:
                 return {**self.state_response(), "stop_delivered": True,
                         "physical_stop_confirmed": True, "cancel_completed": True}
             if self._pending_goal_cancel is not None:
-                # Duplicate cancellation must not reset the encoder proof window.
+                # Duplicate cancellation includes the ACK/ROS in-flight phase.
                 return {**self.state_response(), "cancel_completed": False,
-                        "stop_delivered": True, "physical_stop_confirmed": False}
+                        "stop_delivered": self._pending_goal_cancel.get("stop_delivered") is True,
+                        "physical_stop_confirmed": False}
             self._pending_nav_success = None
             self._sensor_recovery = None
             self._goal_motion_generation += 1
@@ -1374,6 +1402,15 @@ class NavigationControlApi:
             # Block the ROS terminal callback from clearing the Goal while
             # cancellation and physical STOP are still in flight.
             self._state["navigation_state"] = "CANCELING"
+            cancel_generation = self._goal_motion_generation
+            pending_cancel = {
+                "started_at": None,
+                "nav_cancel_requested": False,
+                "nav_cancel_confirmed": False,
+                "stop_delivered": False,
+                "physical_stop_confirmed": False,
+            }
+            self._pending_goal_cancel = pending_cancel
             self._touch_locked()
         cancel_result, stop_result = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
@@ -1386,6 +1423,13 @@ class NavigationControlApi:
         cancel = None if cancel_error is not None else cancel_result
         delivered = self._pi_command_delivered(stop_result)
         with self._lock:
+            if (self._pending_goal_cancel is not pending_cancel
+                or self._goal_motion_generation != cancel_generation
+                or self._state["emergency_stop"]):
+                return {**self.state_response(), "cancel": cancel,
+                        "stop_delivered": delivered,
+                        "physical_stop_confirmed": False,
+                        "cancel_completed": False}
             # A newer E-STOP owns the physical stop baseline. Late cancel
             # results must not replace its encoder/safety generations.
             if not self._state["emergency_stop"]:
@@ -1419,7 +1463,8 @@ class NavigationControlApi:
                 self._state["last_error"] = "STOP_NOT_DELIVERED"
                 self._pending_goal_cancel = None
             elif terminal == "SUCCEEDED":
-                # Success/cancel race still requires original Goal verification.
+                # Winning Nav2 success must still undergo physical stop checks.
+                self._pending_goal_cancel = None
                 self._state["navigation_state"] = "NAVIGATING"
                 self._apply_cancel_terminal_locked("SUCCEEDED")
             elif terminal == "FAILED":
@@ -1429,14 +1474,14 @@ class NavigationControlApi:
             else:
                 self._state["navigation_state"] = "CANCELING_STOP"
                 self._state["last_error"] = None
-                self._pending_goal_cancel = {
+                pending_cancel.update({
                     "started_at": time.time(),
                     "nav_cancel_requested": bool(cancel.get("requested")) if isinstance(cancel, dict) else False,
                     "nav_cancel_confirmed": True,
                     "nav_terminal": terminal or "CANCELED",
                     "stop_delivered": True,
                     "physical_stop_confirmed": False,
-                }
+                })
             self._last_goal_cancel = {
                 "completed": False,
                 "nav_cancel_confirmed": nav_confirmed,

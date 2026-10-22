@@ -2260,6 +2260,62 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result["active_goal"])
         self.assertTrue(any(command["type"] == "stop" for _, command in self.commands))
 
+    async def test_simultaneous_cancel_reuses_original_stop_execution(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = threading.Event()
+        released = threading.Event()
+        original_cancel = self.map_api.ros_control.cancel_navigation
+
+        def slow_cancel():
+            entered.set()
+            if not released.wait(1):
+                raise RuntimeError("cancel test timed out")
+            return original_cancel()
+
+        self.map_api.ros_control.cancel_navigation = slow_cancel
+        task = asyncio.create_task(self.api.cancel_goal())
+        self.assertTrue(await asyncio.to_thread(entered.wait, 0.5))
+        try:
+            second = await self.api.cancel_goal()
+            self.assertFalse(second["cancel_completed"])
+            self.assertFalse(second["stop_delivered"])
+            self.assertEqual("CANCELING", second["navigation_state"])
+            self.assertEqual(1, sum(
+                cmd.get("reason") == "navigation_goal_cancel"
+                for _, cmd in self.commands if cmd["type"] == "stop"
+            ))
+        finally:
+            released.set()
+        first = await task
+        self.assertEqual("CANCELING_STOP", first["navigation_state"])
+
+    async def test_mode_ack_is_not_accepted_as_fresh_telemetry(self):
+        await self.driving_ready()
+        prior = self.api._pi_updated_at
+        self.api.note_pi_status({
+            "type": "ack", "command_id": "fake", "ok": True,
+            "mode": "manual", "navigation_mode": "mapping",
+            "emergency_stop": False,
+        }, now=prior + 100)
+        self.assertEqual(prior, self.api._pi_updated_at)
+        self.assertEqual("DRIVING", self.api._pi_navigation_mode)
+
+    async def test_navigation_telemetry_requires_sample_newer_than_request(self):
+        await self.driving_ready()
+        prior = self.api._pi_updated_at
+        self.assertFalse(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", prior, timeout_sec=0.01
+        ))
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+        }, now=prior + 0.1)
+        self.assertTrue(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", prior, timeout_sec=0.01
+        ))
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))
