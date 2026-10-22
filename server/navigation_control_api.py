@@ -389,17 +389,11 @@ class NavigationControlApi:
                 self._replan_refresh_inflight = False
 
     def note_replanned_path(self, path: Any) -> None:
-        normalized = self._normalized_path(path)
-        if len(normalized) < 2:
-            return
-        with self._lock:
-            if (
-                self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
-                or not self._state["active_goal"]
-            ):
-                return
-            self._state["planned_path"] = normalized
-            self._touch_locked()
+        # Legacy unowned ROS /plan callback is intentionally disabled.
+        # /plan messages do not carry a Goal ID or execution generation.
+        # The safe replacement is note_nav2_replan_signal(), which requests
+        # a new ComputePath result and checks the captured Goal generation.
+        return
 
     def note_active_map(self, active_map: dict[str, Any]) -> None:
         if not isinstance(active_map, dict):

@@ -2148,7 +2148,18 @@ if (root && canvas) {
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
         applyTfPose(tfVisualizationPose);
         updateRobotPose(visualizationPose);
-        rebuildScan(liveScan);
+        // An older robot pose must not be applied to a newer scan as if
+        // both came from the same TF frame. The next fresh pair restores
+        // the scan automatically; the map and approved path stay unchanged.
+        const scanReceived = Number(liveScan?.received_at);
+        const poseReceived = Number(livePose?.received_at);
+        const scanPoseMismatch = Boolean(
+            validPose(livePose)
+            && Number.isFinite(scanReceived) && scanReceived > 0
+            && Number.isFinite(poseReceived) && poseReceived > 0
+            && Math.abs(scanReceived - poseReceived) > 0.75
+        );
+        rebuildScan(scanPoseMismatch ? null : liveScan);
 
         if (
             trajectorySessionActive

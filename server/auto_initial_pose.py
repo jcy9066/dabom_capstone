@@ -59,6 +59,19 @@ def estimate_initial_pose(
         raise AutoPoseUncertain("LiDAR frame stale or malformed")
     if not all(math.isfinite(v) for v in (mount_x, mount_y, mount_yaw)):
         raise AutoPoseUncertain("LiDAR extrinsics invalid")
+    reported_mount = scan.get("mount")
+    if reported_mount is not None:
+        try:
+            rx = float(reported_mount["x"])
+            ry = float(reported_mount["y"])
+            ryaw = float(reported_mount["yaw"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise AutoPoseUncertain("LiDAR mount transform malformed") from exc
+        yaw_error = math.atan2(math.sin(ryaw - mount_yaw), math.cos(ryaw - mount_yaw))
+        if not all(math.isfinite(v) for v in (rx, ry, ryaw)) or (
+            abs(rx - mount_x) > 0.03 or abs(ry - mount_y) > 0.03 or abs(yaw_error) > 0.1
+        ):
+            raise AutoPoseUncertain("Live LiDAR extrinsics disagree with ROS configuration")
     sample_step = max(1, math.ceil(len(ranges) / 48))
     beams: list[tuple[float, float]] = []
     for index in range(0, len(ranges), sample_step):
@@ -76,6 +89,8 @@ def estimate_initial_pose(
     if width < 5 or height < 5 or resolution <= 0 or width * height > 2_000_000:
         raise AutoPoseUncertain("Invalid map dimensions")
     cells = decode_saved_cells(selected_map.raw_path, width, height)
+    if sum(1 for cell in cells if cell >= 65) < 12:
+        raise AutoPoseUncertain("Saved map has insufficient confirmed obstacles")
     origin_x, origin_y, origin_yaw = (
         float(selected_map.origin_x), float(selected_map.origin_y), float(selected_map.origin_yaw))
     co, so = math.cos(origin_yaw), math.sin(origin_yaw)
