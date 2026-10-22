@@ -157,6 +157,8 @@ class NavigationControlApi:
         self._stop_confirmation_episode = 0
         self._post_resume_motion_ready = False
         self._estop_generation = 0
+        # Pi safety_epoch does not distinguish successive GPU Goals.
+        self._goal_motion_generation = 0
         self._estop_attempt_reason: str | None = None
         self._estop_attempts = 0
         self._estop_last_attempt_at: float | None = None
@@ -451,6 +453,7 @@ class NavigationControlApi:
                 "safety_session": self._pi_safety_session,
                 "safety_epoch": self._pi_safety_epoch,
                 "estop_generation": self._estop_generation,
+                "goal_generation": self._goal_motion_generation,
             }
 
     def note_authorized_motion(
@@ -475,6 +478,7 @@ class NavigationControlApi:
                 or self._pi_safety_session != expected_safety.get("safety_session")
                 or self._pi_safety_epoch != expected_safety.get("safety_epoch")
                 or self._estop_generation != expected_safety.get("estop_generation")
+                or self._goal_motion_generation != expected_safety.get("goal_generation")
             ):
                 return False
 
@@ -2118,6 +2122,7 @@ class NavigationControlApi:
             self._state["planned_path"] = []
 
     def _reset_navigation_progress_locked(self) -> None:
+        self._goal_motion_generation += 1
         self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None

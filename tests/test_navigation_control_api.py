@@ -1972,6 +1972,26 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.api.note_authorized_motion(safety))
         self.assertIsNone(self.api.motion_safety_context())
 
+    async def test_goal_generation_rejects_stale_motion_after_restart(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
+        previous = self.api.motion_safety_context()
+        self.assertIsNotNone(previous)
+        with self.api._lock:
+            # Later Goal starts with unchanged Pi session and safety epoch.
+            self.api._reset_navigation_progress_locked()
+        current = self.api.motion_safety_context()
+        self.assertIsNotNone(current)
+        self.assertNotEqual(previous["goal_generation"], current["goal_generation"])
+        self.assertFalse(self.api.note_authorized_motion(previous))
+        self.assertTrue(self.api.note_authorized_motion(current))
+
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
         self.assertTrue(accepted(True))

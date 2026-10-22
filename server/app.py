@@ -712,7 +712,7 @@ class RobotConnectionManager:
                 future.set_result({"ok": False, "error": "robot disconnected"})
         return disconnected
 
-    async def _send_serialized_command(self, robot_id, websocket, command):
+    async def _send_serialized_command(self, robot_id, websocket, command, preflight=None):
         # Serialize sends to the same robot (including STOP), but never
         # hold the global connection/ACK lock across network I/O.
         send_lock = self._send_locks.setdefault(robot_id, asyncio.Lock())
@@ -720,6 +720,9 @@ class RobotConnectionManager:
             async with self.lock:
                 if self.active.get(robot_id) is not websocket:
                     return False
+            # Recheck Goal and safety generation after waiting for send lock.
+            if preflight is not None and not preflight():
+                return False
             await websocket.send_json(command)
             # A replaced/disconnected socket must never be accepted as
             # current, even if its old send completed without exception.
@@ -739,7 +742,7 @@ class RobotConnectionManager:
         except Exception:
             return False
 
-    async def send_command_wait_ack(self, robot_id, command):
+    async def send_command_wait_ack(self, robot_id, command, *, preflight=None):
         command = dict(command)
         command_id = str(command.get("command_id") or uuid4())
         command["command_id"] = command_id
@@ -758,7 +761,7 @@ class RobotConnectionManager:
         deadline = loop.time() + self.ack_timeout_sec
         try:
             sent = await asyncio.wait_for(
-                self._send_serialized_command(robot_id, websocket, command),
+                self._send_serialized_command(robot_id, websocket, command, preflight),
                 timeout=max(0.001, deadline - loop.time()),
             )
             if not sent:
@@ -5655,7 +5658,15 @@ async def send_robot_command(
     # command_id-matched ACK, including ordinary auto_drive, move and STOP.
     physical_command = command_type in {"move", "auto_drive", "stop", "emergency_stop"}
     if physical_command:
-        delivered = await connections.send_command_wait_ack(robot_id, command)
+        if controlled_motion:
+            # The earlier safety check may become stale while this command
+            # waits behind another WebSocket send or STOP.
+            delivered = await connections.send_command_wait_ack(
+                robot_id, command,
+                preflight=lambda: navigation_control_api.motion_safety_context() == motion_context,
+            )
+        else:
+            delivered = await connections.send_command_wait_ack(robot_id, command)
     else:
         delivered = await connections.send_command(robot_id, command)
     if delivered and controlled_motion:

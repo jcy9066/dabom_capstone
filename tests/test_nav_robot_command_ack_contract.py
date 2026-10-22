@@ -132,6 +132,7 @@ def test_server_endpoint_requires_ack_for_all_physical_commands():
     assert 'command_type in {"move", "auto_drive", "stop", "emergency_stop"}' in source
     assert "if physical_command:" in source
     assert "await connections.send_command_wait_ack(robot_id, command)" in source
+    assert "preflight=lambda: navigation_control_api.motion_safety_context() == motion_context" in source
     assert "if delivered and controlled_motion:" in source
     assert '"blocked": not delivered' in source
     assert source.index("if physical_command:") < source.index(
@@ -266,3 +267,50 @@ def test_navigation_ack_helper_requires_explicit_dict_delivery():
         None, "OK", 1,
     ):
         assert valid(payload) is False, repr(payload)
+
+
+
+def test_stale_queued_auto_drive_is_not_sent_after_goal_cancel():
+    async def scenario():
+        manager = _manager()
+        manager.ack_timeout_sec = 0.5
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        send_lock = asyncio.Lock()
+        manager._send_locks["pi-01"] = send_lock
+        valid = True
+        await send_lock.acquire()
+        task = asyncio.create_task(manager.send_command_wait_ack(
+            "pi-01", {"type": "auto_drive", "command_id": "queued-drive"},
+            preflight=lambda: valid,
+        ))
+        for _ in range(100):
+            if "queued-drive" in manager.pending_acks:
+                break
+            await asyncio.sleep(0)
+        assert "queued-drive" in manager.pending_acks
+        valid = False
+        send_lock.release()
+        assert await task is False
+        assert ws.commands == []
+        assert manager.pending_acks == {}
+        # Non-motion STOP still uses the original physical ACK path.
+        stop = asyncio.create_task(manager.send_command_wait_ack(
+            "pi-01", {"type": "stop", "command_id": "stop-after-cancel"}
+        ))
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert await manager.receive_ack("pi-01", ws, {
+            "command_id": "stop-after-cancel", "ok": True,
+        })
+        assert await stop is True
+    asyncio.run(scenario())
+
+
+def test_preflight_is_optional_for_other_commands():
+    async def scenario():
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        assert await manager.send_command("pi-01", {"type": "led", "enabled": True})
+        assert ws.commands[-1]["type"] == "led"
+    asyncio.run(scenario())
