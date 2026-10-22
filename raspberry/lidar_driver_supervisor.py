@@ -12,7 +12,7 @@ import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 
-from raspberry.lidar_recovery_policy import restart_backoff
+from lidar_recovery_policy import restart_backoff
 
 
 class ScanMonitor:
@@ -195,7 +195,7 @@ def main() -> int:
         print(f"[lidar-supervisor] retry_count={consecutive_failures} delay={delay:.1f}s", flush=True)
         until = time.monotonic() + delay
         while not stop_requested and time.monotonic() < until:
-            time.sleep(min(0.25, until - time.monotonic()))
+            time.sleep(min(0.25, max(0.0, until - time.monotonic())))
 
     if current is not None:
         terminate_group(current, signal.SIGINT)

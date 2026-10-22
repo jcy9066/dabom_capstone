@@ -52,5 +52,30 @@ class AutoPoseSafetyTests(unittest.TestCase):
 
 
 
+    def test_mismatched_mount_requires_manual_fallback(self):
+        scan = {"received_at": 100, "angle_min": -math.pi,
+                "angle_increment": 0.1, "range_min": 0.1, "range_max": 8,
+                "ranges": [1.0] * 50,
+                "mount": {"x": 0.0, "y": 0.0, "yaw": 0.0}}
+        with self.assertRaisesRegex(AutoPoseUncertain, "extrinsics disagree"):
+            estimate_initial_pose(self.saved, scan, mount_yaw=math.pi, now=100)
+
+    def test_no_obstacles_rejected_before_search(self):
+        scan = {"received_at": 100, "angle_min": -math.pi,
+                "angle_increment": 0.1, "range_min": 0.1, "range_max": 8,
+                "ranges": [1.0] * 50}
+        with self.assertRaisesRegex(AutoPoseUncertain, "insufficient confirmed obstacles"):
+            estimate_initial_pose(self.saved, scan, now=100)
+
+    def test_malformed_mount_is_rejected(self):
+        scan = {"received_at": 100, "angle_min": -math.pi,
+                "angle_increment": 0.1, "range_min": 0.1, "range_max": 8,
+                "ranges": [1.0] * 50,
+                "mount": {"x": None, "y": 0.0, "yaw": 0.0}}
+        with self.assertRaisesRegex(AutoPoseUncertain, "mount transform malformed"):
+            estimate_initial_pose(self.saved, scan, now=100)
+
+
+
 if __name__ == "__main__":
     unittest.main()
