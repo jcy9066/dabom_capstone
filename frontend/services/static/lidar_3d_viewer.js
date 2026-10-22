@@ -634,6 +634,30 @@ if (root && canvas) {
         ].join(':');
     }
 
+    // An event timestamp is not a geometry revision. Use exact cell content
+    // and origin comparisons so only identical WebGL geometry is reused.
+    function costmapGeometryKey(costmap) {
+        if (!costmap || typeof costmap !== 'object') return 'empty';
+        const origin = costmap.origin || {};
+        return [
+            Number(costmap.width) || 0,
+            Number(costmap.height) || 0,
+            Number(costmap.resolution) || 0,
+            Number(origin.x) || 0,
+            Number(origin.y) || 0,
+            Number(origin.yaw) || 0,
+        ].join(':');
+    }
+
+    function sameCostmapIndices(snapshot, indices) {
+        if (!Array.isArray(snapshot) || !Array.isArray(indices)) return false;
+        if (snapshot.length !== indices.length) return false;
+        for (let i = 0; i < snapshot.length; i += 1) {
+            if (snapshot[i] !== indices[i]) return false;
+        }
+        return true;
+    }
+
     function rebuildCostmapCells(rootGroup, costmap, indices, options) {
         clearGroup(rootGroup);
         if (!costmap || !Array.isArray(indices) || !indices.length) return;
@@ -680,41 +704,57 @@ if (root && canvas) {
         rootGroup.rotation.z = Number(origin.yaw) || 0;
     }
 
+    let drawnObstacleGeometryKey = null;
+    let drawnInflationGeometryKey = null;
+    let drawnObstacleIndices = null;
+    let drawnInflationIndices = null;
+
     function rebuildCostmap(costmap, forceInflation = false) {
         currentCostmap = costmap || null;
         const nextKey = costmapKey(currentCostmap);
+        const geometryKey = costmapGeometryKey(currentCostmap);
+        const obstacles = currentCostmap?.dynamic_obstacles || [];
+        const inflation = currentCostmap?.inflation || [];
         if (nextKey !== currentObstacleCostmapKey) {
             currentObstacleCostmapKey = nextKey;
-            rebuildCostmapCells(
-                dynamicObstacleRoot,
-                currentCostmap,
-                currentCostmap?.dynamic_obstacles || [],
-                {
-                    height: DYNAMIC_OBSTACLE_HEIGHT_M,
-                    color: COLORS.dynamicObstacle,
-                    opacity: 0.96,
-                    cellScale: 0.92,
-                    depthWrite: true,
-                    renderOrder: 25,
-                },
-            );
+            if (geometryKey !== drawnObstacleGeometryKey
+                || !sameCostmapIndices(drawnObstacleIndices, obstacles)) {
+                rebuildCostmapCells(
+                    dynamicObstacleRoot, currentCostmap, obstacles,
+                    {
+                        height: DYNAMIC_OBSTACLE_HEIGHT_M,
+                        color: COLORS.dynamicObstacle,
+                        opacity: 0.96,
+                        cellScale: 0.92,
+                        depthWrite: true,
+                        renderOrder: 25,
+                    },
+                );
+                drawnObstacleGeometryKey = geometryKey;
+                drawnObstacleIndices = Array.isArray(obstacles)
+                    ? obstacles.slice() : null;
+            }
         }
         if (!layerGroups.inflation.visible) return;
         if (!forceInflation && nextKey === currentInflationCostmapKey) return;
         currentInflationCostmapKey = nextKey;
-        rebuildCostmapCells(
-            inflationRoot,
-            currentCostmap,
-            currentCostmap?.inflation || [],
-            {
-                height: INFLATION_HEIGHT_M,
-                color: COLORS.inflation,
-                opacity: 0.17,
-                cellScale: 0.98,
-                depthWrite: false,
-                renderOrder: 10,
-            },
-        );
+        if (forceInflation || geometryKey !== drawnInflationGeometryKey
+            || !sameCostmapIndices(drawnInflationIndices, inflation)) {
+            rebuildCostmapCells(
+                inflationRoot, currentCostmap, inflation,
+                {
+                    height: INFLATION_HEIGHT_M,
+                    color: COLORS.inflation,
+                    opacity: 0.17,
+                    cellScale: 0.98,
+                    depthWrite: false,
+                    renderOrder: 10,
+                },
+            );
+            drawnInflationGeometryKey = geometryKey;
+            drawnInflationIndices = Array.isArray(inflation)
+                ? inflation.slice() : null;
+        }
     }
 
     function clamp(value, min, max) {
