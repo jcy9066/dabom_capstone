@@ -81,13 +81,13 @@ class NavigationControlApi:
         send_robot_command: Callable[[str, dict[str, Any]], Awaitable[bool | dict[str, Any]]],
         get_live_pose: Callable[[], dict[str, Any] | None] | None = None,
         get_live_scan: Callable[[], dict[str, Any] | None] | None = None,
-        get_live_scans: Callable[[], list[dict[str, Any]]] | None = None,
         clear_visualization: Callable[[], None] | None = None,
         clear_goal_visualization: Callable[[], None] | None = None,
         watchdog: NavigationWatchdogConfig | None = None,
         motor_output_enabled: bool = False,
         estop_cooldown_sec: float | None = None,
         goal_reached_tolerance_m: float | None = None,
+        get_live_scans: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._app = app
         self._map_api = map_api

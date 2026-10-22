@@ -136,6 +136,7 @@
             INITIAL_POSE_OUT_OF_BOUNDS: '\ucd08\uae30 \uc704\uce58\uac00 \uc120\ud0dd\ud55c \uc9c0\ub3c4 \ubc94\uc704\ub97c \ubc97\uc5b4\ub0a9\ub2c8\ub2e4.',
             AUTO_INITIAL_POSE_UNCERTAIN: '자동 위치 추정의 신뢰도가 부족합니다. X·Y·방향을 직접 입력해주세요.',
             AUTO_POSE_REQUIRES_STOP: '자동 위치 추정 전 로봇을 수동 정지 상태로 전환해주세요.',
+            AUTO_POSE_MOVED: '위치 추정 중 로봇 움직임이 감지됐습니다. 정지 후 다시 시도해주세요.',
             MAP_LOAD_IN_PROGRESS: '\ub2e4\ub978 \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30\uac00 \ucc98\ub9ac \uc911\uc785\ub2c8\ub2e4.',
             MAP_OPERATION_IN_PROGRESS: '\ub2e4\ub978 \uc800\uc7a5 \uc9c0\ub3c4 \uc791\uc5c5\uc774 \ucc98\ub9ac \uc911\uc785\ub2c8\ub2e4.',
             MAP_NAME_ALREADY_EXISTS: '\uc774\ubbf8 \uac19\uc740 \uc774\ub984\uc758 \uc800\uc7a5 \uc9c0\ub3c4\uac00 \uc788\uc2b5\ub2c8\ub2e4.',
