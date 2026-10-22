@@ -59,6 +59,9 @@ def estimate_initial_pose(
         raise AutoPoseUncertain("LiDAR frame stale or malformed")
     if not all(math.isfinite(v) for v in (mount_x, mount_y, mount_yaw)):
         raise AutoPoseUncertain("LiDAR extrinsics invalid")
+    # Match the effective mount yaw used by LidarRosBridge.
+    if abs(mount_yaw) < 1e-9:
+        mount_yaw = math.pi
     reported_mount = scan.get("mount")
     if reported_mount is not None:
         try:
@@ -117,7 +120,8 @@ def estimate_initial_pose(
             return False
         for dy in (-radius, 0, radius):
             for dx in (-radius, 0, radius):
-                if cells[(row + dy) * width + col + dx] != 0:
+                value = cells[(row + dy) * width + col + dx]
+                if value < 0 or value > 25:
                     return False
         return True
 

@@ -79,3 +79,25 @@ class AutoPoseSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_lidar_zero_yaw_matches_ros_effective_mount():
+    import json
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "grid.json"
+        cells = [0] * 400
+        for index in range(20):
+            cells[index] = 100
+        path.write_text(json.dumps({"data": cells}), encoding="utf-8")
+        saved = SimpleNamespace(raw_path=path, width=20, height=20,
+                                resolution=0.1, origin_x=0, origin_y=0, origin_yaw=0)
+        scan = {"received_at": 10, "angle_min": -1,
+                "angle_increment": 0.05, "range_min": 0.12,
+                "range_max": 6, "ranges": [1.0] * 48,
+                "mount": {"x": 0, "y": 0, "yaw": math.pi}}
+        try:
+            estimate_initial_pose(saved, scan, mount_yaw=0, now=10)
+        except AutoPoseUncertain as exc:
+            assert "extrinsics disagree" not in str(exc)

@@ -43,3 +43,19 @@ def test_runtime_without_observations_has_no_claimed_performance():
     assert result["achieved_fps"] is None
     assert result["peak_recorded_vram_mb"] is None
     assert result["mean_inference_ms"] is None
+
+def test_operational_recall_counts_unavailable_positive_as_missed():
+    r = evaluate_events([
+        {"truth": True, "predicted": True},
+        {"truth": True, "predicted": None},
+        {"truth": False, "predicted": False},
+    ])
+    assert r["unavailable_positive"] == 1
+    assert r["recall"] == 1.0
+    assert r["operational_recall"] == 0.5
+
+
+def test_unavailable_only_cannot_claim_perfect_recall():
+    r = evaluate_events([{"truth": True, "predicted": None}])
+    assert r["operational_recall"] == 0.0
+    assert r["coverage"] == 0.0

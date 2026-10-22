@@ -13,7 +13,8 @@ from pathlib import Path
 
 
 def evaluate_events(events: list[dict]) -> dict:
-    counts = {"tp": 0, "fp": 0, "fn": 0, "tn": 0, "unavailable": 0}
+    counts = {"tp": 0, "fp": 0, "fn": 0, "tn": 0,
+              "unavailable": 0, "unavailable_positive": 0}
     latencies = []
     for event in events:
         if not isinstance(event.get("truth"), bool):
@@ -21,6 +22,8 @@ def evaluate_events(events: list[dict]) -> dict:
         predicted = event.get("predicted")
         if predicted is None:
             counts["unavailable"] += 1
+            if event["truth"]:
+                counts["unavailable_positive"] += 1
             continue
         if not isinstance(predicted, bool):
             raise ValueError("predicted must be bool or null")
@@ -34,11 +37,20 @@ def evaluate_events(events: list[dict]) -> dict:
     tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
+    operational_misses = fn + counts["unavailable_positive"]
+    operational_recall = tp / (tp + operational_misses) if tp + operational_misses else None
     f1 = (2 * precision * recall / (precision + recall)
           if precision is not None and recall is not None and precision + recall else None)
+    operational_f1 = (
+        2 * precision * operational_recall / (precision + operational_recall)
+        if precision is not None and operational_recall is not None
+        and precision + operational_recall else None
+    )
     ordered = sorted(latencies)
     p95 = ordered[math.ceil(0.95 * len(ordered)) - 1] if ordered else None
     return {**counts, "precision": precision, "recall": recall, "f1": f1,
+            "operational_recall": operational_recall,
+            "operational_f1": operational_f1,
             "p95_latency_ms": p95, "latency_samples": len(ordered),
             "coverage": (len(events) - counts["unavailable"]) / len(events) if events else None}
 
