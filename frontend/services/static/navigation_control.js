@@ -472,58 +472,39 @@
 
     async function requestDriveMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
-        if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending) return false;
+        if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending || state.navigationPending) return false;
         if (state.control?.connected !== true) {
-            setFeedback('Pi가 연결되어 있지 않아 주행 모드를 변경할 수 없습니다.', true);
+            setFeedback('Pi 연결 상태를 확인할 수 없어 주행 모드를 변경하지 않습니다.', true);
             return false;
         }
-        if (String(state.control?.robot_mode || '').toUpperCase() === target) return true;
+        // Selecting AUTO prepares navigation only. It never starts a Goal.
+        if (target === 'AUTO' && state.control?.navigation_mode !== 'DRIVING') {
+            const ready = await requestNavigationMode('DRIVING');
+            if (ready !== true) return false; // e.g. operator must select a map/Initial Pose
+        }
         state.drivePending = true;
         state.pointerId = null;
         state.pointerStart = null;
         state.draftGoal = null;
         syncControlComponents();
-        if (options.announce !== false) setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드 전환 요청 중...`);
+        if (options.announce !== false) setFeedback('주행 모드 전환 및 Pi 상태 확인 중...');
         try {
-            if (target === 'MANUAL') {
-                const latest = await refreshState();
-                if (!latest) throw new Error('상태 조회 실패');
-                const retainedGoal = latest.active_goal ? JSON.stringify(latest.active_goal) : null;
-                const retainedPath = Array.isArray(latest.planned_path) && latest.planned_path.length
-                    ? JSON.stringify(latest.planned_path)
-                    : null;
-                setFeedback('Navigation을 안전하게 일시 정지하는 중...');
-                const paused = await mutate('/api/navigation/control/pause-for-manual');
-                applyControlState(paused);
-                if (paused.stop_delivered !== true) {
-                    throw new Error('Pi 정지 명령 전달을 확인하지 못해 MANUAL 전환을 중단했습니다.');
-                }
-                const pausedState = String(paused.navigation_state || '').toUpperCase();
-                const pausedRosState = String(paused.ros_navigation?.state || '').toUpperCase();
-                if (
-                    ['NAVIGATING', 'RESUMING'].includes(pausedState)
-                    || ['NAVIGATING', 'RESUMING'].includes(pausedRosState)
-                ) {
-                    throw new Error('Navigation 일시 정지 완료를 확인하지 못했습니다.');
-                }
-                if (
-                    retainedGoal
-                    && (paused.goal_retained !== true || JSON.stringify(paused.active_goal) !== retainedGoal)
-                ) {
-                    throw new Error('수동 주행용 active Goal이 유지되지 않았습니다.');
-                }
-                if (retainedPath && JSON.stringify(paused.planned_path) !== retainedPath) {
-                    throw new Error('수동 주행용 경로가 유지되지 않았습니다.');
-                }
+            const confirmed = await mutate('/api/navigation/control/patrol-mode', {
+                mode: target.toLowerCase(),
+            });
+            applyControlState(confirmed);
+            if (confirmed.patrol_transition
+                || String(confirmed.robot_mode || '').toUpperCase() !== target
+                || confirmed.patrol_transition_error
+                || (target === 'AUTO' && confirmed.patrol_ready !== true)) {
+                throw new Error('GPU·Pi 주행 모드가 일치하지 않습니다.');
             }
-            await mutate('/api/robots/pi-01/command', { type: 'mode', mode: target.toLowerCase() });
-            await waitForControl(payload => (
-                payload?.connected === true
-                && String(payload?.robot_mode || '').toUpperCase() === target
-            ));
-            if (options.announce !== false) setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드로 전환되었습니다.`);
+            if (options.announce !== false) {
+                setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드 전환이 확인되었습니다.`);
+            }
             return true;
         } catch (error) {
+            await refreshState();
             setFeedback(`주행 모드 전환 실패: ${error.message}`, true);
             return false;
         } finally {
