@@ -147,6 +147,7 @@ class NavigationControlApi:
         self._blocked_failure_in_progress = False
         self._pending_nav_success: dict[str, Any] | None = None
         self._pending_goal_cancel: dict[str, Any] | None = None
+        self._last_goal_cancel: dict[str, Any] | None = None
         self._pending_terminal_stop: dict[str, Any] | None = None
         self._sensor_recovery: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
@@ -393,6 +394,12 @@ class NavigationControlApi:
                 and not self._encoder_stop_violation
                 and self._stop_confirmed_locked(received_at)):
                 self._pending_goal_cancel = None
+                self._last_goal_cancel = {
+                    "completed": True,
+                    "nav_cancel_confirmed": True,
+                    "stop_delivered": True,
+                    "physical_stop_confirmed": True,
+                }
                 self._state["navigation_state"] = "READY"
                 self._state["active_goal"] = None
                 self._state["waypoints"] = []
@@ -630,6 +637,11 @@ class NavigationControlApi:
                     dict(self._pending_goal_cancel)
                     if self._pending_goal_cancel is not None else None
                 ),
+                "last_cancel": dict(self._last_goal_cancel) if self._last_goal_cancel else None,
+                "cancel_completed": bool(
+                    self._last_goal_cancel and self._last_goal_cancel.get("completed")
+                ),
+                "goal_generation": self._goal_motion_generation,
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
                 "patrol_ready": bool(
@@ -1078,6 +1090,8 @@ class NavigationControlApi:
         goal = self._validated_goal(payload.get("goal", payload))
         waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         with self._lock:
+            if self._pending_goal_cancel is not None:
+                raise NavigationControlError("CANCEL_IN_PROGRESS", "Wait for the encoder-confirmed Goal cancel.", 409)
             if self._state["navigation_mode"] != "DRIVING":
                 raise NavigationControlError("DRIVING_MODE_REQUIRED", "Goal poses require DRIVING mode.")
             if not self._state["localization_ready"] or not self._state["nav2_ready"]:
@@ -1130,6 +1144,7 @@ class NavigationControlApi:
                     "GOAL_REPLACEMENT_INTERRUPTED", "Goal replacement was interrupted.", 409,
                 )
             self._goal_motion_generation += 1
+            self._last_goal_cancel = None
             self._state["active_goal"] = goal
             self._state["waypoints"] = [dict(point) for point in waypoints]
             self._state["planned_path"] = normalized_path
@@ -1196,6 +1211,10 @@ class NavigationControlApi:
 
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
+            if (self._pending_goal_cancel is None and self._state["active_goal"] is None
+                    and self._last_goal_cancel and self._last_goal_cancel.get("completed")):
+                return {**self.state_response(), "stop_delivered": True,
+                        "physical_stop_confirmed": True, "cancel_completed": True}
             if self._pending_goal_cancel is not None:
                 # Duplicate cancellation must not reset the encoder proof window.
                 return {**self.state_response(), "cancel_completed": False,
@@ -1203,6 +1222,7 @@ class NavigationControlApi:
             self._pending_nav_success = None
             self._sensor_recovery = None
             self._goal_motion_generation += 1
+            self._last_goal_cancel = None
             self._arm_pending_stop_locked()
         cancel_result, stop_result = await asyncio.gather(
             asyncio.to_thread(self._ros.cancel_navigation),
@@ -1259,6 +1279,13 @@ class NavigationControlApi:
                     "stop_delivered": True,
                     "physical_stop_confirmed": False,
                 }
+            self._last_goal_cancel = {
+                "completed": False,
+                "nav_cancel_confirmed": nav_confirmed,
+                "stop_delivered": delivered,
+                "physical_stop_confirmed": False,
+                "error": self._state["last_error"] if self._state["navigation_state"] == "FAILED" else None,
+            }
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
@@ -1336,6 +1363,9 @@ class NavigationControlApi:
         except Exception:
             last_route_status = {}
         with self._lock:
+            # E-STOP supersedes a pending cancel; no later encoder event
+            # may silently declare that interrupted operation successful.
+            self._pending_goal_cancel = None
             # Capture already-passed intermediate poses before changing the
             # navigation state to EMERGENCY_STOPPED. A later safe resume must
             # not route the robot back to those completed waypoints.
