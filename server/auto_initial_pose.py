@@ -118,8 +118,12 @@ def estimate_initial_pose(
         radius = max(1, math.ceil(0.18 / resolution))
         if not (radius <= col < width - radius and radius <= row < height - radius):
             return False
-        for dy in (-radius, 0, radius):
-            for dx in (-radius, 0, radius):
+        # Verify every grid cell within the chassis clearance disk.
+        # Checking only the perimeter misses obstacles directly under the car.
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if dx * dx + dy * dy > radius * radius:
+                    continue
                 value = cells[(row + dy) * width + col + dx]
                 if value < 0 or value > 25:
                     return False

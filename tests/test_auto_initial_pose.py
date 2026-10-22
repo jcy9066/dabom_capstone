@@ -101,3 +101,19 @@ def test_lidar_zero_yaw_matches_ros_effective_mount():
             estimate_initial_pose(saved, scan, mount_yaw=0, now=10)
         except AutoPoseUncertain as exc:
             assert "extrinsics disagree" not in str(exc)
+
+
+def test_center_obstacle_never_counts_as_free_robot_footprint():
+    # A completely blocked map must not provide a plausible base-link pose.
+    import json
+    with tempfile.TemporaryDirectory() as folder:
+        raw_path = Path(folder) / "grid.json"
+        cells = [100] * (20 * 20)
+        raw_path.write_text(json.dumps({"data": cells}), encoding="utf-8")
+        saved = SimpleNamespace(raw_path=raw_path, width=20, height=20,
+                                resolution=0.1, origin_x=0, origin_y=0, origin_yaw=0)
+        scan = {"received_at": 100, "angle_min": -math.pi,
+                "angle_increment": 0.1, "range_min": 0.1, "range_max": 8,
+                "ranges": [1.0] * 50}
+        with unittest.TestCase().assertRaisesRegex(AutoPoseUncertain, "No valid free-space"):
+            estimate_initial_pose(saved, scan, now=100)
