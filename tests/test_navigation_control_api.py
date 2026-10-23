@@ -790,9 +790,19 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("ENCODER_MOVEMENT_AFTER_STOP", await self.api.evaluate_watchdog())
         self.assertTrue(self.api.state_response()["emergency_stop"])
 
-    async def test_authorized_motion_releases_post_resume_baseline(self):
+    async def test_authorized_manual_motion_releases_post_resume_baseline(self):
         await self.api.emergency_stop("operator")
         await self.api.resume_navigation()
+        # An auto-mode robot without an active Goal must never release
+        # the stop baseline, even after safety resume.
+        self.assertFalse(self.api.note_authorized_motion())
+        self.api.note_pi_status({
+            "mode": "manual",
+            "navigation_mode": "mapping",
+            "emergency_stop": False,
+            "safety_session": "test-pi",
+            "safety_epoch": self._fake_safety_epoch,
+        })
         self.assertTrue(self.api.note_authorized_motion())
         self.api.note_encoder(dict.fromkeys((
             "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
@@ -1430,6 +1440,16 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.confirm_pending_stop_for_test()
 
         self.assertTrue(self.api.motion_allowed())
+        # A stopped/canceled Goal cannot authorize new auto-drive.
+        self.assertFalse(self.api.note_authorized_motion())
+        # Manual control remains possible after verified STOP and
+        # an explicit, authenticated Pi mode change.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi",
+            "safety_epoch": self._fake_safety_epoch,
+        })
         self.assertTrue(self.api.note_authorized_motion())
 
     async def test_cancel_then_confirmed_stop_allows_new_goal(self):
@@ -2140,7 +2160,14 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         })
         prior = self.api.motion_safety_context()
         self.assertIsNotNone(prior)
-        self.api.note_pi_status({"mode": "manual", "navigation_mode": "driving"})
+        # A Pi with an established safety identity must supply that identity
+        # on later status updates, or the update is intentionally rejected.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi",
+            "safety_epoch": 0,
+        })
         self.assertEqual("manual", self.api._robot_mode)
         self.assertNotEqual(prior, self.api.motion_safety_context())
         self.assertFalse(self.api.note_authorized_motion(prior))
