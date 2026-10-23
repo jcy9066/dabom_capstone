@@ -200,7 +200,14 @@ class RobotCommandClient:
         if not self.motor.connected or self.motor.pico_reboot_pending():
             return None
         volume = getattr(self.motor, "volume_percent", None)
-        return volume if type(volume) is int and 0 <= volume <= 100 else None
+        if type(volume) is int and 0 <= volume <= 100:
+            return volume
+        # The initial VOLUME_GET may have been missed after UART reconnect.
+        # Retry a read, never invent a value or enable the UI without Pico ACK.
+        try:
+            return self.motor.get_volume()
+        except Exception:
+            return None
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
