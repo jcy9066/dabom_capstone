@@ -205,9 +205,10 @@ class RobotCommandClient:
         # The initial VOLUME_GET may have been missed after UART reconnect.
         # Retry a read, never invent a value or enable the UI without Pico ACK.
         try:
-            return self.motor.get_volume()
+            refreshed = self.motor.get_volume()
         except Exception:
             return None
+        return refreshed if type(refreshed) is int and 0 <= refreshed <= 100 else None
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
