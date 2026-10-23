@@ -182,6 +182,12 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     monkeypatch.setattr(module.threading, "Thread", Mock())
     bridge = module.Nav2CommandBridge()
     motor._jerk_limiter.step = Mock(side_effect=lambda l, r, now: (l, r))
+    # Rear-blind reverse limiting has separate safety tests; this checks
+    # only calibrated Twist -> wheel-speed -> UART conversion.
+    if hasattr(bridge, "rear_reverse_guard"):
+        bridge.rear_reverse_guard.limit_reverse = Mock(
+            side_effect=lambda linear, **kwargs: (linear, False, None)
+        )
     # Direction-switch sequencing has its own interlock tests. This
     # translation contract must not depend on previous encoder snapshots.
     motor._direction_interlock.request = Mock(return_value="drive")
