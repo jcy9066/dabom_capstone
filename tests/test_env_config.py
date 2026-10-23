@@ -47,7 +47,7 @@ def runtime_env_keys() -> set[str]:
         keys.update(required_shell_env.findall(source))
         keys.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
         )
 
         # Root runtime launchers keep required .env keys in a shell array and

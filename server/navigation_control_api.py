@@ -1753,6 +1753,8 @@ class NavigationControlApi:
                 confirmation_episode = self._stop_confirmation_episode
             if interrupted:
                 raise NavigationControlError("RESUME_INTERRUPTED", "A newer stop or encoder movement interrupted resume.", 409)
+            with self._lock:
+                release_status_at = self._pi_updated_at
             delivered = await self._send_robot_command(self._robot_id, {
                 "type": "resume_navigation",
                 "safety_session": safety_session,
@@ -1761,6 +1763,18 @@ class NavigationControlApi:
             if not self._pi_command_delivered(delivered):
                 await self.emergency_stop("RESUME_RELEASE_FAILED", automatic=True, force=True)
                 raise NavigationControlError("PI_RESUME_FAILED", "The Pi did not accept the resume command.", 409)
+            deadline = time.monotonic() + max(1.5, self._watchdog.pi_timeout_sec)
+            while True:
+                with self._lock:
+                    released = (
+                        self._pi_updated_at is not None
+                        and (release_status_at is None or self._pi_updated_at > release_status_at)
+                        and self._pi_estop_latched is False
+                    )
+                    interrupted = self._estop_generation != estop_generation
+                if released or interrupted or time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(0.05)
         except Exception:
             with self._lock:
                 self._stop_confirmation_after_sequence = None

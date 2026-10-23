@@ -1669,6 +1669,25 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
         self.assertTrue(self.api.state_response()["emergency_stop"])
 
+    async def test_resume_waits_for_pi_status_after_release_ack(self):
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def delayed_status_sender(robot_id, command):
+            if command["type"] == "resume_navigation":
+                asyncio.get_running_loop().call_later(0.1, self.api.note_pi_status, {
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": False,
+                })
+                return True
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = delayed_status_sender
+        resumed = await self.api.resume_navigation()
+        self.assertFalse(resumed["emergency_stop"])
+        self.assertEqual("IDLE", resumed["navigation_state"])
+
     async def test_newer_pi_estop_status_survives_older_release_ack(self):
         await self.api.emergency_stop("operator")
         original_sender = self.api._send_robot_command
