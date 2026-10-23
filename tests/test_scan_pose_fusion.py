@@ -154,3 +154,25 @@ def test_encoder_sequence_rollback_breaks_history():
     assert [s["encoder_sequence"] for s in selected] == [5,104]
     with pytest.raises(AutoPoseUncertain):
         fuse_stationary_scans(selected, now=100.3)
+
+
+def test_amcl_100hz_observations_need_sufficient_history():
+    initial = {'x': 1.0, 'y': 2.0, 'yaw': 0.1}
+    samples = [
+        {'x': 1.0, 'y': 2.0, 'yaw': 0.1, 'at': 1 + i * .01,
+         'xy_variance': .05, 'yaw_variance': .02}
+        for i in range(45)
+    ]
+    assert stable_amcl_observations(samples, initial)
+    assert not stable_amcl_observations(samples[-20:], initial)
+
+
+def test_amcl_100hz_still_rejects_outlier():
+    initial = {'x': 1.0, 'y': 2.0, 'yaw': 0.1}
+    samples = [
+        {'x': 1.0, 'y': 2.0, 'yaw': 0.1, 'at': 1 + i * .01,
+         'xy_variance': .05, 'yaw_variance': .02}
+        for i in range(45)
+    ]
+    samples[30]['x'] += .4
+    assert not stable_amcl_observations(samples, initial)

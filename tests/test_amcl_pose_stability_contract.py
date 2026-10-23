@@ -23,3 +23,9 @@ def test_no_amcl_stable_check_bypass_to_driving():
     control = (Path(__file__).resolve().parents[1] / "server/navigation_control_api.py").read_text(encoding="utf-8")
     assert "await self._activate_map_when_ready(" in control
     assert "await self._wait_for_nav2_ready()" in control
+
+
+def test_amcl_history_handles_100hz_stability_window():
+    ros = (Path(__file__).resolve().parents[1] / "server/navigation_ros_control.py").read_text(encoding="utf-8")
+    assert "self._amcl_history = deque(maxlen=128)" in ros
+    assert "stable_amcl_observations(recent, initial_pose)" in ros

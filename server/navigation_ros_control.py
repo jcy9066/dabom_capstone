@@ -152,7 +152,9 @@ class NavigationRosControl:
         self._tf_listener = None
         self._map = _MapObservation()
         self._amcl = _AmclObservation()
-        self._amcl_history = deque(maxlen=20)
+        # 20 samples at 100 Hz span only 0.19 s and cannot satisfy the
+        # 0.25 s stability window. Retain >1 s at that rate.
+        self._amcl_history = deque(maxlen=128)
         self._amcl_initial_pose_after = None
         self._last_lifecycle = {"map_server": "unavailable", "amcl": "unavailable"}
         self._visualization_listener: Callable[[dict[str, Any]], None] | None = None
