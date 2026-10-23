@@ -497,7 +497,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
             print(
                 f"[motor] Pico W connected: "
@@ -531,7 +531,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
         self._pico_reboot_event.clear()
         print("[motor] encoder stream recovered after Pico reboot")
@@ -582,6 +582,20 @@ class MotorController:
         with self._state_lock:
             self.volume_percent = volume
         return volume
+
+    def _sync_optional_volume_locked(self) -> None:
+        """Support older Pico firmware without optional volume query."""
+        try:
+            self._read_volume_locked()
+        except MotorControllerError as exc:
+            if "ERR,unknown command" not in str(exc):
+                raise
+            with self._state_lock:
+                self.volume_percent = None
+            print(
+                "[motor] WARN: Pico firmware does not support "
+                "VOLUME_GET; encoder streaming remains enabled"
+            )
 
     def get_volume(self) -> int:
         with self._command_lock:
