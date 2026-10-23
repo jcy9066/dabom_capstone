@@ -5465,7 +5465,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
-                # An ACK is command feedback, never fresh Pi telemetry.
+                # ACK confirms the command, not a fresh Pi telemetry sample.
+                # The periodic status frame independently confirms the mode.
                 await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")

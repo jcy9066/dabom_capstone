@@ -222,8 +222,7 @@ class NavigationControlApi:
             self._pi_estop_latched = None
             self._speaker_volume_percent = None
             self._volume_override_until = 0.0
-            # Replacing a live Pi socket may skip a disconnect notification.
-            # New sessions must establish their own encoder sequence baseline.
+            # A replaced Pi socket must establish a fresh encoder baseline.
             self._encoder_sequence = None
             if not connected:
                 self._stop_confirmation_after_sequence = None
@@ -234,7 +233,7 @@ class NavigationControlApi:
 
     def note_pi_status(self, payload: dict[str, Any], now: float | None = None) -> None:
         if not isinstance(payload, dict) or payload.get("type") == "ack":
-            # A command ACK cannot refresh Pi telemetry or safety state.
+            # Command ACK is not telemetry. Never use it to refresh Pi status.
             return
         received_at = now or time.time()
         safety_session = str(payload.get("safety_session") or "").strip()
@@ -496,7 +495,14 @@ class NavigationControlApi:
 
     def _motion_allowed_locked(self, now: float) -> bool:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
-                or self._patrol_transition is not None):
+                or self._patrol_transition is not None
+                or self._patrol_transition_error is not None
+                or self._pending_nav_success is not None
+                or self._state["navigation_state"] in {
+                    "FAILED", "CANCELING", "CANCELING_STOP", "PAUSING_FOR_MANUAL",
+                }):
+            # A failed/ambiguous Pi mode transition cannot be repaired by
+            # encoder STOP alone; require an explicit verified new transition.
             return False
         if self._sensor_recovery is not None:
             return False
@@ -801,10 +807,13 @@ class NavigationControlApi:
         return payload
 
     async def _await_pi_navigation_telemetry(
-        self, expected: str, after: float | None, timeout_sec: float = 1.5
+        self, expected: str, after: float | None, timeout_sec: float | None = None
     ) -> bool:
-        """Require fresh Pi mode and safety status after sending a command."""
-        deadline = time.monotonic() + timeout_sec
+        """Require fresh Pi telemetry, bounded by the configured watchdog."""
+        # Status reports are periodic and may not arrive within 1.5 seconds.
+        # Never loosen the freshness check itself.
+        wait = max(1.5, self._watchdog.pi_timeout_sec) if timeout_sec is None else timeout_sec
+        deadline = time.monotonic() + wait
         while True:
             with self._lock:
                 confirmed = (
@@ -848,11 +857,19 @@ class NavigationControlApi:
                 target == "manual"
                 and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
             )):
-                if self._patrol_transition_error or not self._motion_allowed_locked(time.time()):
+                # Duplicates are success only when safety is settled. An
+                # ambiguous earlier ACK may have switched the Pi, but must
+                # be explicitly reverified after a fresh physical STOP.
+                if self._patrol_transition_error is None:
+                    if not self._motion_allowed_locked(time.time()):
+                        raise NavigationControlError(
+                            "STOP_NOT_CONFIRMED", "The Pi stop is not safely settled.", 409
+                        )
+                    return self.state_response()
+                if not self._stop_confirmed_locked(time.time()):
                     raise NavigationControlError(
-                        "STOP_NOT_CONFIRMED", "Previous mode transition is not safely settled.", 409
+                        "STOP_NOT_CONFIRMED", "Verify a fresh encoder STOP before retrying mode sync.", 409
                     )
-                return self.state_response()
             self._patrol_transition = target
             self._patrol_transition_error = None
             self._touch_locked()
@@ -870,7 +887,8 @@ class NavigationControlApi:
                     }):
                     raise NavigationControlError("MANUAL_STOP_FAILED", "Navigation could not be safely paused.", 409)
             with self._lock:
-                # Emergency stop is not serialized behind dashboard mutations.
+                # E-STOP is intentionally not serialized behind dashboard
+                # mutations, so it may interrupt the pause or Nav2 checks.
                 if self._state["emergency_stop"] or self._pi_estop_latched is not False:
                     raise NavigationControlError(
                         "EMERGENCY_STOP_ACTIVE", "Emergency stop interrupted the mode switch.", 409
@@ -882,7 +900,7 @@ class NavigationControlApi:
             )
             if not self._pi_command_delivered(ack):
                 raise NavigationControlError("PI_MODE_ACK_FAILED", "Pi did not acknowledge mode.", 503)
-            deadline = time.monotonic() + 1.5
+            deadline = time.monotonic() + max(1.5, self._watchdog.pi_timeout_sec)
             while True:
                 with self._lock:
                     confirmed = (
@@ -904,10 +922,21 @@ class NavigationControlApi:
                 self._arm_pending_stop_locked()
                 self._touch_locked()
             # Ambiguous ACK failures can still mean the Pi changed mode.
-            # Never release the motion gate before a separate physical STOP.
-            await self._send_robot_command(
+            # Independently STOP and require *subsequent* encoder proof.
+            stop_ack = await self._send_robot_command(
                 self._robot_id, {"type": "stop", "reason": "patrol_mode_sync_failed"}
             )
+            with self._lock:
+                if (self._pi_command_delivered(stop_ack)
+                    and not self._state["emergency_stop"]):
+                    self._stop_commanded_at = time.time()
+                    self._stop_encoder_ticks = self._encoder_ticks
+                    self._stop_confirmation_after_sequence = self._encoder_sequence or 0
+                    self._stop_confirmation_ticks = None
+                    self._stop_confirmation_started_at = None
+                    self._stop_confirmation_last_at = None
+                    self._stop_confirmation_samples = 0
+                    self._touch_locked()
             raise
         finally:
             with self._lock:
@@ -964,6 +993,8 @@ class NavigationControlApi:
                 and await self._await_pi_navigation_telemetry("MAPPING", pre_mode_telemetry)
             )
             if not self._pi_command_delivered(delivered) or not pi_confirmed:
+                # The GPU process is already in MAPPING. Preserve that truth
+                # and expose Pi divergence explicitly, never as DRIVING ready.
                 with self._lock:
                     self._arm_pending_stop_locked()
                     self._state.update({
@@ -979,7 +1010,8 @@ class NavigationControlApi:
                     })
                     self._touch_locked()
                 await self._send_robot_command(
-                    self._robot_id, {"type": "stop", "reason": "mapping_pi_mode_sync_failed"}
+                    self._robot_id,
+                    {"type": "stop", "reason": "mapping_pi_mode_sync_failed"},
                 )
                 raise NavigationControlError("PI_MODE_SYNC_FAILED", "Pi did not confirm MAPPING mode.", 503)
             with self._lock:
@@ -1138,6 +1170,8 @@ class NavigationControlApi:
             try:
                 await asyncio.to_thread(self._process.stop, "DRIVING")
             except Exception:
+                # The process is not guaranteed to be stopped; motor
+                # authorization remains blocked until a fresh safe state.
                 pass
             with self._lock:
                 self._arm_pending_stop_locked()
@@ -1426,7 +1460,8 @@ class NavigationControlApi:
                 return {**self.state_response(), "stop_delivered": True,
                         "physical_stop_confirmed": True, "cancel_completed": True}
             if self._pending_goal_cancel is not None:
-                # Duplicate cancellation includes the ACK/ROS in-flight phase.
+                # Includes the Nav2/ACK in-flight phase. Never dispatch a
+                # second physical STOP for the same cancel execution.
                 return {**self.state_response(), "cancel_completed": False,
                         "stop_delivered": self._pending_goal_cancel.get("stop_delivered") is True,
                         "physical_stop_confirmed": False}
@@ -1438,6 +1473,8 @@ class NavigationControlApi:
             # Block the ROS terminal callback from clearing the Goal while
             # cancellation and physical STOP are still in flight.
             self._state["navigation_state"] = "CANCELING"
+            # Establish the cancellation owner before any await. Its stop
+            # timeout begins only after Nav2 completion and STOP delivery.
             cancel_generation = self._goal_motion_generation
             pending_cancel = {
                 "started_at": None,
@@ -1462,12 +1499,14 @@ class NavigationControlApi:
             if (self._pending_goal_cancel is not pending_cancel
                 or self._goal_motion_generation != cancel_generation
                 or self._state["emergency_stop"]):
+                # An E-STOP or a later execution owns this Goal now. Never
+                # reset the newer stop proof baseline or terminal state.
                 return {**self.state_response(), "cancel": cancel,
                         "stop_delivered": delivered,
                         "physical_stop_confirmed": False,
                         "cancel_completed": False}
             # A newer E-STOP owns the physical stop baseline. Late cancel
-            # results must not replace its encoder/safety generations.
+            # results never replace its encoder/safety generations.
             if not self._state["emergency_stop"]:
                 self._stop_commanded_at = time.time()
                 self._stop_encoder_ticks = self._encoder_ticks
@@ -1484,6 +1523,8 @@ class NavigationControlApi:
                 and (
                     (cancel.get("confirmed") is True
                      and (cancel.get("completed") is True or cancel.get("requested") is False))
+                    # A Nav2 result may win the cancel race. The cancel ACK
+                    # is false, but a SUCCEEDED action terminal is authoritative.
                     or (terminal == "SUCCEEDED" and cancel.get("completed") is True)
                 )
             )
@@ -1499,7 +1540,8 @@ class NavigationControlApi:
                 self._state["last_error"] = "STOP_NOT_DELIVERED"
                 self._pending_goal_cancel = None
             elif terminal == "SUCCEEDED":
-                # Winning Nav2 success must still undergo physical stop checks.
+                # A successful Nav2 action takes the existing pose/yaw
+                # verification flow; it does not complete a user cancel.
                 self._pending_goal_cancel = None
                 self._state["navigation_state"] = "NAVIGATING"
                 self._apply_cancel_terminal_locked("SUCCEEDED")
@@ -1540,13 +1582,25 @@ class NavigationControlApi:
         with self._lock:
             self._sensor_recovery = None
             self._arm_pending_stop_locked()
-            previous_navigation_state = self._state["navigation_state"]
             self._state["navigation_state"] = "PAUSING_FOR_MANUAL"
             self._touch_locked()
         cancel = None
         cancel_error = None
         try:
             cancel = await asyncio.to_thread(self._ros.cancel_navigation)
+            terminal = self._cancel_terminal(cancel)
+            confirmed = (
+                isinstance(cancel, dict)
+                and (
+                    (cancel.get("confirmed") is True
+                     and (cancel.get("completed") is True or cancel.get("requested") is False))
+                    or (terminal == "SUCCEEDED" and cancel.get("completed") is True)
+                )
+            )
+            if not confirmed:
+                cancel_error = NavigationControlError(
+                    "NAV_CANCEL_FAILED", "Nav2 did not confirm the Goal cancellation.", 409
+                )
         except Exception as exc:
             cancel_error = exc
         stop_response = await self._send_robot_command(
@@ -1555,15 +1609,18 @@ class NavigationControlApi:
         )
         delivered = self._pi_command_delivered(stop_response)
         with self._lock:
-            self._stop_commanded_at = time.time()
-            self._stop_encoder_ticks = self._encoder_ticks
-            self._stop_confirmation_after_sequence = (
-                self._encoder_sequence if delivered else None
-            )
-            self._stop_confirmation_ticks = None
-            self._stop_confirmation_started_at = None
-            self._stop_confirmation_last_at = None
-            self._stop_confirmation_samples = 0
+            # A concurrent E-STOP owns the newest physical STOP baseline.
+            # A late manual-pause acknowledgment must not replace its proof.
+            if not self._state["emergency_stop"]:
+                self._stop_commanded_at = time.time()
+                self._stop_encoder_ticks = self._encoder_ticks
+                self._stop_confirmation_after_sequence = (
+                    self._encoder_sequence if delivered else None
+                )
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
             if cancel_error is None:
                 terminal = self._cancel_terminal(cancel)
                 if self._state["emergency_stop"]:
@@ -1574,6 +1631,9 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "STOP_NOT_DELIVERED"
                 elif terminal == "SUCCEEDED":
+                    # Keep the success STOP/pose proof alive: do not clear it
+                    # in _reset_navigation_progress_locked below.
+                    self._state["navigation_state"] = "NAVIGATING"
                     self._apply_cancel_terminal_locked(terminal)
                 elif terminal == "FAILED":
                     self._state["navigation_state"] = "FAILED"
@@ -1584,10 +1644,17 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "READY"
                 if delivered and terminal != "FAILED" and not self._state["emergency_stop"]:
                     self._state["last_error"] = None
-                self._reset_navigation_progress_locked()
+                if terminal != "SUCCEEDED" or not delivered or self._state["emergency_stop"]:
+                    self._reset_navigation_progress_locked()
             else:
-                self._state["navigation_state"] = previous_navigation_state
-                self._state["last_error"] = str(cancel_error)
+                # Cancel failure cannot restore NAVIGATING: fresh STOP encoder
+                # proof alone could then reopen automatic motor authorization.
+                if self._state["emergency_stop"]:
+                    self._state["navigation_state"] = "EMERGENCY_STOPPED"
+                else:
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "NAV_CANCEL_FAILED"
+                self._reset_navigation_progress_locked()
             self._touch_locked()
         if cancel_error is not None:
             raise cancel_error
@@ -1939,6 +2006,9 @@ class NavigationControlApi:
         # terminal and the regular active-navigation watchdog would return.
         with self._lock:
             self._sync_ros_navigation_terminal_locked(ros_nav, current)
+            # A canceled Goal must time out even with no dashboard readers
+            # and no further encoder messages from a disconnected Pi.
+            self._expire_pending_cancel_locked(current)
             pending_terminal_stop = self._pending_terminal_stop is not None
             hard_fault = bool(self._encoder_stop_violation or self._pi_session_stop_pending)
             recovering = self._sensor_recovery is not None

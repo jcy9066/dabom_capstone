@@ -1936,6 +1936,113 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["goal_retained"])
 
 
+    async def test_manual_takeover_cancel_exception_does_not_resume_motion(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def cancel_failure():
+            raise RuntimeError("Nav2 cancel unavailable")
+
+        self.map_api.ros_control.cancel_navigation = cancel_failure
+        with self.assertRaisesRegex(RuntimeError, "Nav2 cancel unavailable"):
+            await self.api.pause_for_manual()
+
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("NAV_CANCEL_FAILED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(any(
+            command["type"] == "stop" and command.get("reason") == "manual_drive_takeover"
+            for _, command in self.commands
+        ))
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_manual_takeover_rejects_unconfirmed_nav2_cancel(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def unconfirmed_cancel():
+            return {"requested": True, "confirmed": False, "completed": False}
+
+        self.map_api.ros_control.cancel_navigation = unconfirmed_cancel
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.pause_for_manual()
+        self.assertEqual("NAV_CANCEL_FAILED", raised.exception.error_code)
+        self.assertEqual("FAILED", self.api.state_response()["navigation_state"])
+        self.assertTrue(any(c.get("reason") == "manual_drive_takeover" for _, c in self.commands))
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_manual_takeover_success_race_retains_original_goal_stop_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def successful_terminal_race():
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": True, "confirmed": False,
+                "completed": True, "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = successful_terminal_race
+        response = await self.api.pause_for_manual()
+        self.assertEqual("NAVIGATING", response["navigation_state"])
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertIsNotNone(response["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        # Stable encoder STOP alone must not reopen motor authorization while
+        # original Goal pose/yaw proof is still pending.
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_late_manual_pause_stop_cannot_replace_estop_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_sender = self.api._send_robot_command
+
+        async def delayed_stop(robot_id, command):
+            if command.get("reason") == "manual_drive_takeover":
+                entered.set()
+                await release.wait()
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = delayed_stop
+        pending = asyncio.create_task(self.api.pause_for_manual())
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        try:
+            await self.api.emergency_stop("operator")
+            with self.api._lock:
+                baseline = (
+                    self.api._stop_commanded_at,
+                    self.api._stop_confirmation_after_sequence,
+                    self.api._stop_encoder_ticks,
+                )
+        finally:
+            release.set()
+        result = await pending
+        self.assertEqual("EMERGENCY_STOPPED", result["navigation_state"])
+        with self.api._lock:
+            self.assertEqual(
+                baseline,
+                (
+                    self.api._stop_commanded_at,
+                    self.api._stop_confirmation_after_sequence,
+                    self.api._stop_encoder_ticks,
+                ),
+            )
+        self.assertFalse(self.api.motion_allowed())
+
     async def test_resume_check_rejects_pi_reported_delivery_failure(self):
         await self.driving_ready()
         await self.api.emergency_stop("initial")
@@ -2315,6 +2422,64 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.api._await_pi_navigation_telemetry(
             "DRIVING", prior, timeout_sec=0.01
         ))
+
+    async def test_cancel_stop_timeout_progresses_without_dashboard_polling(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        await self.api.cancel_goal()
+        with self.api._lock:
+            started_at = self.api._pending_goal_cancel["started_at"]
+        await self.api.evaluate_watchdog(
+            now=started_at + self.api.STOP_CONFIRM_TIMEOUT_SEC + 0.2
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", state["last_error"])
+        self.assertIsNotNone(state["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_mode_sync_failure_stays_motion_blocked_after_encoder_stop(self):
+        await self.driving_ready()
+        with self.api._lock:
+            self.api._patrol_transition_error = "PI_MODE_ACK_FAILED"
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_confirmation_after_sequence = self.api._encoder_sequence or 0
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        self.assertFalse(self.api.state_response()["patrol_ready"])
+
+    async def test_mode_ack_failure_recovers_only_after_confirmed_stop_and_retry(self):
+        await self.driving_ready()
+        original = self.api._send_robot_command
+        failed_once = True
+
+        async def flaky_mode(robot_id, command):
+            nonlocal failed_once
+            if command.get("type") == "mode" and failed_once:
+                failed_once = False
+                # A lost ACK does not prove the Pi did not actually switch.
+                self.api.note_pi_status({
+                    "mode": command["mode"], "navigation_mode": "driving",
+                    "emergency_stop": False,
+                })
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = flaky_mode
+        with self.assertRaises(NavigationControlError) as first:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("PI_MODE_ACK_FAILED", first.exception.error_code)
+        self.assertFalse(self.api.motion_allowed())
+        with self.assertRaises(NavigationControlError) as early:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("STOP_NOT_CONFIRMED", early.exception.error_code)
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertIsNone(result["patrol_transition_error"])
 
     def test_pi_ack_contract_rejects_truthy_error_payloads(self):
         accepted = self.api._pi_command_delivered
