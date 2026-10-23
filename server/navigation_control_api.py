@@ -402,6 +402,38 @@ class NavigationControlApi:
                 "estop_generation": self._estop_generation,
             }
 
+    def motion_safety_rejection_reason(self) -> str:
+        """Explain a rejected motion without changing safety decisions."""
+        with self._lock:
+            now = time.time()
+
+            if self._state["emergency_stop"]:
+                return "GPU_EMERGENCY_STOP"
+            if self._encoder_stop_violation:
+                return "ENCODER_MOVEMENT_AFTER_STOP"
+
+            if self._stop_commanded_at is not None:
+                if not self._post_resume_motion_ready:
+                    if self._stop_confirmation_after_sequence is None:
+                        return "STOP_CONFIRMATION_NOT_ARMED"
+                    if not self._stop_confirmed_locked(now):
+                        return "STOP_NOT_CONFIRMED"
+
+            if not self._connected:
+                return "PI_DISCONNECTED"
+            if self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec:
+                return "PI_STATUS_STALE"
+            if self._pi_estop_latched is True:
+                return "PI_EMERGENCY_STOP_ACTIVE"
+            if self._pi_estop_latched is not False:
+                return "PI_ESTOP_UNKNOWN"
+            if not self._pi_safety_session:
+                return "PI_SAFETY_SESSION_MISSING"
+            if type(self._pi_safety_epoch) is not int or self._pi_safety_epoch < 0:
+                return "PI_SAFETY_EPOCH_INVALID"
+
+            return "SAFETY_STATE_CHANGED_DURING_CHECK"
+
     def note_authorized_motion(
         self, expected_safety: dict[str, Any] | None = None
     ) -> bool:

@@ -402,8 +402,17 @@ class NavigationRosControl:
             for item in result_wrapper.result.path.poses
         ]
 
+    def _reconcile_completed_navigation_result(self) -> None:
+        """Synchronize completed Nav2 result before its callback runs."""
+        with self._lock:
+            handle = self._navigate_goal_handle
+            future = self._navigate_result_future
+        if handle is not None and future is not None and future.done():
+            self._on_navigation_result(handle, future)
+
     def navigate_to_pose(self, goal: dict[str, float]) -> dict[str, Any]:
         self._require_started()
+        self._reconcile_completed_navigation_result()
         with self._lock:
             if self._navigate_goal_handle is not None:
                 raise NavigationRosError(
@@ -438,6 +447,7 @@ class NavigationRosControl:
         # (blocked watchdog, operator Cancel/Manual, emergency stop). Serialize
         # cancellation so only one request reaches a given Nav2 goal handle.
         with self._cancel_lock:
+            self._reconcile_completed_navigation_result()
             with self._lock:
                 goal_handle = self._navigate_goal_handle
                 result_future = self._navigate_result_future
@@ -455,6 +465,7 @@ class NavigationRosControl:
             )
             confirmed = bool(getattr(response, "goals_canceling", []))
             if not confirmed:
+                self._reconcile_completed_navigation_result()
                 # The result callback may have completed the goal while the
                 # cancel response was in flight. Treat that as idempotent only
                 # when this exact handle is no longer active.

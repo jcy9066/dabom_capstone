@@ -5589,9 +5589,14 @@ async def send_robot_command(
     if controlled_motion:
         motion_context = navigation_control_api.motion_safety_context()
         if motion_context is None:
+            reason = navigation_control_api.motion_safety_rejection_reason()
             return JSONResponse(
-                {"ok": False, "delivered": False,
-                 "error": "Motion safety context unavailable."},
+                {
+                    "ok": False,
+                    "delivered": False,
+                    "error": "Motion safety context unavailable.",
+                    "error_code": reason,
+                },
                 status_code=409,
             )
         command["safety_session"] = motion_context["safety_session"]
