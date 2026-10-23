@@ -1,7 +1,7 @@
 import math
 import pytest
 from server.auto_initial_pose import AutoPoseUncertain
-from server.scan_pose_fusion import fuse_stationary_scans
+from server.scan_pose_fusion import fuse_stationary_scans, select_independent_encoder_scans
 from server.amcl_pose_stability import stable_amcl_observations
 
 
@@ -13,7 +13,8 @@ def frames(n=5, moving=False):
                   'ranges': [1.1 + (i % 3 - 1) * .01]*48,
                   'mount': {'x': 0, 'y': 0, 'yaw': math.pi}},
                   'wheel_ticks': (30+(i if moving else 0), 30, 30, 30),
-                  'encoder_received_at': 98.95 + i*0.3})
+                  'encoder_received_at': 98.95 + i*0.3,
+                  'encoder_sequence': 100 + i})
     return out
 
 
@@ -83,7 +84,9 @@ def test_fusion_feeds_existing_map_matcher(tmp_path):
         scan=dict(seed)
         scan['ranges']=list(seed['ranges'])
         scan['received_at']=200.0+i*.25
-        f.append({'scan': scan, 'wheel_ticks': (100,100,100,100), 'encoder_received_at': scan['received_at']-.02})
+        f.append({'scan': scan, 'wheel_ticks': (100,100,100,100),
+                  'encoder_received_at': scan['received_at']-.02,
+                  'encoder_sequence': 500+i})
     fused=fuse_stationary_scans(f,now=201.1)
     pose=estimate_initial_pose(env, fused, now=201.1)
     assert math.hypot(pose['x']-truth[0], pose['y']-truth[1]) < .35
@@ -108,3 +111,46 @@ def test_amcl_high_rate_still_converges():
     samples=[{'x':1.01,'y':2.0,'yaw':0.1,'at':1.0+i*.05,
               'xy_variance':.05,'yaw_variance':.02} for i in range(16)]
     assert stable_amcl_observations(samples,initial)
+
+
+def test_duplicate_encoder_packet_does_not_prove_stationarity():
+    sample = frames()
+    sample[2]['encoder_sequence'] = sample[1]['encoder_sequence']
+    with pytest.raises(AutoPoseUncertain, match="Repeated or out-of-order"):
+        fuse_stationary_scans(sample, now=100.3)
+
+
+def test_reused_encoder_timestamp_is_rejected():
+    sample = frames()
+    sample[2]['encoder_received_at'] = sample[1]['encoder_received_at']
+    with pytest.raises(AutoPoseUncertain, match="Repeated or out-of-order"):
+        fuse_stationary_scans(sample, now=100.3)
+
+
+def test_missing_encoder_sequence_is_rejected():
+    sample = frames()
+    sample[2].pop('encoder_sequence')
+    with pytest.raises(AutoPoseUncertain, match="sequence unavailable"):
+        fuse_stationary_scans(sample, now=100.3)
+
+
+def test_scan_faster_than_encoder_skips_duplicates():
+    samples = frames()
+    repeated = []
+    for sample in samples:
+        repeated.extend([sample, {**sample, 'scan': dict(sample['scan'])}])
+    for i in range(0, len(repeated), 2):
+        repeated[i+1]['scan']['received_at'] += .01
+    selected = select_independent_encoder_scans(repeated)
+    assert len(selected) == 5
+    assert [s["encoder_sequence"] for s in selected] == list(range(100,105))
+    assert fuse_stationary_scans(selected, now=100.3)['frames_fused'] == 5
+
+
+def test_encoder_sequence_rollback_breaks_history():
+    samples = frames()
+    samples[3]['encoder_sequence'] = 5
+    selected = select_independent_encoder_scans(samples)
+    assert [s["encoder_sequence"] for s in selected] == [5,104]
+    with pytest.raises(AutoPoseUncertain):
+        fuse_stationary_scans(selected, now=100.3)

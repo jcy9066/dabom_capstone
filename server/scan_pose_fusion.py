@@ -19,6 +19,8 @@ def fuse_stationary_scans(samples: list[dict[str, Any]], *, now: float | None = 
         raise AutoPoseUncertain("At least three recent LiDAR frames are required")
     frames: list[dict[str, Any]] = []
     tick_samples = []
+    encoder_sequences: list[int] = []
+    encoder_timestamps: list[float] = []
     times = []
     for sample in samples:
         if not isinstance(sample, dict) or not isinstance(sample.get("scan"), dict):
@@ -27,6 +29,9 @@ def fuse_stationary_scans(samples: list[dict[str, Any]], *, now: float | None = 
         ticks = sample.get("wheel_ticks")
         if not isinstance(ticks, (list, tuple)) or len(ticks) != 4 or any(type(x) is not int for x in ticks):
             raise AutoPoseUncertain("Wheel encoder proof unavailable")
+        encoder_sequence = sample.get("encoder_sequence")
+        if type(encoder_sequence) is not int or encoder_sequence < 0:
+            raise AutoPoseUncertain("Independent wheel encoder sequence unavailable")
         try:
             at = float(frame["received_at"])
             encoder_at = float(sample["encoder_received_at"])
@@ -45,9 +50,17 @@ def fuse_stationary_scans(samples: list[dict[str, Any]], *, now: float | None = 
             raise AutoPoseUncertain("Stale or invalid LiDAR/encoder timestamp")
         frames.append(frame)
         tick_samples.append(ticks)
+        encoder_sequences.append(encoder_sequence)
+        encoder_timestamps.append(encoder_at)
         times.append(at)
     if any(times[i] <= times[i - 1] for i in range(1, len(times))):
         raise AutoPoseUncertain("LiDAR timestamps not strictly increasing")
+    if any(
+        encoder_sequences[i] <= encoder_sequences[i - 1]
+        or encoder_timestamps[i] <= encoder_timestamps[i - 1]
+        for i in range(1, len(encoder_sequences))
+    ):
+        raise AutoPoseUncertain("Repeated or out-of-order wheel encoder sample")
     if not (0.2 <= times[-1] - times[0] <= 2.0 and now - times[-1] <= 1.5):
         raise AutoPoseUncertain("Insufficient fresh multi-frame observation window")
     for wheel in range(4):
@@ -100,3 +113,27 @@ def fuse_stationary_scans(samples: list[dict[str, Any]], *, now: float | None = 
     fused["frames_fused"] = len(frames)
     fused["stable_beams"] = reliable
     return fused
+
+
+def select_independent_encoder_scans(history: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    """Keep the newest independent encoder observations, not reused packets.
+
+    LiDAR can arrive faster than encoder telemetry. Duplicate sequences can be
+    skipped, but missing or backward data forms a hard session boundary.
+    """
+    selected: list[dict[str, Any]] = []
+    last_sequence: int | None = None
+    for item in reversed(history):
+        sequence = item.get("encoder_sequence")
+        if type(sequence) is not int or sequence < 0:
+            break
+        if last_sequence is not None:
+            if sequence == last_sequence:
+                continue
+            if sequence > last_sequence:
+                break
+        selected.append({**item, "scan": dict(item["scan"])})
+        last_sequence = sequence
+        if len(selected) >= limit:
+            break
+    return list(reversed(selected))
