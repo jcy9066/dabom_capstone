@@ -626,8 +626,12 @@
             if (path.endsWith('/cancel')) {
                 if (response.cancel_completed === true && response.physical_stop_confirmed === true) {
                     setFeedback('Goal 취소와 엔코더 정지가 확인되었습니다.');
+                } else if (response.navigation_state === 'EMERGENCY_STOPPED') {
+                    setFeedback('Goal 취소가 E-STOP에 의해 중단되었습니다. 안전 상태를 확인해주세요.', true);
                 } else if (response.stop_delivered !== true || response.navigation_state === 'FAILED') {
                     setFeedback(`취소 부분 실패: ${response.last_error || 'Pi STOP 확인 실패'}`, true);
+                } else if (response.cancel?.terminal === 'SUCCEEDED') {
+                    setFeedback('Nav2 Goal이 취소보다 먼저 종료되었습니다. Pi 정지 확인 중...');
                 } else {
                     setFeedback('Nav2 취소 후 Pi 엔코더 정지 확인 중...');
                 }
@@ -636,7 +640,18 @@
                 setFeedback('요청이 적용되었습니다.');
             }
         } catch (error) {
-            setFeedback(`요청 실패: ${error.message}`, true);
+            if (path.endsWith('/cancel')) {
+                let latest = null;
+                try {
+                    latest = await refreshState();
+                } catch (_) {
+                    // Preserve the transport failure; status may be offline.
+                }
+                const reason = latest?.last_error || error.message;
+                setFeedback(`Goal 취소 실패·정지 확인 필요: ${reason}`, true);
+            } else {
+                setFeedback(`요청 실패: ${error.message}`, true);
+            }
         } finally {
             state.busy = false;
         }

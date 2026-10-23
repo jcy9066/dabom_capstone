@@ -17,16 +17,24 @@ python3 -m pytest -q tests
 info 'Python regression PASS'
 
 info 'JavaScript parser and UI contract tests'
+# Three.js is an ES module; --input-type=module + stdin also works on
+# older supported Node versions without package.json type=module.
+node --input-type=module --check < frontend/services/static/lidar_3d_viewer.js
 for file in \
-    frontend/services/static/lidar_3d_viewer.js \
     frontend/services/static/script.js \
+    frontend/services/static/navigation_control.js \
+    frontend/services/static/dashboard_state.js \
     frontend/services/static/speaker_volume.js \
+    frontend/services/static/action_feedback.js \
     tests/test_dashboard_action_feedback.js \
     tests/test_dashboard_report_feedback.js; do
     node --check "$file"
 done
 node tests/test_dashboard_action_feedback.js
 node tests/test_dashboard_report_feedback.js
+node tests/test_pr90_goal_path_events.js
+node tests/test_pr90_cancel_feedback.js
+node tests/test_pr90_patrol_transition.js
 info 'JavaScript regression PASS'
 
 info 'Independent C++17 motion and safety regressions'

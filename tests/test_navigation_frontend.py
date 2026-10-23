@@ -19,6 +19,21 @@ class NavigationFrontendContractTests(unittest.TestCase):
         cls.navigation_component = (ROOT / "frontend/components/controls/navigation_mode_control.js").read_text(encoding="utf-8")
         cls.controls_css = (ROOT / "frontend/components/controls/controls.css").read_text(encoding="utf-8")
 
+    def test_cancel_success_race_and_estop_are_not_displayed_as_cancel_success(self):
+        source = self.control
+        self.assertIn("response.cancel?.terminal === 'SUCCEEDED'", source)
+        self.assertIn("response.navigation_state === 'EMERGENCY_STOPPED'", source)
+        self.assertIn("response.cancel_completed === true && response.physical_stop_confirmed === true", source)
+        self.assertIn("취소 부분 실패", source)
+
+    def test_global_path_retained_while_manual_pauses_or_cancel_waits_for_stop(self):
+        js = (ROOT / "frontend/services/static/script.js").read_text(encoding="utf-8")
+        allowed = js.split("document.addEventListener('dabom:navigation-control-state'", 1)[1]
+        for status in ("READY", "PAUSING_FOR_MANUAL", "CANCELING", "CANCELING_STOP"):
+            self.assertIn(f"'{status}'", allowed)
+        self.assertIn("&& control.active_goal", allowed)
+        self.assertIn("control.planned_path", allowed)
+
     def test_consumes_frozen_dashboard_navigation_contract(self):
         for contract in (
             "payload?.dashboard_config",
@@ -453,6 +468,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("await self.pause_for_manual()", server[start:end])
         self.assertIn('{"type": "mode", "mode": target}', server[start:end])
 
+
+    def test_cancel_http_failure_reloads_server_state_before_error_feedback(self):
+        dashboard = (ROOT / "frontend/services/static/navigation_control.js").read_text(
+            encoding="utf-8"
+        )
+        start = dashboard.index("async function simpleAction(")
+        end = dashboard.index("async function requestLedToggle(", start)
+        handler = dashboard[start:end]
+        self.assertIn("if (path.endsWith('/cancel'))", handler)
+        self.assertIn("latest = await refreshState();", handler)
+        self.assertIn("latest?.last_error || error.message", handler)
+        self.assertIn("Goal 취소 실패", handler)
 
     def test_goal_bound_global_path_and_terminal_visibility_contract(self):
         dashboard = (
