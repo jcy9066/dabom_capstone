@@ -1,0 +1,31 @@
+"""Protect AMCL publication and convergence wiring independently of ROS imports."""
+from pathlib import Path
+
+
+def test_amcl_stability_is_gated_after_initial_pose_published():
+    ros = (Path(__file__).resolve().parents[1] / "server/navigation_ros_control.py").read_text(encoding="utf-8")
+    assert "self._amcl_history.clear()" in ros
+    assert 'self._amcl_initial_pose_after = time.monotonic()' in ros
+    assert 'item["at"] >= self._amcl_initial_pose_after' in ros
+    assert "stable_amcl_observations(recent, initial_pose)" in ros
+    assert 'max(float(covariance[0]), float(covariance[7]))' in ros
+    assert "yaw_variance = float(covariance[35])" in ros
+    assert '"stable_samples": 3' in ros
+
+
+def test_no_amcl_stable_check_bypass_to_driving():
+    ros = (Path(__file__).resolve().parents[1] / "server/navigation_ros_control.py").read_text(encoding="utf-8")
+    start = ros.index("    def load_map_and_reset_pose(")
+    end = ros.index("    def active_status(", start)
+    transition = ros[start:end]
+    assert "_wait_for_amcl(initial_pose" in transition
+    assert "stable_samples" not in transition  # confirmed inside wait helper
+    control = (Path(__file__).resolve().parents[1] / "server/navigation_control_api.py").read_text(encoding="utf-8")
+    assert "await self._activate_map_when_ready(" in control
+    assert "await self._wait_for_nav2_ready()" in control
+
+
+def test_amcl_history_handles_100hz_stability_window():
+    ros = (Path(__file__).resolve().parents[1] / "server/navigation_ros_control.py").read_text(encoding="utf-8")
+    assert "self._amcl_history = deque(maxlen=128)" in ros
+    assert "stable_amcl_observations(recent, initial_pose)" in ros

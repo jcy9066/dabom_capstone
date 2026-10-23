@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from server.amcl_pose_stability import stable_amcl_observations
 from server.env_config import env_float
 from server.navigation_motion_segments import annotate_path
 
@@ -151,6 +152,10 @@ class NavigationRosControl:
         self._tf_listener = None
         self._map = _MapObservation()
         self._amcl = _AmclObservation()
+        # 20 samples at 100 Hz span only 0.19 s and cannot satisfy the
+        # 0.25 s stability window. Retain >1 s at that rate.
+        self._amcl_history = deque(maxlen=128)
+        self._amcl_initial_pose_after = None
         self._last_lifecycle = {"map_server": "unavailable", "amcl": "unavailable"}
         self._visualization_listener: Callable[[dict[str, Any]], None] | None = None
 
@@ -347,7 +352,7 @@ class NavigationRosControl:
         self._publish_initial_pose(initial_pose)
         if progress is not None:
             progress("verifying")
-        observed_amcl = self._wait_for_amcl(initial_pose, amcl_sequence, timeout_sec=5.0)
+        observed_amcl = self._wait_for_amcl(initial_pose, amcl_sequence, timeout_sec=8.0)
 
         lifecycle = self._refresh_lifecycle_states(timeout_sec=0.5)
         return {
@@ -821,12 +826,20 @@ class NavigationRosControl:
         deadline = time.monotonic() + timeout_sec
         with self._condition:
             while True:
-                if self._amcl.sequence > before_sequence and self._amcl_matches(initial_pose):
-                    return {
-                        "x": self._amcl.x,
-                        "y": self._amcl.y,
-                        "yaw": self._amcl.yaw,
-                    }
+                if (self._amcl_initial_pose_after is not None
+                    and self._amcl.sequence > before_sequence):
+                    recent = [
+                        item for item in self._amcl_history
+                        if item["sequence"] > before_sequence
+                        and item["at"] >= self._amcl_initial_pose_after
+                    ]
+                    if stable_amcl_observations(recent, initial_pose):
+                        return {
+                            "x": self._amcl.x,
+                            "y": self._amcl.y,
+                            "yaw": self._amcl.yaw,
+                            "stable_samples": 3,
+                        }
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise NavigationRosError(
@@ -837,6 +850,11 @@ class NavigationRosControl:
                 self._condition.wait(timeout=min(remaining, 0.2))
 
     def _publish_initial_pose(self, initial_pose: dict[str, float]) -> None:
+        # Existing-map AMCL messages from before this publication must
+        # never count toward localization stability.
+        with self._condition:
+            self._amcl_history.clear()
+            self._amcl_initial_pose_after = time.monotonic()
         message = PoseWithCovarianceStamped()
         message.header.frame_id = "map"
         message.header.stamp = self._node.get_clock().now().to_msg()
@@ -1053,14 +1071,32 @@ class NavigationRosControl:
         )
 
     def _on_amcl_pose(self, message: Any) -> None:
-        orientation = message.pose.pose.orientation
-        yaw = self._yaw_from_orientation(orientation)
+        try:
+            orientation = message.pose.pose.orientation
+            yaw = self._yaw_from_orientation(orientation)
+            x = float(message.pose.pose.position.x)
+            y = float(message.pose.pose.position.y)
+            covariance = message.pose.covariance
+            xy_variance = max(float(covariance[0]), float(covariance[7]))
+            yaw_variance = float(covariance[35])
+            if not all(map(math.isfinite, (x, y, yaw, xy_variance, yaw_variance))):
+                return
+            if xy_variance < 0 or yaw_variance < 0:
+                return
+        except (AttributeError, TypeError, IndexError, ValueError, OverflowError):
+            return
         with self._condition:
             self._amcl.sequence += 1
-            self._amcl.x = float(message.pose.pose.position.x)
-            self._amcl.y = float(message.pose.pose.position.y)
+            self._amcl.x = x
+            self._amcl.y = y
             self._amcl.yaw = yaw
             self._amcl.received_at = time.monotonic()
+            self._amcl_history.append({
+                "sequence": self._amcl.sequence,
+                "at": self._amcl.received_at,
+                "x": x, "y": y, "yaw": yaw,
+                "xy_variance": xy_variance, "yaw_variance": yaw_variance,
+            })
             self._condition.notify_all()
 
     def _map_matches(self, selected_map: Any) -> bool:

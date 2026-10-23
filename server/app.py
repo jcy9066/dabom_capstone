@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from importlib.util import module_from_spec, spec_from_file_location
 import gc
 import hashlib
@@ -57,6 +58,7 @@ from server.database import (
     DatabaseOperationError,
 )
 from server.env_config import env_bool, env_float, env_int, env_text
+from server.scan_pose_fusion import select_independent_encoder_scans
 from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
 from server.media_service import (
     FrozenFrameCache,
@@ -475,6 +477,9 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+# Bounded in RAM; never persisted with saved maps. Only recent physical
+# stationary samples can be used for automatic Initial Pose.
+localization_scan_history = deque(maxlen=8)
 
 live_mapping_grid = LiveMappingGrid(
     resolution=0.05,
@@ -944,9 +949,23 @@ def current_navigation_pose_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def current_navigation_scan_snapshot():
+    with state_lock:
+        current = navigation_state.get("scan")
+        return dict(current) if isinstance(current, dict) else None
+
+
+def current_navigation_scans_snapshot():
+    with state_lock:
+        # LiDAR can be faster than encoder telemetry; skip duplicate encoder
+        # packets but never accept a reused packet as independent evidence.
+        return select_independent_encoder_scans(list(localization_scan_history))
+
+
 def clear_navigation_visualization_state():
     live_mapping_grid.reset()
     with state_lock:
+        localization_scan_history.clear()
         navigation_state["map"] = None
         navigation_state["pose"] = None
         navigation_state["global_path"] = []
@@ -994,6 +1013,8 @@ navigation_control_api = NavigationControlApi(
     robot_id=SERVER_ROBOT_ID,
     get_live_map=current_navigation_map_snapshot,
     get_live_pose=current_navigation_pose_snapshot,
+    get_live_scan=current_navigation_scan_snapshot,
+    get_live_scans=current_navigation_scans_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(
         payload,
         name,
@@ -2057,7 +2078,7 @@ def draw_detection_overlay(frame, detection):
     label = (
         detection.get("label")
         or detection.get("track_label")
-        or ("" if is_person else "WEAPON")
+        or ""
     )
     score = detection.get("score")
     if detection.get("action_source") == "pair":
@@ -2282,6 +2303,8 @@ def process_frame_for_dashboard(frame):
                 frame_processor.action_display_buffer.pop(buffered_id, None)
 
     for obj in tracked_boxes:
+        if obj.get("cls", 0) != 0:
+            continue
         oid = obj["id"]
         cls_id = obj.get("cls", 0)
         state = obj_states.get(oid, 0)
@@ -2413,11 +2436,6 @@ def process_frame_for_dashboard(frame):
                 ):
                     detection["confidence_level"] = "trigger_suspicious"
                     detection["visual_state"] = "suspicious"
-        else:
-            danger = True
-            detection["label"] = "WEAPON"
-            detection["danger"] = True
-
         detections.append(detection)
 
     for detection in detections:
@@ -5294,6 +5312,25 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     )
                 navigation_state["scan"] = stored_scan
                 navigation_state["scan_updated_at"] = received_at
+                # No auto-localization without fresh, motion-free encoder
+                # observations corresponding to every stored LiDAR frame.
+                encoder_at = encoder_state.get("updated_at")
+                wheels = None
+                encoder_sequence = None
+                if (encoder_state.get("robot_id") == robot_id
+                    and isinstance(encoder_at, (int, float))
+                    and 0 <= received_at - encoder_at <= 0.4):
+                    wheels = tuple(encoder_state[k] for k in (
+                        "left_front_ticks", "right_front_ticks",
+                        "left_rear_ticks", "right_rear_ticks"
+                    ))
+                    encoder_sequence = encoder_state.get("sequence")
+                localization_scan_history.append({
+                    "scan": dict(stored_scan),
+                    "wheel_ticks": wheels,
+                    "encoder_received_at": encoder_at,
+                    "encoder_sequence": encoder_sequence,
+                })
                 status = build_navigation_status(received_at)
 
             navigation_visualization_hub.publish(
@@ -5325,6 +5362,8 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
         print(f"[lidar-ws] error robot_id={robot_id}: {exc}")
     finally:
         lidar_ros_bridge.mark_disconnected(robot_id)
+        with state_lock:
+            localization_scan_history.clear()
 
 
 @app.get("/api/lidar/bridge")
@@ -5360,6 +5399,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
         return
     await connections.connect(robot_id, websocket)
     if robot_id == SERVER_ROBOT_ID:
+        # A new Pi connection must supply a fresh wheel observation; old
+        # session readings cannot authorize a new Initial Pose estimate.
+        with state_lock:
+            localization_scan_history.clear()
+            encoder_state["updated_at"] = None
         navigation_control_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
@@ -5404,6 +5448,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                     continue
 
                 with state_lock:
+                    if (encoder_state.get("updated_at") is not None
+                        and received_encoder["sequence"] <= encoder_state["sequence"]):
+                        # Ignore stale/duplicate Pi packets for visualization
+                        # and for sensor-independent localization proof.
+                        continue
                     encoder_state.update(received_encoder)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_encoder(received_encoder)

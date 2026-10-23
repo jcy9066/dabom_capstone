@@ -1,0 +1,44 @@
+"""ROS-independent AMCL convergence checks following /initialpose publication."""
+from __future__ import annotations
+import math
+from typing import Any
+
+
+def stable_amcl_observations(samples: list[dict[str, Any]], initial: dict[str, float], *,
+                             minimum_samples: int = 3, minimum_span: float = 0.25) -> bool:
+    if len(samples) < minimum_samples:
+        return False
+    try:
+        newest_at = float(samples[-1]["at"])
+        # A high-rate AMCL stream can span <0.25s in its last three
+        # messages. Use the most recent 1s and check every sample.
+        recent = [item for item in samples if 0 <= newest_at - float(item["at"]) <= 1.0]
+        if len(recent) < minimum_samples:
+            return False
+        timestamps = [float(item["at"]) for item in recent]
+        if any(not math.isfinite(t) for t in timestamps):
+            return False
+        if any(timestamps[i] <= timestamps[i - 1] for i in range(1, len(timestamps))):
+            return False
+        if timestamps[-1] - timestamps[0] < minimum_span:
+            return False
+        cx, cy, yaw = (float(initial[k]) for k in ("x", "y", "yaw"))
+        base_x, base_y, base_yaw = (float(recent[0][k]) for k in ("x", "y", "yaw"))
+        if not all(map(math.isfinite, (cx, cy, yaw, base_x, base_y, base_yaw))):
+            return False
+        for pose in recent:
+            x, y, angle = (float(pose[k]) for k in ("x", "y", "yaw"))
+            xyvar, yawvar = (float(pose[k]) for k in ("xy_variance", "yaw_variance"))
+            if not all(map(math.isfinite, (x, y, angle, xyvar, yawvar))):
+                return False
+            if not (0 <= xyvar <= 0.25 and 0 <= yawvar <= math.radians(25) ** 2):
+                return False
+            if math.hypot(x - cx, y - cy) > 0.45 or math.hypot(x - base_x, y - base_y) > 0.20:
+                return False
+            delta = math.atan2(math.sin(angle - yaw), math.cos(angle - yaw))
+            spread = math.atan2(math.sin(angle - base_yaw), math.cos(angle - base_yaw))
+            if abs(delta) > math.radians(25) or abs(spread) > math.radians(12):
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False

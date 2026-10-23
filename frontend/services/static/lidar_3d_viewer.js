@@ -220,6 +220,9 @@ if (root && canvas) {
     let cameraVisualReady = false;
     let cameraMountLocal = new THREE.Vector3(0.12, 0, LIDAR_HEIGHT_M);
     let scanVisualHeightM = 0.16;
+    // Default is the legacy physical 180-degree mounting correction.
+    // New scan packets carry the ROS laser->base_link mounting transform.
+    let scanMountLocal = { x: 0, y: 0, yaw: LIDAR_VISUAL_YAW_OFFSET_RAD };
     let cameraAspect = 4 / 3;
     let cameraViewPlane = null;
     let cameraViewBorder = null;
@@ -1248,12 +1251,8 @@ if (root && canvas) {
             group.rotation.z = pose.yaw;
         }
 
-        // Rotate both LiDAR layers in place around the current robot/LiDAR origin.
-        // This fixes the physical mount being reversed without altering ROS/map data.
-        for (const group of [scanRoot, pointsRoot]) {
-            group.position.set(pose.x, pose.y, pose.z);
-            group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
-        }
+        // Scan geometry is frozen at the received frame's world pose in
+        // rebuildScan(), not dragged along with interpolated robot movement.
         setPoseVisibility(true);
 
         followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
@@ -1469,6 +1468,14 @@ if (root && canvas) {
     // every incoming scan replaces the previous frame. A transient obstacle
     // disappears from the live LiDAR layer on the next valid scan.
     function rebuildScan(scan) {
+        const mount = scan?.mount;
+        if (mount && [mount.x, mount.y, mount.yaw].every(v => Number.isFinite(Number(v)))) {
+            scanMountLocal = {
+                x: Number(mount.x),
+                y: Number(mount.y),
+                yaw: Number(mount.yaw),
+            };
+        }
         const nextKey = scanKey(scan);
         if (nextKey === currentScanKey) return;
         currentScanKey = nextKey;
@@ -1482,6 +1489,21 @@ if (root && canvas) {
         }
 
         ensureScanCapacity(scan.ranges.length);
+
+        // Anchor this single scan at the latest available base map pose.
+        // The previous scan stays fixed while the robot moves; each new scan
+        // replaces it (LaserScan Decay Time = 0). Never translate map/costmap.
+        if (targetPose) {
+            const yaw = targetPose.yaw;
+            const cy = Math.cos(yaw);
+            const sy = Math.sin(yaw);
+            const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
+            const sensorY = targetPose.y + sy * scanMountLocal.x + cy * scanMountLocal.y;
+            for (const group of [scanRoot, pointsRoot]) {
+                group.position.set(sensorX, sensorY, targetPose.z);
+                group.rotation.z = yaw + scanMountLocal.yaw;
+            }
+        }
 
         const angleMin = Number(scan.angle_min) || 0;
         const angleIncrement = Number(scan.angle_increment) || 0;
@@ -2126,7 +2148,18 @@ if (root && canvas) {
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
         applyTfPose(tfVisualizationPose);
         updateRobotPose(visualizationPose);
-        rebuildScan(liveScan);
+        // An older robot pose must not be applied to a newer scan as if
+        // both came from the same TF frame. The next fresh pair restores
+        // the scan automatically; the map and approved path stay unchanged.
+        const scanReceived = Number(liveScan?.received_at);
+        const poseReceived = Number(livePose?.received_at);
+        const scanPoseMismatch = Boolean(
+            validPose(livePose)
+            && Number.isFinite(scanReceived) && scanReceived > 0
+            && Number.isFinite(poseReceived) && poseReceived > 0
+            && Math.abs(scanReceived - poseReceived) > 0.75
+        );
+        rebuildScan(scanPoseMismatch ? null : liveScan);
 
         if (
             trajectorySessionActive
