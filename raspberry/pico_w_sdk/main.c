@@ -70,7 +70,7 @@
  * MOTOR_MAX_PWM is a firmware safety ceiling, not a current limiter.
  * Start conservatively and raise only after current/thermal validation.
  */
-#define MOTOR_MAX_PWM 0.30f
+#define MOTOR_MAX_PWM 0.60f
 #define MOTOR_RAMP_STEP 0.05f
 #define MOTOR_RAMP_INTERVAL_MS 20U
 #define MOTOR_REVERSE_DEADTIME_MS 120U

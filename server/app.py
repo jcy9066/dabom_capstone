@@ -186,7 +186,7 @@ async def auth_login_page(request: Request):
 async def auth_main_page(request: Request):
     if not request.session.get("user"):
         return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse(request, "index.html")
+    return templates.TemplateResponse(request, "index.html", {"manual_speed": env_float("MANUAL_SPEED", minimum=0.0, maximum=1.0)})
 
 
 @app.post("/api/auth/email/send")

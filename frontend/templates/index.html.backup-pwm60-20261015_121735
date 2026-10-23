@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 순찰 관제 센터</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="static/style.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/system_control.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/navigation_map_control.css?v=20261001-map-modal-controls">
+    <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="/components/records/records.css?v=20260930-lidar3d-controls-v16">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261006-model-pipeline-toggle-v1">
+</head>
+<body>
+
+    <!-- 사이드 메뉴 오버레이 -->
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+    <!-- 사이드 메뉴 -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <span class="sidebar-title">설정</span>
+            <button class="sidebar-close" onclick="closeSidebar()">✕</button>
+        </div>
+
+        <div class="sidebar-body">
+            <div class="sidebar-item">
+                <span class="sidebar-item-label">다크 모드</span>
+
+                <div class="dark-toggle" id="darkToggle" onclick="toggleDarkMode()">
+                    <div class="dark-toggle-slider"></div>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-info">
+                <span class="sidebar-info-label">시스템</span>
+                <span class="sidebar-info-value">AI 순찰 로봇 v1.0</span>
+            </div>
+            <div class="sidebar-divider"></div>
+            <div id="systemControlPanelSlot"></div>
+
+            {% set current_user = request.session.get('user') or {} %}
+            <div class="sidebar-account" id="sidebarAccount" aria-label="현재 로그인 계정">
+                <span class="sidebar-info-label">현재 로그인</span>
+                <strong class="sidebar-account-name" id="sidebarAccountName">
+                    {{ current_user.get('name') or '사용자' }}
+                </strong>
+                <span class="sidebar-account-id" id="sidebarAccountLoginId">
+                    {{ current_user.get('login_id') or '-' }}
+                </span>
+                <button class="sidebar-logout-btn" id="logoutBtn" type="button" onclick="logout()">
+                    &#xB85C;&#xADF8;&#xC544;&#xC6C3;
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="system-status-bar">
+        <span>
+            CPU:
+            <span id="sys-cpu-usage">0.0</span>%
+            /
+            <span id="sys-cpu-temp">0.0</span>°C
+        </span>
+
+        <span>
+            RAM:
+            <span id="sys-ram">0.0</span>%
+        </span>
+        <span>
+            PING:
+            <span id="sys-internet">0</span>
+        </span>
+        <span class="system-state-item">
+            PI:
+            <span class="state-value state-unknown" id="pi-connection-status">UNKNOWN</span>
+        </span>
+        <span class="system-state-item">
+            MODE:
+            <span class="state-value state-unknown" id="robot-mode-status">UNKNOWN</span>
+        </span>
+    </div>
+
+    <header>
+        <button
+            class="menu-btn"
+            id="menuBtn"
+            onclick="openSidebar()"
+            title="메뉴"
+        >
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+
+        <div class="header-center">
+            <div class="live-badge">LIVE</div>
+            <h1>AI 순찰 로봇 관제 센터</h1>
+        </div>
+    </header>
+
+    <div class="dashboard-container">
+
+        <div class="card" id="camera-card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    실시간 카메라 (RTMO-M + BotSORT + X3D-M)
+                </h2>
+                <div
+                    id="model-pipeline-toggle-mount"
+                    class="dashboard-model-control-mount"
+                    data-dashboard-mount="model-pipeline-toggle"
+                    aria-label="Model pipeline control"
+                ></div>
+            </div>
+
+            <div class="screen-content" id="video-wrapper">
+                <div
+                    id="no-camera-msg"
+                    class="no-camera-bg"
+                    style="display: none;"
+                >
+                    카메라 신호 대기 중
+                </div>
+
+                <img
+                    id="camera-stream"
+                    src="{{ url_for('video_feed') }}"
+                    alt=""
+                >
+
+                <div
+                    class="overlay-controls top-left"
+                    id="camera-controls"
+                >
+                    <button
+                        class="icon-btn"
+                        onclick="toggleFullscreen('video-wrapper')"
+                    >
+                        전체화면
+                    </button>
+                </div>
+
+                <div
+                    class="overlay-datetime"
+                    id="camera-datetime"
+                >
+                    0000-00-00 00:00:00
+                </div>
+
+                <div
+                    class="overlay-detection-vertical"
+                    id="detection-data"
+                >
+                    <span class="detection-title">
+                        --Now Object List--
+                    </span>
+                </div>
+
+                <div
+                    class="minimap-overlay lidar-viewer-overlay"
+                    id="minimap-overlay"
+                >
+                    <div
+                        id="lidar-3d-viewer"
+                        class="lidar-3d-viewer"
+                        aria-label="3D LiDAR navigation visualization"
+                    >
+                        <canvas
+                            id="lidar-3d-canvas"
+                            class="lidar-3d-canvas"
+                            tabindex="0"
+                        ></canvas>
+
+                        <div
+                            class="lidar-control-drawer"
+                            id="lidar-control-drawer"
+                            data-open="true"
+                        >
+                            <div
+                                class="lidar-control-drawer-content"
+                                id="lidar-control-drawer-content"
+                            >
+                                <div class="lidar-control-strip">
+                                    <div class="navigation-control-panel" id="navigation-control-panel">
+                                        <div class="navigation-control-row">
+                                            <div
+                                                id="navigation-viewer-mode-controls-mount"
+                                                class="viewer-navigation-mode-controls"
+                                                data-dashboard-mount="navigation-viewer-mode-controls"
+                                                aria-label="Navigation mode"
+                                            ></div>
+                                        </div>
+                                        <div class="navigation-control-row">
+                                            <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
+                                            <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>목표 취소</button>
+                                        </div>
+                                    </div>
+
+                                    <span class="lidar-control-separator" aria-hidden="true"></span>
+
+                                    <div class="lidar-view-controls" aria-label="3D viewer controls">
+                                        <button type="button" data-lidar-view="free" data-control-button="view" class="active">FREE</button>
+                                        <button type="button" data-lidar-view="top" data-control-button="view">TOP</button>
+                                        <button type="button" data-lidar-view="follow" data-control-button="view">FOLLOW</button>
+                                        <span class="lidar-control-separator" aria-hidden="true"></span>
+                                        <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
+                                        <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
+                                    </div>
+
+                                    <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
+                                        <button
+                                            type="button"
+                                            class="lidar-control-overflow-toggle"
+                                            id="lidarControlOverflowToggle"
+                                            data-control-button="secondary"
+                                            aria-expanded="false"
+                                            aria-controls="lidar-control-overflow-menu"
+                                            aria-label="추가 제어 열기"
+                                            title="추가 제어"
+                                        >
+                                            ⋯
+                                        </button>
+                                        <div
+                                            class="lidar-control-overflow-menu"
+                                            id="lidar-control-overflow-menu"
+                                            hidden
+                                        ></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                class="dashboard-drawer-toggle dashboard-drawer-toggle--top lidar-control-drawer-handle"
+                                id="lidarControlDrawerToggle"
+                                data-drawer-toggle
+                                data-drawer-target="lidar-control-drawer"
+                                data-drawer-open-label="제어 패널 접기"
+                                data-drawer-closed-label="제어 패널 펼치기"
+                                aria-expanded="true"
+                                aria-controls="lidar-control-drawer-content"
+                                aria-label="제어 패널 접기"
+                                title="제어 패널 접기"
+                            >
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
+                            </button>
+                        </div>
+
+                        <div
+                            class="lidar-layer-drawer"
+                            id="lidar-layer-drawer"
+                            data-open="false"
+                        >
+                            <div
+                                class="lidar-layer-drawer-content"
+                                id="lidar-layer-drawer-content"
+                            >
+                                <div class="lidar-layer-drawer-title">LAYERS</div>
+                                <div class="lidar-display-options">
+                                    <label><input type="checkbox" data-lidar-display="map" checked>Map</label>
+                                    <label><input type="checkbox" data-lidar-display="robot" checked>Robot</label>
+                                    <label><input type="checkbox" data-lidar-display="grid" checked>Grid</label>
+                                    <label><input type="checkbox" data-lidar-display="tf" checked>TF</label>
+                                    <label><input type="checkbox" data-lidar-display="scan" checked>LaserScan</label>
+                                    <label><input type="checkbox" data-lidar-display="points" checked>LiDAR Points</label>
+                                    <label><input type="checkbox" data-lidar-display="obstacles" checked>Dynamic Obstacle</label>
+                                    <label><input type="checkbox" data-lidar-display="inflation">Inflation</label>
+                                    <label><input type="checkbox" data-lidar-display="path" checked>Global Path</label>
+                                    <label><input type="checkbox" data-lidar-display="trajectory" checked>Trajectory</label>
+                                    <label><input type="checkbox" data-lidar-display="goal" checked>Goal</label>
+                                    <label><input type="checkbox" data-lidar-display="camera-frustum" checked>Camera Frustum</label>
+                                    <label><input type="checkbox" data-lidar-display="camera-view" checked>Camera View</label>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                class="dashboard-drawer-toggle dashboard-drawer-toggle--left lidar-layer-drawer-handle"
+                                id="lidarLayerDrawerToggle"
+                                data-drawer-toggle
+                                data-drawer-target="lidar-layer-drawer"
+                                data-drawer-open-label="레이어 패널 접기"
+                                data-drawer-closed-label="레이어 패널 펼치기"
+                                aria-expanded="false"
+                                aria-controls="lidar-layer-drawer-content"
+                                aria-label="레이어 패널 펼치기"
+                                title="레이어 패널 펼치기"
+                            >
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="lidar-bottom-status" id="lidar-bottom-status">
+                        <div
+                            class="lidar-control-message"
+                            id="lidar-control-message"
+                            role="status"
+                            aria-live="polite"
+                            hidden
+                        ></div>
+                        <div
+                            class="lidar-gps-meta"
+                            id="lidar-gps-meta"
+                        >
+                            GPS LAT -- / LNG -- / ALT --
+                        </div>
+                        <div
+                            class="lidar-map-meta"
+                            id="lidar-map-meta"
+                        >
+                            LiDAR OFFLINE
+                        </div>
+                    </div>
+
+                    <div
+                        class="lidar-stale-overlay visible"
+                        id="lidar-stale-overlay"
+                    >
+                        <div
+                            class="lidar-stale-title"
+                            id="lidar-stale-title"
+                        >
+                            LiDAR OFFLINE
+                        </div>
+
+                        <div
+                            class="lidar-stale-detail"
+                            id="lidar-stale-detail"
+                        >
+                            NO SCAN DATA
+                        </div>
+                    </div>
+
+                    <button
+                        class="lidar-map-select-btn"
+                        id="lidarMapSelectBtn"
+                        type="button"
+                        title="Load saved map"
+                    >
+                        MAP
+                    </button>
+
+                    <button
+                        class="lidar-viewer-fullscreen-btn"
+                        id="lidarViewerFullscreenBtn"
+                        type="button"
+                        title="3D Viewer 전체화면"
+                        aria-label="3D Viewer 전체화면"
+                    >
+                        <span class="fullscreen-corner corner-tl" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-tr" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-bl" aria-hidden="true"></span>
+                        <span class="fullscreen-corner corner-br" aria-hidden="true"></span>
+                    </button>
+
+                    <button
+                        class="minimap-expand-btn"
+                        id="minimapExpandBtn"
+                        onclick="toggleMinimapExpand()"
+                        title="미니맵 확대"
+                    >
+                        ⛶
+                    </button>
+                </div>
+            </div>
+
+            <div class="map-bookmark-panel" id="records-toolbar-mount" data-dashboard-mount="records-toolbar">
+                <button
+                    class="mb-btn"
+                    data-record-view="patrolModal"
+                    onclick="openModal('patrolModal')"
+                >
+                    순찰 기록 조회
+                </button>
+
+                <button
+                    class="mb-btn"
+                    data-record-view="galleryModal"
+                    onclick="openModal('galleryModal')"
+                >
+                    이미지 갤러리
+                </button>
+
+                <span id="current-situation-mount" class="dashboard-component-mount" data-dashboard-mount="current-situation">
+                    <button
+                        class="mb-btn current-situation-record-btn"
+                        data-record-view="currentSituation"
+                        onclick="openCurrentSituationModal()"
+                    >
+                        현재 상황 작성
+                    </button>
+                </span>
+
+                <button
+                    class="mb-btn"
+                    data-record-view="actionsModal"
+                    onclick="openModal('actionsModal')"
+                >
+                    관리자 조치 조회
+                </button>
+
+                <button
+                    class="mb-btn"
+                    data-record-view="statusModal"
+                    onclick="openModal('statusModal')"
+                >
+                    기기 상태 조회
+                </button>
+
+            </div>
+        </div>
+
+        <div class="right-panel">
+
+            <section class="card server-state-card" id="serverStateCard" aria-label="서버 기준 로봇 상태">
+                <div class="card-header server-state-header">
+                    <h2 class="card-title">SERVER STATE</h2>
+                    <span class="server-state-updated" id="server-state-updated">확인 중</span>
+                </div>
+                <div class="server-state-grid">
+                    <div class="server-state-field">
+                        <span>주행 구분</span>
+                        <strong id="operation-mode-status">UNKNOWN</strong>
+                    </div>
+                    <div class="server-state-field">
+                        <span>활성 지도</span>
+                        <strong id="active-map-status">UNAVAILABLE</strong>
+                    </div>
+                    <div class="server-state-field">
+                        <span>Navigation</span>
+                        <strong id="navigation-state-status">UNKNOWN</strong>
+                    </div>
+                    <div class="server-state-field">
+                        <span>비상 정지</span>
+                        <strong id="emergency-stop-status">UNAVAILABLE</strong>
+                    </div>
+                    <div class="server-state-field server-state-field-wide">
+                        <span>현재 목표</span>
+                        <strong id="current-goal-status">UNAVAILABLE</strong>
+                    </div>
+                    <div class="server-state-field server-state-field-wide">
+                        <span>계획 경로</span>
+                        <strong id="planned-path-status">UNAVAILABLE</strong>
+                    </div>
+                </div>
+            </section>
+
+            <div class="card alert-card">
+                <div class="card-header">
+                    <h2 class="card-title text-danger">
+                        ⚠️ 실시간 위험/경고 알림
+                    </h2>
+
+                    <button
+                        class="clear-btn"
+                        onclick="clearAlerts()"
+                    >
+                        알림 지우기
+                    </button>
+                </div>
+
+                <div
+                    class="alert-container"
+                    id="alertBox"
+                >
+                    <div class="alert-entry alert-info alert-unavailable">
+                        <span class="alert-time">
+                            --:--:--
+                        </span>
+
+                        <span class="alert-message">
+                            실시간 알림 API를 사용할 수 없습니다.
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-grid">
+                <div
+                    class="card dashboard-mode-controls"
+                    id="dashboard-mode-controls-mount"
+                    data-dashboard-mount="drive-mode-controls"
+                >
+                    <button
+                        class="dashboard-drive-mode-control"
+                        data-dashboard-control="drive-mode"
+                        type="button"
+                        onclick="togglePatrolMode()"
+                    >
+                        <span
+                            id="label-auto"
+                            class="mode-text inactive"
+                        >
+                            자동
+                        </span>
+
+                        <div
+                            class="toggle-switch unknown"
+                            id="mode-switch-ui"
+                        >
+                            <div class="toggle-slider"></div>
+                        </div>
+
+                        <span
+                            id="label-manual"
+                            class="mode-text inactive"
+                        >
+                            수동
+                        </span>
+                    </button>
+
+                    <div
+                        id="dashboard-navigation-mode-controls-mount"
+                        class="dashboard-navigation-mode-controls"
+                        data-dashboard-mount="navigation-mode-controls"
+                        aria-label="Navigation mode"
+                    ></div>
+
+                    <div
+                        id="dashboard-led-control-mount"
+                        class="dashboard-led-control-mount"
+                        data-dashboard-mount="dashboard-led-control"
+                        aria-label="LED control"
+                    ></div>
+                </div>
+
+                <div class="split-btn-container dashboard-action-controls">
+                    <button
+                        class="card action-btn action-beep"
+                        id="dashboardBeepBtn"
+                        type="button"
+                    >
+                        BEEP
+                    </button>
+
+                    <button
+                        class="card action-btn action-warning"
+                        type="button"
+                        onclick="warnTrespasser()"
+                    >
+                        경고
+                    </button>
+
+                    <button
+                        class="card action-btn action-report"
+                        type="button"
+                        onclick="reportDanger()"
+                    >
+                        신고
+                    </button>
+                </div>
+
+                <div
+                    class="card d-pad-container disabled"
+                    id="d-pad-area"
+                >
+                    <div class="d-pad">
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↖"
+                            title="좌회전"
+                        >
+                            ↖
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↑"
+                            title="전진"
+                        >
+                            ↑
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↗"
+                            title="우회전"
+                        >
+                            ↗
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="←"
+                            title="반시계 방향 회전"
+                        >
+                            ←
+                        </button>
+
+                        <!-- 중앙 정지 및 회전 버튼 제거 -->
+                        <!-- 3×3 D-Pad 배치를 유지하기 위한 빈 칸 -->
+                        <div
+                            id="dpad-center-action-mount"
+                            class="d-center-split"
+                            data-dashboard-mount="dpad-center-action"
+                            aria-hidden="true"
+                        ></div>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="→"
+                            title="시계 방향 회전"
+                        >
+                            →
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↙"
+                            title="왼쪽으로 후진"
+                        >
+                            ↙
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↓"
+                            title="후진"
+                        >
+                            ↓
+                        </button>
+
+                        <button
+                            class="d-btn"
+                            data-drive-direction="↘"
+                            title="오른쪽으로 후진"
+                        >
+                            ↘
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div
+        id="commonModal"
+        class="modal"
+    >
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">
+                    모달 제목
+                </h2>
+
+                <button
+                    type="button"
+                    class="close-btn"
+                    data-modal-close
+                    aria-label="전체 모달 닫기"
+                >
+                    &times;
+                </button>
+            </div>
+
+            <div
+                id="modalBody"
+                class="modal-body"
+            >
+                모달 내용이 여기에 들어갑니다.
+            </div>
+        </div>
+    </div>
+
+    <script src="/components/modal/modal_manager.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/navigation/saved_map_modal.js?v=20261001-mapping-restart-v1"></script>
+    <script src="/components/records/record_filters.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/records/record_table.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/records/pagination.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/records/record_modal.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/control_button.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/model_pipeline_toggle.js?v=20261006-model-pipeline-toggle-v1"></script>
+    <script src="/components/controls/cycle_filter_button.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/drive_mode_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/controls/navigation_mode_control.js?v=20261001-nav-mode-map-reset"></script>
+    <script src="/components/gallery/image_detail.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="/components/current_situation/current_situation.js?v=20260930-lidar3d-controls-v16"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "/static/vendor/three/three.module.min.js",
+                "three/addons/": "/static/vendor/three/addons/"
+            }
+        }
+    </script>
+    <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
+    <script src="static/script.js?v=20261007-dynamic-obstacle-v32"></script>
+    <script src="static/system_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/dashboard_state.js?v=20260930-lidar3d-controls-v16"></script>
+    <script src="static/navigation_control.js?v=20261003-current-driving-path-v3"></script>
+</body>
+</html>

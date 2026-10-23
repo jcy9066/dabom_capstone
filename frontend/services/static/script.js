@@ -1281,7 +1281,7 @@ window.applyServerPatrolMode = applyServerPatrolMode;
 window.setDashboardRobotConnection = setDashboardRobotConnection;
 
 const ROBOT_ID = 'pi-01';
-const MANUAL_SPEED = 0.3; // Normalized PWM: 30% output, not m/s.
+const MANUAL_SPEED = Number(window.DABOM_MANUAL_SPEED); // Normalized PWM from .env
 const COMMAND_REPEAT_MS = 120;
 
 const DRIVE_KEYS = [
