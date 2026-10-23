@@ -177,7 +177,7 @@ def test_estop_during_direct_motion_ack_must_fail():
         api._connected = True
         api._pi_updated_at = time.time()
 
-    async def ack_after_estop(robot_id, command):
+    async def ack_after_estop(robot_id, command, *, preflight=None):
         with api._lock:
             api._state["emergency_stop"] = True
             api._post_resume_motion_ready = False
@@ -269,21 +269,19 @@ def test_resume_ack_requires_matching_pi_safety_epoch():
 def test_settings_guide_uses_dashboard_actions_and_modal_manager():
     for label in (
         r"\ub300\uc2dc\ubcf4\ub4dc \uc0ac\uc6a9 \uc548\ub0b4",
-        r"[Mapping] \uc120\ud0dd",
-        r"[Driving] \uc120\ud0dd",
-        r"[\uc21c\ucc30 \uae30\ub85d \uc870\ud68c]",
-        r"[\uc774\ubbf8\uc9c0 \uac24\ub7ec\ub9ac]",
-        r"[\ud604\uc7ac \uc0c1\ud669 \uc791\uc131]",
-        r"[\uad00\ub9ac\uc790 \uc870\uce58 \uc870\ud68c]",
-        r"[\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]",
+        "Mapping을 선택하고 Manual 모드로 전환하세요.",
+        "Driving을 선택하고 저장 지도를 불러오세요.",
+        "순찰 내역·갤러리에서 탐지 내용과 이미지를 확인하세요.",
+        "상황 기록을 작성하고 조치 내역에서 처리 결과를 확인하세요.",
+        "기기 상태 내역에서 시작·종료 기간을 지정해 조회하세요.",
     ):
         assert label in SCRIPT
     assert "DabomDashboardComponents?.modal" in SCRIPT
     assert "processGuideItems()" in SCRIPT
     assert "state.status.gpu" in SCRIPT
     assert "state.status.pi" in SCRIPT
-    assert "component.id !== 'map_bridge'" in SCRIPT
-    assert r"SLAM Mapping\uc740 ${label}\ub97c \ud568\uaed8 \uc2dc\uc791" in SCRIPT
+    assert "SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id)" in SCRIPT
+    assert "'프로세스 시작 순서: ' + processGuideItems().join(' → ')" in SCRIPT
 
 
 def test_disconnected_status_does_not_become_process_guide_source():
