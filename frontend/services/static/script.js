@@ -180,11 +180,17 @@ async function refreshTrackedPeople() {
         const response = await fetch('/api/latest_result', { signal: controller.signal });
         if (!response.ok) throw new Error('tracker request failed');
         const payload = await response.json();
+        // A fetch can finish parsing after its signal was aborted.
+        if (controller !== objectListController || controller.signal.aborted
+            || !isDashboardDocumentVisible()) return;
         const fresh = payload.ok !== false && payload.processed_at
             && Date.now() / 1000 - Number(payload.processed_at) <= 3;
         renderTrackedPeople(fresh ? payload.detections : []);
     } catch (error) {
-        if (error.name !== 'AbortError') renderTrackedPeople([]);
+        if (controller === objectListController && !controller.signal.aborted
+            && isDashboardDocumentVisible() && error.name !== 'AbortError') {
+            renderTrackedPeople([]);
+        }
     } finally {
         if (objectListController === controller) objectListController = null;
     }
