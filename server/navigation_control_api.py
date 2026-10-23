@@ -821,8 +821,17 @@ class NavigationControlApi:
                     and (after is None or self._pi_updated_at > after)
                     and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                     and self._pi_navigation_mode == expected
-                    and self._pi_estop_latched is False
-                    and not self._state["emergency_stop"]
+                    # An already-confirmed physical STOP is required to
+                    # switch an active route into Mapping. Requiring E-STOP
+                    # to be released here would contradict that transition.
+                    # DRIVING must still require both safety latches clear.
+                    and (
+                        expected == "MAPPING"
+                        or (
+                            self._pi_estop_latched is False
+                            and not self._state["emergency_stop"]
+                        )
+                    )
                 )
             if confirmed:
                 return True
