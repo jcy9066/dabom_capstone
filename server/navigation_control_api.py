@@ -222,8 +222,10 @@ class NavigationControlApi:
             self._pi_estop_latched = None
             self._speaker_volume_percent = None
             self._volume_override_until = 0.0
+            # Replacing a live Pi socket may skip a disconnect notification.
+            # New sessions must establish their own encoder sequence baseline.
+            self._encoder_sequence = None
             if not connected:
-                self._encoder_sequence = None
                 self._stop_confirmation_after_sequence = None
                 self._estop_generation += 1
                 if not self._estop_command_acknowledged:
