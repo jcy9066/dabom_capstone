@@ -1960,11 +1960,11 @@ def draw_skeleton_points(frame, skeleton, color):
             cv2.line(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
-def draw_detection_overlay(frame, detection):
+def draw_detection_overlay(frame, detection, scene_danger=False):
     height, width = frame.shape[:2]
     x1, y1, x2, y2 = clamp_box(detection["box"], width, height)
     is_person = detection.get("cls", 0) == 0
-    is_danger = bool(detection.get("danger"))
+    is_danger = bool(detection.get("danger")) or (scene_danger and is_person)
     has_action_label = bool(detection.get("label"))
     confidence_level = detection.get("confidence_level")
     is_suspicious = bool(
@@ -2040,7 +2040,12 @@ def render_latest_overlay(frame, now=None):
     if pose_overlay_fresh:
         for detection in detections:
             if detection.get("box"):
-                draw_detection_overlay(display_frame, detection)
+                draw_detection_overlay(
+                    display_frame, detection,
+                    scene_danger=bool(
+                        scene and scene.get("status") == "ok" and scene.get("danger")
+                    ),
+                )
         draw_interaction_overlays(
             display_frame,
             detections,
@@ -2351,7 +2356,14 @@ def process_frame_for_dashboard(frame):
 
     for detection in detections:
         if detection.get("box"):
-            draw_detection_overlay(display_frame, detection)
+            draw_detection_overlay(
+                display_frame, detection,
+                scene_danger=bool(
+                    scene_level and scene_result
+                    and scene_result.get("status") == "ok"
+                    and scene_result.get("danger")
+                ),
+            )
 
     if not scene_level:
         resolved_pair_overlays = interaction_pair_overlays(
