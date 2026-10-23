@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync('frontend/services/static/script.js', 'utf8');
 new vm.Script(source); // Reject a syntax error anywhere in the dashboard script.
 const first = source.indexOf('const OBJECT_LIST_POLL_MS');
-const last = source.indexOf('// 카메라 연결 상태 폴링', first);
+const last = source.indexOf('// END TRACKED PEOPLE LIST', first);
 assert(first >= 0 && last > first, 'tracking-list implementation is missing');
 const block = source.slice(first, last);
 
