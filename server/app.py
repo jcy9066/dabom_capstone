@@ -58,6 +58,7 @@ from server.database import (
     DatabaseOperationError,
 )
 from server.env_config import env_bool, env_float, env_int, env_text
+from server.scan_pose_fusion import select_independent_encoder_scans
 from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
 from server.media_service import (
     FrozenFrameCache,
@@ -956,10 +957,9 @@ def current_navigation_scan_snapshot():
 
 def current_navigation_scans_snapshot():
     with state_lock:
-        return [
-            {**item, "scan": dict(item["scan"])}
-            for item in list(localization_scan_history)[-5:]
-        ]
+        # LiDAR can be faster than encoder telemetry; skip duplicate encoder
+        # packets but never accept a reused packet as independent evidence.
+        return select_independent_encoder_scans(list(localization_scan_history))
 
 
 def clear_navigation_visualization_state():
@@ -5316,6 +5316,7 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 # observations corresponding to every stored LiDAR frame.
                 encoder_at = encoder_state.get("updated_at")
                 wheels = None
+                encoder_sequence = None
                 if (encoder_state.get("robot_id") == robot_id
                     and isinstance(encoder_at, (int, float))
                     and 0 <= received_at - encoder_at <= 0.4):
@@ -5323,10 +5324,12 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                         "left_front_ticks", "right_front_ticks",
                         "left_rear_ticks", "right_rear_ticks"
                     ))
+                    encoder_sequence = encoder_state.get("sequence")
                 localization_scan_history.append({
                     "scan": dict(stored_scan),
                     "wheel_ticks": wheels,
                     "encoder_received_at": encoder_at,
+                    "encoder_sequence": encoder_sequence,
                 })
                 status = build_navigation_status(received_at)
 
@@ -5396,6 +5399,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
         return
     await connections.connect(robot_id, websocket)
     if robot_id == SERVER_ROBOT_ID:
+        # A new Pi connection must supply a fresh wheel observation; old
+        # session readings cannot authorize a new Initial Pose estimate.
+        with state_lock:
+            localization_scan_history.clear()
+            encoder_state["updated_at"] = None
         navigation_control_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
@@ -5440,6 +5448,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                     continue
 
                 with state_lock:
+                    if (encoder_state.get("updated_at") is not None
+                        and received_encoder["sequence"] <= encoder_state["sequence"]):
+                        # Ignore stale/duplicate Pi packets for visualization
+                        # and for sensor-independent localization proof.
+                        continue
                     encoder_state.update(received_encoder)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_encoder(received_encoder)
