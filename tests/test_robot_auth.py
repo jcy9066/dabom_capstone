@@ -93,7 +93,7 @@ def test_robot_command_allows_authenticated_user_with_csrf():
     assert login.status_code == 200
 
     csrf = browser.get("/api/auth/csrf").json()["csrf_token"]
-    with patch.object(server.connections, "send_command", AsyncMock(return_value=True)):
+    with patch.object(server.connections, "send_command_wait_ack", AsyncMock(return_value=True)):
         response = browser.post(
             "/api/robots/pi-01/command",
             headers={"X-CSRF-Token": csrf},
