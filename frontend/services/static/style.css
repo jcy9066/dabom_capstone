@@ -321,7 +321,7 @@ h1 {
 /* ===================================================
    메인 레이아웃
 =================================================== */
-.dashboard-container { display: flex; gap: 14px; flex: 1 1 auto; min-height: max(0px, calc(100vh - 190px)); }
+.dashboard-container { display: flex; gap: 14px; flex: 1 1 auto; min-height: 0; }
 
 .card {
     background-color: var(--card-bg);
