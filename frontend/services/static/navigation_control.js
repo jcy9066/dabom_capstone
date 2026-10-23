@@ -527,7 +527,6 @@
     }
 
     async function setMappingMode({ restart = false } = {}) {
-        if (state.control?.navigation_mode === 'MAPPING' && !restart) return true;
         if (state.busy || state.drivePending || state.navigationPending) return false;
         const moving = navigationIsMoving();
         if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return false;
@@ -536,6 +535,17 @@
         syncControlComponents();
         setFeedback('Mapping 모드로 전환 중...');
         try {
+            if (state.control?.navigation_mode === 'MAPPING' && !restart) {
+                const runtime = await requestJson('/api/system-control/status');
+                const mapping = runtime.gpu?.find(component => component.id === 'slam_mapping');
+                if (!mapping || !['off', 'on', 'duplicate'].includes(mapping.state)) {
+                    throw new Error('Mapping 실행 상태를 확인할 수 없습니다.');
+                }
+                if (mapping.state !== 'off') {
+                    setFeedback('Mapping 모드가 실행 중입니다.');
+                    return true;
+                }
+            }
             const mappingPayload = {
                 mode: 'MAPPING',
                 ...(restart ? { restart: true } : {}),

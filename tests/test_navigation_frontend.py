@@ -338,7 +338,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("mappingLabel.dataset.navigationModeTarget = 'MAPPING'", self.navigation_component)
         self.assertIn("drivingLabel.dataset.navigationModeTarget = 'DRIVING'", self.navigation_component)
         self.assertIn("const explicitTarget = event.target?.closest?.(", self.navigation_component)
-        self.assertIn("if (next === current) return;", self.navigation_component)
+        self.assertIn("if (next === current && next !== 'MAPPING') return;", self.navigation_component)
         self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
         self.assertIn("...(restart ? { restart: true } : {})", self.control)
         self.assertIn("setMappingMode(options)", self.control)
