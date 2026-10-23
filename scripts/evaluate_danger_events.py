@@ -27,7 +27,11 @@ def evaluate_events(events: list[dict]) -> dict:
             continue
         if not isinstance(predicted, bool):
             raise ValueError("predicted must be bool or null")
-        key = ("t" if event["truth"] else "f") + ("p" if predicted else "n")
+        # Choose the confusion-matrix cell from truth and prediction.
+        if event["truth"]:
+            key = "tp" if predicted else "fn"
+        else:
+            key = "fp" if predicted else "tn"
         counts[key] += 1
         if event.get("latency_ms") is not None:
             latency = float(event["latency_ms"])

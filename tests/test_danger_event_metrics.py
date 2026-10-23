@@ -59,3 +59,36 @@ def test_unavailable_only_cannot_claim_perfect_recall():
     r = evaluate_events([{"truth": True, "predicted": None}])
     assert r["operational_recall"] == 0.0
     assert r["coverage"] == 0.0
+
+
+def test_all_four_confusion_matrix_cells():
+    events = [
+        {"truth": True, "predicted": True},
+        {"truth": True, "predicted": False},
+        {"truth": False, "predicted": True},
+        {"truth": False, "predicted": False},
+    ]
+    result = evaluate_events(events)
+    assert {key:result[key] for key in ("tp", "fp", "fn", "tn")} == {
+        "tp": 1, "fp": 1, "fn": 1, "tn": 1,
+    }
+
+
+def test_only_negative_events_do_not_inflate_false_negatives():
+    result = evaluate_events([{"truth": False, "predicted": False}] * 4)
+    assert result["tn"] == 4
+    assert result["fn"] == 0
+    assert result["recall"] is None
+
+
+def test_violence_misses_reduce_recall_and_f1():
+    result = evaluate_events([
+        {"truth": True, "predicted": True},
+        {"truth": True, "predicted": False},
+        {"truth": True, "predicted": False},
+        {"truth": False, "predicted": False},
+    ])
+    assert result["fn"] == 2
+    assert result["tn"] == 1
+    assert result["recall"] == 1 / 3
+    assert result["f1"] == 0.5
