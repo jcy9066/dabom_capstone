@@ -63,7 +63,10 @@ class NavigationControlApi:
     PROGRESS_DISTANCE_M = 0.10
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
-    ROTATION_MAX_CUMULATIVE_SEC = 15.0
+    # A verified in-place 180-degree turn can take 25-30s at the measured
+    # wheel/PWM limits. Cap prolonged rotation while preserving the separate
+    # 5s NO-PROGRESS timeout, live odom proof and swept-footprint checks.
+    ROTATION_MAX_CUMULATIVE_SEC = 40.0
     STOP_CONFIRM_STABLE_SEC = 0.5
     STOP_CONFIRM_MAX_AGE_SEC = 0.5
     STOP_CONFIRM_TIMEOUT_SEC = 3.0

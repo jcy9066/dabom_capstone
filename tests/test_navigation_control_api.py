@@ -1005,15 +1005,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with self.api._lock:
             self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
 
-        for sequence, elapsed in enumerate((4.0, 8.0, 12.0), start=1):
-            self.set_rotation(sequence)
+        # Approximately 180 degrees at the measured ~0.12rad/s takes
+        # longer than the previous 15s safety cap. Fresh, directed yaw
+        # progress should keep the Goal alive for this bounded period.
+        for sequence, elapsed in enumerate(
+            (4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 36.0), start=1
+        ):
+            self.set_rotation(sequence, yaw=sequence * 0.32)
             self.refresh_watchdog_samples(base + elapsed)
             self.assertIsNone(await self.api.evaluate_watchdog(now=base + elapsed))
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
 
-        self.set_rotation(4)
-        self.refresh_watchdog_samples(base + 15.0)
-        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.0))
+        self.set_rotation(10, yaw=3.14)
+        self.refresh_watchdog_samples(base + 40.0)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 40.0))
 
     async def test_translation_resets_cumulative_rotation_allowance(self):
         await self.driving_ready()
