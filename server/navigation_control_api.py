@@ -3543,8 +3543,9 @@ class NavigationControlApi:
                     reuse = False
                     if cached and hasattr(self._ros, "loop_path_valid"):
                         current_pose = self._safe_live_pose()
-                        # Never attach the first saved pose to a distant or
-                        # differently oriented robot: that would cut corners.
+                        # A small start-pose mismatch is not an obstruction.
+                        # Preserve the learned trajectory for subsequent laps
+                        # instead of deleting it due to temporary alignment.
                         aligned = (
                             isinstance(current_pose, dict)
                             and math.hypot(
@@ -3560,11 +3561,13 @@ class NavigationControlApi:
                             reuse = await asyncio.to_thread(
                                 self._ros.loop_path_valid, cached,
                             )
-                        if not reuse:
-                            with self._lock:
-                                if epoch == self._loop_epoch:
-                                    self._loop_path_cache.pop(next_index, None)
-                                    self._loop_replans += 1
+                            if not reuse:
+                                # A confirmed dynamic obstacle invalidates
+                                # this direction's physical trajectory.
+                                with self._lock:
+                                    if epoch == self._loop_epoch:
+                                        self._loop_path_cache.pop(next_index, None)
+                                        self._loop_replans += 1
                     if reuse:
                         plan = cached
                     else:
