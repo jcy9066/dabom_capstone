@@ -2884,16 +2884,27 @@ class NavigationControlApi:
             return False
         try:
             rotation = self._ros.rotation_status()
-            age = float(rotation["command_age_sec"])
-            angular = float(rotation["command_angular_z"])
-            linear = float(rotation["command_linear_x"])
+            retained = rotation.get("pivot_command_age_sec") is not None
+            age = float(
+                rotation["pivot_command_age_sec"] if retained
+                else rotation["command_age_sec"]
+            )
+            angular = float(
+                rotation["pivot_command_angular_z"] if retained
+                else rotation["command_angular_z"]
+            )
+            linear = float(
+                rotation["pivot_command_linear_x"] if retained
+                else rotation["command_linear_x"]
+            )
             pose = self._safe_live_pose()
             px, py, yaw = float(pose["x"]), float(pose["y"]), float(pose["yaw"])
             received = float(pose["received_at"])
         except (AttributeError, KeyError, ValueError, TypeError, OverflowError):
             return False
         if (not all(math.isfinite(x) for x in (age, angular, linear, px, py, yaw, received))
-            or not 0 <= age <= 0.5 or not 0 <= current - received <= 0.5
+            or not 0 <= age <= (0.75 if retained else 0.5)
+            or not 0 <= current - received <= 0.5
             or abs(angular) < self._ros.ROTATION_MIN_ANGULAR_RPS
             or abs(linear) > self._ros.ROTATION_MAX_LINEAR_MPS):
             return False
