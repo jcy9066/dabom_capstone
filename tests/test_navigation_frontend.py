@@ -64,6 +64,16 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("GLTFLoader", viewer)
         self.assertIn("robot_upper_chassis.glb", viewer)
 
+    def test_3d_viewer_never_labels_preview_as_live_executed_path(self):
+        viewer = self.viewer
+        allowed = viewer.split("function displayedGlobalPath(", 1)[1].split(
+            "function pathKey(", 1
+        )[0]
+        self.assertIn("['PATH_READY', 'READY'].includes(navState)", allowed)
+        self.assertNotIn("'NAVIGATING'", allowed)
+        self.assertNotIn("'RESUMING'", allowed)
+        self.assertIn("control.planned_path", allowed)
+
     def test_3d_viewer_rotates_lidar_visuals_180_degrees_in_place(self):
         template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
         viewer = (

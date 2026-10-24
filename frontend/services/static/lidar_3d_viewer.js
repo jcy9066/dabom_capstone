@@ -1544,7 +1544,10 @@ if (root && canvas) {
         // A retained Goal may be retried after FAILED / EMERGENCY_STOPPED,
         // but its old path must not look executable. REPLACING_GOAL retains
         // the old Goal internally until Pi STOP has been confirmed.
-        if (!['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING'].includes(navState)) {
+        // A preview is NOT the FollowPath action's executed path. Until a
+        // trustworthy execution-to-path binding exists, never render the
+        // preview as though it were the actively followed route.
+        if (!['PATH_READY', 'READY'].includes(navState)) {
             return [];
         }
         const authorizedPath = control.planned_path;
