@@ -41,6 +41,8 @@ class FakeRos:
         self.plan_calls = 0
         self.navigate_calls = 0
         self.cancel_calls = 0
+        self.through_plan_calls = []
+        self.through_navigation_calls = []
         self.state = "IDLE"
         self.health = {
             "available": True,
@@ -51,6 +53,11 @@ class FakeRos:
             "localization_age_sec": 0.01,
         }
         self.rotation = {}
+        self.live_generation = 0
+        self.live_route = None
+
+    def applied_follow_path(self):
+        return self.live_route
 
     def compute_path(self, goal):
         self.plan_calls += 1
@@ -61,13 +68,24 @@ class FakeRos:
         self.state = "NAVIGATING"
         return {"accepted": True, "goal": goal}
 
+    def compute_path_through_poses(self, poses):
+        self.plan_calls += 1
+        self.through_plan_calls.append([dict(p) for p in poses])
+        return [{"x": 0.0, "y": 0.0}, *[dict(p) for p in poses]]
+
+    def navigate_through_poses(self, poses):
+        self.navigate_calls += 1
+        self.through_navigation_calls.append([dict(p) for p in poses])
+        self.state = "NAVIGATING"
+        return {"accepted": True, "action": "/navigate_through_poses"}
+
     def cancel_navigation(self):
         self.cancel_calls += 1
         self.state = "CANCELED"
-        return {"requested": True, "confirmed": True}
+        return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self):
-        return {"state": self.state, "error": None}
+        return {"state": self.state, "error": None, "route_generation": self.live_generation}
 
     def watchdog_status(self, now=None):
         return dict(self.health)
@@ -136,6 +154,26 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         async def sender(robot_id, command):
             self.commands.append((robot_id, dict(command)))
+            if command["type"] == "navigation_mode":
+                self.api.note_pi_status({
+                    "navigation_mode": command["mode"],
+                    "mode": self.api._robot_mode,
+                    "emergency_stop": False,
+                    **({
+                        "safety_session": "test-pi",
+                        "safety_epoch": self._fake_safety_epoch,
+                    } if self.api._pi_safety_session is not None else {}),
+                })
+            if command["type"] == "mode":
+                self.api.note_pi_status({
+                    "mode": command["mode"],
+                    "navigation_mode": self.api._pi_navigation_mode or "mapping",
+                    "emergency_stop": False,
+                    **({
+                        "safety_session": "test-pi",
+                        "safety_epoch": self._fake_safety_epoch,
+                    } if self.api._pi_safety_session is not None else {}),
+                })
             if command["type"] == "emergency_stop":
                 self._fake_safety_epoch += 1
                 self.api.note_pi_status({
@@ -163,6 +201,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                         })
                 return {
                     "ok": True,
+                    "delivered": True,
                     "encoder_sequence": marker,
                     "safety_session": "test-pi",
                     "safety_epoch": self._fake_safety_epoch,
@@ -239,6 +278,46 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         disconnected = self.api.state_response()
         self.assertFalse(disconnected["pi_safety"]["fresh"])
         self.assertIsNone(disconnected["pi_safety"]["emergency_stop"])
+
+    async def test_stop_ack_updates_only_current_pi_safety_epoch(self):
+        self.api.note_pi_status({
+            "safety_session": "test-pi", "safety_epoch": 77,
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        stop = {"type": "stop"}
+        for robot, ack in (
+            ("other-robot", {"ok": True, "safety_session": "test-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": False, "safety_session": "test-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": True, "safety_session": "wrong-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": True, "safety_session": "test-pi", "safety_epoch": True}),
+            ("pi-01", {"ok": True, "safety_session": "test-pi", "safety_epoch": 76}),
+        ):
+            self.api.note_pi_command_ack(robot, stop, ack)
+            self.assertEqual(77, self.api._pi_safety_epoch)
+        self.api.note_pi_command_ack("pi-01", stop, {
+            "ok": True, "safety_session": "test-pi", "safety_epoch": 78,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+        self.api.note_pi_status({
+            "safety_session": "test-pi", "safety_epoch": 77,
+            "emergency_stop": False,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+        self.api.note_pi_command_ack("pi-01", {"type": "auto_drive"}, {
+            "ok": True, "safety_session": "test-pi", "safety_epoch": 99,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+
+    async def test_pi_mode_telemetry_does_not_override_gpu_mode(self):
+        self.api.note_pi_status({
+            "mode": "manual",
+            "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        state = self.api.state_response()
+        self.assertEqual("MAPPING", state["navigation_mode"])
+        self.assertEqual("DRIVING", state["pi_navigation_mode"])
 
     async def driving_ready(self):
         result = await self.api.switch_mode(
@@ -323,14 +402,29 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             payload["initial_pose"]["yaw_degrees"],
         )
 
-    async def test_current_mapping_requires_live_pose(self):
+    async def test_current_mapping_falls_back_to_origin_without_live_pose(self):
         self.api._get_live_pose = lambda: None
-        with self.assertRaises(NavigationControlError) as raised:
-            await self.api.switch_mode(
-                {"mode": "DRIVING", "source": "current"},
-                user="tester",
-            )
-        self.assertEqual("INITIAL_POSE_REQUIRED", raised.exception.error_code)
+        result = await self.api.switch_mode(
+            {"mode": "DRIVING", "source": "current"}, user="tester",
+        )
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        payload, _user = self.map_api.activate_calls[-1]
+        self.assertEqual(
+            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
+            payload["initial_pose"],
+        )
+
+    async def test_current_mapping_falls_back_from_invalid_pose(self):
+        self.api._get_live_pose = lambda: {"x": float("nan"), "y": 0, "yaw": 0}
+        result = await self.api.switch_mode(
+            {"mode": "DRIVING", "source": "current"}, user="tester",
+        )
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        payload, _user = self.map_api.activate_calls[-1]
+        self.assertEqual(
+            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
+            payload["initial_pose"],
+        )
 
     async def test_goal_only_plans_until_explicit_start(self):
         await self.driving_ready()
@@ -348,6 +442,302 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(self.api._navigation_progress_at)
             self.assertEqual((0.25, 0.5), self.api._navigation_progress_pose)
 
+    async def test_new_goal_replaces_active_goal_after_encoder_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.2})
+        await self.api.start_navigation()
+        old_plans = self.map_api.ros_control.plan_calls
+        task = asyncio.create_task(
+            self.api.plan_goal({"x": 1.5, "y": 1.5, "yaw": -0.3})
+        )
+        await asyncio.sleep(0.03)
+        self.assertFalse(task.done())
+        interim = self.api.state_response()
+        self.assertEqual("REPLACING_GOAL", interim["navigation_state"])
+        self.assertEqual(1.0, interim["active_goal"]["x"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(old_plans, self.map_api.ros_control.plan_calls)
+        self.assertTrue(any(
+            command.get("reason") == "navigation_goal_replace"
+            for _, command in self.commands
+        ))
+        await self.confirm_pending_stop_for_test()
+        result = await task
+        self.assertEqual("PATH_READY", result["navigation_state"])
+        self.assertEqual(1.5, result["active_goal"]["x"])
+        self.assertEqual(-0.3, result["active_goal"]["yaw"])
+        self.assertEqual(old_plans + 1, self.map_api.ros_control.plan_calls)
+        self.assertEqual(1, self.map_api.ros_control.cancel_calls)
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        # Replanned Goal must still be explicitly started by operator.
+        started = await self.api.start_navigation()
+        self.assertEqual("NAVIGATING", started["navigation_state"])
+        self.assertEqual(2, self.map_api.ros_control.navigate_calls)
+
+    async def test_invalid_new_goal_does_not_interrupt_old_navigation(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        plans = self.map_api.ros_control.plan_calls
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"x": 200.0, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("GOAL_OUT_OF_BOUNDS", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertEqual(plans, self.map_api.ros_control.plan_calls)
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+
+    async def test_replace_goal_fails_closed_without_stop_ack(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original = self.api._send_robot_command
+
+        async def no_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = no_stop
+        plans = self.map_api.ros_control.plan_calls
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual(
+            "GOAL_REPLACEMENT_STOP_NOT_DELIVERED", raised.exception.error_code,
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual(1.0, state["active_goal"]["x"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(plans, self.map_api.ros_control.plan_calls)
+        self.assertFalse(state["emergency_stop"])
+
+    async def test_replace_goal_times_out_without_fresh_encoders(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.10
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual(
+            "GOAL_REPLACEMENT_STOP_NOT_CONFIRMED", raised.exception.error_code,
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual(1.0, state["active_goal"]["x"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertFalse(state["emergency_stop"])
+
+    async def test_replace_goal_cancel_error_keeps_old_goal_and_stop_gate(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        old_plans = self.map_api.ros_control.plan_calls
+
+        def reject_cancel():
+            raise RuntimeError("Nav2 cancellation unavailable")
+
+        self.map_api.ros_control.cancel_navigation = reject_cancel
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual(
+            "GOAL_REPLACEMENT_CANCEL_FAILED", raised.exception.error_code,
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual(1.0, state["active_goal"]["x"])
+        self.assertEqual(old_plans, self.map_api.ros_control.plan_calls)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_replace_goal_e_stop_race_cannot_publish_new_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        task = asyncio.create_task(
+            self.api.plan_goal({"x": 1.5, "y": 1.5, "yaw": 0.0})
+        )
+        await asyncio.sleep(0.03)
+        self.assertEqual(
+            "REPLACING_GOAL", self.api.state_response()["navigation_state"],
+        )
+        await self.api.emergency_stop("operator")
+        with self.assertRaises(NavigationControlError):
+            await task
+        state = self.api.state_response()
+        self.assertTrue(state["emergency_stop"])
+        self.assertEqual("EMERGENCY_STOPPED", state["navigation_state"])
+        self.assertEqual(1.0, state["active_goal"]["x"])
+
+    async def test_new_goal_while_path_ready_does_not_send_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        result = await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.2})
+        self.assertEqual("PATH_READY", result["navigation_state"])
+        self.assertEqual(1.5, result["active_goal"]["x"])
+        self.assertEqual(2, self.map_api.ros_control.plan_calls)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertFalse(any(
+            c.get("reason") == "navigation_goal_replace" for _, c in self.commands
+        ))
+
+    async def test_replacement_plan_error_keeps_old_goal_after_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        old_goal = dict(self.api.state_response()["active_goal"])
+
+        def unavailable_plan(_goal):
+            raise RuntimeError("Nav2 planner unavailable")
+
+        task = asyncio.create_task(
+            self.api.plan_goal({"x": 1.5, "y": 1.5, "yaw": 0.0})
+        )
+        await asyncio.sleep(0.03)
+        self.map_api.ros_control.compute_path = unavailable_plan
+        await self.confirm_pending_stop_for_test()
+        with self.assertRaises(RuntimeError):
+            await task
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("GOAL_REPLACEMENT_PLAN_FAILED", current["last_error"])
+        self.assertEqual(old_goal, current["active_goal"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_waypoint_route_uses_one_nav2_action_and_final_yaw(self):
+        await self.driving_ready()
+        request = {
+            "goal": {"x": 1.6, "y": 1.0, "yaw": -0.7},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        }
+        planned = await self.api.plan_goal(request)
+        self.assertEqual("PATH_READY", planned["navigation_state"])
+        self.assertEqual(2, len(planned["waypoints"]))
+        self.assertEqual(1, len(self.map_api.ros_control.through_plan_calls))
+        route = self.map_api.ros_control.through_plan_calls[0]
+        self.assertEqual(3, len(route))
+        self.assertAlmostEqual(math.atan2(0.3, 0.5), route[0]["yaw"])
+        self.assertAlmostEqual(math.atan2(0.2, 0.6), route[1]["yaw"])
+        self.assertAlmostEqual(-0.7, route[-1]["yaw"])
+        started = await self.api.start_navigation()
+        self.assertEqual("/navigate_through_poses", started["navigation"]["action"])
+        self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+    async def test_intermediate_waypoint_yaw_is_not_required(self):
+        await self.driving_ready()
+        request = {
+            "goal": {"x": 1.5, "y": 1.0, "yaw": 0.2},
+            "waypoints": [{"x": 0.5, "y": 0.4, "yaw": 99.0}],
+        }
+        response = await self.api.plan_goal(request)
+        self.assertEqual("PATH_READY", response["navigation_state"])
+        self.assertNotEqual(99.0, response["waypoints"][0]["yaw"])
+        self.assertEqual(0.2, response["active_goal"]["yaw"])
+
+    async def test_invalid_waypoint_rejected_without_canceling_running_goal(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({
+                "goal": {"x": 1.5, "y": 1.5, "yaw": 0.0},
+                "waypoints": [{"x": 300.0, "y": 0.0}],
+            })
+        self.assertEqual("GOAL_OUT_OF_BOUNDS", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+
+    async def test_passed_waypoint_progress_culls_route_without_dropping_final(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": 0.4},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 2,
+            })
+        state = self.api.state_response()
+        self.assertEqual(1, len(state["waypoints"]))
+        self.assertEqual(1.0, state["waypoints"][0]["x"])
+        self.assertEqual(1.7, state["active_goal"]["x"])
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 1,
+            })
+        self.assertEqual([], self.api.state_response()["waypoints"])
+        self.assertIsNotNone(self.api.state_response()["active_goal"])
+
+    async def test_stale_waypoint_count_never_reinstates_removed_points(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": 0.4},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 2,
+            })
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_through_poses",
+                "number_of_poses_remaining": 3,
+            })
+            self.api._sync_waypoint_progress_locked({
+                "action": "navigate_to_pose",
+                "number_of_poses_remaining": 1,
+            })
+        self.assertEqual(1, len(self.api.state_response()["waypoints"]))
+
+    async def test_emergency_stop_preserves_completed_waypoint_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.7, "y": 1.3, "yaw": -0.2},
+            "waypoints": [{"x": 0.5, "y": 0.5}, {"x": 1.0, "y": 0.8}],
+        })
+        await self.api.start_navigation()
+        original_status = self.map_api.ros_control.navigation_status
+        self.map_api.ros_control.navigation_status = lambda: {
+            **original_status(),
+            "action": "navigate_through_poses",
+            "number_of_poses_remaining": 2,
+        }
+        result = await self.api.emergency_stop("operator")
+        self.assertTrue(result["emergency_stop"])
+        self.assertEqual(1, len(result["waypoints"]))
+        self.assertEqual(1.0, result["waypoints"][0]["x"])
+        self.assertAlmostEqual(-0.2, result["active_goal"]["yaw"])
+
+    async def test_manual_final_xy_cannot_bypass_pending_intermediates(self):
+        await self.driving_ready()
+        await self.api.plan_goal({
+            "goal": {"x": 1.5, "y": 1.2, "yaw": 0.0},
+            "waypoints": [{"x": 0.5, "y": 0.4}],
+        })
+        self.api.note_pi_status({"mode": "manual", "navigation_mode": "driving"})
+        self.api.note_navigation_sample(
+            "pose", payload={"x": 1.5, "y": 1.2, "yaw": 0.0},
+        )
+        state = self.api.state_response()
+        self.assertIsNotNone(state["active_goal"])
+        self.assertEqual("PATH_READY", state["navigation_state"])
+
+    async def test_bad_waypoint_numbers_are_rejected(self):
+        await self.driving_ready()
+        for bad in ([{"x": True, "y": 0}], [{"x": "nan", "y": 0}], "not-a-list"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(NavigationControlError) as raised:
+                    await self.api.plan_goal({
+                        "goal": {"x": 1.5, "y": 1.0, "yaw": 0.0},
+                        "waypoints": bad,
+                    })
+                self.assertEqual("INVALID_WAYPOINTS", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.plan_calls)
+
     async def test_goal_terminal_and_manual_tolerance_rules(self):
         await self.driving_ready()
         await self.api.plan_goal({"goal": {"x": 1.0, "y": 1.0, "yaw": 0.0}})
@@ -356,10 +746,21 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         failed = self.api.state_response()
         self.assertEqual("FAILED", failed["navigation_state"])
         self.assertIsNotNone(failed["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        await self.api.evaluate_watchdog()
+        await self.confirm_pending_stop_for_test()
 
         with self.api._lock:
             self.api._state["navigation_state"] = "NAVIGATING"
         self.map_api.ros_control.state = "SUCCEEDED"
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        self.assertIsNotNone(pending["active_goal"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
         succeeded = self.api.state_response()
         self.assertEqual("SUCCEEDED", succeeded["navigation_state"])
         self.assertIsNone(succeeded["active_goal"])
@@ -442,6 +843,14 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_authorized_motion_releases_post_resume_baseline(self):
         await self.api.emergency_stop("operator")
         await self.api.resume_navigation()
+        # A confirmed STOP is not AUTO permission without an active Goal.
+        self.assertTrue(self.api.motion_allowed())
+        self.assertFalse(self.api.note_authorized_motion())
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "mapping",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": self._fake_safety_epoch,
+        })
         self.assertTrue(self.api.note_authorized_motion())
         self.api.note_encoder(dict.fromkeys((
             "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
@@ -516,6 +925,39 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
 
+    async def test_initial_planning_does_not_consume_five_second_motion_window(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        # The first nonzero command from this Goal arms the five-second timer.
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 1
+        self.refresh_watchdog_samples(base + 6.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 6.0))
+        self.assertIsNone(self.api._navigation_command_wait_started_at)
+        self.assertAlmostEqual(base + 6.0, self.api._navigation_progress_at)
+        self.refresh_watchdog_samples(base + 11.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 11.1)
+        )
+
+    async def test_silent_controller_cannot_wait_forever_for_first_motion(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 15.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.1)
+        )
+
     async def test_ten_centimeter_translation_resets_five_second_progress_timer(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
@@ -563,15 +1005,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with self.api._lock:
             self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
 
-        for sequence, elapsed in enumerate((4.0, 8.0, 12.0), start=1):
-            self.set_rotation(sequence)
+        # Approximately 180 degrees at the measured ~0.12rad/s takes
+        # longer than the previous 15s safety cap. Fresh, directed yaw
+        # progress should keep the Goal alive for this bounded period.
+        for sequence, elapsed in enumerate(
+            (4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 36.0), start=1
+        ):
+            self.set_rotation(sequence, yaw=sequence * 0.32)
             self.refresh_watchdog_samples(base + elapsed)
             self.assertIsNone(await self.api.evaluate_watchdog(now=base + elapsed))
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
 
-        self.set_rotation(4)
-        self.refresh_watchdog_samples(base + 15.0)
-        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.0))
+        self.set_rotation(10, yaw=3.14)
+        self.refresh_watchdog_samples(base + 40.0)
+        self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 40.0))
 
     async def test_translation_resets_cumulative_rotation_allowance(self):
         await self.driving_ready()
@@ -712,7 +1159,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         issue = await self.api.evaluate_watchdog(now=base + 5.1)
 
         self.assertIsNone(issue)
-        current = self.api.state_response(now=base + 5.1)
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
+        current = self.api.state_response()
         self.assertEqual("SUCCEEDED", current["navigation_state"])
         self.assertIsNone(current["active_goal"])
         self.assertFalse(current["emergency_stop"])
@@ -755,6 +1208,36 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("READY", self.api.state_response(now=base + 5.1)["navigation_state"])
         self.assertEqual(0, self.map_api.ros_control.cancel_calls)
         self.assertFalse(self.api.state_response(now=base + 5.1)["emergency_stop"])
+
+    async def test_nav2_cancel_exception_is_not_a_physical_path_estop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample(
+            "pose", now=base, payload={"x": 0.0, "y": 0.0, "yaw": 0.0},
+        )
+        self.refresh_watchdog_samples(base + 5.1)
+
+        def reject_cancel():
+            raise RuntimeError("Nav2 cancel transport failure")
+
+        self.map_api.ros_control.cancel_navigation = reject_cancel
+        self.assertEqual(
+            "BLOCKED_TIMEOUT",
+            await self.api.evaluate_watchdog(now=base + 5.1),
+        )
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("NAV_CANCEL_FAILED", result["last_error"])
+        self.assertFalse(result["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertTrue(any(
+            command["type"] == "stop" for _, command in self.commands
+        ))
+        self.assertFalse(any(
+            command["type"] == "emergency_stop" for _, command in self.commands
+        ))
 
     async def test_blocked_cancel_error_after_estop_does_not_reclassify_failure(self):
         await self.driving_ready()
@@ -801,24 +1284,172 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         )
         self.map_api.ros_control.state = "SUCCEEDED"
 
-        issue = await self.api.evaluate_watchdog(now=base + 5.1)
-
-        self.assertIsNone(issue)
+        pending = self.api.state_response()
+        self.assertEqual("NAVIGATING", pending["navigation_state"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
         self.map_api.ros_control.state = "NAVIGATING"
-        current = self.api.state_response(now=base + 5.1)
+        current = self.api.state_response()
         self.assertEqual("SUCCEEDED", current["navigation_state"])
         self.assertIsNone(current["active_goal"])
 
-    async def test_pi_loss_while_navigating_triggers_automatic_estop(self):
+    async def test_ros_success_never_reports_success_without_fresh_stop(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
+        self.api.STOP_CONFIRM_TIMEOUT_SEC = 0.10
+        self.map_api.ros_control.state = "SUCCEEDED"
+
+        interim = self.api.state_response()
+        self.assertEqual("NAVIGATING", interim["navigation_state"])
+        self.assertIsNotNone(interim["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertFalse(result["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_ros_success_stop_delivery_failure_is_not_success(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original = self.api._send_robot_command
+
+        async def deny_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = deny_stop
+        self.map_api.ros_control.state = "SUCCEEDED"
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", result["last_error"])
+        self.assertTrue(result["active_goal"])
+        self.assertFalse(result["emergency_stop"])
+
+    async def test_pi_loss_while_navigating_stops_without_automatic_estop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
         self.api.note_pi_connection(False)
-        issue = await self.api.evaluate_watchdog()
+        issue = await self.api.evaluate_watchdog(now=base)
         self.assertEqual("PI_CONNECTION_LOSS", issue)
         current = self.api.state_response()
-        self.assertTrue(current["emergency_stop"])
-        self.assertEqual("PI_CONNECTION_LOSS", current["emergency_reason"])
+        self.assertFalse(current["emergency_stop"])
+        self.assertEqual("NAVIGATING", current["navigation_state"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertTrue(any(c["type"] == "stop" for _, c in self.commands))
+        self.assertEqual(1, self.map_api.ros_control.cancel_calls)
+
+        # Pi never recovered: end the bounded recovery episode as FAILED.
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual(
+            "SENSOR_RECOVERY_TIMEOUT:PI_CONNECTION_LOSS", current["last_error"],
+        )
+        self.assertFalse(current["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_lidar_loss_recovers_after_stable_samples_and_new_path(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6.0)
+        self.assertEqual(
+            "LIDAR_DATA_LOSS",
+            await self.api.evaluate_watchdog(now=base),
+        )
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(1, self.map_api.ros_control.cancel_calls)
+
+        # A restored sensor does not re-enable motor output until the Pi STOP
+        # is proven with fresh, stable post-command wheel encoder samples.
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertFalse(self.api.motion_allowed())
+        await self.confirm_pending_stop_for_test()
+
+        self.refresh_watchdog_samples(base + 1.25)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.25))
+        state = self.api.state_response()
+        self.assertEqual("NAVIGATING", state["navigation_state"])
+        self.assertFalse(state["emergency_stop"])
+        self.assertEqual(2, self.map_api.ros_control.plan_calls)
+        self.assertEqual(2, self.map_api.ros_control.navigate_calls)
+        self.assertIsNone(self.api._sensor_recovery)
+
+    async def test_recovery_does_not_start_new_goal_without_stop_confirmation(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6.0)
+        self.assertEqual("LIDAR_DATA_LOSS", await self.api.evaluate_watchdog(now=base))
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.refresh_watchdog_samples(base + 1.2)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.2))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_nav2_failed_issues_physical_stop_without_emergency_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.map_api.ros_control.state = "FAILED"
+        observed = self.api.state_response()
+        self.assertEqual("FAILED", observed["navigation_state"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual(0, sum(
+            c["type"] == "emergency_stop" for _, c in self.commands
+        ))
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        self.assertTrue(any(
+            c.get("reason") == "nav2_failed" for _, c in self.commands
+        ))
+        self.assertFalse(self.api.state_response()["emergency_stop"])
+
+    async def test_sensor_recovery_rejected_when_pi_stop_undeliverable(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        base = time.time()
+        self.api.note_navigation_sample("scan", now=base - 6)
+        self.assertEqual(
+            "LIDAR_DATA_LOSS", await self.api.evaluate_watchdog(now=base),
+        )
+        self.refresh_watchdog_samples(base + 0.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 0.1))
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 1.2))
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        failed = self.api.state_response()
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertFalse(failed["emergency_stop"])
+        self.assertIsNone(self.api.motion_safety_context())
 
     async def test_encoder_motion_after_stop_updates_estop_reason(self):
         await self.driving_ready()
@@ -895,6 +1526,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.confirm_pending_stop_for_test()
 
         self.assertTrue(self.api.motion_allowed())
+        # No new AUTO motion may be authorized after Goal cancellation.
+        self.assertFalse(self.api.note_authorized_motion())
+        # MANUAL remains separately authorized after confirmed STOP.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
         self.assertTrue(self.api.note_authorized_motion())
 
     async def test_cancel_then_confirmed_stop_allows_new_goal(self):
@@ -911,12 +1549,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         canceled = await self.api.cancel_goal()
         self.assertTrue(canceled["stop_delivered"])
 
-        await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
         with self.assertRaises(NavigationControlError) as raised:
-            await self.api.start_navigation()
-        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+            await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("CANCEL_IN_PROGRESS", raised.exception.error_code)
 
         await self.confirm_pending_stop_for_test()
+        self.assertTrue(self.api.state_response()["cancel_completed"])
+        await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
         started = await self.api.start_navigation()
         self.assertEqual("NAVIGATING", started["navigation_state"])
         self.assertEqual(2, self.map_api.ros_control.navigate_calls)
@@ -1133,6 +1772,25 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("RESUME_INTERRUPTED", raised.exception.error_code)
         self.assertTrue(self.api.state_response()["emergency_stop"])
 
+    async def test_resume_waits_for_pi_status_after_release_ack(self):
+        await self.api.emergency_stop("operator")
+        original_sender = self.api._send_robot_command
+
+        async def delayed_status_sender(robot_id, command):
+            if command["type"] == "resume_navigation":
+                asyncio.get_running_loop().call_later(0.1, self.api.note_pi_status, {
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                    "emergency_stop": False,
+                })
+                return True
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = delayed_status_sender
+        resumed = await self.api.resume_navigation()
+        self.assertFalse(resumed["emergency_stop"])
+        self.assertEqual("IDLE", resumed["navigation_state"])
+
     async def test_newer_pi_estop_status_survives_older_release_ack(self):
         await self.api.emergency_stop("operator")
         original_sender = self.api._send_robot_command
@@ -1277,6 +1935,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pi_reconnect_requires_fresh_status_for_motion(self):
         await self.driving_ready()
+        # Only active NavigateToPose sessions may consume automatic motion
+        # safety tokens. A DRIVING-ready screen is not an active Goal.
+        with self.api._lock:
+            self.api._state["navigation_state"] = "NAVIGATING"
 
         status = {
             "mode": "auto",
@@ -1335,13 +1997,19 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.map_api.ros_control.cancel_navigation = completes_before_cancel
 
         result = await self.api.cancel_goal()
-
-        self.assertEqual("SUCCEEDED", result["navigation_state"])
-        self.assertIsNone(result["active_goal"])
-        self.assertEqual([], result["planned_path"])
+        self.assertEqual("NAVIGATING", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
         self.assertFalse(result["emergency_stop"])
+        finishing = asyncio.create_task(self.api.evaluate_watchdog())
+        await asyncio.sleep(0.02)
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNone(await finishing)
+        complete = self.api.state_response()
+        self.assertEqual("SUCCEEDED", complete["navigation_state"])
+        self.assertIsNone(complete["active_goal"])
+        self.assertEqual([], complete["planned_path"])
 
-    async def test_manual_takeover_does_not_retain_terminal_canceled_goal(self):
+    async def test_manual_takeover_preserves_goal_when_ros_was_already_canceled(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
@@ -1360,10 +2028,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.api.pause_for_manual()
 
-        self.assertEqual("CANCELED", result["navigation_state"])
-        self.assertIsNone(result["active_goal"])
-        self.assertEqual([], result["planned_path"])
-        self.assertFalse(result["goal_retained"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(result["planned_path"])
+        self.assertTrue(result["goal_retained"])
 
     async def test_manual_takeover_preserves_terminal_failure_and_goal(self):
         await self.driving_ready()
@@ -1388,6 +2056,871 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result["active_goal"])
         self.assertTrue(result["planned_path"])
         self.assertTrue(result["goal_retained"])
+
+
+    async def test_manual_takeover_cancel_exception_does_not_resume_motion(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def cancel_failure():
+            raise RuntimeError("Nav2 cancel unavailable")
+
+        self.map_api.ros_control.cancel_navigation = cancel_failure
+        with self.assertRaisesRegex(RuntimeError, "Nav2 cancel unavailable"):
+            await self.api.pause_for_manual()
+
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("NAV_CANCEL_FAILED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(any(
+            command["type"] == "stop" and command.get("reason") == "manual_drive_takeover"
+            for _, command in self.commands
+        ))
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_manual_takeover_rejects_unconfirmed_nav2_cancel(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def unconfirmed_cancel():
+            return {"requested": True, "confirmed": False, "completed": False}
+
+        self.map_api.ros_control.cancel_navigation = unconfirmed_cancel
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.pause_for_manual()
+        self.assertEqual("NAV_CANCEL_FAILED", raised.exception.error_code)
+        self.assertEqual("FAILED", self.api.state_response()["navigation_state"])
+        self.assertTrue(any(c.get("reason") == "manual_drive_takeover" for _, c in self.commands))
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_manual_takeover_success_race_retains_original_goal_stop_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def successful_terminal_race():
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": True, "confirmed": False,
+                "completed": True, "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = successful_terminal_race
+        response = await self.api.pause_for_manual()
+        self.assertEqual("NAVIGATING", response["navigation_state"])
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertIsNotNone(response["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        # Stable encoder STOP alone must not reopen motor authorization while
+        # original Goal pose/yaw proof is still pending.
+        await self.confirm_pending_stop_for_test()
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_late_manual_pause_stop_cannot_replace_estop_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_sender = self.api._send_robot_command
+
+        async def delayed_stop(robot_id, command):
+            if command.get("reason") == "manual_drive_takeover":
+                entered.set()
+                await release.wait()
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = delayed_stop
+        pending = asyncio.create_task(self.api.pause_for_manual())
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        try:
+            await self.api.emergency_stop("operator")
+            with self.api._lock:
+                baseline = (
+                    self.api._stop_commanded_at,
+                    self.api._stop_confirmation_after_sequence,
+                    self.api._stop_encoder_ticks,
+                )
+        finally:
+            release.set()
+        result = await pending
+        self.assertEqual("EMERGENCY_STOPPED", result["navigation_state"])
+        with self.api._lock:
+            self.assertEqual(
+                baseline,
+                (
+                    self.api._stop_commanded_at,
+                    self.api._stop_confirmation_after_sequence,
+                    self.api._stop_encoder_ticks,
+                ),
+            )
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_resume_check_rejects_pi_reported_delivery_failure(self):
+        await self.driving_ready()
+        await self.api.emergency_stop("initial")
+        original_sender = self.api._send_robot_command
+
+        async def incomplete_check(robot_id, command):
+            if command["type"] == "resume_safety_check":
+                return {
+                    "ok": True, "delivered": False,
+                    "encoder_sequence": 2,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                }
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = incomplete_check
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_resume_release_rejects_truthy_failure_response(self):
+        await self.driving_ready()
+        await self.api.emergency_stop("initial")
+        original_sender = self.api._send_robot_command
+
+        async def incomplete_release(robot_id, command):
+            if command["type"] == "resume_navigation":
+                return {"ok": False, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = incomplete_release
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.resume_navigation()
+        self.assertEqual("PI_RESUME_FAILED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_late_auto_motion_context_rejected_after_goal_canceled(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        # Establish the Pi safety identity before obtaining an auto-drive
+        # permit; the legacy driving_ready fixture has no session ID.
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
+        safety = self.api.motion_safety_context()
+        self.assertIsNotNone(safety)
+        with self.api._lock:
+            self.api._state["navigation_state"] = "CANCELED"
+        self.assertFalse(self.api.note_authorized_motion(safety))
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_goal_generation_rejects_stale_motion_after_restart(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
+        previous = self.api.motion_safety_context()
+        self.assertIsNotNone(previous)
+        with self.api._lock:
+            # Later Goal starts with unchanged Pi session and safety epoch.
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, time.time())
+        current = self.api.motion_safety_context()
+        self.assertIsNotNone(current)
+        self.assertNotEqual(previous["goal_generation"], current["goal_generation"])
+        self.assertFalse(self.api.note_authorized_motion(previous))
+        self.assertTrue(self.api.note_authorized_motion(current))
+
+    async def test_nonactive_pose_update_does_not_invalidate_manual_motion_generation(self):
+        with self.api._lock:
+            before = self.api._goal_motion_generation
+            self.api._state["navigation_state"] = "READY"
+            self.api._note_navigation_progress_locked(
+                {"x": 0.1, "y": 0.1}, time.time()
+            )
+            self.assertEqual(before, self.api._goal_motion_generation)
+
+    async def test_robot_mode_change_rejects_cached_autodrive_context(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False, "safety_session": "test-pi",
+            "safety_epoch": 0,
+        })
+        prior = self.api.motion_safety_context()
+        self.assertIsNotNone(prior)
+        # Pi packets without an established safety identity are ignored.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
+        self.assertEqual("manual", self.api._robot_mode)
+        self.assertNotEqual(prior, self.api.motion_safety_context())
+        self.assertFalse(self.api.note_authorized_motion(prior))
+
+    async def test_auto_mapping_selection_keeps_mapping_and_does_not_start_nav2(self):
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "mapping", "emergency_stop": False,
+        })
+        result = await self.api.switch_patrol_mode({"mode": "auto"})
+        self.assertEqual("auto", result["robot_mode"])
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual("MAPPING", result["pi_navigation_mode"])
+        self.assertFalse(result["patrol_ready"])
+        self.assertEqual(["mode"], [cmd["type"] for _, cmd in self.commands])
+        self.assertEqual([], self.process.transitions)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_manual_mapping_selection_does_not_cancel_nav2(self):
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual(["mode"], [cmd["type"] for _, cmd in self.commands])
+        self.assertEqual([], self.process.transitions)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+
+    async def test_auto_selection_in_driving_does_not_require_nav2_readiness(self):
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "mapping", "emergency_stop": False,
+        })
+        with self.api._lock:
+            self.api._state["navigation_mode"] = "DRIVING"
+            self.api._state["localization_ready"] = False
+            self.api._state["nav2_ready"] = False
+            self.api._state["active_map"] = None
+        result = await self.api.switch_patrol_mode({"mode": "auto"})
+        self.assertEqual("auto", result["robot_mode"])
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        self.assertEqual("MAPPING", result["pi_navigation_mode"])
+        self.assertFalse(result["patrol_ready"])
+        self.assertEqual(["mode"], [cmd["type"] for _, cmd in self.commands])
+        self.assertEqual([], self.process.transitions)
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
+        self.assertIsNone(self.api.motion_safety_context())
+
+
+    async def test_patrol_manual_pause_retains_goal_and_never_starts_motor(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        before = list(self.api.state_response()["planned_path"])
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertEqual(before, result["planned_path"])
+        self.assertTrue(result["active_goal"])
+        self.assertFalse(any(cmd["type"] == "auto_drive" for _, cmd in self.commands))
+
+    async def test_patrol_ack_failure_preserves_motion_gate(self):
+        await self.driving_ready()
+        original = self.api._send_robot_command
+
+        async def fail_mode(robot_id, command):
+            if command.get("type") == "mode":
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = fail_mode
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("PI_MODE_ACK_FAILED", raised.exception.error_code)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual("PI_MODE_ACK_FAILED",
+                         self.api.state_response()["patrol_transition_error"])
+
+    async def test_cancel_pending_maintains_goal_until_fresh_encoder_proof(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        first = await self.api.cancel_goal()
+        self.assertFalse(first["cancel_completed"])
+        self.assertEqual("CANCELING_STOP", first["navigation_state"])
+        self.assertIsNotNone(first["active_goal"])
+        self.assertTrue(first["planned_path"])
+        duplicate = await self.api.cancel_goal()
+        self.assertFalse(duplicate["cancel_completed"])
+        self.assertEqual(1, sum(cmd["type"] == "stop" and
+                                cmd.get("reason") == "navigation_goal_cancel"
+                                for _, cmd in self.commands))
+        await self.confirm_pending_stop_for_test()
+        final = self.api.state_response()
+        self.assertTrue(final["cancel_completed"])
+        self.assertEqual("READY", final["navigation_state"])
+        self.assertIsNone(final["active_goal"])
+        self.assertEqual([], final["planned_path"])
+        repeat = await self.api.cancel_goal()
+        self.assertTrue(repeat["cancel_completed"])
+
+    async def test_cancel_encoder_timeout_keeps_goal_and_blocks_motion(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        await self.api.cancel_goal()
+        pending = self.api.state_response()["cancel_progress"]
+        failed = self.api.state_response(
+            now=pending["started_at"] + self.api.STOP_CONFIRM_TIMEOUT_SEC + 0.2
+        )
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", failed["last_error"])
+        self.assertIsNotNone(failed["active_goal"])
+        self.assertFalse(failed["cancel_completed"])
+        self.assertFalse(self.api.motion_allowed())
+
+
+    async def test_orphaned_cancel_with_terminal_success_fails_closed(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": time.time(), "started_at": None,
+                "nav_cancel_confirmed": False, "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "SUCCEEDED"
+        self.map_api.ros_control.state = "CANCELED"
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("CANCEL_STATE_INCONSISTENT", state["last_error"])
+        self.assertIsNone(state["cancel_progress"])
+        self.assertIsNotNone(state["active_goal"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        # Previewing a new path is allowed; running it without STOP proof is not.
+        planned = await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("PATH_READY", planned["navigation_state"])
+        with self.assertRaises(NavigationControlError):
+            await self.api.start_navigation()
+
+    async def test_stalled_cancel_dispatch_expires_and_retries_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        now = time.time()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": now - self.api.CANCEL_REQUEST_TIMEOUT_SEC - 0.1,
+                "started_at": None, "nav_cancel_confirmed": False,
+                "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING"
+        failed = self.api.state_response(now=now)
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertEqual("NAV_CANCEL_TIMEOUT", failed["last_error"])
+        self.assertIsNone(failed["cancel_progress"])
+        self.assertIsNotNone(failed["active_goal"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_inflight_cancel_does_not_expire_early(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        now = time.time()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": now, "started_at": None,
+                "nav_cancel_confirmed": False, "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING"
+        current = self.api.state_response(now=now + 0.1)
+        self.assertEqual("CANCELING", current["navigation_state"])
+        self.assertIsNotNone(current["cancel_progress"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_cancel_dispatch_timeout_does_not_unlock_motors(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = asyncio.Event()
+
+        async def stalled_stop(robot_id, command):
+            if command.get("type") == "stop":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        self.api._send_robot_command = stalled_stop
+        self.api.CANCEL_REQUEST_TIMEOUT_SEC = 0.03
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.cancel_goal()
+        self.assertEqual("NAV_CANCEL_TIMEOUT", raised.exception.error_code)
+        self.assertTrue(entered.is_set())
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertIsNone(current["cancel_progress"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+
+    async def test_cancel_task_interruption_preserves_stop_gate(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = asyncio.Event()
+
+        async def stalled_stop(robot_id, command):
+            if command.get("type") == "stop":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        self.api._send_robot_command = stalled_stop
+        task = asyncio.create_task(self.api.cancel_goal())
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("NAV_CANCEL_INTERRUPTED", current["last_error"])
+        self.assertIsNone(current["cancel_progress"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+
+    async def test_controller_path_ingest_discards_late_and_terminal_events(self):
+        import json
+        control = NavigationRosControl()
+        control._navigation_state = "NAVIGATING"
+        control._navigate_goal_handle = object()
+        control._route_generation = 7
+        start_ns = time.monotonic_ns()
+        control._nav_run_started_ns = start_ns
+        path = [
+            {"x": 0.0, "y": 0.0, "yaw": 0.0},
+            {"x": 1.0, "y": 1.0, "yaw": 0.0},
+        ]
+
+        def event(sequence, when):
+            return SimpleNamespace(data=json.dumps({
+                "source": "segmented_rpp", "instance": "test-controller",
+                "sequence": sequence, "emitted_ns": when, "path": path,
+            }))
+
+        # A delayed message originating from before new action start is stale.
+        control._on_applied_follow_path(event(1, start_ns - 1))
+        self.assertIsNone(control.applied_follow_path())
+        control._on_applied_follow_path(event(2, start_ns + 1))
+        applied = control.applied_follow_path()
+        self.assertEqual(7, applied["route_generation"])
+        self.assertEqual(2, applied["sequence"])
+        control._on_applied_follow_path(event(1, start_ns + 2))
+        self.assertEqual(2, control.applied_follow_path()["sequence"])
+        control._on_applied_follow_path(event(3, start_ns + 20_000_000_000))
+        self.assertEqual(2, control.applied_follow_path()["sequence"])
+        control._navigation_state = "CANCELED"
+        self.assertIsNone(control.applied_follow_path())
+
+    async def test_actual_follow_path_is_goal_scoped_not_a_preview(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        preview = list(self.api.state_response()["planned_path"])
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_route = {
+            "route_generation": 9,
+            "path": [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                     {"x": 1.0, "y": 1.0, "yaw": 0.0}],
+        }
+        self.map_api.ros_control.live_generation = 9
+        state = self.api.state_response()
+        self.assertEqual(self.map_api.ros_control.live_route["path"], state["executed_path"])
+        self.assertEqual(preview, state["planned_path"])
+        # Stale route generation must not show the previously accepted path.
+        self.map_api.ros_control.live_generation = 10
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_generation = 9
+        self.map_api.ros_control.live_route["path"][-1]["yaw"] = 3.14
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_route["path"][-1]["yaw"] = 0.0
+        with self.api._lock:
+            self.api._state["navigation_state"] = "CANCELING"
+        self.assertEqual([], self.api.state_response()["executed_path"])
+
+    async def test_anonymous_plan_is_not_recomputed(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        before = self.map_api.ros_control.plan_calls
+        old_path = list(self.api.state_response()["planned_path"])
+        # No anonymous /plan event is permitted to schedule a new action.
+        self.assertFalse(hasattr(self.api, "note_nav2_replan_signal"))
+        await asyncio.sleep(0.02)
+        self.assertEqual(before, self.map_api.ros_control.plan_calls)
+        self.assertEqual(old_path, self.api.state_response()["planned_path"])
+
+    async def test_repeated_patrol_request_never_masks_unconfirmed_stop(self):
+        await self.driving_ready()
+        with self.api._lock:
+            self.api._robot_mode = "manual"
+            self.api._patrol_transition_error = "PI_MODE_ACK_FAILED"
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_confirmation_after_sequence = None
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("STOP_NOT_CONFIRMED", raised.exception.error_code)
+
+    async def test_cancel_cannot_clear_goal_without_stop_ack(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._pending_goal_cancel = {
+                "started_at": time.time(), "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING_STOP"
+            self.api._stop_confirmation_after_sequence = 1
+            self.api._stop_confirmation_ticks = (0, 0, 0, 0)
+            self.api._stop_confirmation_started_at = time.time() - 1.0
+            self.api._stop_confirmation_last_at = time.time()
+            self.api._stop_confirmation_samples = 5
+        self.api.note_encoder({
+            "sequence": 2, "left_front_ticks": 0, "left_rear_ticks": 0,
+            "right_front_ticks": 0, "right_rear_ticks": 0,
+        })
+        self.assertIsNotNone(self.api.state_response()["active_goal"])
+        self.assertFalse(self.api.state_response()["cancel_completed"])
+
+    async def test_mapping_pi_mode_failure_preserves_gpu_truth_and_blocks_motion(self):
+        await self.driving_ready()
+        old_sender = self.api._send_robot_command
+
+        async def reject_mapping(robot_id, command):
+            if command.get("type") == "navigation_mode" and command.get("mode") == "mapping":
+                return False
+            return await old_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_mapping
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_mode({"mode": "MAPPING"})
+        self.assertEqual("PI_MODE_SYNC_FAILED", raised.exception.error_code)
+        result = self.api.state_response()
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual("ERROR", result["navigation_state"])
+        self.assertEqual("DRIVING", result["pi_navigation_mode"])
+        self.assertFalse(result["patrol_ready"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertEqual([], result["planned_path"])
+
+    async def test_cancel_success_winning_race_without_cancel_ack(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+
+        def real_nav2_success_race():
+            self.map_api.ros_control.state = "SUCCEEDED"
+            return {
+                "requested": True, "confirmed": False,
+                "completed": True, "terminal": "SUCCEEDED",
+            }
+
+        self.map_api.ros_control.cancel_navigation = real_nav2_success_race
+        canceled = await self.api.cancel_goal()
+        self.assertEqual("NAVIGATING", canceled["navigation_state"])
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertTrue(canceled["stop_delivered"])
+        self.assertFalse(canceled["cancel_completed"])
+        self.assertIsNotNone(self.api._pending_nav_success)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_estop_during_manual_pause_blocks_mode_command(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        original_pause = self.api.pause_for_manual
+
+        async def interrupt_pause():
+            result = await original_pause()
+            with self.api._lock:
+                self.api._state["emergency_stop"] = True
+                self.api._pi_estop_latched = True
+            result["emergency_stop"] = True
+            return result
+
+        self.api.pause_for_manual = interrupt_pause
+        before = len([c for _, c in self.commands if c["type"] == "mode"])
+        with self.assertRaises(NavigationControlError):
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        after = len([c for _, c in self.commands if c["type"] == "mode"])
+        self.assertEqual(before, after)
+
+    async def test_manual_request_stops_orphaned_nav_goal_even_if_pi_already_manual(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        before = self.map_api.ros_control.cancel_calls
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertGreater(self.map_api.ros_control.cancel_calls, before)
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("READY", result["navigation_state"])
+        self.assertIsNotNone(result["active_goal"])
+        self.assertTrue(any(command["type"] == "stop" for _, command in self.commands))
+
+    async def test_simultaneous_cancel_reuses_original_stop_execution(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = threading.Event()
+        released = threading.Event()
+        original_cancel = self.map_api.ros_control.cancel_navigation
+
+        def slow_cancel():
+            entered.set()
+            if not released.wait(1):
+                raise RuntimeError("cancel test timed out")
+            return original_cancel()
+
+        self.map_api.ros_control.cancel_navigation = slow_cancel
+        task = asyncio.create_task(self.api.cancel_goal())
+        self.assertTrue(await asyncio.to_thread(entered.wait, 0.5))
+        try:
+            second = await self.api.cancel_goal()
+            self.assertFalse(second["cancel_completed"])
+            self.assertFalse(second["stop_delivered"])
+            self.assertEqual("CANCELING", second["navigation_state"])
+            self.assertEqual(1, sum(
+                cmd.get("reason") == "navigation_goal_cancel"
+                for _, cmd in self.commands if cmd["type"] == "stop"
+            ))
+        finally:
+            released.set()
+        first = await task
+        self.assertEqual("CANCELING_STOP", first["navigation_state"])
+
+    async def test_mode_ack_is_not_accepted_as_fresh_telemetry(self):
+        await self.driving_ready()
+        prior = self.api._pi_updated_at
+        self.api.note_pi_status({
+            "type": "ack", "command_id": "fake", "ok": True,
+            "mode": "manual", "navigation_mode": "mapping",
+            "emergency_stop": False,
+        }, now=prior + 100)
+        self.assertEqual(prior, self.api._pi_updated_at)
+        self.assertEqual("DRIVING", self.api._pi_navigation_mode)
+
+    async def test_navigation_telemetry_requires_sample_newer_than_request(self):
+        await self.driving_ready()
+        prior = self.api._pi_updated_at
+        self.assertFalse(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", prior, timeout_sec=0.01
+        ))
+        self.api.note_pi_status({
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+        }, now=prior + 0.1)
+        self.assertTrue(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", prior, timeout_sec=0.01
+        ))
+
+    async def test_cancel_stop_timeout_progresses_without_dashboard_polling(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        await self.api.cancel_goal()
+        with self.api._lock:
+            started_at = self.api._pending_goal_cancel["started_at"]
+        await self.api.evaluate_watchdog(
+            now=started_at + self.api.STOP_CONFIRM_TIMEOUT_SEC + 0.2
+        )
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("STOP_NOT_CONFIRMED", state["last_error"])
+        self.assertIsNotNone(state["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_mode_sync_failure_stays_motion_blocked_after_encoder_stop(self):
+        await self.driving_ready()
+        with self.api._lock:
+            self.api._patrol_transition_error = "PI_MODE_ACK_FAILED"
+            self.api._stop_commanded_at = time.time()
+            self.api._stop_confirmation_after_sequence = self.api._encoder_sequence or 0
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        self.assertFalse(self.api.state_response()["patrol_ready"])
+
+    async def test_mode_ack_failure_recovers_only_after_confirmed_stop_and_retry(self):
+        await self.driving_ready()
+        original = self.api._send_robot_command
+        failed_once = True
+
+        async def flaky_mode(robot_id, command):
+            nonlocal failed_once
+            if command.get("type") == "mode" and failed_once:
+                failed_once = False
+                # A lost ACK does not prove the Pi did not actually switch.
+                self.api.note_pi_status({
+                    "mode": command["mode"], "navigation_mode": "driving",
+                    "emergency_stop": False,
+                })
+                return False
+            return await original(robot_id, command)
+
+        self.api._send_robot_command = flaky_mode
+        with self.assertRaises(NavigationControlError) as first:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("PI_MODE_ACK_FAILED", first.exception.error_code)
+        self.assertFalse(self.api.motion_allowed())
+        with self.assertRaises(NavigationControlError) as early:
+            await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("STOP_NOT_CONFIRMED", early.exception.error_code)
+        await self.confirm_pending_stop_for_test()
+        self.assertFalse(self.api.motion_allowed())
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertIsNone(result["patrol_transition_error"])
+
+    def test_pi_ack_contract_rejects_truthy_error_payloads(self):
+        accepted = self.api._pi_command_delivered
+        self.assertTrue(accepted(True))
+        self.assertTrue(accepted({"ok": True, "delivered": True}))
+        for reply in (
+            {"ok": True},
+            {"ok": True, "delivered": None},
+            {"ok": True, "delivered": 1},
+            {"ok": True, "delivered": "true"},
+            False, None, RuntimeError("disconnected"), "OK",
+            {"ok": False, "delivered": True},
+            {"ok": True, "delivered": False},
+            {"ok": "false", "delivered": True},
+            {"ok": True, "delivered": "false"},
+            {"error": "Pi unavailable"},
+        ):
+            self.assertFalse(accepted(reply), repr(reply))
+
+    async def test_cancel_dict_stop_failure_cannot_ack_encoder_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command["type"] == "stop":
+                return {"ok": False, "delivered": False, "error": "Pi UART timeout"}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        canceled = await self.api.cancel_goal()
+        self.assertIs(canceled["stop_delivered"], False)
+        self.assertEqual("FAILED", canceled["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", canceled["last_error"])
+        self.assertIsNone(self.api._stop_confirmation_after_sequence)
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_manual_dict_stop_failure_cannot_report_ready(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command.get("reason") == "manual_drive_takeover":
+                return {"ok": True, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        paused = await self.api.pause_for_manual()
+        self.assertIs(paused["stop_delivered"], False)
+        self.assertEqual("FAILED", paused["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", paused["last_error"])
+        self.assertIsNone(self.api._stop_confirmation_after_sequence)
+        self.assertIsNotNone(paused["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_emergency_stop_dict_error_does_not_acknowledge_pi(self):
+        await self.driving_ready()
+        original_sender = self.api._send_robot_command
+
+        async def reject_estop(robot_id, command):
+            if command["type"] == "emergency_stop":
+                return {"ok": False, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_estop
+        stopped = await self.api.emergency_stop("operator")
+        self.assertTrue(stopped["emergency_stop"])
+        self.assertEqual("EMERGENCY_STOPPED", stopped["navigation_state"])
+        self.assertIs(stopped["stop_delivered"], False)
+        self.assertFalse(self.api._estop_command_acknowledged)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_ros_cancel_exception_keeps_emergency_stop_delivery(self):
+        await self.driving_ready()
+
+        def reject_nav_cancel():
+            raise RuntimeError("ROS cancellation failed")
+
+        self.map_api.ros_control.cancel_navigation = reject_nav_cancel
+        stopped = await self.api.emergency_stop("operator")
+        self.assertTrue(stopped["emergency_stop"])
+        self.assertTrue(stopped["stop_delivered"])
+        self.assertIn("ROS cancellation failed", stopped["cancel_error"])
+        self.assertTrue(self.api._estop_command_acknowledged)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_terminal_success_dict_stop_failure_is_not_success(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_stop(robot_id, command):
+            if command.get("reason") == "navigation_goal_succeeded":
+                return {"ok": True, "delivered": False}
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_stop
+        self.map_api.ros_control.state = "SUCCEEDED"
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertIsNone(await self.api.evaluate_watchdog())
+        result = self.api.state_response()
+        self.assertEqual("FAILED", result["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", result["last_error"])
+        self.assertIsNotNone(result["active_goal"])
+
+    async def test_cancel_pi_stop_failure_retains_goal_and_fails_safely(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        original_sender = self.api._send_robot_command
+
+        async def reject_physical_stop(robot_id, command):
+            if command["type"] == "stop":
+                return False
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = reject_physical_stop
+        canceled = await self.api.cancel_goal()
+        self.assertFalse(canceled["stop_delivered"])
+        self.assertEqual("FAILED", canceled["navigation_state"])
+        self.assertEqual("STOP_NOT_DELIVERED", canceled["last_error"])
+        self.assertIsNotNone(canceled["active_goal"])
+        self.assertFalse(canceled["emergency_stop"])
+        self.assertFalse(self.api.motion_allowed())
 
     async def test_cancel_failure_still_sends_stop(self):
         await self.driving_ready()
@@ -1729,6 +3262,72 @@ class NavigationRosRotationTelemetryTests(unittest.TestCase):
         self.assertEqual(1, ros.rotation_status()["odom_sequence"])
         ros._on_odom(self.odom(0.4, 9_950_000_000))
         self.assertEqual(2, ros.rotation_status()["odom_sequence"])
+
+
+class NavigationRosPlanningTimeoutTests(unittest.TestCase):
+    class Future:
+        def __init__(self, result=None, finished=True):
+            self._result, self._finished = result, finished
+
+        def done(self):
+            return self._finished
+
+        def result(self):
+            return self._result
+
+    class Handle:
+        accepted = True
+
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def get_result_async(self):
+            return NavigationRosPlanningTimeoutTests.Future(finished=False)
+
+        def cancel_goal_async(self):
+            self.cancel_calls += 1
+            return NavigationRosPlanningTimeoutTests.Future(
+                result=SimpleNamespace(goals_canceling=[1]),
+            )
+
+    class Client:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def wait_for_server(self, timeout_sec=0):
+            return True
+
+        def send_goal_async(self, request):
+            return NavigationRosPlanningTimeoutTests.Future(result=self.handle)
+
+    def test_pose_plan_timeout_cancels_original_goal(self):
+        from server import navigation_ros_control as ros_module
+        control = NavigationRosControl()
+        handle = self.Handle()
+        control._compute_path_client = self.Client(handle)
+        with patch.dict(os.environ, {"NAV_COMPUTE_PATH_TIMEOUT_SEC": "0.1"}), \
+             patch.object(control, "_require_started"), \
+             patch.object(control, "_pose_stamped", return_value=object()), \
+             patch.object(ros_module, "ComputePathToPose", SimpleNamespace(Goal=SimpleNamespace)):
+            with self.assertRaises(ros_module.NavigationRosError) as raised:
+                control.compute_path({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
+        self.assertEqual(504, raised.exception.status_code)
+        self.assertEqual(1, handle.cancel_calls)
+
+    def test_waypoint_plan_timeout_cancels_original_goal(self):
+        from server import navigation_ros_control as ros_module
+        control = NavigationRosControl()
+        handle = self.Handle()
+        control._compute_through_client = self.Client(handle)
+        with patch.dict(os.environ, {"NAV_COMPUTE_PATH_TIMEOUT_SEC": "0.1"}), \
+             patch.object(control, "_require_started"), \
+             patch.object(control, "_pose_stamped", return_value=object()), \
+             patch.object(ros_module, "ComputePathThroughPoses", SimpleNamespace(Goal=SimpleNamespace)):
+            with self.assertRaises(ros_module.NavigationRosError) as raised:
+                control.compute_path_through_poses([{"x": 1.0, "y": 1.0, "yaw": 0.0}])
+        self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
+        self.assertEqual(1, handle.cancel_calls)
 
 
 if __name__ == "__main__":

@@ -7,14 +7,16 @@ const canvas = document.getElementById('lidar-3d-canvas');
 
 if (root && canvas) {
     const COLORS = {
-        background: 0x101821,
-        mapFree: [62, 76, 88, 255],
-        mapUnknown: [30, 40, 51, 255],
-        mapOccupied: [86, 104, 118, 255],
-        occupiedWall: 0x70869a,
-        lowerChassis: 0x667582,
-        upperChassis: 0x98a6b1,
-        wheel: 0x222a31,
+        background: 0x0b1420,
+        mapFree: [56, 83, 103, 255],
+        mapUnknown: [29, 42, 56, 255],
+        mapOccupied: [82, 104, 123, 255],
+        occupiedTop: 0x8297a9,
+        occupiedWall: 0x52687b,
+        mapOutline: 0x577184,
+        lowerChassis: 0x687a89,
+        upperChassis: 0xa5b2bd,
+        wheel: 0x14191e,
         robotFront: 0x5b9bd5,
         scanRay: 0x7dd3fc,
         scanPoint: 0x2dd4bf,
@@ -30,8 +32,8 @@ if (root && canvas) {
         cameraViewBorder: 0xe2e8f0,
     };
 
-    const DEFAULT_OCCUPIED_HEIGHT_M = 0.08;
-    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.06;
+    const DEFAULT_OCCUPIED_HEIGHT_M = 0.24;
+    const DYNAMIC_OBSTACLE_HEIGHT_M = 0.18;
     const INFLATION_HEIGHT_M = 0.006;
     const MAP_OCCUPIED_THRESHOLD = 50;
     const LIDAR_HEIGHT_M = 0.12;
@@ -119,10 +121,10 @@ if (root && canvas) {
         world.add(group);
     }
 
-    const ambient = new THREE.HemisphereLight(0xd8e5ef, 0x1d2832, 1.05);
+    const ambient = new THREE.HemisphereLight(0xd8e5ef, 0x1d2832, 1.10);
     scene.add(ambient);
 
-    const keyLight = new THREE.DirectionalLight(0xf2f7fa, 1.15);
+    const keyLight = new THREE.DirectionalLight(0xf2f7fa, 1.30);
     keyLight.position.set(3, -4, 7);
     scene.add(keyLight);
 
@@ -470,9 +472,9 @@ if (root && canvas) {
         const heightM = hasMapExtent ? height * resolution : MAPPING_PREVIEW_GRID_SIZE_M;
         const size = Math.max(1, Math.ceil(Math.max(widthM, heightM)));
         const divisions = Math.min(100, Math.max(4, size * 2));
-        const helper = new THREE.GridHelper(size, divisions, 0x64748b, 0x334155);
+        const helper = new THREE.GridHelper(size, divisions, 0x577184, 0x253c4e);
         helper.material.transparent = true;
-        helper.material.opacity = 0.3;
+        helper.material.opacity = viewerExpanded ? 0.18 : 0.10;
         helper.material.depthWrite = false;
         helper.rotation.x = Math.PI / 2;
         helper.position.set(
@@ -548,14 +550,26 @@ if (root && canvas) {
                 resolution * 0.94,
                 obstacleHeightM,
             );
-            const boxMaterial = new THREE.MeshStandardMaterial({
-                color: COLORS.occupiedWall,
-                roughness: 0.88,
-                metalness: 0.02,
-            });
+            // Face-local vertex colors give a bright +Z top and darker
+            // sides without six material groups / draw calls. BoxGeometry
+            // uses four distinct vertices per face: +Z is face index 4.
+            // Extrusion height stays a schematic, not a measurement.
+            const faceColors = new Float32Array(boxGeometry.attributes.position.count * 3);
+            const topColor = new THREE.Color(COLORS.occupiedTop);
+            const sideColor = new THREE.Color(COLORS.occupiedWall);
+            for (let vertex = 0; vertex < boxGeometry.attributes.position.count; vertex += 1) {
+                const color = Math.floor(vertex / 4) === 4 ? topColor : sideColor;
+                faceColors[vertex * 3] = color.r;
+                faceColors[vertex * 3 + 1] = color.g;
+                faceColors[vertex * 3 + 2] = color.b;
+            }
+            boxGeometry.setAttribute('color', new THREE.BufferAttribute(faceColors, 3));
             const occupied = new THREE.InstancedMesh(
                 boxGeometry,
-                boxMaterial,
+                new THREE.MeshStandardMaterial({
+                    color: 0xffffff, vertexColors: true,
+                    roughness: 0.87, metalness: 0.01,
+                }),
                 occupiedCount,
             );
             occupied.name = 'occupied-cells';
@@ -579,6 +593,24 @@ if (root && canvas) {
             mapRoot.add(occupied);
         }
 
+        // Thin schematic map extent: no collision, costmap, or raycast role.
+        // Inherits the exact map origin and yaw from the occupancy-map root.
+        const outline = new THREE.LineLoop(
+            new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0.012),
+                new THREE.Vector3(widthM, 0, 0.012),
+                new THREE.Vector3(widthM, heightM, 0.012),
+                new THREE.Vector3(0, heightM, 0.012),
+            ]),
+            new THREE.LineBasicMaterial({
+                color: COLORS.mapOutline, transparent: true,
+                opacity: 0.85, depthWrite: false, toneMapped: false,
+            }),
+        );
+        outline.name = 'occupancy-extent-outline';
+        outline.raycast = () => {};
+        mapRoot.add(outline);
+
         const transform = mapTransform(map);
         mapRoot.position.set(transform.x, transform.y, transform.z);
         mapRoot.rotation.z = transform.yaw;
@@ -600,6 +632,30 @@ if (root && canvas) {
             Array.isArray(costmap.dynamic_obstacles) ? costmap.dynamic_obstacles.length : 0,
             Array.isArray(costmap.inflation) ? costmap.inflation.length : 0,
         ].join(':');
+    }
+
+    // An event timestamp is not a geometry revision. Use exact cell content
+    // and origin comparisons so only identical WebGL geometry is reused.
+    function costmapGeometryKey(costmap) {
+        if (!costmap || typeof costmap !== 'object') return 'empty';
+        const origin = costmap.origin || {};
+        return [
+            Number(costmap.width) || 0,
+            Number(costmap.height) || 0,
+            Number(costmap.resolution) || 0,
+            Number(origin.x) || 0,
+            Number(origin.y) || 0,
+            Number(origin.yaw) || 0,
+        ].join(':');
+    }
+
+    function sameCostmapIndices(snapshot, indices) {
+        if (!Array.isArray(snapshot) || !Array.isArray(indices)) return false;
+        if (snapshot.length !== indices.length) return false;
+        for (let i = 0; i < snapshot.length; i += 1) {
+            if (snapshot[i] !== indices[i]) return false;
+        }
+        return true;
     }
 
     function rebuildCostmapCells(rootGroup, costmap, indices, options) {
@@ -648,41 +704,57 @@ if (root && canvas) {
         rootGroup.rotation.z = Number(origin.yaw) || 0;
     }
 
+    let drawnObstacleGeometryKey = null;
+    let drawnInflationGeometryKey = null;
+    let drawnObstacleIndices = null;
+    let drawnInflationIndices = null;
+
     function rebuildCostmap(costmap, forceInflation = false) {
         currentCostmap = costmap || null;
         const nextKey = costmapKey(currentCostmap);
+        const geometryKey = costmapGeometryKey(currentCostmap);
+        const obstacles = currentCostmap?.dynamic_obstacles || [];
+        const inflation = currentCostmap?.inflation || [];
         if (nextKey !== currentObstacleCostmapKey) {
             currentObstacleCostmapKey = nextKey;
-            rebuildCostmapCells(
-                dynamicObstacleRoot,
-                currentCostmap,
-                currentCostmap?.dynamic_obstacles || [],
-                {
-                    height: DYNAMIC_OBSTACLE_HEIGHT_M,
-                    color: COLORS.dynamicObstacle,
-                    opacity: 0.92,
-                    cellScale: 0.92,
-                    depthWrite: true,
-                    renderOrder: 25,
-                },
-            );
+            if (geometryKey !== drawnObstacleGeometryKey
+                || !sameCostmapIndices(drawnObstacleIndices, obstacles)) {
+                rebuildCostmapCells(
+                    dynamicObstacleRoot, currentCostmap, obstacles,
+                    {
+                        height: DYNAMIC_OBSTACLE_HEIGHT_M,
+                        color: COLORS.dynamicObstacle,
+                        opacity: 0.96,
+                        cellScale: 0.92,
+                        depthWrite: true,
+                        renderOrder: 25,
+                    },
+                );
+                drawnObstacleGeometryKey = geometryKey;
+                drawnObstacleIndices = Array.isArray(obstacles)
+                    ? obstacles.slice() : null;
+            }
         }
         if (!layerGroups.inflation.visible) return;
         if (!forceInflation && nextKey === currentInflationCostmapKey) return;
         currentInflationCostmapKey = nextKey;
-        rebuildCostmapCells(
-            inflationRoot,
-            currentCostmap,
-            currentCostmap?.inflation || [],
-            {
-                height: INFLATION_HEIGHT_M,
-                color: COLORS.inflation,
-                opacity: 0.22,
-                cellScale: 0.98,
-                depthWrite: false,
-                renderOrder: 10,
-            },
-        );
+        if (forceInflation || geometryKey !== drawnInflationGeometryKey
+            || !sameCostmapIndices(drawnInflationIndices, inflation)) {
+            rebuildCostmapCells(
+                inflationRoot, currentCostmap, inflation,
+                {
+                    height: INFLATION_HEIGHT_M,
+                    color: COLORS.inflation,
+                    opacity: 0.17,
+                    cellScale: 0.98,
+                    depthWrite: false,
+                    renderOrder: 10,
+                },
+            );
+            drawnInflationGeometryKey = geometryKey;
+            drawnInflationIndices = Array.isArray(inflation)
+                ? inflation.slice() : null;
+        }
     }
 
     function clamp(value, min, max) {
@@ -699,8 +771,8 @@ if (root && canvas) {
     function applyNeutralMaterial(object, color) {
         const material = new THREE.MeshStandardMaterial({
             color,
-            roughness: 0.78,
-            metalness: 0.04,
+            roughness: 0.56,
+            metalness: 0.32,
         });
         object.traverse(child => {
             if (!child.isMesh) return;
@@ -730,8 +802,8 @@ if (root && canvas) {
             new THREE.CylinderGeometry(radius, radius, width, 20),
             new THREE.MeshStandardMaterial({
                 color: COLORS.wheel,
-                roughness: 0.92,
-                metalness: 0.02,
+                roughness: 0.97,
+                metalness: 0.00,
             }),
         );
         wheel.add(tire);
@@ -836,7 +908,7 @@ if (root && canvas) {
             alpha: false,
             desynchronized: true,
         });
-        cameraTextureContext.fillStyle = '#101821';
+        cameraTextureContext.fillStyle = '#0b1420';
         cameraTextureContext.fillRect(
             0,
             0,
@@ -897,7 +969,7 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.cameraViewBorder,
                 transparent: true,
-                opacity: 0.78,
+                opacity: 0.90,
                 depthTest: false,
                 depthWrite: false,
             }),
@@ -1036,6 +1108,20 @@ if (root && canvas) {
             const upperBox = placePartAtBottom(upper, lowerBox.max.z + 0.012);
             cad.add(lower, upper);
             model.add(cad);
+            // A flat contact shadow costs no realtime shadow-map pass.
+            const contactShadow = new THREE.Mesh(
+                new THREE.CircleGeometry(1, 32),
+                new THREE.MeshBasicMaterial({
+                    color: 0x02060b,
+                    transparent: true,
+                    opacity: 0.23,
+                    depthWrite: false,
+                }),
+            );
+            contactShadow.name = 'robot-contact-shadow';
+            contactShadow.scale.set(chassisLength * 0.58, chassisWidth * 0.65, 1);
+            contactShadow.position.z = 0.007;
+            model.add(contactShadow);
 
             const wheelX = chassisLength * 0.35;
             const wheelY = chassisWidth * 0.5 + wheelWidth * 0.18;
@@ -1086,7 +1172,7 @@ if (root && canvas) {
                 Math.max(upperBox.max.z, wheelRadius * 2),
             );
 
-            obstacleHeightM = clamp(wheelRadius * 2.25, 0.07, 0.12);
+            obstacleHeightM = clamp(wheelRadius * 6.75, 0.21, 0.36);
 
             clearGroup(robotPoseGroup);
             robotPoseGroup.add(model);
@@ -1351,7 +1437,7 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.scanRay,
                 transparent: true,
-                opacity: 0.34,
+                opacity: 0.26,
                 depthWrite: false,
             }),
         );
@@ -1368,10 +1454,10 @@ if (root && canvas) {
             scanPointGeometry,
             new THREE.PointsMaterial({
                 color: COLORS.scanPoint,
-                size: 0.035,
+                size: viewerExpanded ? 0.038 : 0.048,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
+                opacity: 1.0,
                 depthWrite: false,
             }),
         );
@@ -1444,30 +1530,37 @@ if (root && canvas) {
 
     function displayedGlobalPath(
         control = currentControlState,
-        state = currentVisualizationState,
+        _state = currentVisualizationState,
     ) {
-        const livePath = Array.isArray(state?.globalPath) ? state.globalPath : [];
-        const livePathStatus = String(state?.globalPathStatus || 'none');
-
-        // Show standalone ComputePathToPose results for debugging.
-        if (!control?.active_goal) {
-            return livePathStatus === 'fresh' && livePath.length >= 2
-                ? livePath
-                : [];
-        }
+        // The control API owns the Goal and its currently approved path.
+        // /plan and /global_path visualize independent ROS computations and
+        // do not carry an action ID: their delayed WS packets may describe
+        // the preceding Goal after cancel/replacement. Never let those
+        // unowned packets override the server's Goal-bound planned_path.
+        if (String(control?.navigation_mode || '').toUpperCase() !== 'DRIVING'
+            || !control?.active_goal) return [];
 
         const navState = String(control.navigation_state || '').toUpperCase();
-        if (navState === 'FAILED') return [];
-
-        if (!['NAVIGATING', 'RESUMING'].includes(navState)) {
-            return control.planned_path || [];
+        // A retained Goal may be retried after FAILED / EMERGENCY_STOPPED,
+        // but its old path must not look executable. REPLACING_GOAL retains
+        // the old Goal internally until Pi STOP has been confirmed.
+        // A preview is NOT the FollowPath action's executed path. Until a
+        // trustworthy execution-to-path binding exists, never render the
+        // preview as though it were the actively followed route.
+        if (['NAVIGATING', 'RESUMING'].includes(navState)) {
+            // The Controller's accepted FollowPath path is not the preview.
+            // Missing, stale or unowned execution paths are deliberately hidden.
+            const appliedPath = control.executed_path;
+            return Array.isArray(appliedPath) && appliedPath.length >= 2
+                ? appliedPath : [];
         }
-
-        if (livePathStatus === 'fresh') {
-            return livePath.length >= 2 ? livePath : [];
+        if (!['PATH_READY', 'READY'].includes(navState)) {
+            return [];
         }
-        if (livePathStatus === 'stale') return [];
-        return control.planned_path || [];
+        const authorizedPath = control.planned_path;
+        return Array.isArray(authorizedPath) && authorizedPath.length >= 2
+            ? authorizedPath
+            : [];
     }
 
     function pathKey(path) {
@@ -1480,6 +1573,14 @@ if (root && canvas) {
             hash = Math.imul(hash, 16777619);
             hash ^= y;
             hash = Math.imul(hash, 16777619);
+            // Distinguish paths with identical XY but different yaw/motion
+            // (reverse and in-place rotation are visible path changes).
+            hash ^= Math.round((Number(point?.yaw) || 0) * 1000);
+            hash = Math.imul(hash, 16777619);
+            for (const letter of String(point?.motion || '')) {
+                hash ^= letter.charCodeAt(0);
+                hash = Math.imul(hash, 16777619);
+            }
         }
         return `${path.length}:${hash >>> 0}`;
     }
@@ -1498,9 +1599,10 @@ if (root && canvas) {
             const x = Number(point?.x);
             const y = Number(point?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            // Draw above the occupancy wall height and disable depth testing so
-            // the planned Global Path stays readable over Map/LiDAR layers.
-            positions.push(x, y, 0.16);
+            // A ground-adjacent display elevation does not change ROS path
+            // coordinates. With depth testing, chassis and real obstacle
+            // meshes occlude the corresponding visual segments naturally.
+            positions.push(x, y, 0.026);
         }
         if (positions.length < 6) return;
 
@@ -1515,31 +1617,108 @@ if (root && canvas) {
                 color: COLORS.globalPath,
                 transparent: true,
                 opacity: 1.0,
-                depthTest: false,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         line.frustumCulled = false;
-        line.renderOrder = 100;
+        line.renderOrder = 20;
 
         const points = new THREE.Points(
             geometry,
             new THREE.PointsMaterial({
                 color: COLORS.globalPath,
-                size: 0.055,
+                size: viewerExpanded ? 0.038 : 0.060,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
-                depthTest: false,
+                opacity: 0.90,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         points.frustumCulled = false;
-        points.renderOrder = 101;
+        points.renderOrder = 21;
         pathRoot.add(line, points);
+
+        // Arrowheads show the motion direction; reverse segments are amber.
+        // Rotation-only segments receive a compact circular marker.
+        const valid = path.filter(point =>
+            Number.isFinite(Number(point?.x))
+            && Number.isFinite(Number(point?.y))
+        );
+        // The existing heading/segment arrow glyphs follow the same
+        // near-floor depth as the continuous path, never above the chassis.
+        const height = 0.038;
+        let distanceSinceArrow = 0;
+        let lastRotationAt = null;
+        for (let i = 0; i + 1 < valid.length; i += 1) {
+            const from = valid[i];
+            const to = valid[i + 1];
+            const dx = Number(to.x) - Number(from.x);
+            const dy = Number(to.y) - Number(from.y);
+            const length = Math.hypot(dx, dy);
+            const motion = String(from.motion || '');
+            if (motion.startsWith('rotate_') && length < 0.003) {
+                const center = new THREE.Vector3(Number(from.x), Number(from.y), height);
+                if (lastRotationAt && center.distanceTo(lastRotationAt) < 0.08) continue;
+                lastRotationAt = center.clone();
+                const ring = new THREE.Mesh(
+                    new THREE.RingGeometry(0.045, 0.06, 20),
+                    new THREE.MeshBasicMaterial({
+                        color: COLORS.globalPath,
+                        side: THREE.DoubleSide,
+                        depthTest: true,
+                        depthWrite: false,
+                    }),
+                );
+                ring.position.copy(center);
+                ring.renderOrder = 22;
+                pathRoot.add(ring);
+                const left = motion === 'rotate_left';
+                const tangent = new THREE.Vector3(left ? -1 : 1, 0, 0);
+                const rotationArrow = new THREE.ArrowHelper(
+                    tangent,
+                    new THREE.Vector3(center.x, center.y + 0.06, height),
+                    0.085, COLORS.globalPath, 0.045, 0.035,
+                );
+                rotationArrow.traverse(part => {
+                    if (part.material) {
+                        part.material.depthTest = true;
+                        part.material.depthWrite = false;
+                    }
+                    part.renderOrder = 23;
+                });
+                pathRoot.add(rotationArrow);
+                continue;
+            }
+            if (length < 0.001) continue;
+            distanceSinceArrow += length;
+            if (distanceSinceArrow < 0.28) continue;
+            distanceSinceArrow = 0;
+            const forward = motion !== 'reverse';
+            const direction = new THREE.Vector3(dx / length, dy / length, 0);
+            const position = new THREE.Vector3(
+                (Number(from.x) + Number(to.x)) / 2,
+                (Number(from.y) + Number(to.y)) / 2,
+                height,
+            );
+            const arrow = new THREE.ArrowHelper(
+                direction, position, 0.14,
+                forward ? COLORS.globalPath : COLORS.trajectory,
+                0.06, 0.035,
+            );
+            arrow.traverse(part => {
+                if (part.material) {
+                    part.material.depthTest = true;
+                    part.material.depthWrite = false;
+                }
+                part.renderOrder = 22;
+            });
+            pathRoot.add(arrow);
+        }
     }
 
-    function createGoalMarker(goal, color) {
+    function createGoalMarker(goal, color, isDraft = false) {
         const x = Number(goal?.x);
         const y = Number(goal?.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -1549,17 +1728,37 @@ if (root && canvas) {
         marker.position.set(x, y, 0.045);
         marker.rotation.z = yaw;
 
-        const ring = new THREE.Mesh(
-            new THREE.RingGeometry(0.07, 0.105, 32),
-            new THREE.MeshBasicMaterial({
-                color,
-                side: THREE.DoubleSide,
-                transparent: true,
-                opacity: 0.95,
-                depthWrite: false,
-            }),
-        );
-        marker.add(ring);
+        if (isDraft) {
+            // Purely graphic dashed ring: not a tolerance or collision radius.
+            const vertices = [];
+            for (let index = 0; index < 64; index += 1) {
+                const angle = 2 * Math.PI * index / 64;
+                vertices.push(new THREE.Vector3(
+                    0.095 * Math.cos(angle), 0.095 * Math.sin(angle), 0,
+                ));
+            }
+            const ring = new THREE.LineLoop(
+                new THREE.BufferGeometry().setFromPoints(vertices),
+                new THREE.LineDashedMaterial({
+                    color, dashSize: 0.038, gapSize: 0.027,
+                    transparent: true, opacity: 0.98, depthWrite: false,
+                }),
+            );
+            ring.computeLineDistances();
+            marker.add(ring);
+        } else {
+            // Two concentric rings visually distinguish an active goal.
+            for (const [inner, outer] of [[0.072, 0.099], [0.040, 0.052]]) {
+                const ring = new THREE.Mesh(
+                    new THREE.RingGeometry(inner, outer, 48),
+                    new THREE.MeshBasicMaterial({
+                        color, side: THREE.DoubleSide,
+                        transparent: true, opacity: 0.98, depthWrite: false,
+                    }),
+                );
+                marker.add(ring);
+            }
+        }
 
         const direction = new THREE.ArrowHelper(
             new THREE.Vector3(1, 0, 0),
@@ -1588,9 +1787,17 @@ if (root && canvas) {
         currentGoalKey = nextKey;
 
         clearGroup(goalRoot);
-        const active = createGoalMarker(currentControlState?.active_goal, COLORS.goal);
+        // During replacement the previous Goal is retained for recovery,
+        // not offered as the currently executable destination.
+        const replacing = String(
+            currentControlState?.navigation_state || ''
+        ).toUpperCase() === 'REPLACING_GOAL';
+        const active = createGoalMarker(
+            replacing ? null : currentControlState?.active_goal,
+            COLORS.goal,
+        );
         if (active) goalRoot.add(active);
-        const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal);
+        const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal, true);
         if (draft) goalRoot.add(draft);
     }
 
@@ -1609,23 +1816,28 @@ if (root && canvas) {
             new THREE.LineBasicMaterial({
                 color: COLORS.trajectory,
                 transparent: true,
-                opacity: 0.9,
+                opacity: 0.98,
+                depthTest: true,
+                depthWrite: false,
             }),
         );
         line.frustumCulled = false;
+        line.renderOrder = 12;
 
         const points = new THREE.Points(
             trajectoryGeometry,
             new THREE.PointsMaterial({
                 color: COLORS.trajectory,
-                size: 0.045,
+                size: viewerExpanded ? 0.048 : 0.065,
                 sizeAttenuation: true,
                 transparent: true,
-                opacity: 0.95,
+                opacity: 0.98,
+                depthTest: true,
                 depthWrite: false,
             }),
         );
         points.frustumCulled = false;
+        points.renderOrder = 13;
         trajectoryRoot.add(line, points);
     }
 
@@ -1801,6 +2013,9 @@ if (root && canvas) {
             trajectoryRoot.visible = false;
         }
 
+        // Preserve the recorded trace for review after completion but stop
+        // appending stationary localization jitter after the Goal ends.
+        if (!movingNow) trajectorySessionActive = false;
         previousNavigationMode = mode;
         previousNavigationState = navState;
         scheduleControlOverflowLayout();
@@ -2029,7 +2244,25 @@ if (root && canvas) {
         }
     });
 
+    function applyTechnicalDensity() {
+        // Appearance only: keep all geometry, poses, FOV and Orbit settings.
+        const compact = !viewerExpanded;
+        for (const grid of gridRoot.children) {
+            if (grid.material) grid.material.opacity = compact ? 0.10 : 0.18;
+        }
+        for (const child of pathRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.060 : 0.038;
+        }
+        for (const child of trajectoryRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.065 : 0.048;
+        }
+        for (const child of pointsRoot.children) {
+            if (child.isPoints) child.material.size = compact ? 0.048 : 0.038;
+        }
+    }
+
     function resize() {
+        applyTechnicalDensity();
         const rect = root.getBoundingClientRect();
         const width = Math.max(1, Math.floor(rect.width));
         const height = Math.max(1, Math.floor(rect.height));

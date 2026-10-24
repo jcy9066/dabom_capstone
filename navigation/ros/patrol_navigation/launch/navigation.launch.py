@@ -61,9 +61,8 @@ def generate_launch_description():
     max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
     wheel_track_m = env_float("WHEEL_TRACK_M", minimum=0.01)
     # Differential-drive in-place rotation at left=-max, right=+max.
-    max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
-    # Physical motor breakaway floor. Apply only after a non-zero wheel command;
-    # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
+    max_angular_rps = min(1.05, (2.0 * max_wheel_mps) / wheel_track_m)
+    # Physical motor breakaway floor. Do not apply it to zero-velocity STOP.
     min_auto_drive_pwm = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0)
     pkg_share = FindPackageShare(
         "patrol_navigation"
@@ -73,6 +72,13 @@ def generate_launch_description():
             pkg_share,
             "behavior_trees",
             "navigate_to_pose_dynamic_replanning.xml",
+        ]
+    )
+    navigate_through_poses_bt = PathJoinSubstitution(
+        [
+            pkg_share,
+            "behavior_trees",
+            "navigate_through_poses_dynamic_replanning.xml",
         ]
     )
 
@@ -163,12 +169,9 @@ def generate_launch_description():
         parameters=[
             nav2_params,
             {
-                "FollowPath.min_vel_x": 0.0,
-                "FollowPath.min_speed_xy": 0.0,
-                "FollowPath.max_vel_x": max_wheel_mps,
-                "FollowPath.max_speed_xy": max_wheel_mps,
-                "FollowPath.max_vel_theta": max_angular_rps,
+                "FollowPath.desired_linear_vel": max_wheel_mps,
                 "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
+                "FollowPath.segment_pivot_max_angular": max_angular_rps,
             },
         ],
         remappings=(
@@ -205,7 +208,18 @@ def generate_launch_description():
         name="planner_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "GridBased.max_wheel_mps": max_wheel_mps,
+                "GridBased.max_angular_rps": max_angular_rps,
+                "GridBased.wheel_track_m": wheel_track_m,
+                "GridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32.json"]
+                ),
+                "GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32_stable.json"]
+                ),
+            },
         ],
         remappings=common_remappings,
     )
@@ -247,6 +261,7 @@ def generate_launch_description():
             nav2_params,
             {
                 "default_nav_to_pose_bt_xml": navigate_to_pose_bt,
+                "default_nav_through_poses_bt_xml": navigate_through_poses_bt,
             },
         ],
         remappings=common_remappings,
@@ -459,7 +474,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "nav2_request_timeout_sec",
-                default_value="0.25",
+                # Must permit the server to await Pi's command_id ACK.
+                # A 0.25s HTTP deadline can expire before a valid Pi ACK.
+                default_value="1.50",
             ),
 
             # -------------------------------------------------

@@ -74,9 +74,16 @@ python3 -m pip install -r requirements.txt
 
 source /opt/ros/humble/setup.bash
 cd navigation/ros
-colcon build --symlink-install --packages-select patrol_navigation
+colcon build --symlink-install --packages-select patrol_navigation_controller patrol_navigation
+source install/setup.bash
+ros2 pkg prefix patrol_navigation_controller
 cd ../..
 ```
+
+GPU 서버에서는 C++ 기반 `TimeScoredLatticePlanner` 및 `SegmentedRPPController`도
+빌드해야 합니다. Pi의 LiDAR 전용 시작에는 기존 `patrol_navigation` Python
+패키지 빌드만 필요합니다. GPU 시작 스크립트는 필수 Nav2 플러그인 설치 여부를
+먼저 검사하고, 누락된 경우 Navigation 실행을 차단합니다.
 
 ## 2. GPU Server 실행
 

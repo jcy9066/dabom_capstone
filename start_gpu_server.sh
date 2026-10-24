@@ -49,6 +49,33 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+clock_sync_diagnostic() {
+    # Diagnostics only; never modify host clocks or block motor STOP.
+    local status synced ntp platform
+    status=""
+    synced="unknown"
+    ntp="unknown"
+    platform="Linux"
+    if grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null; then
+        platform="WSL2"
+    fi
+    if command -v timedatectl >/dev/null 2>&1; then
+        status="$(timeout 3s timedatectl show -p NTPSynchronized -p NTP 2>/dev/null || true)"
+        synced="$(printf '%s\n' "${status}" | sed -n 's/^NTPSynchronized=//p' | head -n 1)"
+        ntp="$(printf '%s\n' "${status}" | sed -n 's/^NTP=//p' | head -n 1)"
+    fi
+    synced="${synced:-unknown}"
+    ntp="${ntp:-unknown}"
+    log "Clock check: utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ') synchronized=${synced} ntp=${ntp} platform=${platform}"
+    if [[ "${synced}" == "no" ]]; then
+        warn "System clock not synchronized; LiDAR and TF timestamps may disagree."
+    elif [[ "${ntp}" == "no" && "${platform}" != "WSL2" ]]; then
+        warn "NTP disabled; verify clock synchronization before navigation."
+    fi
+    # WSL2 uses Windows/Hyper-V time sync even when NTP=no.
+    # Local NTP status cannot establish cross-host Pi/GPU clock agreement.
+}
+
 proc_cmdline() {
     local pid="$1"
 
@@ -368,10 +395,11 @@ require_cmd flock
 require_cmd setsid
 require_cmd ps
 require_cmd timeout
+clock_sync_diagnostic
 
 [[ -f /opt/ros/humble/setup.bash ]] || fail "ROS 2 Humble setup not found"
-[[ -f "${ROOT_DIR}/navigation/ros/install/setup.bash" ]] \
-    || fail "patrol_navigation is not built: navigation/ros/install/setup.bash is missing"
+[[ -f "${ROOT_DIR}/navigation/ros/install/local_setup.bash" ]] \
+    || fail "patrol_navigation is not built: navigation/ros/install/local_setup.bash is missing"
 [[ -f "${ROOT_DIR}/server/app.py" ]] || fail "server/app.py is missing"
 [[ -f "${ROOT_DIR}/server/wheel_odometry.py" ]] || fail "server/wheel_odometry.py is missing"
 [[ -d "${ROOT_DIR}/frontend/templates" ]] || fail "frontend/templates is missing"
@@ -381,11 +409,45 @@ set +u
 # shellcheck disable=SC1091
 source /opt/ros/humble/setup.bash
 # shellcheck disable=SC1091
-source "${ROOT_DIR}/navigation/ros/install/setup.bash"
+# Source only this build overlay; setup.bash may chain a stale underlay.
+source "${ROOT_DIR}/navigation/ros/install/local_setup.bash"
 set -u
 
 ros2 pkg prefix nav2_rotation_shim_controller >/dev/null 2>&1 \
     || fail "nav2_rotation_shim_controller is missing from the ROS 2 Humble Nav2 installation"
+
+# Planner and controller are C++ plugins, not resources in patrol_navigation.
+# A Python-only colcon build may succeed while these remain uninstalled.
+# Refuse to enter the GPU navigation runtime if any plugin package is absent.
+for navigation_package in \
+    patrol_navigation_controller \
+    nav2_smac_planner \
+    nav2_regulated_pure_pursuit_controller; do
+    ros2 pkg prefix "${navigation_package}" >/dev/null 2>&1 \
+        || fail "Required Nav2 plugin package ${navigation_package} is missing; build the GPU workspace with --packages-select patrol_navigation_controller patrol_navigation and install the Humble Nav2 plugins"
+done
+
+# A stale ROS ament index can exist even if the shared library is missing.
+# The plugin XML exports both GlobalPlanner and Controller from this library.
+navigation_controller_prefix="$(ros2 pkg prefix patrol_navigation_controller)"
+# GDB detected a different checkout's plugin at /home/user/dabom_capstone,
+# while the active launcher was built in another checkout. Do not let that
+# happen silently: enforce that the plugin resolves from this script's root.
+expected_nav_install="$(realpath -m -- "${ROOT_DIR}/navigation/ros/install")"
+resolved_controller_prefix="$(realpath -m -- "${navigation_controller_prefix}")"
+if [[ "${resolved_controller_prefix}" != "${expected_nav_install}" &&
+      "${resolved_controller_prefix}" != "${expected_nav_install}/patrol_navigation_controller" ]]; then
+    fail "Wrong Nav2 overlay: patrol_navigation_controller resolves to ${resolved_controller_prefix}; expected under ${expected_nav_install}. Rebuild or source this checkout's navigation/ros/install/local_setup.bash."
+fi
+navigation_pkg_prefix="$(ros2 pkg prefix patrol_navigation)"
+resolved_navigation_prefix="$(realpath -m -- "${navigation_pkg_prefix}")"
+if [[ "${resolved_navigation_prefix}" != "${expected_nav_install}" &&
+      "${resolved_navigation_prefix}" != "${expected_nav_install}/patrol_navigation" ]]; then
+    fail "Wrong Nav2 overlay: patrol_navigation resolves to ${resolved_navigation_prefix}; expected under ${expected_nav_install}."
+fi
+log "Nav2 plugin verified: ${resolved_controller_prefix}"
+[[ -f "${navigation_controller_prefix}/lib/libsegmented_rpp_controller.so" ]] \
+    || fail "TimeScoredLatticePlanner/SegmentedRPPController shared library is missing; rebuild patrol_navigation_controller"
 
 export ROS_DOMAIN_ID ROS_LOCALHOST_ONLY ENCODER_ROS_ENABLE ENCODER_ROS_TOPIC
 export WHEEL_DIAMETER_M WHEEL_TRACK_M ENCODER_TICKS_PER_REV

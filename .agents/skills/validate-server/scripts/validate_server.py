@@ -401,7 +401,7 @@ def collect_used_env_vars(root: Path) -> set[str]:
         used.update(SHELL_REQUIRED_ENV_RE.findall(source))
         used.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
         )
         # Runtime launchers also validate indirectly via required_env arrays.
         for block in re.findall(r"required_env\s*=\s*\((.*?)\)", source, re.DOTALL):
@@ -478,6 +478,13 @@ def check_env_example(root: Path, findings: list[Finding]) -> None:
             "MIN_AUTO_DRIVE_PWM": "0.30",
             "LIDAR_YAW": "3.141592653589793",
             "LIDAR_SCAN_STALE_SEC": "3.0",
+            "CAMERA_UPLOAD_MIN_BPS": "1024",
+            "CAMERA_UPLOAD_STALL_SEC": "15",
+            "ACTION_MIN_HISTORY_FRAMES": "12",
+            "ACTION_POSE_GAP_RESET_SEC": "1.5",
+            "ACTION_INTERACTION_PAIR_DISTANCE_RATIO": "1.5",
+            "ACTION_INTERACTION_MAX_PAIRS": "4",
+            "ACTION_INTERACTION_INFER_EVERY_N": "2",
         }
         if value and defaults.get(name) != value:
             nonempty.append(name)

@@ -662,10 +662,14 @@ class RobotConnectionManager:
         self.active = {}
         self.lock = asyncio.Lock()
         self.pending_acks = {}
+        # One send mutex per robot. No slow WebSocket send holds the global
+        # connection/ACK bookkeeping lock or blocks other robots.
+        self._send_locks = {}
         self.ack_timeout_sec = env_float(
             "ROBOT_COMMAND_ACK_TIMEOUT_SEC",
             minimum=0.1,
         )
+        self.send_timeout_sec = self.ack_timeout_sec
 
     async def connect(self, robot_id, websocket):
         await websocket.accept()
@@ -708,18 +712,37 @@ class RobotConnectionManager:
                 future.set_result({"ok": False, "error": "robot disconnected"})
         return disconnected
 
+    async def _send_serialized_command(self, robot_id, websocket, command, preflight=None):
+        # Serialize sends to the same robot (including STOP), but never
+        # hold the global connection/ACK lock across network I/O.
+        send_lock = self._send_locks.setdefault(robot_id, asyncio.Lock())
+        async with send_lock:
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+            # Recheck Goal and safety generation after waiting for send lock.
+            if preflight is not None and not preflight():
+                return False
+            await websocket.send_json(command)
+            # A replaced/disconnected socket must never be accepted as
+            # current, even if its old send completed without exception.
+            async with self.lock:
+                return self.active.get(robot_id) is websocket
+
     async def send_command(self, robot_id, command):
         async with self.lock:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        async with self.lock:
-            if self.active.get(robot_id) is not websocket:
-                return False
-            await websocket.send_json(command)
-        return True
+        try:
+            return await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command),
+                timeout=self.send_timeout_sec,
+            )
+        except Exception:
+            return False
 
-    async def send_command_wait_ack(self, robot_id, command):
+    async def send_command_wait_ack(self, robot_id, command, *, preflight=None):
         command = dict(command)
         command_id = str(command.get("command_id") or uuid4())
         command["command_id"] = command_id
@@ -733,14 +756,47 @@ class RobotConnectionManager:
             if command_id in self.pending_acks:
                 return False
             self.pending_acks[command_id] = (robot_id, websocket, future)
+        # The total send + Pi ACK round trip shares ONE bounded deadline.
+        # A blocked send must not acquire the global lock or evade timeout.
+        deadline = loop.time() + self.ack_timeout_sec
         try:
-            async with self.lock:
-                if self.active.get(robot_id) is not websocket:
-                    return False
-                await websocket.send_json(command)
-            ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            sent = await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command, preflight),
+                timeout=max(0.001, deadline - loop.time()),
+            )
+            if not sent:
+                reporter = getattr(self, "command_transport_observer", None)
+                if callable(reporter) and command.get("type") == "auto_drive":
+                    try:
+                        reporter(robot_id, "auto_drive", "WebSocket send/preflight rejected")
+                    except Exception:
+                        pass
+                return False
+            ack = await asyncio.wait_for(
+                future, timeout=max(0.001, deadline - loop.time())
+            )
+            # ACK is authenticated to the current Pi WebSocket and matched
+            # against its pending command_id by receive_ack(). Report STOP
+            # safety epochs immediately, before the next auto_drive request,
+            # and retain the Pi's rejection reason for diagnosis.
+            observer = getattr(self, "command_ack_observer", None)
+            if callable(observer) and isinstance(ack, dict):
+                try:
+                    observer(robot_id, command, ack)
+                except Exception:
+                    # Observability never changes the physical ACK contract.
+                    pass
             if command.get("type") == "resume_safety_check":
-                return ack if isinstance(ack, dict) else False
+                # Only a command_id-matched Pi ACK can prove processing.
+                # The Pi's raw ACK has "ok" but no "delivered" field.
+                # Normalize it here; do not allow an untrusted/malformed
+                # incoming delivered flag to override the actual ACK result.
+                if not isinstance(ack, dict):
+                    return False
+                return {
+                    **ack,
+                    "delivered": ack.get("ok") is True,
+                }
             if command.get("type") == "resume_navigation":
                 return (
                     isinstance(ack, dict)
@@ -749,8 +805,43 @@ class RobotConnectionManager:
                     and ack.get("safety_session") == command.get("safety_session")
                     and ack.get("safety_epoch") == command.get("safety_epoch")
                 )
+            if command.get("type") in {"mode", "navigation_mode"}:
+                # ACK command IDs alone do not prove the Pi applied the
+                # requested mode. The Pi includes its *actual* mode in ACK.
+                field = "mode" if command["type"] == "mode" else "navigation_mode"
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and str(ack.get(field) or "").lower()
+                    == str(command.get("mode") or "").lower()
+                )
+            # Motion ACK must come from the Pi *after* motor execution,
+            # with the same safety generation that was authorized. The Pi
+            # advances its epoch on STOP, so this identity check applies
+            # only to the motion commands that carry an expected generation.
+            if command.get("type") in ("move", "auto_drive") and (
+                "safety_session" in command or "safety_epoch" in command
+            ):
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and type(ack.get("safety_epoch")) is int
+                    and ack["safety_epoch"] == command.get("safety_epoch")
+                )
             return isinstance(ack, dict) and ack.get("ok") is True
-        except Exception:
+        except Exception as exc:
+            reporter = getattr(self, "command_transport_observer", None)
+            if callable(reporter) and command.get("type") == "auto_drive":
+                try:
+                    reason = (
+                        "ACK/send deadline exceeded"
+                        if isinstance(exc, asyncio.TimeoutError)
+                        else type(exc).__name__
+                    )
+                    reporter(robot_id, "auto_drive", reason)
+                except Exception:
+                    pass
             return False
         finally:
             async with self.lock:
@@ -913,6 +1004,16 @@ def publish_live_mapping_map(map_payload, received_at):
     return stored_map
 
 
+def clear_navigation_goal_path():
+    # Do not reset the map, pose, camera, or local costmap on Goal cancel.
+    with state_lock:
+        navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
+    navigation_visualization_hub.publish({
+        "type": "global_path", "path": [], "goal_path_cleared": True,
+    })
+
+
 navigation_control_api = NavigationControlApi(
     app=app,
     map_api=navigation_map_api,
@@ -928,7 +1029,17 @@ navigation_control_api = NavigationControlApi(
     ),
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
+    clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
+)
+# A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
+# This observer only accepts command_id-matched ACKs from the current socket.
+connections.command_ack_observer = navigation_control_api.note_pi_command_ack
+connections.command_transport_observer = (
+    lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
+        "Pi command transport failure robot=%s type=%s reason=%s",
+        robot_id, command_type, reason,
+    )
 )
 
 def publish_navigation_ros_visualization(event):
@@ -937,18 +1048,11 @@ def publish_navigation_ros_visualization(event):
     payload = dict(event)
     event_type = str(payload.get("type") or "")
     if event_type == "global_path":
-        path = payload.get("path")
-        normalized = [dict(point) for point in path] if isinstance(path, list) else []
-        received_at = payload.get("received_at")
-        try:
-            received_at = float(received_at)
-        except (TypeError, ValueError):
-            received_at = time.time()
-        with state_lock:
-            navigation_state["global_path"] = normalized
-            navigation_state["global_path_updated_at"] = received_at
-        navigation_control_api.note_replanned_path(normalized)
-    elif event_type == "costmap":
+        # /plan has no execution owner. Never trigger a duplicate Nav2
+        # ComputePath action for visualization or mislabel this anonymous
+        # planner output as the controller's currently executed path.
+        return
+    if event_type == "costmap":
         costmap = payload.get("costmap")
         with state_lock:
             navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
@@ -5345,8 +5449,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
-                if robot_id == SERVER_ROBOT_ID:
-                    navigation_control_api.note_pi_status(message)
+                # ACK confirms the command, not a fresh Pi telemetry sample.
+                # The periodic status frame independently confirms the mode.
                 await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
@@ -5600,8 +5704,20 @@ async def send_robot_command(
             )
         command["safety_session"] = motion_context["safety_session"]
         command["safety_epoch"] = motion_context["safety_epoch"]
-    if controlled_motion and navigation_control_api.motion_requires_ack():
-        delivered = await connections.send_command_wait_ack(robot_id, command)
+    # A WebSocket send only proves that the server handed the frame to the
+    # transport. Never report physical motor/STOP delivery without the Pi's
+    # command_id-matched ACK, including ordinary auto_drive, move and STOP.
+    physical_command = command_type in {"move", "auto_drive", "stop", "emergency_stop"}
+    if physical_command:
+        if controlled_motion:
+            # The earlier safety check may become stale while this command
+            # waits behind another WebSocket send or STOP.
+            delivered = await connections.send_command_wait_ack(
+                robot_id, command,
+                preflight=lambda: navigation_control_api.motion_safety_context() == motion_context,
+            )
+        else:
+            delivered = await connections.send_command_wait_ack(robot_id, command)
     else:
         delivered = await connections.send_command(robot_id, command)
     if delivered and controlled_motion:
@@ -5615,13 +5731,13 @@ async def send_robot_command(
         {
             "ok": delivered,
             "delivered": delivered,
-            "blocked": False,
+            "blocked": not delivered,
             "robot_id": robot_id,
             "command": command,
             "error": (
                 None
                 if delivered
-                else "robot not connected"
+                else "robot command not delivered or acknowledged"
             ),
         },
         status_code=status_code,

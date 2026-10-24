@@ -13,6 +13,13 @@ except ModuleNotFoundError:  # Direct robot_command_client.py execution.
     from env_config import env_float
 
 try:
+    from raspberry.controllers.jerk_limiter import WheelJerkLimiter
+    from raspberry.controllers.direction_interlock import DriveDirectionInterlock, segment_mode
+except ModuleNotFoundError:
+    from controllers.jerk_limiter import WheelJerkLimiter
+    from controllers.direction_interlock import DriveDirectionInterlock, segment_mode
+
+try:
     import serial
 except ImportError:
     serial = None
@@ -91,6 +98,14 @@ class MotorController:
                 "max_wheel_mps must match MAX_WHEEL_MPS; update the shared calibration"
             )
 
+        # Profile operates on final normalized wheel PWM, after breakaway
+        # scaling. Emergency/STOP commands bypass the profile entirely.
+        self._jerk_limiter = WheelJerkLimiter(
+            max_accel=0.50 / self.max_wheel_mps,
+            max_jerk=2.0 / self.max_wheel_mps,
+        )
+        self._direction_interlock = DriveDirectionInterlock()
+        self._direction_fault_latched = False
         self.last_command_at = 0.0
         self.current_motion = "stop"
         self.led_enabled = False
@@ -311,6 +326,55 @@ class MotorController:
         ):
             reader_thread.join(timeout=0.5)
 
+    @staticmethod
+    def _valid_uart_ack(command: str, response: str) -> bool:
+        """Only the exact Pico ACK for this command proves execution.
+
+        UART v1 has no command IDs; validating opcode and grammar is
+        mandatory, though a delayed *same-opcode* ACK cannot be disambiguated
+        without a future firmware protocol version.
+        """
+        parts = command.split(",")
+        opcode = parts[0]
+        exact = {
+            "PING": "OK,PONG",
+            "FW_INFO": "OK,FW,MOTOR_SAFE_V1",
+            "STOP": "OK,STOP",
+            "DRIVE": "OK,DRIVE",
+            "ENC_RESET": "OK,ENC_RESET",
+        }
+        if opcode in exact:
+            return response == exact[opcode]
+        if opcode == "MOVE" and len(parts) == 3:
+            return response == "OK,MOVE," + parts[1]
+        if opcode == "ENC_STREAM" and len(parts) == 2:
+            return response == "OK,ENC_STREAM," + parts[1]
+        if opcode == "LED" and len(parts) == 2:
+            return response == "OK,LED," + parts[1]
+        if opcode == "BEEP" and len(parts) == 2:
+            return response == "OK,BEEP," + parts[1]
+        if opcode == "VOLUME_GET" and len(parts) == 1:
+            fields = response.split(",")
+            return (
+                len(fields) == 3
+                and fields[:2] == ["OK", "VOLUME"]
+                and fields[2].isdigit()
+                and 0 <= int(fields[2]) <= 100
+            )
+        if opcode == "VOLUME" and len(parts) == 2:
+            return (
+                parts[1].isdigit()
+                and 0 <= int(parts[1]) <= 100
+                and response == "OK,VOLUME," + parts[1]
+            )
+        if opcode == "ENC_GET":
+            fields = response.split(",")
+            return (
+                len(fields) == 7 and fields[:2] == ["OK", "ENC"]
+                and all(x.lstrip("-").isdigit() for x in fields[2:])
+            )
+        return False
+
     def _exchange_locked(self, command: str) -> str:
         serial_device = self._serial_device()
 
@@ -358,11 +422,19 @@ class MotorController:
                     response = None
 
             if response is not None:
-                if response.startswith("ERR"):
+                if response.startswith("ERR,"):
                     raise MotorControllerError(
                         f"Pico W 명령 거부: {response}"
                     )
-
+                if not self._valid_uart_ack(command, response):
+                    # On a mismatched response, the Pi cannot claim that
+                    # the motor received STOP. Close the ambiguous UART
+                    # session; reconnection begins with a new STOP.
+                    self._close_serial_locked()
+                    raise MotorControllerError(
+                        f"Pico W ACK 불일치: command={command.split(',')[0]} "
+                        f"response={response}"
+                    )
                 return response
 
             if not self.connected:
@@ -425,7 +497,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
             print(
                 f"[motor] Pico W connected: "
@@ -459,7 +531,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
         self._pico_reboot_event.clear()
         print("[motor] encoder stream recovered after Pico reboot")
@@ -510,6 +582,20 @@ class MotorController:
         with self._state_lock:
             self.volume_percent = volume
         return volume
+
+    def _sync_optional_volume_locked(self) -> None:
+        """Support older Pico firmware without optional volume query."""
+        try:
+            self._read_volume_locked()
+        except MotorControllerError as exc:
+            if "ERR,unknown command" not in str(exc):
+                raise
+            with self._state_lock:
+                self.volume_percent = None
+            print(
+                "[motor] WARN: Pico firmware does not support "
+                "VOLUME_GET; encoder streaming remains enabled"
+            )
 
     def get_volume(self) -> int:
         with self._command_lock:
@@ -572,7 +658,9 @@ class MotorController:
 
         with self._command_lock:
             self._ensure_connected_locked()
-
+            # Manual MOVE remains independent from the autonomous velocity
+            # profile. Resume auto drive from zero after manual takeover.
+            self._jerk_limiter.reset()
             self._exchange_locked(
                 f"MOVE,{direction},{normalized_speed:.3f}"
             )
@@ -581,10 +669,39 @@ class MotorController:
                 self.last_command_at = time.monotonic()
                 self.current_motion = direction
 
+    def _trace_motor_output(
+        self, state: str, left_pwm: float = 0.0,
+        right_pwm: float = 0.0, detail: str = "",
+    ) -> None:
+        """Bounded Pi-side diagnostics; does not authorize or send motion."""
+        now = time.monotonic()
+        previous_state = getattr(self, "_last_motor_trace_state", None)
+        previous_at = getattr(self, "_last_motor_trace_at", None)
+        if (
+            previous_state == state
+            and previous_at is not None
+            and now - previous_at < 0.5
+        ):
+            return
+        self._last_motor_trace_state = state
+        self._last_motor_trace_at = now
+        safe_detail = str(detail).replace(chr(10), " ").replace(chr(13), " ")[:80]
+        try:
+            print(
+                f"[motor-motion] state={state} "
+                f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
+                f"detail={safe_detail}",
+                flush=True,
+            )
+        except (OSError, ValueError):
+            # Diagnostics must never affect Pico motor command delivery.
+            pass
+
     def drive(
         self,
         left_mps: float,
         right_mps: float,
+        rear_blind_limited: bool = False,
     ) -> None:
         """
         좌우 바퀴 목표 속도(m/s)를 Pico의
@@ -633,19 +750,91 @@ class MotorController:
             abs(right_normalized),
         )
 
-        if 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+        if rear_blind_limited:
+            # A safety cap MUST take precedence over motor breakaway PWM.
+            # The motor may fail to move at 30% duty, but silently raising
+            # it to MIN_AUTO_DRIVE_PWM (often 50%) is not permitted.
+            if peak > 0.30:
+                left_normalized *= 0.30 / peak
+                right_normalized *= 0.30 / peak
+        elif 0.0 < peak < MIN_AUTO_DRIVE_PWM:
             pwm_scale = MIN_AUTO_DRIVE_PWM / peak
             left_normalized *= pwm_scale
             right_normalized *= pwm_scale
 
         with self._command_lock:
             self._ensure_connected_locked()
+            if self._direction_fault_latched:
+                raise MotorControllerError(
+                    "automatic direction switch timed out; motion locked until explicit safety reset"
+                )
+            now = time.monotonic()
+            with self._state_lock:
+                telemetry = dict(self._encoder_state)
+            updated_at = telemetry.get("updated_monotonic")
+            snapshot = {
+                **telemetry,
+                "age_sec": None if updated_at is None else now - updated_at,
+            }
+            mode = segment_mode(left_normalized, right_normalized)
+            decision = self._direction_interlock.request(mode, now, snapshot)
+            if decision == "stop":
+                # One STOP per transition. Only a successful UART reply
+                # starts the encoder-stable confirmation window.
+                self._jerk_limiter.reset()
+                try:
+                    self._exchange_locked("STOP,direction_switch")
+                except Exception:
+                    self._direction_fault_latched = True
+                    raise
+                with self._state_lock:
+                    sequence = int(self._encoder_state["sequence"])
+                    self.current_motion = "stop"
+                    self.last_command_at = time.monotonic()
+                self._direction_interlock.mark_stop_sent(
+                    time.monotonic(), sequence,
+                )
+                self._trace_motor_output("interlock_stop", detail=mode)
+                return
+            if decision == "hold":
+                self._trace_motor_output("interlock_hold", detail=mode)
+                return
+            if decision == "timeout":
+                self._jerk_limiter.reset()
+                self._direction_fault_latched = True
+                self._exchange_locked("STOP,direction_switch_timeout")
+                with self._state_lock:
+                    self.current_motion = "stop"
+                    self.last_command_at = time.monotonic()
+                self._trace_motor_output("interlock_timeout", detail=mode)
+                raise MotorControllerError(
+                    "direction change STOP not encoder-confirmed within 3s"
+                )
 
-            self._exchange_locked(
-                "DRIVE,"
-                f"{left_normalized:.3f},"
-                f"{right_normalized:.3f}"
+            limited_left, limited_right = self._jerk_limiter.step(
+                left_normalized, right_normalized, time.monotonic(),
             )
+            if rear_blind_limited:
+                # Deceleration is allowed to bypass jerk smoothing when a
+                # fresh safety restriction lowers the permitted output.
+                final_peak = max(abs(limited_left), abs(limited_right))
+                if final_peak > 0.30:
+                    limited_left *= 0.30 / final_peak
+                    limited_right *= 0.30 / final_peak
+                    self._jerk_limiter.reset()
+            try:
+                self._exchange_locked(
+                    "DRIVE,"
+                    f"{limited_left:.3f},"
+                    f"{limited_right:.3f}"
+                )
+                self._trace_motor_output(
+                    "uart_drive", limited_left, limited_right,
+                    "rear_limited" if rear_blind_limited else mode,
+                )
+            except Exception:
+                self._jerk_limiter.reset()
+                raise
 
             with self._state_lock:
                 self.last_command_at = time.monotonic()
@@ -661,6 +850,9 @@ class MotorController:
         error: Optional[Exception] = None
 
         with self._command_lock:
+            # STOP, failsafe and E-STOP have no acceleration/jerk delay.
+            self._jerk_limiter.reset()
+            self._direction_interlock.abort_pending()
             with self._state_lock:
                 self.current_motion = "stop"
                 self.last_command_at = time.monotonic()
@@ -671,6 +863,7 @@ class MotorController:
                 self._exchange_locked(
                     f"STOP,{self._sanitize_reason(reason)}"
                 )
+                self._trace_motor_output("uart_stop", detail=reason)
 
             except Exception as exc:
                 error = exc
@@ -687,6 +880,13 @@ class MotorController:
             raise MotorControllerError(
                 str(error)
             ) from error
+
+    def clear_direction_fault_after_safety_resume(self) -> None:
+        """Re-arm only after operator/Pi safety-resume workflow completes."""
+        with self._command_lock:
+            self._direction_fault_latched = False
+            self._direction_interlock.reset()
+            self._jerk_limiter.reset()
 
     def failsafe_tick(self) -> None:
         with self._state_lock:

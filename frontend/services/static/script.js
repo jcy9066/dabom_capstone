@@ -593,45 +593,16 @@ function cancelNavigationGlobalPathStaleTimer() {
     }
 }
 
-function scheduleNavigationGlobalPathStale(receivedAtSec = null) {
+function scheduleNavigationGlobalPathStale() {
+    // A Global Path belongs to its Goal execution, not to a heartbeat.
+    // Keep it until an explicit replacement or Goal termination.
     cancelNavigationGlobalPathStaleTimer();
-
-    // Standalone ComputePathToPose debugging:
-    // retain the latest path until another path or reset arrives.
-    if (navigationGlobalPathRunKey === null) {
-        return;
-    }
-
-    let delayMs = GLOBAL_PATH_STALE_MS;
-    const received = Number(receivedAtSec);
-
-    if (Number.isFinite(received) && received > 0) {
-        delayMs = Math.max(
-            0,
-            GLOBAL_PATH_STALE_MS - Math.max(0, Date.now() - received * 1000),
-        );
-    }
-
-    if (delayMs <= 0) {
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        return;
-    }
-
-    navigationGlobalPathStaleTimer = window.setTimeout(() => {
-        navigationGlobalPathStaleTimer = null;
-
-        if (
-            lidarState.globalPathStatus !== 'fresh'
-            && lidarState.globalPathStatus !== 'pending'
-        ) return;
-
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        emitNavigationVisualizationState(false);
-    }, delayMs);
 }
 function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
+    // Raw ROS global_path has no Goal execution ID. Ignore packets received
+    // before an active Goal or after cancellation/completion so late arrivals
+    // cannot resurrect an orphaned route in dashboard visualization state.
+    if (navigationGlobalPathRunKey === null) return;
     lidarState.globalPath = Array.isArray(path) ? path : [];
     if (lidarState.globalPath.length >= 2) {
         lidarState.globalPathStatus = 'fresh';
@@ -661,6 +632,7 @@ function navigationControlGoalKey(control) {
     const goal = control?.active_goal;
     if (!goal) return null;
     return [
+        control?.goal_generation ?? 'unknown',
         Number(goal.x) || 0,
         Number(goal.y) || 0,
         Number(goal.yaw) || 0,
@@ -713,18 +685,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
-    if (Array.isArray(data.global_path) && data.global_path.length >= 2) {
-        applyNavigationGlobalPath(
-            data.global_path,
-            data.global_path_updated_at ?? null,
-            false,
-        );
-    } else if (
-        navigationGlobalPathRunKey !== null
-        && lidarState.globalPathStatus !== 'pending'
-    ) {
-        resetNavigationGlobalPath();
-    }
+    // Snapshot /plan events have no Goal execution identifier and are
+    // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
         lidarState.scan = data.scan;
@@ -784,10 +746,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'global_path') {
-        applyNavigationGlobalPath(
-            message.path,
-            message.received_at ?? null,
-        );
+        // Anonymous ROS /plan packets have no Goal owner. The approved
+        // path is delivered by the navigation control-state endpoint.
         return;
     }
 
@@ -824,13 +784,24 @@ function applyNavigationStreamMessage(message) {
 document.addEventListener('dabom:navigation-control-state', event => {
     const control = event.detail || {};
     const navState = String(control.navigation_state || '').toUpperCase();
-    const active = ['NAVIGATING', 'RESUMING'].includes(navState) && control.active_goal;
+    const active = ['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING', 'PAUSING_FOR_MANUAL', 'REPLACING_GOAL', 'CANCELING', 'CANCELING_STOP'].includes(navState)
+        && control.active_goal;
     if (active) {
         const nextRunKey = navigationControlGoalKey(control);
         if (nextRunKey !== navigationGlobalPathRunKey) {
             navigationGlobalPathRunKey = nextRunKey;
             beginNavigationGlobalPathPending();
         }
+        const running = ['NAVIGATING', 'RESUMING'].includes(navState);
+        const preview = ['PATH_READY', 'READY'].includes(navState);
+        const path = running ? control.executed_path
+            : preview ? control.planned_path : [];
+        // An unconfirmed live FollowPath must never leave a stale preview
+        // on the 2D map. Stop/cancel also clears executable path display.
+        applyNavigationGlobalPath(
+            Array.isArray(path) ? path : [],
+            control.updated_at ?? null,
+        );
         return;
     }
 

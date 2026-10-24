@@ -47,7 +47,7 @@ def runtime_env_keys() -> set[str]:
         keys.update(required_shell_env.findall(source))
         keys.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
         )
 
         # Root runtime launchers keep required .env keys in a shell array and
@@ -83,6 +83,13 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
         "MIN_AUTO_DRIVE_PWM": "0.30",
         "LIDAR_YAW": "3.141592653589793",
         "LIDAR_SCAN_STALE_SEC": "3.0",
+        "CAMERA_UPLOAD_MIN_BPS": "1024",
+        "CAMERA_UPLOAD_STALL_SEC": "15",
+        "ACTION_MIN_HISTORY_FRAMES": "12",
+        "ACTION_POSE_GAP_RESET_SEC": "1.5",
+        "ACTION_INTERACTION_PAIR_DISTANCE_RATIO": "1.5",
+        "ACTION_INTERACTION_MAX_PAIRS": "4",
+        "ACTION_INTERACTION_INFER_EVERY_N": "2",
     }
     assert all(value == defaults.get(key, "") for key, value in entries)
     assert set(keys) == runtime_env_keys()
