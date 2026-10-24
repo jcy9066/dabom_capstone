@@ -1558,6 +1558,7 @@ class NavigationControlApi:
                 if (self._loop_epoch != loop_epoch or self._state["emergency_stop"]
                     or self._state["navigation_state"] != "PATH_READY"):
                     raise NavigationControlError("LOOP_INTERRUPTED", "Loop start interrupted.", 409)
+        command_baseline = self._nonzero_command_sequence()
         if loop_goals and hasattr(self._ros, "begin_loop_trace"):
             await asyncio.to_thread(self._ros.begin_loop_trace)
         result = (
@@ -1598,7 +1599,9 @@ class NavigationControlApi:
                 self._stop_encoder_ticks = None
                 self._stop_confirmation_after_sequence = None
                 self._post_resume_motion_ready = False
-                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._start_navigation_progress_locked(
+                    progress_pose, progress_started_at, command_baseline,
+                )
                 self._touch_locked()
         if interrupted:
             await self.emergency_stop("NAVIGATION_START_INTERRUPTED", automatic=True, force=True)
@@ -2035,6 +2038,7 @@ class NavigationControlApi:
             raise NavigationControlError("RESUME_INTERRUPTED", "A newer emergency stop interrupted resume.", 409)
         if not restart_navigation:
             return {**self.state_response(), "replanned": False}
+        command_baseline = self._nonzero_command_sequence()
         try:
             navigation = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         except Exception:
@@ -2055,7 +2059,9 @@ class NavigationControlApi:
                 self._state["navigation_state"] = "NAVIGATING"
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
-                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._start_navigation_progress_locked(
+                    progress_pose, progress_started_at, command_baseline,
+                )
                 self._touch_locked()
         if interrupted:
             await self.emergency_stop("RESUME_INTERRUPTED", automatic=True, force=True)
@@ -2469,6 +2475,7 @@ class NavigationControlApi:
                             "SENSOR_RECOVERY_TIMEOUT",
                             "Sensor recovery deadline expired during planning.",
                         )
+                command_baseline = self._nonzero_command_sequence()
                 navigation = await asyncio.to_thread(
                     self._navigate_route, recovery["goal"], recovery["waypoints"]
                 )
@@ -2502,7 +2509,7 @@ class NavigationControlApi:
                     self._stop_encoder_ticks = None
                     self._stop_confirmation_after_sequence = None
                     self._start_navigation_progress_locked(
-                        self._safe_live_pose(), time.time(),
+                        self._safe_live_pose(), time.time(), command_baseline,
                     )
                     self._touch_locked()
             if interrupted:
@@ -3193,6 +3200,7 @@ class NavigationControlApi:
                 target = dict(recovery["goal"])
                 stage_goal: dict[str, float] | None = None
 
+            command_baseline = self._nonzero_command_sequence()
             try:
                 if phase == "backup_wait_stop":
                     source = recovery["failed_pose"]
@@ -3279,7 +3287,7 @@ class NavigationControlApi:
                     self._post_resume_motion_ready = False
                     recovery["phase"] = next_phase
                     self._start_navigation_progress_locked(
-                        self._safe_live_pose(), time.time(),
+                        self._safe_live_pose(), time.time(), command_baseline,
                     )
                     self._touch_locked()
             if interrupted:
@@ -3659,6 +3667,7 @@ class NavigationControlApi:
                             "LOOP_STAGE_REVOKED", "Loop stage no longer safe to start.", 409,
                         )
                 self._assert_watchdogs_healthy()
+                command_baseline = self._nonzero_command_sequence()
                 if phase == "turn_pending":
                     action = await asyncio.to_thread(self._ros.spin_loop_turn, angle)
                 else:
@@ -3704,7 +3713,7 @@ class NavigationControlApi:
                             self._loop_turn_target = dict(target)
                             self._loop_turn_requested = angle
                         self._start_navigation_progress_locked(
-                            self._safe_live_pose(), time.time(),
+                            self._safe_live_pose(), time.time(), command_baseline,
                         )
                         self._touch_locked()
                 if interrupted and action_accepted:
