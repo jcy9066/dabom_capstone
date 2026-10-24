@@ -1563,8 +1563,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
                     await self.api._advance_loop_leg()
         self.assertEqual([], self.map_api.ros_control.follow_path_calls)
-        self.assertEqual(old_plans + 1, self.map_api.ros_control.plan_calls)
-        self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
+        self.assertEqual(old_plans, self.map_api.ros_control.plan_calls)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+        self.assertEqual("FAILED", self.api.state_response()["navigation_state"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
 
     async def test_stale_pose_during_cached_drive_triggers_estop(self):
         await self.driving_ready()
