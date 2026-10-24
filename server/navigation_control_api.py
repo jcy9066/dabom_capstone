@@ -1480,7 +1480,13 @@ class NavigationControlApi:
                 if (self._loop_epoch != loop_epoch or self._state["emergency_stop"]
                     or self._state["navigation_state"] != "PATH_READY"):
                     raise NavigationControlError("LOOP_INTERRUPTED", "Loop setup was interrupted.", 409)
-        result = await asyncio.to_thread(self._navigate_route, goal, waypoints)
+        result = (
+            await asyncio.to_thread(
+                self._ros.navigate_through_poses, [*waypoints, goal], loop=True,
+            )
+            if loop_goals
+            else await asyncio.to_thread(self._navigate_route, goal, waypoints)
+        )
         try:
             progress_pose = self._get_live_pose()
         except Exception:
