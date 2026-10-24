@@ -717,6 +717,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.api.start_navigation()
         now = time.time()
         self.api._loop_reverse_used = True
+        self.api._state["navigation_state"] = "LOOP_RECOVERY_STOPPING"
         self.api._loop_recovery = {
             "phase": "backup_wait_stop",
             "epoch": self.api._loop_epoch,
@@ -757,6 +758,64 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], stopped["waypoints"])
         await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
         self.assertEqual(before, len(self.map_api.ros_control.through_navigation_calls))
+
+    def test_loop_reverse_requires_fresh_post_stop_real_displacement(self):
+        now = time.time()
+        r = {"failed_pose": {"x": 1.0, "y": 0.3, "yaw": 0.0}}
+        good = {"x": 0.65, "y": 0.3, "yaw": 0.0, "received_at": now}
+        verify = self.api._loop_recovery_reverse_progress
+        self.assertTrue(verify(r, good, now=now, after=now - 0.1))
+        self.assertFalse(verify(r, good, now=now + 2.0, after=now - 0.1))
+        self.assertFalse(verify(r, good, now=now, after=now + 0.01))
+        self.assertFalse(verify(r, {**good, "x": 1.4}, now=now, after=now - 0.1))
+        self.assertFalse(verify(r, {**good, "received_at": None},
+                                now=now, after=now - 0.1))
+
+    async def test_loop_recovery_reapproach_and_spin_resume_preserves_budget(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recovery = {
+            "phase": "reapproach_wait_stop",
+            "epoch": self.api._loop_epoch,
+            "goal_index": 1, "goal": b,
+            "failed_pose": {"x": 1.6, "y": 0.5, "yaw": 0.0},
+            "spin_angle": math.pi,
+        }
+        self.api._loop_recovery = recovery
+        self.api._loop_reverse_used = True
+        self.api._state["navigation_state"] = "READY"
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                await self.api._advance_loop_recovery()
+        self.assertEqual([b], self.map_api.ros_control.loop_reapproach_calls)
+        self.assertEqual("reapproaching", recovery["phase"])
+
+        recovery["phase"] = "spin_wait_stop"
+        self.api._state["navigation_state"] = "READY"
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": b["x"], "y": b["y"], "yaw": 0.0, "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_recovery()
+        self.assertEqual([math.pi], self.map_api.ros_control.spin_radians)
+        self.assertEqual("turning", recovery["phase"])
+
+        recovery["phase"] = "resume_wait_stop"
+        self.api._state["navigation_state"] = "READY"
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                await self.api._advance_loop_recovery()
+        self.assertIsNone(self.api._loop_recovery)
+        self.assertTrue(self.api._loop_reverse_used)
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertEqual([b["x"], a["x"]], [
+            p["x"] for p in self.map_api.ros_control.through_navigation_calls[-1][:2]
+        ])
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
 
     async def test_loop_rejects_overlapping_a_b(self):
         await self.driving_ready()
