@@ -43,3 +43,25 @@ def test_server_retains_model_toggle_but_restricts_pipeline_id():
     assert 'if pipeline != "8":' in source
     assert '"pipelines": PIPELINE_OPTIONS' in source
     assert "def set_model_pipeline_enabled(enabled):" in source
+
+def test_legacy_pipeline_modules_and_dependencies_are_removed():
+    retired = [
+        "action.py",
+        "action_batch.py",
+        "action_rtmpose_posec3d.py",
+        "action_rtmpose_stgcn.py",
+        "action_rtmpose_stgcnpp.py",
+        "action_vitpose_stgcnpp.py",
+        "action_yolopose_posec3d.py",
+        "action_yolopose_stgcnpp.py",
+        "detector.py",
+        "detector_dino.py",
+        "detector_yolo.py",
+    ]
+    model_dir = ROOT / "perception" / "models"
+    assert all(not (model_dir / name).exists() for name in retired)
+    assert (model_dir / "detector_rtmo.py").is_file()
+    assert (model_dir / "scene_x3d.py").is_file()
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    for legacy in ("mmengine==", "mmcv-lite==", "mmaction2 @"):
+        assert legacy not in requirements
