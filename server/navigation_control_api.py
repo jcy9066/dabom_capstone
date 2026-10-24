@@ -191,6 +191,14 @@ class NavigationControlApi:
         self._loop_next_turn_clockwise = True
         self._loop_turn_target: dict[str, float] | None = None
         self._loop_turn_requested: float | None = None
+        # Session-only, per-direction physical path cache. Goal index 1=A->B;
+        # index 0=B->A. Never reuse across a different map or new Loop.
+        self._loop_path_cache: dict[int, list[dict[str, float]]] = {}
+        self._loop_active_path: list[dict[str, float]] = []
+        self._loop_follow_active = False
+        self._loop_validity_last_at = 0.0
+        self._loop_cache_hits = 0
+        self._loop_replans = 0
         self._replan_refresh_started_at = 0.0
         self._replan_refresh_inflight = False
         self._estop_attempt_reason: str | None = None
@@ -794,6 +802,9 @@ class NavigationControlApi:
                 "loop_active": bool(self._loop_goals and self._loop_started),
                 "loop_stage": self._loop_stage,
                 "loop_completed_legs": self._loop_completed_legs,
+                "loop_cached_directions": sorted(self._loop_path_cache),
+                "loop_cache_hits": self._loop_cache_hits,
+                "loop_replans": self._loop_replans,
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
                 "patrol_ready": bool(
@@ -2904,6 +2915,14 @@ class NavigationControlApi:
         self._loop_next_turn_clockwise = True
         self._loop_turn_target = None
         self._loop_turn_requested = None
+        self._loop_path_cache.clear()
+        self._loop_active_path = []
+        self._loop_follow_active = False
+        self._loop_validity_last_at = 0.0
+        self._loop_cache_hits = 0
+        self._loop_replans = 0
+        if hasattr(self._ros, "discard_loop_trace"):
+            self._ros.discard_loop_trace()
 
     @staticmethod
     def _loop_route_points(
@@ -3184,6 +3203,133 @@ class NavigationControlApi:
                 # A user cancellation may have landed during an async Nav2
                 # action acceptance. Do not leave that action running.
                 await asyncio.to_thread(self._ros.cancel_navigation)
+
+    @staticmethod
+    def _certify_physical_loop_path(
+        trace: Any, origin: dict[str, float], destination: dict[str, float],
+    ) -> list[dict[str, float]]:
+        """Only proven physical AMCL samples may enter the reuse cache."""
+        if not isinstance(trace, list) or not 4 <= len(trace) <= 1500:
+            return []
+        try:
+            path = [
+                {k: float(p[k]) for k in ("x", "y", "yaw")}
+                for p in trace
+            ]
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return []
+        if not all(math.isfinite(v) for p in path for v in p.values()):
+            return []
+        if (math.hypot(path[0]["x"] - origin["x"],
+                       path[0]["y"] - origin["y"]) > 0.55
+            or math.hypot(path[-1]["x"] - destination["x"],
+                          path[-1]["y"] - destination["y"]) > 0.55):
+            return []
+        travelled = 0.0
+        for a, b in zip(path, path[1:]):
+            dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+            distance = math.hypot(dx, dy)
+            if distance > 0.45:
+                return []  # map-frame discontinuity
+            if dx * math.cos(a["yaw"]) + dy * math.sin(a["yaw"]) < -0.075:
+                return []  # reject physical reverse segments
+            travelled += distance
+        if travelled < 0.50:
+            return []
+        return path
+
+    @staticmethod
+    def _remaining_loop_path(
+        path: list[dict[str, float]], pose: dict[str, float],
+    ) -> list[dict[str, float]]:
+        if len(path) < 2:
+            return []
+        # Trim historical/behind-the-robot points: an obstacle appearing
+        # behind the vehicle must not invalidate the route already traversed.
+        index = min(
+            range(len(path)),
+            key=lambda i: (path[i]["x"] - pose["x"]) ** 2
+                          + (path[i]["y"] - pose["y"]) ** 2,
+        )
+        if math.hypot(path[index]["x"] - pose["x"],
+                      path[index]["y"] - pose["y"]) > 0.55:
+            return []
+        return [dict(p) for p in path[max(index - 1, 0):]]
+
+    async def _monitor_loop_cached_path(self) -> None:
+        """Reuse a safe path; replan only when its remaining cells are blocked."""
+        async with self._operation_lock:
+            with self._lock:
+                if (not self._loop_follow_active or not self._loop_started
+                    or self._loop_stage != "drive"
+                    or self._state["navigation_state"] != "NAVIGATING"
+                    or self._state["emergency_stop"]
+                    or self._pending_nav_success is not None):
+                    return
+                epoch = self._loop_epoch
+                path = [dict(p) for p in self._loop_active_path]
+                goal = dict(self._state["active_goal"] or {})
+                index = self._loop_leg_index
+            try:
+                pose = self._safe_live_pose()
+                if not isinstance(pose, dict):
+                    raise NavigationControlError(
+                        "LOOP_CACHE_POSE_STALE", "No live pose for cache validation.", 409,
+                    )
+                remainder = self._remaining_loop_path(path, pose)
+                # At the very end, the controller's local-costmap protection
+                # still runs; Nav2 terminal success requires physical STOP.
+                if len(remainder) < 2:
+                    if not remainder:
+                        raise NavigationControlError(
+                            "LOOP_CACHE_OFF_ROUTE", "Robot diverged from saved path.", 409,
+                        )
+                    return
+                safe = await asyncio.to_thread(self._ros.loop_path_valid, remainder)
+                if safe:
+                    return
+                # The cached route is genuinely obstructed. Change path only
+                # now. New geometry is not called a physical cache until driven.
+                with self._lock:
+                    if epoch != self._loop_epoch:
+                        return
+                    self._loop_path_cache.pop(index, None)
+                    self._loop_replans += 1
+                fresh = self._normalized_path(
+                    await asyncio.to_thread(self._compute_path_for_route, goal, [])
+                )
+                if len(fresh) < 2 or not await asyncio.to_thread(
+                    self._ros.loop_path_valid, fresh,
+                ):
+                    raise NavigationControlError(
+                        "LOOP_REPLAN_UNSAFE", "Obstacle blocks the new path.", 422,
+                    )
+                with self._lock:
+                    if (epoch != self._loop_epoch or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "NAVIGATING"):
+                        return
+                result = await asyncio.to_thread(
+                    self._ros.follow_loop_path, fresh, preempt=True,
+                )
+                if result.get("accepted") is not True:
+                    raise NavigationControlError(
+                        "LOOP_REPLAN_REJECTED", "Controller rejected replanned route.", 409,
+                    )
+                with self._lock:
+                    if epoch == self._loop_epoch and self._loop_stage == "drive":
+                        self._loop_active_path = [dict(p) for p in fresh]
+                        self._state["planned_path"] = fresh
+                        self._touch_locked()
+            except Exception:
+                with self._lock:
+                    should_stop = (
+                        epoch == self._loop_epoch and self._loop_started
+                        and not self._state["emergency_stop"]
+                    )
+                if should_stop:
+                    await self.emergency_stop(
+                        "LOOP_CACHE_VALIDATION_FAILED", automatic=True, force=True,
+                    )
 
     async def _advance_loop_leg(self) -> None:
         """Advance only after the last action physically stopped.
