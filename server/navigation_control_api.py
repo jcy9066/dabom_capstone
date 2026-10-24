@@ -2133,6 +2133,18 @@ class NavigationControlApi:
             recovering = self._sensor_recovery is not None
         if pending_terminal_stop and not hard_fault:
             await self._deliver_terminal_stop()
+        with self._lock:
+            loop_sensor_recovery = bool(
+                recovering and (self._loop_goals or self._loop_recovery)
+            )
+        if loop_sensor_recovery:
+            # Generic sensor recovery would launch a different BT/controller
+            # and could bypass the loop-only no-reverse guard. Never resume
+            # automatically from a sensor fault during A/B or its backup.
+            await self.emergency_stop(
+                "LOOP_SENSOR_RECOVERY_BLOCKED", automatic=True, force=True,
+            )
+            return "LOOP_SENSOR_RECOVERY_BLOCKED"
         if not recovering and not hard_fault and self._loop_pending:
             await self._advance_loop_leg()
         if not recovering and not hard_fault and self._loop_recovery is not None:
