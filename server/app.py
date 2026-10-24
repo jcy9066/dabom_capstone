@@ -769,6 +769,17 @@ class RobotConnectionManager:
             ack = await asyncio.wait_for(
                 future, timeout=max(0.001, deadline - loop.time())
             )
+            # ACK is authenticated to the current Pi WebSocket and matched
+            # against its pending command_id by receive_ack(). Report STOP
+            # safety epochs immediately, before the next auto_drive request,
+            # and retain the Pi's rejection reason for diagnosis.
+            observer = getattr(self, "command_ack_observer", None)
+            if callable(observer) and isinstance(ack, dict):
+                try:
+                    observer(robot_id, command, ack)
+                except Exception:
+                    # Observability never changes the physical ACK contract.
+                    pass
             if command.get("type") == "resume_safety_check":
                 # Only a command_id-matched Pi ACK can prove processing.
                 # The Pi's raw ACK has "ok" but no "delivered" field.
@@ -1004,6 +1015,9 @@ navigation_control_api = NavigationControlApi(
     clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+# A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
+# This observer only accepts command_id-matched ACKs from the current socket.
+connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 
 def publish_navigation_ros_visualization(event):
     if not isinstance(event, dict):
