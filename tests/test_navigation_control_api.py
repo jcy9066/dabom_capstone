@@ -2164,7 +2164,31 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(prior, self.api.motion_safety_context())
         self.assertFalse(self.api.note_authorized_motion(prior))
 
-    async def test_auto_requires_verified_driving_before_pi_mode_request(self):
+    async def test_auto_mapping_selection_keeps_mapping_and_does_not_start_nav2(self):
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "mapping", "emergency_stop": False,
+        })
+        result = await self.api.switch_patrol_mode({"mode": "auto"})
+        self.assertEqual("auto", result["robot_mode"])
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual("MAPPING", result["pi_navigation_mode"])
+        self.assertFalse(result["patrol_ready"])
+        self.assertEqual(["mode"], [cmd["type"] for _, cmd in self.commands])
+        self.assertEqual([], self.process.transitions)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+        self.assertIsNone(self.api.motion_safety_context())
+
+    async def test_manual_mapping_selection_does_not_cancel_nav2(self):
+        result = await self.api.switch_patrol_mode({"mode": "manual"})
+        self.assertEqual("manual", result["robot_mode"])
+        self.assertEqual("MAPPING", result["navigation_mode"])
+        self.assertEqual(["mode"], [cmd["type"] for _, cmd in self.commands])
+        self.assertEqual([], self.process.transitions)
+        self.assertEqual(0, self.map_api.ros_control.cancel_calls)
+
+    async def test_auto_driving_still_requires_verified_readiness(self):
+        with self.api._lock:
+            self.api._state["navigation_mode"] = "DRIVING"
         with self.assertRaises(NavigationControlError) as raised:
             await self.api.switch_patrol_mode({"mode": "auto"})
         self.assertEqual("DRIVING_NOT_READY", raised.exception.error_code)
