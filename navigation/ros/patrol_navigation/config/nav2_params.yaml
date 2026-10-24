@@ -42,7 +42,10 @@ controller_server:
     loop_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: false
-      xy_goal_tolerance: 0.55
+      # Physical first pass must end inside the 0.40m cache-admission
+      # radius; the later cached replay can finish 0.10m before that trace
+      # endpoint while still satisfying the server's 0.55m proof.
+      xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 3.14
 
     # Cached FollowPath must reach its recorded physical endpoint,
