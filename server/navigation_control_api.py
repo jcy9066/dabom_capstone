@@ -1518,6 +1518,7 @@ class NavigationControlApi:
                 self._estop_generation != estop_generation
                 or self._state["emergency_stop"]
                 or self._encoder_stop_violation
+                or (bool(loop_goals) and self._loop_epoch != loop_epoch)
                 or (
                     self._stop_commanded_at is not None
                     and (
@@ -1553,11 +1554,13 @@ class NavigationControlApi:
 
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
-            loop_pending = self._loop_pending
             self._clear_loop_locked()
             # The preceding leg already completed a physical STOP; no
             # second Nav2 cancel or motor STOP is needed between loop legs.
-            if loop_pending and self._state["active_goal"] is None and self._stop_confirmed_locked(time.time()):
+            if (self._state["active_goal"] is None
+                and self._state["navigation_state"] == "READY"
+                and self._pending_goal_cancel is None
+                and self._stop_confirmed_locked(time.time())):
                 self._state["navigation_state"] = "CANCELED"
                 self._state["waypoints"] = []
                 self._state["planned_path"] = []
