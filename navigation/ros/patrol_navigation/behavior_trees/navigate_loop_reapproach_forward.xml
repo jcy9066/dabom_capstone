@@ -1,0 +1,12 @@
+<!-- After one guarded backup, return to the SAME loop waypoint.
+     Reapproach is forward-only. No blind reverse, no generic recovery. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="SafeForwardReapproach">
+      <Timeout msec="5000">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      </Timeout>
+      <FollowPath path="{path}" controller_id="LoopFollowPath" goal_checker_id="general_goal_checker"/>
+    </Sequence>
+  </BehaviorTree>
+</root>
