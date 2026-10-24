@@ -52,7 +52,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
             self.control,
         )
         auto_request = self.control.index("await requestDriveMode('AUTO', { announce: false })")
-        goal_request = self.control.index("mutate('/api/navigation/control/goal', { goal })")
+        goal_request = self.control.index("mutate('/api/navigation/control/goal', loopGoals")
+        self.assertIn("loop_goals: loopGoals", self.control)
+        self.assertIn("data-lidar-interaction=\"set-loop\"", (
+            ROOT / "frontend/templates/index.html"
+        ).read_text(encoding="utf-8"))
         self.assertLess(auto_request, goal_request)
         self.assertIn("state.draftGoal = null", self.control)
         viewer = (
