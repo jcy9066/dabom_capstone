@@ -142,6 +142,12 @@ def test_forward_only_loop_planner_is_separate_from_existing_goal_settings():
     assert 'request.planner_id = "LoopGridBased"' in ROS
 
 
+def test_anonymous_path_topics_cannot_trigger_new_cache_planning():
+    assert "or bool(self._loop_goals and self._loop_started)" in SERVER
+    assert "if self._loop_goals and self._loop_started:" in SERVER
+    assert "Anonymous" in SERVER or "anonymous Nav2 topic messages" in SERVER
+
+
 def test_real_trajectory_cache_replays_on_dedicated_nav2_follow_path():
     assert "def begin_loop_trace(self)" in ROS
     assert "def finish_loop_trace(self)" in ROS
