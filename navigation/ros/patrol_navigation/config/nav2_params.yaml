@@ -22,7 +22,7 @@ controller_server:
     failure_tolerance: 0.3
 
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker", "loop_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker", "loop_goal_checker", "loop_cached_goal_checker"]
     controller_plugins: ["FollowPath", "LoopFollowPath"]
 
     progress_checker:
@@ -43,6 +43,14 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: false
       xy_goal_tolerance: 0.55
+      yaw_goal_tolerance: 3.14
+
+    # Cached FollowPath must reach its recorded physical endpoint,
+    # not stop 0.55m before that endpoint. No additional yaw demand.
+    loop_cached_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: false
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 3.14
 
     FollowPath:
