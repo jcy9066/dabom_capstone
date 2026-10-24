@@ -152,6 +152,9 @@ class NavigationRosControl:
         self._last_nav_command_linear_x = None
         self._last_nav_command_angular_z = None
         self._rotation_command_since_at = None
+        self._last_loop_pivot_at = None
+        self._last_loop_pivot_angular = None
+        self._last_loop_pivot_linear = None
         self._last_tf_at = None
         self._tf_buffer = None
         self._tf_listener = None
@@ -522,6 +525,11 @@ class NavigationRosControl:
             feedback_epoch = self._route_feedback_epoch
             self._route_poses_remaining = len(poses)
             self._navigate_action_kind = "navigate_through_poses"
+            if loop:
+                # A new loop cannot inherit the previous loop's pivot evidence.
+                self._last_loop_pivot_at = None
+                self._last_loop_pivot_angular = None
+                self._last_loop_pivot_linear = None
         handle = self._wait_future(
             self._navigate_through_client.send_goal_async(
                 request,
@@ -1066,6 +1074,9 @@ class NavigationRosControl:
                 "command_age_sec": self._monotonic_age(now, self._last_nav_command_at),
                 "command_linear_x": self._last_nav_command_linear_x,
                 "command_angular_z": self._last_nav_command_angular_z,
+                "pivot_command_age_sec": self._monotonic_age(now, self._last_loop_pivot_at),
+                "pivot_command_angular_z": self._last_loop_pivot_angular,
+                "pivot_command_linear_x": self._last_loop_pivot_linear,
                 "command_since_at": self._rotation_command_since_at,
                 "odometry_age_sec": self._monotonic_age(now, self._last_odom_at),
                 "odom_interval_start_at": self._last_odom_previous_at,
@@ -1098,6 +1109,11 @@ class NavigationRosControl:
             self._last_nav_command_at = now
             self._last_nav_command_linear_x = linear
             self._last_nav_command_angular_z = angular
+            if (rotating and self._navigate_action_kind == "navigate_through_poses"
+                and self._navigation_state == "NAVIGATING"):
+                self._last_loop_pivot_at = now
+                self._last_loop_pivot_angular = angular
+                self._last_loop_pivot_linear = linear
 
     def _on_odom(self, message: Any) -> None:
         try:
