@@ -53,6 +53,11 @@ class FakeRos:
             "localization_age_sec": 0.01,
         }
         self.rotation = {}
+        self.live_generation = 0
+        self.live_route = None
+
+    def applied_follow_path(self):
+        return self.live_route
 
     def compute_path(self, goal):
         self.plan_calls += 1
@@ -80,7 +85,7 @@ class FakeRos:
         return {"requested": True, "confirmed": True, "completed": True}
 
     def navigation_status(self):
-        return {"state": self.state, "error": None}
+        return {"state": self.state, "error": None, "route_generation": self.live_generation}
 
     def watchdog_status(self, now=None):
         return dict(self.health)
@@ -2487,6 +2492,32 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(current["active_goal"])
         self.assertFalse(self.api.motion_allowed())
         self.assertIsNotNone(self.api._pending_terminal_stop)
+
+    async def test_actual_follow_path_is_goal_scoped_not_a_preview(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        preview = list(self.api.state_response()["planned_path"])
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_route = {
+            "route_generation": 9,
+            "path": [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                     {"x": 1.0, "y": 1.0, "yaw": 0.0}],
+        }
+        self.map_api.ros_control.live_generation = 9
+        state = self.api.state_response()
+        self.assertEqual(self.map_api.ros_control.live_route["path"], state["executed_path"])
+        self.assertEqual(preview, state["planned_path"])
+        # Stale route generation must not show the previously accepted path.
+        self.map_api.ros_control.live_generation = 10
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_generation = 9
+        self.map_api.ros_control.live_route["path"][-1]["yaw"] = 3.14
+        self.assertEqual([], self.api.state_response()["executed_path"])
+        self.map_api.ros_control.live_route["path"][-1]["yaw"] = 0.0
+        with self.api._lock:
+            self.api._state["navigation_state"] = "CANCELING"
+        self.assertEqual([], self.api.state_response()["executed_path"])
 
     async def test_anonymous_plan_is_not_recomputed(self):
         await self.driving_ready()

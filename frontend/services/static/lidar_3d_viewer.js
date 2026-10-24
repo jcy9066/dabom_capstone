@@ -1547,6 +1547,13 @@ if (root && canvas) {
         // A preview is NOT the FollowPath action's executed path. Until a
         // trustworthy execution-to-path binding exists, never render the
         // preview as though it were the actively followed route.
+        if (['NAVIGATING', 'RESUMING'].includes(navState)) {
+            // The Controller's accepted FollowPath path is not the preview.
+            // Missing, stale or unowned execution paths are deliberately hidden.
+            const appliedPath = control.executed_path;
+            return Array.isArray(appliedPath) && appliedPath.length >= 2
+                ? appliedPath : [];
+        }
         if (!['PATH_READY', 'READY'].includes(navState)) {
             return [];
         }

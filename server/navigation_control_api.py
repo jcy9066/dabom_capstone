@@ -743,6 +743,10 @@ class NavigationControlApi:
             ros_nav = self._ros.navigation_status()
         except Exception:
             ros_nav = {"state": "UNAVAILABLE"}
+        try:
+            applied = self._ros.applied_follow_path()
+        except (AttributeError, RuntimeError):
+            applied = None
         with self._lock:
             self._sync_ros_navigation_terminal_locked(ros_nav, current)
             self._expire_pending_cancel_locked(current)
@@ -761,6 +765,7 @@ class NavigationControlApi:
                     self._last_goal_cancel and self._last_goal_cancel.get("completed")
                 ),
                 "goal_generation": self._goal_motion_generation,
+                "executed_path": self._current_executed_path_locked(ros_nav, applied),
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
                 "patrol_ready": bool(
@@ -825,6 +830,39 @@ class NavigationControlApi:
                 },
             }
         return payload
+
+    def _current_executed_path_locked(
+        self, ros_nav: dict[str, Any], applied: Any,
+    ) -> list[dict[str, float | str]]:
+        """Only actual FollowPath-installed paths matching current Nav2 action."""
+        if (self._state["navigation_mode"] != "DRIVING"
+            or self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
+            or self._state["emergency_stop"] or self._encoder_stop_violation
+            or self._pending_goal_cancel is not None
+            or ros_nav.get("state") != "NAVIGATING"
+            or not isinstance(applied, dict)
+            or type(applied.get("route_generation")) is not int
+            or applied["route_generation"] != ros_nav.get("route_generation")):
+            return []
+        goal = self._state.get("active_goal")
+        path = applied.get("path")
+        if (not isinstance(goal, dict) or not isinstance(path, list)
+            or not 2 <= len(path) <= 5000 or not isinstance(path[-1], dict)):
+            return []
+        terminal = path[-1]
+        try:
+            dx = float(goal["x"]) - float(terminal["x"])
+            dy = float(goal["y"]) - float(terminal["y"])
+            d_yaw = math.atan2(
+                math.sin(float(goal["yaw"]) - float(terminal["yaw"])),
+                math.cos(float(goal["yaw"]) - float(terminal["yaw"])),
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return []
+        if (not all(math.isfinite(v) for v in (dx, dy, d_yaw))
+            or math.hypot(dx, dy) > 0.20 or abs(d_yaw) > 0.20):
+            return []
+        return [dict(point) for point in path]
 
     async def _await_pi_navigation_telemetry(
         self, expected: str, after: float | None, timeout_sec: float | None = None

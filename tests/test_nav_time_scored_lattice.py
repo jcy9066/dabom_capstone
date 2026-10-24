@@ -268,4 +268,5 @@ def test_nearby_yaw_goal_has_swept_collision_checked_pivot():
     assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in code
     assert "return pivot_path;" in code
     assert "kSecondCandidateReserveSec" in code
+    assert "kSecondCandidateReserveSec = 4.3" in code
 

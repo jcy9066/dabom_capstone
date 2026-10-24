@@ -70,8 +70,9 @@ class NavigationFrontendContractTests(unittest.TestCase):
             "function pathKey(", 1
         )[0]
         self.assertIn("['PATH_READY', 'READY'].includes(navState)", allowed)
-        self.assertNotIn("'NAVIGATING'", allowed)
-        self.assertNotIn("'RESUMING'", allowed)
+        self.assertIn("'NAVIGATING'", allowed)
+        self.assertIn("'RESUMING'", allowed)
+        self.assertIn("control.executed_path", allowed)
         self.assertIn("control.planned_path", allowed)
 
     def test_3d_viewer_rotates_lidar_visuals_180_degrees_in_place(self):
