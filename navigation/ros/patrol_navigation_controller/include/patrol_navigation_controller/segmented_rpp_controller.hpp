@@ -89,6 +89,12 @@ private:
   // Loop-only controller rejects any reverse-drive segment instead of
   // silently backing up when the planner cannot provide a pivot route.
   bool loop_forward_only_ = false;
+  // Loop half-turn ambiguity (pi == -pi): prefer clockwise first, then
+  // counterclockwise after a physically completed turn. Never toggle on
+  // a rejected path, a safety STOP, or an incomplete pivot.
+  bool loop_turn_clockwise_ = true;
+  bool loop_half_turn_in_progress_ = false;
+  double loop_half_turn_target_yaw_ = 0.0;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;
