@@ -58,6 +58,9 @@ class NavigationControlApi:
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
     NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
     BLOCKED_TIMEOUT_SEC = 5.0
+    # Keep A/B disjoint even when both endpoints have 0.55m XY tolerance.
+    LOOP_MIN_SPACING_M = 1.20
+    LOOP_STAGE_PENDING_TIMEOUT_SEC = 8.0
     PROGRESS_DISTANCE_M = 0.10
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
@@ -176,6 +179,7 @@ class NavigationControlApi:
         self._loop_leg_index = 0
         self._loop_started = False
         self._loop_pending = False
+        self._loop_pending_since: float | None = None
         self._loop_epoch = 0
         self._loop_route_size = 0
         self._loop_route_start_index = 0
@@ -1397,9 +1401,9 @@ class NavigationControlApi:
             if goal != loop_goals[0] or math.hypot(
                 loop_goals[0]["x"] - loop_goals[1]["x"],
                 loop_goals[0]["y"] - loop_goals[1]["y"],
-            ) <= 0.50:
+            ) < self.LOOP_MIN_SPACING_M:
                 raise NavigationControlError(
-                    "INVALID_LOOP", "The first Goal must be A; A and B must be more than 0.5m apart.", 400,
+                    "INVALID_LOOP", "A and B must be at least 1.20m apart to avoid overlapping arrival regions.", 400,
                 )
         with self._lock:
             if self._pending_goal_cancel is not None:
@@ -2845,6 +2849,7 @@ class NavigationControlApi:
         self._loop_epoch += 1
         self._loop_goals = []
         self._loop_pending = False
+        self._loop_pending_since = None
         self._loop_started = False
         self._loop_leg_index = 0
         self._loop_route_size = 0
