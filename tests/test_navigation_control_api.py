@@ -594,44 +594,95 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
 
-    async def test_loop_a_b_start_and_rolling_preemption_are_continuous(self):
+    async def test_loop_requires_verified_spin_before_next_forward_leg(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
         b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
-        planned = await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
-        self.assertEqual("PATH_READY", planned["navigation_state"])
-        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
-        self.assertEqual(2, len(planned["loop_goals"]))
-
+        prepared = await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        self.assertEqual("PATH_READY", prepared["navigation_state"])
         started = await self.api.start_navigation()
-        self.assertTrue(started["loop_active"])
         self.assertEqual("NAVIGATING", started["navigation_state"])
-        self.assertTrue(self.map_api.ros_control.last_loop_flag)
-        route = self.map_api.ros_control.through_navigation_calls[-1]
-        self.assertEqual(12, len(route))
-        self.assertEqual([a["x"], b["x"], a["x"], b["x"]],
-                         [p["x"] for p in route[:4]])
-        # A faces B, B faces A. Every leg is forward after a 180-degree
-        # in-place pivot at the preceding turnaround.
-        self.assertTrue(all(abs(p["yaw"]) < 1e-7 for p in route[0::2]))
-        self.assertTrue(all(
-            abs(abs(p["yaw"]) - math.pi) < 1e-7 for p in route[1::2]
-        ))
-        self.assertTrue(all(
-            (route[i + 1]["x"] - route[i]["x"]) * math.cos(route[i]["yaw"])
-            + (route[i + 1]["y"] - route[i]["y"]) * math.sin(route[i]["yaw"])
-            > 0
-            for i in range(len(route) - 1)
-        ))
-        self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
+        self.assertEqual("drive", started["loop_stage"])
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertEqual([a], self.map_api.ros_control.loop_reapproach_calls)
+        self.assertEqual([], self.map_api.ros_control.through_navigation_calls)
+        self.assertEqual([], self.map_api.ros_control.spin_radians)
 
-        self.api._loop_refresh_inflight = True
-        await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
-        refilled = self.map_api.ros_control.through_navigation_calls[-1]
-        self.assertEqual(12, len(refilled))
-        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
-        self.assertTrue(self.api.state_response()["loop_active"])
-        self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
+        # Simulate arrival at B after initial A and A->B, both physically
+        # confirmed. The next B->A leg MUST NOT start before a signed Spin.
+        with self.api._lock:
+            self.api._loop_completed_legs = 2
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "turn_pending"
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=False):
+            await self.api._advance_loop_leg()
+        self.assertEqual([], self.map_api.ros_control.spin_radians)
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+        live_b = lambda: {"x": b["x"], "y": b["y"], "yaw": 0.0,
+                          "received_at": time.time()}
+        with patch.object(self.api, "_safe_live_pose", side_effect=live_b):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual([-math.pi], self.map_api.ros_control.spin_radians)
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertEqual("turn", self.api.state_response()["loop_stage"])
+
+        # Nav2 SUCCEEDED without encoder-confirmed Pi STOP cannot proceed.
+        with self.api._lock:
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            await self.api._resolve_pending_nav_success()
+        self.assertEqual("drive_pending", self.api.state_response()["loop_stage"])
+        self.assertEqual(0, self.api.state_response()["loop_leg_index"])
+        self.assertFalse(self.api._loop_next_turn_clockwise)
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+        with patch.object(self.api, "_safe_live_pose", side_effect=live_b):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual("drive", self.api.state_response()["loop_stage"])
+        self.assertEqual(2, self.map_api.ros_control.navigate_calls)
+        self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
+
+    async def test_loop_turn_direction_alternates_after_verified_half_turn(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_completed_legs = 3
+            self.api._loop_leg_index = 0
+            self.api._loop_next_turn_clockwise = False
+            self.api._loop_stage = "turn_pending"
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": a["x"], "y": a["y"], "yaw": math.pi, "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual([math.pi], self.map_api.ros_control.spin_radians)
+
+    def test_loop_leg_and_spin_require_different_arrival_proof(self):
+        now = time.time()
+        target = {"x": 1.0, "y": 2.0, "yaw": math.pi}
+        pose = {"x": 1.1, "y": 2.0, "yaw": 0.0, "received_at": now}
+        verify = self.api._loop_pose_confirmed
+        self.assertTrue(verify(target, pose, need_yaw=False, now=now, after=now-0.1))
+        self.assertFalse(verify(target, pose, need_yaw=True, now=now, after=now-0.1))
+        self.assertFalse(verify(target, pose, need_yaw=False, now=now+1, after=now-0.1))
+        self.assertFalse(verify(target, pose, need_yaw=False, now=now, after=now+0.01))
+        self.assertFalse(verify(target, {**pose, "x": 1.8},
+                                need_yaw=False, now=now, after=now-0.1))
 
     async def test_loop_pivot_headings_for_non_axis_aligned_waypoints(self):
         a = {"x": 0.2, "y": 0.1, "yaw": 1.1}
@@ -646,23 +697,22 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             ), places=6)
         self.assertEqual([a["x"], b["x"]] * 3, [p["x"] for p in route])
 
-    async def test_loop_batch_terminal_does_not_resume_as_reverse_goal(self):
+    async def test_loop_without_verified_stop_never_starts_spin(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
         b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
         await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
         await self.api.start_navigation()
-        previous_calls = self.map_api.ros_control.navigate_calls
         with self.api._lock:
+            self.api._loop_completed_legs = 2
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "turn_pending"
             self.api._loop_pending = True
-            self.api._state["active_goal"] = None
             self.api._state["navigation_state"] = "READY"
-        await self.api._advance_loop_leg()
-        current = self.api.state_response()
-        self.assertEqual("FAILED", current["navigation_state"])
-        self.assertEqual("LOOP_CONTINUITY_LOST", current["last_error"])
-        self.assertEqual([], current["loop_goals"])
-        self.assertEqual(previous_calls, self.map_api.ros_control.navigate_calls)
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=False):
+            await self.api._advance_loop_leg()
+        self.assertTrue(self.api._loop_pending)
+        self.assertEqual([], self.map_api.ros_control.spin_radians)
 
     async def test_loop_pivot_failure_requires_recent_rotation_and_fresh_pose(self):
         await self.driving_ready()
