@@ -912,6 +912,39 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
 
+    async def test_initial_planning_does_not_consume_five_second_motion_window(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        # The first nonzero command from this Goal arms the five-second timer.
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 1
+        self.refresh_watchdog_samples(base + 6.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 6.0))
+        self.assertIsNone(self.api._navigation_command_wait_started_at)
+        self.assertAlmostEqual(base + 6.0, self.api._navigation_progress_at)
+        self.refresh_watchdog_samples(base + 11.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 11.1)
+        )
+
+    async def test_silent_controller_cannot_wait_forever_for_first_motion(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 15.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.1)
+        )
+
     async def test_ten_centimeter_translation_resets_five_second_progress_timer(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
