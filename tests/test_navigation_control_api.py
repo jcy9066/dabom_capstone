@@ -68,11 +68,17 @@ class FakeRos:
         self.through_plan_calls.append([dict(p) for p in poses])
         return [{"x": 0.0, "y": 0.0}, *[dict(p) for p in poses]]
 
-    def navigate_through_poses(self, poses):
+    def navigate_through_poses(self, poses, *, loop=False):
         self.navigate_calls += 1
         self.through_navigation_calls.append([dict(p) for p in poses])
+        self.last_loop_flag = loop
         self.state = "NAVIGATING"
         return {"accepted": True, "action": "/navigate_through_poses"}
+
+    def preempt_navigation_route(self, poses):
+        self.through_navigation_calls.append([dict(p) for p in poses])
+        self.state = "NAVIGATING"
+        return {"accepted": True, "preempted": True}
 
     def cancel_navigation(self):
         self.cancel_calls += 1
@@ -572,6 +578,56 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("/navigate_through_poses", started["navigation"]["action"])
         self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+    async def test_loop_a_b_start_and_rolling_preemption_are_continuous(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        planned = await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        self.assertEqual("PATH_READY", planned["navigation_state"])
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
+        self.assertEqual(2, len(planned["loop_goals"]))
+
+        started = await self.api.start_navigation()
+        self.assertTrue(started["loop_active"])
+        self.assertEqual("NAVIGATING", started["navigation_state"])
+        self.assertTrue(self.map_api.ros_control.last_loop_flag)
+        route = self.map_api.ros_control.through_navigation_calls[-1]
+        self.assertEqual(12, len(route))
+        self.assertEqual([a["x"], b["x"], a["x"], b["x"]],
+                         [p["x"] for p in route[:4]])
+        self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
+
+        self.api._loop_refresh_inflight = True
+        await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
+        refilled = self.map_api.ros_control.through_navigation_calls[-1]
+        self.assertEqual(12, len(refilled))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.assertTrue(self.api.state_response()["loop_active"])
+        self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
+
+    async def test_operator_estop_destroys_loop_and_blocks_refill(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        before = len(self.map_api.ros_control.through_navigation_calls)
+        stopped = await self.api.emergency_stop("test_loop_estop")
+        self.assertTrue(stopped["emergency_stop"])
+        self.assertFalse(stopped["loop_active"])
+        self.assertEqual([], stopped["loop_goals"])
+        await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
+        self.assertEqual(before, len(self.map_api.ros_control.through_navigation_calls))
+
+    async def test_loop_rejects_overlapping_a_b(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 0.4, "y": 0.5, "yaw": 0.0}
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        self.assertEqual("INVALID_LOOP", raised.exception.error_code)
+        self.assertEqual(0, self.map_api.ros_control.navigate_calls)
 
     async def test_intermediate_waypoint_yaw_is_not_required(self):
         await self.driving_ready()
