@@ -57,6 +57,9 @@ class NavigationControlApi:
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
     NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
     BLOCKED_TIMEOUT_SEC = 5.0
+    # Initial Smac planning may take several seconds before the first Twist.
+    # Bound this wait independently; never mask a permanently silent Controller.
+    CONTROLLER_COMMAND_START_TIMEOUT_SEC = 15.0
     PROGRESS_DISTANCE_M = 0.10
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
@@ -1386,6 +1389,7 @@ class NavigationControlApi:
             if not goal or not path_ready:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
+        command_baseline = self._nonzero_command_sequence()
         result = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         try:
             progress_pose = self._get_live_pose()
@@ -1413,7 +1417,9 @@ class NavigationControlApi:
                 self._stop_encoder_ticks = None
                 self._stop_confirmation_after_sequence = None
                 self._post_resume_motion_ready = False
-                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._start_navigation_progress_locked(
+                    progress_pose, progress_started_at, command_baseline,
+                )
                 self._touch_locked()
         if interrupted:
             await self.emergency_stop("NAVIGATION_START_INTERRUPTED", automatic=True, force=True)
@@ -1838,6 +1844,7 @@ class NavigationControlApi:
             raise NavigationControlError("RESUME_INTERRUPTED", "A newer emergency stop interrupted resume.", 409)
         if not restart_navigation:
             return {**self.state_response(), "replanned": False}
+        command_baseline = self._nonzero_command_sequence()
         try:
             navigation = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         except Exception:
@@ -1858,7 +1865,9 @@ class NavigationControlApi:
                 self._state["navigation_state"] = "NAVIGATING"
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
-                self._start_navigation_progress_locked(progress_pose, progress_started_at)
+                self._start_navigation_progress_locked(
+                    progress_pose, progress_started_at, command_baseline,
+                )
                 self._touch_locked()
         if interrupted:
             await self.emergency_stop("RESUME_INTERRUPTED", automatic=True, force=True)
@@ -2044,13 +2053,27 @@ class NavigationControlApi:
                     issue is None and not waiting_for_stop
                     and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
                 ):
-                    self._note_rotation_progress_locked(rotation, current)
-                blocked = (
-                    issue is None
-                    and not waiting_for_stop
-                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
-                    and self._navigation_progress_timed_out_locked(current)
-                )
+                    waiting_since = self._navigation_command_wait_started_at
+                    if waiting_since is not None:
+                        sequence = rotation.get("nonzero_command_sequence")
+                        baseline = self._navigation_command_baseline
+                        if (
+                            type(sequence) is int and type(baseline) is int
+                            and sequence > baseline
+                        ):
+                            # Arm movement detection at this Goal's first
+                            # nonzero velocity, not during initial planning.
+                            self._navigation_command_wait_started_at = None
+                            self._navigation_command_baseline = None
+                            self._navigation_progress_at = current
+                        else:
+                            blocked = (
+                                current - waiting_since
+                                >= self.CONTROLLER_COMMAND_START_TIMEOUT_SEC
+                            )
+                    if self._navigation_command_wait_started_at is None:
+                        self._note_rotation_progress_locked(rotation, current)
+                        blocked = self._navigation_progress_timed_out_locked(current)
                 if blocked:
                     self._blocked_failure_in_progress = True
         if issue:
@@ -2231,6 +2254,7 @@ class NavigationControlApi:
                             "SENSOR_RECOVERY_TIMEOUT",
                             "Sensor recovery deadline expired during planning.",
                         )
+                command_baseline = self._nonzero_command_sequence()
                 navigation = await asyncio.to_thread(
                     self._navigate_route, recovery["goal"], recovery["waypoints"]
                 )
@@ -2264,7 +2288,7 @@ class NavigationControlApi:
                     self._stop_encoder_ticks = None
                     self._stop_confirmation_after_sequence = None
                     self._start_navigation_progress_locked(
-                        self._safe_live_pose(), time.time(),
+                        self._safe_live_pose(), time.time(), command_baseline,
                     )
                     self._touch_locked()
             if interrupted:
@@ -2623,19 +2647,34 @@ class NavigationControlApi:
         self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
+        self._navigation_command_baseline = None
+        self._navigation_command_wait_started_at = None
         self._rotation_extension_sec = 0.0
+        self._navigation_command_baseline = None
+        self._navigation_command_wait_started_at = None
         self._rotation_last_odom_sequence = None
         self._rotation_last_verified_yaw = None
         self._rotation_limit_reached = False
+
+    def _nonzero_command_sequence(self) -> int | None:
+        try:
+            sequence = self._ros.rotation_status().get("nonzero_command_sequence")
+        except Exception:
+            return None
+        return sequence if type(sequence) is int and sequence >= 0 else None
 
     def _start_navigation_progress_locked(
         self,
         payload: dict[str, Any] | None,
         received_at: float,
+        nonzero_command_baseline: int | None = None,
     ) -> None:
         self._goal_motion_generation += 1
         self._reset_navigation_progress_locked()
         self._navigation_progress_at = received_at
+        if type(nonzero_command_baseline) is int:
+            self._navigation_command_baseline = nonzero_command_baseline
+            self._navigation_command_wait_started_at = received_at
         if not isinstance(payload, dict):
             return
         try:
