@@ -20,9 +20,9 @@ try:
     from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import (
-        BackUp, ComputePathToPose, ComputePathThroughPoses, NavigateToPose, NavigateThroughPoses, Spin,
+        BackUp, ComputePathToPose, ComputePathThroughPoses, FollowPath, NavigateToPose, NavigateThroughPoses, Spin,
     )
-    from nav2_msgs.srv import LoadMap
+    from nav2_msgs.srv import IsPathValid, LoadMap
     from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from rclpy.action import ActionClient
@@ -49,6 +49,8 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     ComputePathThroughPoses = None
     NavigateToPose = None
     NavigateThroughPoses = None
+    FollowPath = None
+    IsPathValid = None
     Spin = None
     BackUp = None
     GetState = None
@@ -133,6 +135,10 @@ class NavigationRosControl:
         self._navigate_through_client = None
         self._spin_client = None
         self._backup_client = None
+        self._follow_path_client = None
+        self._path_validity_client = None
+        self._loop_recording = False
+        self._loop_trace: list[dict[str, float]] = []
         self._navigate_goal_handle = None
         self._navigate_result_future = None
         self._route_poses_remaining: int | None = None
@@ -243,6 +249,10 @@ class NavigationRosControl:
             )
             self._spin_client = ActionClient(self._node, Spin, "/spin")
             self._backup_client = ActionClient(self._node, BackUp, "/backup")
+            self._follow_path_client = ActionClient(self._node, FollowPath, "/follow_path")
+            self._path_validity_client = self._node.create_client(
+                IsPathValid, "/is_path_valid",
+            )
             self._tf_buffer = Buffer()
             self._tf_listener = TransformListener(self._tf_buffer, self._node, spin_thread=False)
             self._thread = threading.Thread(
@@ -270,6 +280,10 @@ class NavigationRosControl:
             self._navigate_through_client = None
             self._spin_client = None
             self._backup_client = None
+            self._follow_path_client = None
+            self._path_validity_client = None
+            self._loop_recording = False
+            self._loop_trace.clear()
             self._navigate_goal_handle = None
             self._navigate_result_future = None
             self._tf_listener = None
@@ -665,6 +679,112 @@ class NavigationRosControl:
             lambda future, handle=goal_handle: self._on_navigation_result(handle, future)
         )
         return {"accepted": True, "action": "/navigate_to_pose"}
+
+    def _path_stamped(self, poses: list[dict[str, float]]) -> Any:
+        if not isinstance(poses, list) or not 2 <= len(poses) <= 2000:
+            raise NavigationRosError("INVALID_CACHED_PATH", "Invalid saved loop path.", 400)
+        message = Path()
+        message.header.frame_id = "map"
+        message.header.stamp = self._node.get_clock().now().to_msg()
+        for pose in poses:
+            if not all(math.isfinite(float(pose[k])) for k in ("x", "y", "yaw")):
+                raise NavigationRosError("INVALID_CACHED_PATH", "Non-finite path pose.", 400)
+            message.poses.append(self._pose_stamped(pose))
+        return message
+
+    def loop_path_valid(self, poses: list[dict[str, float]]) -> bool:
+        """Ask the Nav2 planner costmap about the *remaining* cached path."""
+        self._require_started()
+        if (self._path_validity_client is None
+            or not self._path_validity_client.wait_for_service(timeout_sec=0.3)):
+            raise NavigationRosError(
+                "LOOP_PATH_VALIDATOR_UNAVAILABLE", "Cannot certify cached path.", 503,
+            )
+        request = IsPathValid.Request()
+        request.path = self._path_stamped(poses)
+        result = self._wait_future(
+            self._path_validity_client.call_async(request), timeout_sec=1.5,
+            error_code="LOOP_PATH_VALIDATION_TIMEOUT",
+            message="Timed out checking cached path collision.",
+        )
+        return result.is_valid is True
+
+    def follow_loop_path(
+        self, poses: list[dict[str, float]], *, preempt: bool = False,
+    ) -> dict[str, Any]:
+        """Controller-server FollowPath executes stored, verified map poses."""
+        self._require_started()
+        request = FollowPath.Goal()
+        request.path = self._path_stamped(poses)
+        request.controller_id = "LoopFollowPath"
+        request.goal_checker_id = "loop_goal_checker"
+        client = self._follow_path_client
+        if client is None or not client.wait_for_server(timeout_sec=2.5):
+            raise NavigationRosError(
+                "FOLLOW_PATH_UNAVAILABLE", "Nav2 FollowPath action unavailable.", 503,
+            )
+        with self._cancel_lock:
+            with self._lock:
+                previous = self._navigate_goal_handle
+                allowed = (
+                    preempt and previous is not None
+                    and self._navigate_action_kind == "follow_path"
+                    and self._navigation_state == "NAVIGATING"
+                )
+                if (previous is not None and not allowed) or (preempt and not allowed):
+                    raise NavigationRosError(
+                        "FOLLOW_PATH_BUSY", "No matching cached loop path to update.", 409,
+                    )
+            handle = self._wait_future(
+                client.send_goal_async(request), timeout_sec=3.0,
+                error_code="FOLLOW_PATH_START_TIMEOUT",
+                message="Timed out requesting cached FollowPath.",
+            )
+            if not handle.accepted:
+                raise NavigationRosError("FOLLOW_PATH_REJECTED", "FollowPath rejected.", 422)
+            future = handle.get_result_async()
+            with self._lock:
+                if preempt and (
+                    self._navigate_goal_handle is not previous
+                    or self._navigation_state != "NAVIGATING"
+                ):
+                    handle.cancel_goal_async()
+                    raise NavigationRosError(
+                        "FOLLOW_PATH_INTERRUPTED", "A new owner canceled this path.", 409,
+                    )
+                self._route_feedback_epoch += 1
+                self._route_poses_remaining = None
+                self._navigate_action_kind = "follow_path"
+                self._navigate_goal_handle = handle
+                self._navigate_result_future = future
+                self._navigation_state = "NAVIGATING"
+                self._navigation_error = None
+            future.add_done_callback(
+                lambda resolved, current=handle: self._on_navigation_result(current, resolved)
+            )
+            return {"accepted": True, "action": "/follow_path", "cached": True}
+
+    def begin_loop_trace(self) -> None:
+        """Record *physical* map-frame AMCL positions, not planned geometry."""
+        with self._lock:
+            self._loop_trace = []
+            self._loop_recording = True
+            if (self._amcl.x is not None and self._amcl.y is not None
+                and self._amcl.yaw is not None and self._amcl.received_at is not None
+                and time.monotonic() - self._amcl.received_at <= 0.5):
+                self._loop_trace.append({
+                    "x": self._amcl.x, "y": self._amcl.y, "yaw": self._amcl.yaw,
+                })
+
+    def finish_loop_trace(self) -> list[dict[str, float]]:
+        with self._lock:
+            self._loop_recording = False
+            return [dict(p) for p in self._loop_trace]
+
+    def discard_loop_trace(self) -> None:
+        with self._lock:
+            self._loop_recording = False
+            self._loop_trace = []
 
     def _start_loop_behavior_action(
         self, *, client: Any, goal: Any, kind: str,
@@ -1312,6 +1432,22 @@ class NavigationRosControl:
             self._amcl.y = y
             self._amcl.yaw = yaw
             self._amcl.received_at = time.monotonic()
+            if self._loop_recording and len(self._loop_trace) < 1500:
+                sample = {"x": x, "y": y, "yaw": yaw}
+                if not self._loop_trace:
+                    self._loop_trace.append(sample)
+                else:
+                    prev = self._loop_trace[-1]
+                    distance = math.hypot(x - prev["x"], y - prev["y"])
+                    delta = math.atan2(
+                        math.sin(yaw - prev["yaw"]), math.cos(yaw - prev["yaw"]),
+                    )
+                    if distance > 0.45:
+                        # Localization jump invalidates actual travelled path.
+                        self._loop_recording = False
+                        self._loop_trace = []
+                    elif distance >= 0.035 or abs(delta) >= 0.12:
+                        self._loop_trace.append(sample)
             self._amcl_history.append({
                 "sequence": self._amcl.sequence,
                 "at": self._amcl.received_at,
