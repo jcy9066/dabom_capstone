@@ -765,6 +765,12 @@ class RobotConnectionManager:
                 timeout=max(0.001, deadline - loop.time()),
             )
             if not sent:
+                reporter = getattr(self, "command_transport_observer", None)
+                if callable(reporter) and command.get("type") == "auto_drive":
+                    try:
+                        reporter(robot_id, "auto_drive", "WebSocket send/preflight rejected")
+                    except Exception:
+                        pass
                 return False
             ack = await asyncio.wait_for(
                 future, timeout=max(0.001, deadline - loop.time())
@@ -824,7 +830,18 @@ class RobotConnectionManager:
                     and ack["safety_epoch"] == command.get("safety_epoch")
                 )
             return isinstance(ack, dict) and ack.get("ok") is True
-        except Exception:
+        except Exception as exc:
+            reporter = getattr(self, "command_transport_observer", None)
+            if callable(reporter) and command.get("type") == "auto_drive":
+                try:
+                    reason = (
+                        "ACK/send deadline exceeded"
+                        if isinstance(exc, asyncio.TimeoutError)
+                        else type(exc).__name__
+                    )
+                    reporter(robot_id, "auto_drive", reason)
+                except Exception:
+                    pass
             return False
         finally:
             async with self.lock:
@@ -1018,6 +1035,12 @@ navigation_control_api = NavigationControlApi(
 # A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
 # This observer only accepts command_id-matched ACKs from the current socket.
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
+connections.command_transport_observer = (
+    lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
+        "Pi command transport failure robot=%s type=%s reason=%s",
+        robot_id, command_type, reason,
+    )
+)
 
 def publish_navigation_ros_visualization(event):
     if not isinstance(event, dict):
