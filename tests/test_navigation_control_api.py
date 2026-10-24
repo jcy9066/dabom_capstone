@@ -1169,6 +1169,38 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.api.state_response()["loop_cache_hits"])
         self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
 
+    async def test_second_b_to_a_reuses_reverse_direction_trace_forward_only(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 1.6 - i * 0.1, "y": 0.5, "yaw": math.pi}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[0] = recorded
+            self.api._loop_leg_index = 0
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        previous_plans = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": b["x"], "y": b["y"], "yaw": math.pi,
+            "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        state = self.api.state_response()
+        self.assertEqual("drive", state["loop_stage"])
+        self.assertEqual([0], state["loop_cached_directions"])
+        self.assertEqual(1, state["loop_cache_hits"])
+        self.assertEqual(previous_plans, self.map_api.ros_control.plan_calls)
+        self.assertEqual(recorded, self.map_api.ros_control.follow_path_calls[-1]["poses"])
+        self.assertFalse(self.map_api.ros_control.follow_path_calls[-1]["preempt"])
+
     async def test_start_misalignment_keeps_learned_path_for_later_lap(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
