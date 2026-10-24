@@ -41,6 +41,7 @@ def _fake(cls):
     instance._pending_command = None
     instance._stop_command_in_flight = False
     instance._stop_delivery_failed = False
+    instance._zero_twist_stop_active = False
     instance._stop_retry_command = None
     instance._stop_retry_due_at = None
     instance.STOP_RETRY_INTERVAL_SEC = 0.50
@@ -54,6 +55,56 @@ def _fake(cls):
     instance.get_logger = lambda: SimpleNamespace(error=lambda msg: None)
     instance._log_send_error = lambda msg: None
     return instance
+
+
+def test_continuous_zero_twists_send_one_stop_and_new_drive_rearms_stop():
+    """Prevent zero-Twist STOP storms without permitting a new motor command."""
+    cls = _bridge_class("_queue_command")
+    bridge = _fake(cls)
+    zero = {"type": "stop", "reason": "nav2_zero_twist"}
+
+    assert bridge._queue_command(zero)
+    first = bridge._pending_command
+    assert first["type"] == "stop"
+    assert bridge._zero_twist_stop_active
+
+    # Repeated controller ticks cannot replace/extend the same STOP.
+    for _ in range(60):
+        assert bridge._queue_command(zero)
+        assert bridge._pending_command is first
+    bridge._pending_command = None  # Worker took the acknowledged STOP.
+    for _ in range(60):
+        assert bridge._queue_command(zero)
+        assert bridge._pending_command is None
+
+    # Nonzero drive after the STOP is permitted to attempt the existing Pi
+    # direction interlock, but must re-arm the next physical zero-Twist STOP.
+    assert bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+    assert not bridge._zero_twist_stop_active
+    assert bridge._queue_command(zero)
+    assert bridge._pending_command["type"] == "stop"
+    assert bridge._zero_twist_stop_active
+    assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+
+
+def test_zero_twist_still_retries_unacknowledged_stop_and_other_safety_stops():
+    cls = _bridge_class("_queue_command")
+    bridge = _fake(cls)
+    zero = {"type": "stop", "reason": "nav2_zero_twist"}
+    assert bridge._queue_command(zero)
+    bridge._pending_command = None
+    bridge._stop_delivery_failed = True
+    assert bridge._queue_command(zero)
+    assert bridge._stop_retry_command["reason"] == "nav2_zero_twist"
+    assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
+
+    # A different safety condition must not be absorbed by the zero-Twist
+    # de-duplication path even after an ordinary STOP was acknowledged.
+    bridge._stop_delivery_failed = False
+    bridge._stop_retry_command = None
+    assert bridge._queue_command({"type": "stop", "reason": "rear_obstacle_in_stop_distance"})
+    assert bridge._pending_command["reason"] == "rear_obstacle_in_stop_distance"
+    assert not bridge._queue_command({"type": "auto_drive", "left_mps": 0.1})
 
 
 def test_stop_supersedes_pending_drive_and_is_not_overwritten():

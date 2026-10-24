@@ -237,6 +237,11 @@ class Nav2CommandBridge(Node):
         # A failed physical STOP must be explicitly retried/acknowledged
         # before accepting any subsequent auto_drive.
         self._stop_delivery_failed = bool(self.motor_output_enabled)
+        # One acknowledged STOP is sufficient for a continuous zero-Twist
+        # interval. Sending a STOP on each controller tick repeatedly advances
+        # the Pi safety_epoch and cancels its physical direction-switch
+        # confirmation, starving reverse -> forward handoffs.
+        self._zero_twist_stop_active = False
         self._stop_retry_command: dict | None = None
         self._stop_retry_due_at: float | None = None
 
@@ -300,6 +305,21 @@ class Nav2CommandBridge(Node):
                 return False
 
             is_stop = command.get("type") in ("stop", "emergency_stop")
+            is_zero_twist_stop = (
+                command.get("type") == "stop"
+                and command.get("reason") == "nav2_zero_twist"
+            )
+            if (
+                is_zero_twist_stop
+                and self._zero_twist_stop_active
+                and not self._stop_delivery_failed
+            ):
+                # First STOP is already queued, in flight, or acknowledged.
+                # Never reset the Pi's STOP/encoder handoff for every zero
+                # velocity sample. An unacknowledged STOP is still retried
+                # by the existing worker, and all OTHER safety STOPs bypass
+                # this idempotence gate.
+                return True
             pending_is_stop = (
                 self._pending_command is not None
                 and self._pending_command.get("type") in ("stop", "emergency_stop")
@@ -322,6 +342,12 @@ class Nav2CommandBridge(Node):
                     self._command_condition.notify_all()
                 return True
             self._pending_command = command
+            if is_zero_twist_stop:
+                self._zero_twist_stop_active = True
+            elif not is_stop:
+                # Any newly queued movement invalidates the previous STOP;
+                # even a later zero Twist must issue a new physical STOP.
+                self._zero_twist_stop_active = False
             self._command_condition.notify()
 
         return True
