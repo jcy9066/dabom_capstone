@@ -3216,7 +3216,7 @@ class NavigationControlApi:
                     self._touch_locked()
                     return
                 allowed = (
-                    phase in {"turn_pending", "drive_pending"
+                    phase in {"turn_pending", "drive_pending"}
                     and self._loop_started
                     and self._state["navigation_state"] == "READY"
                     and self._state["navigation_mode"] == "DRIVING"
