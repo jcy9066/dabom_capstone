@@ -101,6 +101,31 @@ def test_timeout_and_invalid_ack_fail_closed(name):
     assert result is False
 
 
+def test_ack_observer_receives_only_command_id_matched_live_pi_acks():
+    async def scenario():
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        observed = []
+        manager.command_ack_observer = lambda robot, cmd, ack: observed.append(
+            (robot, cmd["type"], ack.get("safety_epoch"))
+        )
+        task = asyncio.create_task(manager.send_command_wait_ack(
+            "pi-01", {"type": "stop", "command_id": "stop-observe"},
+        ))
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert not await manager.receive_ack("pi-01", ws, {
+            "command_id": "wrong-id", "ok": True, "safety_epoch": 99,
+        })
+        assert observed == []
+        assert await manager.receive_ack("pi-01", ws, {
+            "command_id": "stop-observe", "ok": True, "safety_epoch": 78,
+        })
+        assert await task is True
+        assert observed == [("pi-01", "stop", 78)]
+    asyncio.run(scenario())
+
+
 def test_motion_safety_generation_must_match_pi_ack():
     command = {
         "type": "auto_drive", "safety_session": "pi-session-1",
