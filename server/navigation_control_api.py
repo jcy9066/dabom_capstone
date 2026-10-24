@@ -864,8 +864,16 @@ class NavigationControlApi:
                     and (after is None or self._pi_updated_at > after)
                     and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                     and self._pi_navigation_mode == expected
-                    and self._pi_estop_latched is False
-                    and not self._state["emergency_stop"]
+                    # MAPPING is a non-driving mode: it must be selectable
+                    # while E-STOP stays latched. Releasing E-STOP remains
+                    # mandatory before any DRIVING motion authorization.
+                    and (
+                        expected == "MAPPING"
+                        or (
+                            self._pi_estop_latched is False
+                            and not self._state["emergency_stop"]
+                        )
+                    )
                 )
             if confirmed:
                 return True
