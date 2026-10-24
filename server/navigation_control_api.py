@@ -2973,7 +2973,10 @@ class NavigationControlApi:
                     and self._state["navigation_mode"] == "DRIVING"
                     and self._robot_mode == "auto"
                     and self._pi_navigation_mode == "DRIVING"
+                    and self._pi_estop_latched is False
+                    and not self._encoder_stop_violation
                     and self._stop_confirmed_locked(now)
+                    and self._motion_allowed_locked(now)
                     and self._state["navigation_state"] in {
                         "LOOP_RECOVERY_STOPPING", "READY",
                     }
