@@ -697,6 +697,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             ), places=6)
         self.assertEqual([a["x"], b["x"]] * 3, [p["x"] for p in route])
 
+    async def test_loop_spin_success_without_physical_yaw_never_starts_next_leg(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "turn"
+            self.api._loop_turn_requested = -math.pi
+            self.api._loop_leg_index = 1
+            self.api._state["active_goal"] = {
+                "x": b["x"], "y": b["y"], "yaw": -math.pi,
+            }
+            self.api._state["navigation_state"] = "NAVIGATING"
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_motor_output_enabled", True):
+            with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+                "x": b["x"], "y": b["y"], "yaw": 0.0,
+                "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    await self.api._resolve_pending_nav_success()
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("ORIGINAL_GOAL_NOT_REACHED", state["last_error"])
+        self.assertEqual([], state["loop_goals"])
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+        self.assertFalse(state["loop_pending"])
+
     async def test_loop_without_verified_stop_never_starts_spin(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
