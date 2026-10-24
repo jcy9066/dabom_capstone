@@ -17,7 +17,7 @@
             </Timeout>
           </Fallback>
         </RateController>
-        <FollowPath path="{path}" controller_id="LoopFollowPath" goal_checker_id="general_goal_checker"/>
+        <FollowPath path="{path}" controller_id="LoopFollowPath" goal_checker_id="loop_goal_checker"/>
       </PipelineSequence>
     </Sequence>
   </BehaviorTree>
