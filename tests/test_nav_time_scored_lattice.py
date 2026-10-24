@@ -214,6 +214,35 @@ def test_each_time_ranked_candidate_is_collision_checked_before_selection():
     assert code.index("const bool collision_safe") < code.index("best = std::move(path)")
 
 
+def test_humble_smac_parameters_declared_during_parent_configure():
+    # PlannerServer::computePlan() holds dynamic_params_lock_ on Humble.
+    # Smac nested parameter declarations during createPlan() cause deadlock.
+    code = SOURCE.read_text()
+    parent_config = code.split(
+        "void TimeScoredLatticePlanner::configure(", 1
+    )[1].split("void TimeScoredLatticePlanner::activate()", 1)[0]
+    assert 'for (const auto & candidate_name : {"QuickMotion", "StableTurns"})' in parent_config
+    assert "declare_parameter_if_not_declared(" in parent_config
+    for name in {
+        "tolerance", "allow_unknown", "max_iterations",
+        "max_on_approach_iterations", "smooth_path", "lattice_filepath",
+        "cache_obstacle_heuristic", "reverse_penalty", "change_penalty",
+        "non_straight_penalty", "cost_penalty", "retrospective_penalty",
+        "rotation_penalty", "analytic_expansion_ratio",
+        "analytic_expansion_max_length", "max_planning_time",
+        "lookup_table_size", "allow_reverse_expansion",
+    }:
+        assert f'prefix + "{name}"' in parent_config
+    assert "if (lattice_path.empty())" in parent_config
+    assert parent_config.index('prefix + "max_on_approach_iterations"') < (
+        parent_config.index('node->get_parameter(name_ + ".candidate_names"')
+    )
+    action_code = code.split(
+        "nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(", 1
+    )[1]
+    assert "declare_parameter_if_not_declared(" not in action_code
+
+
 def test_pure_cpp_cost_model_execution(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
     if compiler is None:
