@@ -161,6 +161,20 @@ def test_real_trajectory_cache_replays_on_dedicated_nav2_follow_path():
     assert "self._loop_path_cache.clear()" in SERVER
 
 
+def test_cached_goal_tolerance_is_honored_by_loop_controller():
+    # Cached FollowPath demands XY 0.10m; the first planned loop leg uses
+    # XY 0.55m. The controller must not STOP at the broader tolerance for
+    # both or the cached path action can never terminate.
+    assert 'loop_cached_goal_checker:' in CONFIG
+    assert 'xy_goal_tolerance: 0.10' in CONFIG
+    assert 'goal_checker->getTolerances(pose_tolerance, velocity_tolerance)' in LOOP_CPP
+    assert 'terminal_xy_tolerance = std::clamp(' in LOOP_CPP
+    assert 'distance(pose, terminal) <= terminal_xy_tolerance' in LOOP_CPP
+    assert 'controller_id = "LoopFollowPath"' in ROS or (
+        'request.controller_id = "LoopFollowPath"' in ROS
+    )
+
+
 def test_forward_only_planner_is_separate_from_regular_set_goal():
     assert 'planner_plugins: ["GridBased", "LoopGridBased"]' in CONFIG
     assert "LoopGridBased:" in CONFIG
