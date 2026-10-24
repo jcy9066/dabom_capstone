@@ -274,6 +274,36 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(disconnected["pi_safety"]["fresh"])
         self.assertIsNone(disconnected["pi_safety"]["emergency_stop"])
 
+    async def test_stop_ack_updates_only_current_pi_safety_epoch(self):
+        self.api.note_pi_status({
+            "safety_session": "test-pi", "safety_epoch": 77,
+            "mode": "auto", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
+        stop = {"type": "stop"}
+        for robot, ack in (
+            ("other-robot", {"ok": True, "safety_session": "test-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": False, "safety_session": "test-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": True, "safety_session": "wrong-pi", "safety_epoch": 78}),
+            ("pi-01", {"ok": True, "safety_session": "test-pi", "safety_epoch": True}),
+            ("pi-01", {"ok": True, "safety_session": "test-pi", "safety_epoch": 76}),
+        ):
+            self.api.note_pi_command_ack(robot, stop, ack)
+            self.assertEqual(77, self.api._pi_safety_epoch)
+        self.api.note_pi_command_ack("pi-01", stop, {
+            "ok": True, "safety_session": "test-pi", "safety_epoch": 78,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+        self.api.note_pi_status({
+            "safety_session": "test-pi", "safety_epoch": 77,
+            "emergency_stop": False,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+        self.api.note_pi_command_ack("pi-01", {"type": "auto_drive"}, {
+            "ok": True, "safety_session": "test-pi", "safety_epoch": 99,
+        })
+        self.assertEqual(78, self.api._pi_safety_epoch)
+
     async def test_pi_mode_telemetry_does_not_override_gpu_mode(self):
         self.api.note_pi_status({
             "mode": "manual",
