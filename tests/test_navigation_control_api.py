@@ -1475,6 +1475,72 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.api.state_response()["loop_cached_directions"])
         self.assertFalse(self.api._loop_pending)
 
+    def test_cached_loop_pose_freshness_guard(self):
+        recent = {"x": 0.5, "y": 0.3, "yaw": 0.0, "received_at": 100.0}
+        self.assertTrue(self.api._fresh_loop_pose(recent, now=100.2))
+        for sample in (
+            {**recent, "received_at": 99.49},
+            {**recent, "received_at": 100.01},
+            {**recent, "received_at": float("nan")},
+            {**recent, "x": float("inf")},
+            {key: value for key, value in recent.items()
+             if key != "received_at"},
+        ):
+            self.assertFalse(self.api._fresh_loop_pose(sample, now=100.0))
+
+    async def test_stale_pose_cannot_trigger_cached_follow_path(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 0.3 + 0.1*i, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = recorded
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        old_plans = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            **a, "received_at": time.time() - 2.0,
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual([], self.map_api.ros_control.follow_path_calls)
+        self.assertEqual(old_plans + 1, self.map_api.ros_control.plan_calls)
+        self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
+
+    async def test_stale_pose_during_cached_drive_triggers_estop(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 0.3 + 0.1*i, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = recorded
+            self.api._loop_active_path = recorded
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._state["active_goal"] = b
+            self.api._state["navigation_state"] = "NAVIGATING"
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": 0.8, "y": 0.5, "yaw": 0.0,
+            "received_at": time.time() - 2.0,
+        }):
+            await self.api._monitor_loop_cached_path()
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertEqual(0, self.map_api.ros_control.validity_queries)
+
     async def test_cached_drive_validation_fails_closed_if_no_safe_replan(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
