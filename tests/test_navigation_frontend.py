@@ -368,6 +368,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("setMappingMode(options)", self.control)
         self.assertIn("source: 'current'", self.control)
         self.assertIn("현재 Mapping 결과로 Driving 모드 전환 중...", self.control)
+        self.assertIn("response.emergency_stop", self.control)
+        self.assertIn("긴급 정지 해제 후 Set Goal을 사용할 수 있습니다.", self.control)
         self.assertIn("view.map", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):

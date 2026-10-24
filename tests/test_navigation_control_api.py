@@ -820,6 +820,67 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("EMERGENCY_STOPPED", state["navigation_state"])
         self.assertIsNotNone(state["active_goal"])
 
+    async def test_driving_transition_while_estop_latched_preserves_stop_and_mode_sync(self):
+        """Pi may enter DRIVING while E-stopped; no movement until explicit Resume."""
+        stopped = await self.api.emergency_stop("operator")
+        self.assertTrue(stopped["emergency_stop"])
+        original_sender = self.api._send_robot_command
+
+        async def sender_retaining_estop(robot_id, command):
+            if command.get("type") == "navigation_mode":
+                self.commands.append((robot_id, dict(command)))
+                self.api.note_pi_status({
+                    "mode": "auto",
+                    "navigation_mode": command["mode"],
+                    "emergency_stop": True,
+                    "safety_session": "test-pi",
+                    "safety_epoch": self._fake_safety_epoch,
+                })
+                return True
+            return await original_sender(robot_id, command)
+
+        self.api._send_robot_command = sender_retaining_estop
+        try:
+            state = await self.api.switch_mode({
+                "mode": "DRIVING", "source": "current",
+            })
+        finally:
+            self.api._send_robot_command = original_sender
+        self.assertEqual("DRIVING", state["navigation_mode"])
+        self.assertEqual("DRIVING", state["pi_navigation_mode"])
+        self.assertEqual("EMERGENCY_STOPPED", state["navigation_state"])
+        self.assertTrue(state["emergency_stop"])
+        self.assertTrue(state["pi_safety"]["emergency_stop"])
+        self.assertTrue(state["localization_ready"])
+        self.assertTrue(state["nav2_ready"])
+        self.assertFalse(state["patrol_ready"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertFalse(any(
+            command["type"] in {"auto_drive", "move"}
+            for _, command in self.commands
+        ))
+        with self.assertRaises(NavigationControlError) as blocked:
+            await self.api.plan_goal({"x": 0.0, "y": 0.0, "yaw": 0.0})
+        self.assertEqual("EMERGENCY_STOP_ACTIVE", blocked.exception.error_code)
+        resumed = await self.api.resume_navigation()
+        self.assertEqual("DRIVING", resumed["navigation_mode"])
+        self.assertEqual("READY", resumed["navigation_state"])
+        self.assertFalse(resumed["emergency_stop"])
+        self.assertFalse(resumed["replanned"])
+
+    async def test_driving_transition_requires_known_pi_estop_status(self):
+        self.api.note_pi_status({
+            "navigation_mode": "driving", "emergency_stop": True,
+        })
+        self.assertTrue(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", None, timeout_sec=0.01,
+        ))
+        with self.api._lock:
+            self.api._pi_estop_latched = None
+        self.assertFalse(await self.api._await_pi_navigation_telemetry(
+            "DRIVING", None, timeout_sec=0.01,
+        ))
+
     async def test_mapping_estop_can_be_released_without_a_goal(self):
         stopped = await self.api.emergency_stop("operator")
         self.assertTrue(stopped["emergency_stop"])

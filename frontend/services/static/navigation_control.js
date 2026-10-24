@@ -603,7 +603,9 @@
                     source: 'current',
                 });
                 applyControlState(response);
-                setFeedback('Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
+                setFeedback(response.emergency_stop
+                    ? 'Driving 모드로 전환했습니다. 긴급 정지 해제 후 Set Goal을 사용할 수 있습니다.'
+                    : 'Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
                 return true;
             } catch (error) {
                 setFeedback(`Driving 모드 전환 실패: ${error.message}`, true);
