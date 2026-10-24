@@ -756,9 +756,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.api._loop_turn_requested = math.pi
         now = time.time()
         self.map_api.ros_control.rotation = {
-            "command_age_sec": 0.1,
-            "command_angular_z": -0.4,
-            "command_linear_x": 0.0,
+            "pivot_command_age_sec": 0.1,
+            "pivot_command_angular_z": -0.4,
+            "pivot_command_linear_x": 0.0,
         }
         with patch.object(self.api, "_safe_live_pose", return_value={
             "x": b["x"], "y": b["y"], "yaw": 0.0, "received_at": now,
@@ -773,6 +773,36 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.api._loop_reverse_used)
         self.assertEqual(1, self.api._loop_recovery["goal_index"])
         self.assertAlmostEqual(math.pi, self.api._loop_recovery["spin_angle"])
+
+    async def test_loop_spin_without_new_pivot_command_never_backs_up(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        self.api._loop_stage = "turn"
+        self.api._loop_leg_index = 1
+        self.api._loop_turn_requested = -math.pi
+        now = time.time()
+        # A last generic angular velocity or stale previous Spin is never
+        # proof that the current turn physically attempted rotation.
+        self.map_api.ros_control.rotation = {
+            "command_age_sec": 0.02, "command_angular_z": -0.4,
+            "command_linear_x": 0.0,
+            "pivot_command_age_sec": None,
+        }
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": b["x"], "y": b["y"], "yaw": 0.0,
+            "received_at": now,
+        }):
+            with self.api._lock:
+                self.api._sync_ros_navigation_terminal_locked(
+                    {"state": "FAILED", "action": "spin"}, now,
+                )
+        self.assertIsNone(self.api._loop_recovery)
+        self.assertFalse(self.api._loop_reverse_used)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
 
     async def test_loop_generic_failure_never_backs_up(self):
         await self.driving_ready()
@@ -838,8 +868,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.api._loop_leg_index = 1
         now = time.time()
         self.map_api.ros_control.rotation = {
-            "command_age_sec": 0.1, "command_angular_z": -0.4,
-            "command_linear_x": 0.0,
+            "pivot_command_age_sec": 0.1, "pivot_command_angular_z": -0.4,
+            "pivot_command_linear_x": 0.0,
         }
         with patch.object(self.api, "_safe_live_pose", return_value={
             "x": b["x"], "y": b["y"], "yaw": 0.0, "received_at": now,
