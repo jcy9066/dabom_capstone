@@ -61,6 +61,7 @@ class FakeRos:
         self.trace_started = False
         self.cache_valid = True
         self.validity_queries = 0
+        self.path_valid_results = []
 
     def begin_loop_trace(self):
         self.trace_started = True
@@ -75,7 +76,10 @@ class FakeRos:
 
     def loop_path_valid(self, poses):
         self.validity_queries += 1
-        return self.cache_valid
+        return (
+            self.path_valid_results.pop(0) if self.path_valid_results
+            else self.cache_valid
+        )
 
     def follow_loop_path(self, poses, *, preempt=False):
         self.navigate_calls += 1
@@ -1138,6 +1142,70 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.map_api.ros_control.follow_path_calls)
         self.assertEqual([], self.api.state_response()["loop_cached_directions"])
         self.assertEqual(1, self.api.state_response()["loop_replans"])
+
+    async def test_during_cached_drive_replans_only_after_path_is_blocked(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        saved = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = saved
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._loop_active_path = saved
+            self.api._state["active_goal"] = b
+            self.api._state["navigation_state"] = "NAVIGATING"
+        def live():
+            return {"x": 0.8, "y": 0.5, "yaw": 0.0,
+                    "received_at": time.time()}
+        old_plans = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_safe_live_pose", side_effect=live):
+            self.map_api.ros_control.path_valid_results = [True]
+            await self.api._monitor_loop_cached_path()
+            self.assertEqual(old_plans, self.map_api.ros_control.plan_calls)
+            self.assertEqual([], self.map_api.ros_control.follow_path_calls)
+            self.map_api.ros_control.path_valid_results = [False, True]
+            await self.api._monitor_loop_cached_path()
+        self.assertEqual(old_plans + 1, self.map_api.ros_control.plan_calls)
+        self.assertEqual(1, len(self.map_api.ros_control.follow_path_calls))
+        self.assertTrue(self.map_api.ros_control.follow_path_calls[0]["preempt"])
+        self.assertEqual([], self.api.state_response()["loop_cached_directions"])
+        self.assertEqual(1, self.api.state_response()["loop_replans"])
+        self.assertFalse(self.api.state_response()["emergency_stop"])
+
+    async def test_cached_drive_validation_fails_closed_if_no_safe_replan(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        saved = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = saved
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._loop_active_path = saved
+            self.api._state["active_goal"] = b
+            self.api._state["navigation_state"] = "NAVIGATING"
+        self.map_api.ros_control.cache_valid = False
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": 0.8, "y": 0.5, "yaw": 0.0,
+            "received_at": time.time(),
+        }):
+            await self.api._monitor_loop_cached_path()
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertEqual([], self.api.state_response()["loop_cached_directions"])
+        self.assertEqual([], self.map_api.ros_control.follow_path_calls)
 
     def test_cache_validation_ignores_traversed_behind_robot_path(self):
         path = [{"x": i / 10, "y": 0.0, "yaw": 0.0} for i in range(20)]
