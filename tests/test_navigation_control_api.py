@@ -1169,6 +1169,33 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.api.state_response()["loop_cache_hits"])
         self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
 
+    async def test_start_misalignment_keeps_learned_path_for_later_lap(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = recorded
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_leg_index = 1
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        start = {"x": a["x"], "y": a["y"] + 0.37, "yaw": 0.0,
+                 "received_at": time.time()}
+        with patch.object(self.api, "_safe_live_pose", return_value=start):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
+        self.assertEqual(0, self.api.state_response()["loop_replans"])
+        self.assertEqual([], self.map_api.ros_control.follow_path_calls)
+        self.assertEqual("drive", self.api.state_response()["loop_stage"])
+
     async def test_obstructed_cached_leg_discards_cache_and_replans(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
