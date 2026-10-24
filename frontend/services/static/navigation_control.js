@@ -9,6 +9,7 @@
     const state = {
         control: null,
         draftGoal: null,
+        loopDrafts: [],
         pointerId: null,
         pointerStart: null,
         csrf: null,
@@ -293,7 +294,24 @@
         }));
     }
 
+    function publishLoopDraft() {
+        document.dispatchEvent(new CustomEvent('dabom:navigation-loop-draft', {
+            detail: state.loopDrafts.map(goal => ({ ...goal })),
+        }));
+        if ($('navigation-cancel')) $('navigation-cancel').hidden = !(
+            state.loopDrafts.length || state.control?.active_goal
+            || state.control?.loop_goals?.length
+        );
+    }
+
+    function clearLoopDraft() {
+        if (!state.loopDrafts.length) return;
+        state.loopDrafts = [];
+        publishLoopDraft();
+    }
+
     function applyControlState(payload) {
+        const previousMode = String(state.control?.robot_mode || '').toUpperCase();
         state.control = payload;
         window.setDashboardRobotConnection?.(payload?.connected === true);
         window.applyServerPatrolMode?.(payload?.robot_mode);
@@ -312,7 +330,16 @@
             setFeedback(viewerStateText);
         }
         if ($('navigation-start')) $('navigation-start').hidden = !pathReady;
-        if ($('navigation-cancel')) $('navigation-cancel').hidden = !payload.active_goal;
+        if ($('navigation-cancel')) $('navigation-cancel').hidden = !(
+            payload.active_goal || payload.loop_goals?.length || state.loopDrafts.length
+        );
+        if (payload.navigation_mode !== 'DRIVING' || payload.emergency_stop
+            || (previousMode === 'AUTO'
+                && String(payload.robot_mode).toUpperCase() === 'MANUAL')) {
+            state.draftGoal = null;
+            publishGoalDraft();
+            clearLoopDraft();
+        }
         syncControlComponents(payload);
         updateHazardHooks(payload);
         resolveControlWaiters(payload);
@@ -388,13 +415,14 @@
 
     function beginGoal(event) {
         const interactionMode = window.navigationMapView?.interactionMode?.() || 'view';
-        if (interactionMode !== 'set-goal') return;
+        if (!['set-goal', 'set-loop'].includes(interactionMode)) return;
         if (event.button === 2) {
             event.preventDefault();
             state.pointerId = null;
             state.pointerStart = null;
             state.draftGoal = null;
             publishGoalDraft();
+            clearLoopDraft();
             window.navigationMapView?.setInteractionMode?.('view');
             setFeedback('Goal 지정을 취소했습니다.');
             window.navigationMapView?.requestRender();
@@ -440,8 +468,28 @@
         if (state.pointerId !== event.pointerId || !state.draftGoal) return;
         event.preventDefault();
         const goal = { ...state.draftGoal };
+        const loopMode = window.navigationMapView?.interactionMode?.() === 'set-loop';
         state.pointerId = null;
         state.pointerStart = null;
+
+        if (loopMode && state.loopDrafts.length === 0) {
+            state.loopDrafts = [goal];
+            state.draftGoal = null;
+            publishGoalDraft();
+            publishLoopDraft();
+            setFeedback('Loop A 지정 완료. 지도에서 B를 지정해주세요.');
+            return;
+        }
+        const loopGoals = loopMode ? [state.loopDrafts[0], goal] : null;
+        if (loopGoals && Math.hypot(
+            loopGoals[0].x - loopGoals[1].x,
+            loopGoals[0].y - loopGoals[1].y,
+        ) <= 0.5) {
+            state.draftGoal = null;
+            publishGoalDraft();
+            setFeedback('A와 B는 0.5m보다 떨어져 있어야 합니다. B를 다시 지정해주세요.', true);
+            return;
+        }
         setFeedback('경로를 계산하는 중입니다...');
         try {
             if (String(state.control?.robot_mode || '').toUpperCase() === 'MANUAL') {
@@ -451,15 +499,18 @@
             if (String(state.control?.robot_mode || '').toUpperCase() !== 'AUTO') {
                 throw new Error('AUTO 모드 전환을 확인하지 못해 Goal 등록을 중단했습니다.');
             }
-            applyControlState(await mutate('/api/navigation/control/goal', { goal }));
-            state.draftGoal = null;
-            publishGoalDraft();
-            setFeedback('경로 미리보기가 준비되었습니다. 주행 시작 전에는 로봇이 움직이지 않습니다.');
+            applyControlState(await mutate('/api/navigation/control/goal', loopGoals
+                ? { goal: loopGoals[0], loop_goals: loopGoals }
+                : { goal }));
+            setFeedback(loopGoals
+                ? 'A ↔ B 반복 경로가 준비되었습니다. 주행 시작 버튼을 눌러주세요.'
+                : '경로 미리보기가 준비되었습니다. 주행 시작 전에는 로봇이 움직이지 않습니다.');
         } catch (error) {
-            state.draftGoal = null;
-            publishGoalDraft();
             setFeedback(`경로 계산 실패: ${error.message}`, true);
         } finally {
+            state.draftGoal = null;
+            publishGoalDraft();
+            clearLoopDraft();
             window.navigationMapView?.setInteractionMode?.('view');
             window.navigationMapView?.requestRender();
         }
@@ -471,6 +522,7 @@
         state.pointerStart = null;
         state.draftGoal = null;
         publishGoalDraft();
+        clearLoopDraft();
         window.navigationMapView?.setInteractionMode?.('view');
         setFeedback('Goal 지정을 취소했습니다.');
         window.navigationMapView?.requestRender();
@@ -800,6 +852,13 @@
         const warningButton = document.querySelector('.action-warning');
         if (warningButton) warningButton.disabled = false;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
+        document.addEventListener('dabom:navigation-interaction-mode', event => {
+            if (event.detail?.mode !== 'set-loop' && state.loopDrafts.length) {
+                state.draftGoal = null;
+                publishGoalDraft();
+                clearLoopDraft();
+            }
+        });
         document.addEventListener('dabom:alerts-cleared', clearDisplayedAlerts);
         document.addEventListener('visibilitychange', () => {
             clearControlPollTimer();
@@ -809,7 +868,7 @@
         document.addEventListener('keydown', event => {
             if (
                 event.key === 'Escape'
-                && window.navigationMapView?.interactionMode?.() === 'set-goal'
+                && ['set-goal', 'set-loop'].includes(window.navigationMapView?.interactionMode?.())
             ) {
                 event.preventDefault();
                 cancelGoalDraft();
@@ -821,7 +880,15 @@
             state.hazardObserver.observe(alertBox, { childList: true });
         }
         $('navigation-start')?.addEventListener('click', () => simpleAction('/api/navigation/control/start', 'NavigateToPose 시작 중...'));
-        $('navigation-cancel')?.addEventListener('click', () => simpleAction('/api/navigation/control/cancel', '목표 취소 중...'));
+        $('navigation-cancel')?.addEventListener('click', () => {
+            if (state.loopDrafts.length && !state.control?.active_goal
+                && !state.control?.loop_goals?.length) {
+                cancelGoalDraft();
+                return;
+            }
+            cancelGoalDraft();
+            void simpleAction('/api/navigation/control/cancel', '목표 취소 중...');
+        });
         window.navigationControl = {
             applyState: applyControlState,
             beep,
