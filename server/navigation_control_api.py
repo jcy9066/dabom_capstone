@@ -3344,10 +3344,22 @@ class NavigationControlApi:
                         "LOOP_REPLAN_REJECTED", "Controller rejected replanned route.", 409,
                     )
                 with self._lock:
-                    if epoch == self._loop_epoch and self._loop_stage == "drive":
+                    interrupted = (
+                        epoch != self._loop_epoch or self._state["emergency_stop"]
+                        or self._robot_mode != "auto"
+                        or self._state["navigation_mode"] != "DRIVING"
+                    )
+                    if not interrupted and self._loop_stage == "drive":
                         self._loop_active_path = [dict(p) for p in fresh]
                         self._state["planned_path"] = fresh
                         self._touch_locked()
+                if interrupted:
+                    # Even an authenticated Cancel racing between the last
+                    # epoch check and action acceptance cannot leave an
+                    # unowned FollowPath goal running on the motor bridge.
+                    await self.emergency_stop(
+                        "LOOP_CACHE_PREEMPT_INTERRUPTED", automatic=True, force=True,
+                    )
             except Exception:
                 with self._lock:
                     should_stop = (
