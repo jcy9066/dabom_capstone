@@ -9,6 +9,7 @@ CONTROL = (ROOT / "frontend/services/static/navigation_control.js").read_text(en
 VIEWER = (ROOT / "frontend/services/static/lidar_3d_viewer.js").read_text(encoding="utf-8")
 HTML = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
 CONFIG = (ROOT / "navigation/ros/patrol_navigation/config/nav2_params.yaml").read_text(encoding="utf-8")
+CONTROLLER = (ROOT / "navigation/ros/patrol_navigation_controller/src/segmented_rpp_controller.cpp").read_text(encoding="utf-8")
 TREE = ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_ab_loop_cached_path.xml"
 
 
@@ -21,6 +22,12 @@ def test_loop_tree_is_valid_and_checks_obstacles_and_new_goals():
                for node in tree.iter("FollowPath"))
     assert "loop_goal_checker" in CONFIG
     assert "yaw_goal_tolerance: 3.14" in CONFIG
+    assert any(node.attrib.get("controller_id") == "LoopFollowPath"
+               for node in tree.iter("FollowPath"))
+    assert 'controller_plugins: ["FollowPath", "LoopFollowPath"]' in CONFIG
+    assert "loop_forward_only: true" in CONFIG
+    assert "allow_reversing: false" in CONFIG
+    assert "Loop path contains reverse drive instead of a 180-degree pivot" in CONTROLLER
 
 
 def test_loop_does_not_modify_regular_goal_mode():
@@ -31,6 +38,12 @@ def test_loop_does_not_modify_regular_goal_mode():
     assert "loop=True" in SERVER
     assert 'loop: bool = False' in ROS
     assert "preempt_navigation_route" in ROS
+
+
+def test_pivot_turnaround_does_not_fall_back_to_reverse_navigation():
+    assert "heading_ab if (first + index) % 2 == 0 else heading_ba" in SERVER
+    assert "LOOP_CONTINUITY_LOST" in SERVER
+    assert "No automatic reverse fallback" not in SERVER or "_advance_loop_leg" in SERVER
 
 
 def test_cancel_manual_mapping_estop_revoke_loop_ownership():
