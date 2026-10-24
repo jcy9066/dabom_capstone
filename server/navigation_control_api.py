@@ -180,6 +180,8 @@ class NavigationControlApi:
         self._loop_route_size = 0
         self._loop_route_start_index = 0
         self._loop_refresh_inflight = False
+        self._loop_recovery: dict[str, Any] | None = None
+        self._loop_reverse_used = False
         self._replan_refresh_started_at = 0.0
         self._replan_refresh_inflight = False
         self._estop_attempt_reason: str | None = None
@@ -708,7 +710,14 @@ class NavigationControlApi:
                 self._touch_locked(current)
             return None
         self._pending_nav_success = None
-        self._clear_loop_locked()
+        recovering_pivot = (
+            terminal == "FAILED"
+            and self._loop_recovery is None
+            and self._arm_loop_pivot_recovery_locked(ros_nav, current)
+        )
+        if not recovering_pivot:
+            # A failed backup/reapproach/spin is terminal: no second reverse.
+            self._clear_loop_locked()
         # A Nav2 terminal state is not evidence that Pi motor output stopped.
         # Arm the output gate immediately, even if this state is first read by
         # the dashboard; the async watchdog must deliver physical STOP.
@@ -719,7 +728,10 @@ class NavigationControlApi:
             "last_attempt_at": None,
             "processing": False,
         }
-        self._state["navigation_state"] = "CANCELING_STOP" if terminal == "CANCELED" else terminal
+        self._state["navigation_state"] = (
+            "LOOP_RECOVERY_STOPPING" if recovering_pivot
+            else ("CANCELING_STOP" if terminal == "CANCELED" else terminal)
+        )
         if terminal == "CANCELED":
             self._pending_goal_cancel = {
                 "started_at": current,
@@ -765,6 +777,10 @@ class NavigationControlApi:
                 "loop_leg_index": self._loop_leg_index if self._loop_goals else None,
                 "loop_pending": self._loop_pending,
                 "loop_refreshing": self._loop_refresh_inflight,
+                "loop_recovery_phase": (
+                    self._loop_recovery["phase"] if self._loop_recovery else None
+                ),
+                "loop_reverse_used": self._loop_reverse_used,
                 "loop_active": bool(self._loop_goals and self._loop_started),
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
@@ -2750,6 +2766,8 @@ class NavigationControlApi:
         self._loop_route_size = 0
         self._loop_route_start_index = 0
         self._loop_refresh_inflight = False
+        self._loop_recovery = None
+        self._loop_reverse_used = False
 
     @staticmethod
     def _loop_route_points(
@@ -2824,6 +2842,69 @@ class NavigationControlApi:
             finally:
                 with self._lock:
                     self._loop_refresh_inflight = False
+
+    def _arm_loop_pivot_recovery_locked(
+        self, ros_nav: dict[str, Any], current: float,
+    ) -> bool:
+        """Only a recent observed pivot failure permits one guarded backup."""
+        if (not self._loop_started or len(self._loop_goals) != 2
+            or self._loop_reverse_used or self._state["emergency_stop"]
+            or self._robot_mode != "auto" or self._state["navigation_mode"] != "DRIVING"
+            or ros_nav.get("action") != "navigate_through_poses"):
+            return False
+        try:
+            rotation = self._ros.rotation_status()
+            age = float(rotation["command_age_sec"])
+            angular = float(rotation["command_angular_z"])
+            linear = float(rotation["command_linear_x"])
+            pose = self._safe_live_pose()
+            px, py, yaw = float(pose["x"]), float(pose["y"]), float(pose["yaw"])
+            received = float(pose["received_at"])
+        except (AttributeError, KeyError, ValueError, TypeError, OverflowError):
+            return False
+        if (not all(math.isfinite(x) for x in (age, angular, linear, px, py, yaw, received))
+            or not 0 <= age <= 0.5 or not 0 <= current - received <= 0.5
+            or abs(angular) < self._ros.ROTATION_MIN_ANGULAR_RPS
+            or abs(linear) > self._ros.ROTATION_MAX_LINEAR_MPS):
+            return False
+        distances = [
+            math.hypot(px - g["x"], py - g["y"]) for g in self._loop_goals
+        ]
+        at_index = 0 if distances[0] <= distances[1] else 1
+        if distances[at_index] > 0.35:
+            return False
+        # Reverse only along the known inbound track; if an attempted
+        # pivot has already changed heading substantially, abort instead.
+        other = self._loop_goals[1 - at_index]
+        reached = self._loop_goals[at_index]
+        inbound_yaw = math.atan2(reached["y"] - other["y"], reached["x"] - other["x"])
+        err = math.atan2(math.sin(yaw - inbound_yaw), math.cos(yaw - inbound_yaw))
+        if abs(err) > 0.35:
+            return False
+        self._loop_reverse_used = True
+        self._loop_recovery = {
+            "phase": "backup_wait_stop",
+            "epoch": self._loop_epoch,
+            "goal_index": at_index,
+            "goal": {"x": reached["x"], "y": reached["y"], "yaw": inbound_yaw},
+            "failed_pose": {"x": px, "y": py, "yaw": yaw},
+            "spin_angle": math.pi if angular < 0 else -math.pi,
+            "started_at": current,
+        }
+        return True
+
+    @staticmethod
+    def _loop_recovery_reverse_progress(recovery: dict[str, Any], pose: dict) -> bool:
+        """Require actual backward displacement; an ACK alone is insufficient."""
+        try:
+            before = recovery["failed_pose"]
+            heading = float(before["yaw"])
+            dx = float(pose["x"]) - float(before["x"])
+            dy = float(pose["y"]) - float(before["y"])
+            return (all(math.isfinite(x) for x in (heading, dx, dy))
+                and dx * math.cos(heading) + dy * math.sin(heading) <= -0.15)
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return False
 
     async def _advance_loop_leg(self) -> None:
         """Fail closed if rolling route preemption missed the final pose.
