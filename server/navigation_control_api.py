@@ -3307,7 +3307,7 @@ class NavigationControlApi:
         if len(cleaned) < 4 or travelled < 0.50:
             return []
         if math.hypot(cleaned[-1]["x"] - destination["x"],
-                      cleaned[-1]["y"] - destination["y"]) > 0.55:
+                      cleaned[-1]["y"] - destination["y"]) > 0.40:
             return []
         return cleaned
 
