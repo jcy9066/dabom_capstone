@@ -596,7 +596,18 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(12, len(route))
         self.assertEqual([a["x"], b["x"], a["x"], b["x"]],
                          [p["x"] for p in route[:4]])
-        self.assertTrue(all(abs(p["yaw"]) < 1e-7 for p in route))
+        # A faces B, B faces A. Every leg is forward after a 180-degree
+        # in-place pivot at the preceding turnaround.
+        self.assertTrue(all(abs(p["yaw"]) < 1e-7 for p in route[0::2]))
+        self.assertTrue(all(
+            abs(abs(p["yaw"]) - math.pi) < 1e-7 for p in route[1::2]
+        ))
+        self.assertTrue(all(
+            (route[i + 1]["x"] - route[i]["x"]) * math.cos(route[i]["yaw"])
+            + (route[i + 1]["y"] - route[i]["y"]) * math.sin(route[i]["yaw"])
+            > 0
+            for i in range(len(route) - 1)
+        ))
         self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
 
         self.api._loop_refresh_inflight = True
@@ -606,6 +617,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
         self.assertTrue(self.api.state_response()["loop_active"])
         self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
+
+    async def test_loop_pivot_headings_for_non_axis_aligned_waypoints(self):
+        a = {"x": 0.2, "y": 0.1, "yaw": 1.1}
+        b = {"x": 1.2, "y": 1.1, "yaw": -1.3}
+        route = self.api._loop_route_points([a, b], first=0, count=6)
+        forward_heading = math.atan2(1.0, 1.0)
+        for index, point in enumerate(route):
+            expected = forward_heading if index % 2 == 0 else forward_heading - math.pi
+            self.assertAlmostEqual(0.0, math.atan2(
+                math.sin(point["yaw"] - expected),
+                math.cos(point["yaw"] - expected),
+            ), places=6)
+        self.assertEqual([a["x"], b["x"]] * 3, [p["x"] for p in route])
+
+    async def test_loop_batch_terminal_does_not_resume_as_reverse_goal(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        previous_calls = self.map_api.ros_control.navigate_calls
+        with self.api._lock:
+            self.api._loop_pending = True
+            self.api._state["active_goal"] = None
+            self.api._state["navigation_state"] = "READY"
+        await self.api._advance_loop_leg()
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("LOOP_CONTINUITY_LOST", current["last_error"])
+        self.assertEqual([], current["loop_goals"])
+        self.assertEqual(previous_calls, self.map_api.ros_control.navigate_calls)
 
     async def test_operator_estop_destroys_loop_and_blocks_refill(self):
         await self.driving_ready()
