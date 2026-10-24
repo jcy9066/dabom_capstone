@@ -52,3 +52,22 @@ def test_gpu_nav_plugin_preflight_and_build_instructions():
     assert "--packages-select patrol_navigation_controller patrol_navigation" in readme
     cmake = (ROOT / "navigation/ros/patrol_navigation_controller/CMakeLists.txt").read_text()
     assert "install(TARGETS segmented_rpp_controller" in cmake
+
+
+def test_clock_diagnostics_do_not_modify_os_clock_or_block_startup():
+    for script in ("start_gpu_server.sh", "start_pi_stack.sh"):
+        content = (ROOT / script).read_text()
+        assert "clock_sync_diagnostic()" in content
+        assert "require_cmd timeout\nclock_sync_diagnostic" in content
+        assert "timedatectl show -p NTPSynchronized -p NTP" in content
+        assert 'platform="WSL2"' in content
+        assert "date -s" not in content
+        assert "timedatectl set-time " not in content
+
+
+def test_future_lidar_stamps_are_bounded_at_gpu_ingress():
+    content = (ROOT / "server/lidar_ros_bridge.py").read_text()
+    assert "skew_sec <= 0.05" in content
+    assert "valid_source and skew_sec > 0.05" in content
+    assert "message.header.stamp = received_stamp" in content
+    assert "_future_stamp_warning_at" in content
