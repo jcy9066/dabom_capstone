@@ -609,7 +609,9 @@ class NavigationRosControl:
             return {"accepted": True, "action": "/navigate_through_poses",
                     "preempted": True}
 
-    def navigate_to_pose(self, goal: dict[str, float]) -> dict[str, Any]:
+    def navigate_to_pose(
+        self, goal: dict[str, float], *, loop_reapproach: bool = False,
+    ) -> dict[str, Any]:
         self._require_started()
         with self._lock:
             if self._navigate_goal_handle is not None:
@@ -621,6 +623,12 @@ class NavigationRosControl:
             raise NavigationRosError("NAVIGATOR_UNAVAILABLE", "NavigateToPose action is unavailable.", 503)
         request = NavigateToPose.Goal()
         request.pose = self._pose_stamped(goal)
+        if loop_reapproach:
+            from ament_index_python.packages import get_package_share_directory
+            request.behavior_tree = str(
+                Path(get_package_share_directory("patrol_navigation"))
+                / "behavior_trees" / "navigate_loop_reapproach_forward.xml"
+            )
         with self._lock:
             self._route_feedback_epoch += 1
             self._route_poses_remaining = None
