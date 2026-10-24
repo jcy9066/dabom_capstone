@@ -143,6 +143,7 @@ class NavigationRosControl:
         self._odom_yaw_window = deque()
         self._odom_sequence = 0
         self._last_nav_command_at = None
+        self._nonzero_nav_command_sequence = 0
         self._last_nav_command_linear_x = None
         self._last_nav_command_angular_z = None
         self._rotation_command_since_at = None
@@ -920,6 +921,7 @@ class NavigationRosControl:
             now = time.monotonic()
             return {
                 "command_age_sec": self._monotonic_age(now, self._last_nav_command_at),
+                "nonzero_command_sequence": self._nonzero_nav_command_sequence,
                 "command_linear_x": self._last_nav_command_linear_x,
                 "command_angular_z": self._last_nav_command_angular_z,
                 "command_since_at": self._rotation_command_since_at,
@@ -936,8 +938,12 @@ class NavigationRosControl:
             angular = float(message.angular.z)
         except (AttributeError, TypeError, ValueError, OverflowError):
             return
+        if not math.isfinite(linear) or not math.isfinite(angular):
+            return
         now = time.monotonic()
         with self._lock:
+            if abs(linear) > 1e-6 or abs(angular) > 1e-6:
+                self._nonzero_nav_command_sequence += 1
             previously_rotating = (
                 self._rotation_command_since_at is not None
                 and self._monotonic_age(now, self._last_nav_command_at) <= self.ROTATION_COMMAND_MAX_AGE_SEC
