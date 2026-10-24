@@ -2747,9 +2747,17 @@ class NavigationControlApi:
         for index in range(count):
             goal = goals[(first + index) % 2]
             following = goals[(first + index + 1) % 2]
-            heading = math.atan2(
-                following["y"] - goal["y"], following["x"] - goal["x"],
-            )
+            if index == count - 1:
+                # If rolling preemption loses the race, final yaw should
+                # follow the arrival heading, never force a 180 degree turn.
+                previous = goals[(first + index - 1) % 2]
+                heading = math.atan2(
+                    goal["y"] - previous["y"], goal["x"] - previous["x"],
+                )
+            else:
+                heading = math.atan2(
+                    following["y"] - goal["y"], following["x"] - goal["x"],
+                )
             points.append({"x": goal["x"], "y": goal["y"], "yaw": heading})
         return points
 
