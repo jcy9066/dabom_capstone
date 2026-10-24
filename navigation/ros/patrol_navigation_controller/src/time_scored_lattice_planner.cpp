@@ -348,7 +348,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     // Never spend the remaining budget configuring StableTurns if a
     // collision-verified first path is already available. Reserve time
     // for the second search plus the final fresh-costmap validation.
-    constexpr double kSecondCandidateReserveSec = 2.6;
+    constexpr double kSecondCandidateReserveSec = 4.3;
     if (index > 0 && !best.poses.empty() &&
       max_total_planning_sec_ - elapsed < kSecondCandidateReserveSec)
     {

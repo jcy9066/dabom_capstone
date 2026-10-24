@@ -5,7 +5,10 @@
 #include "patrol_navigation_controller/path_sweep.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -15,6 +18,7 @@
 #include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "nav2_util/node_utils.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "nav2_util/robot_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
@@ -39,6 +43,12 @@ void SegmentedRPPController::configure(
   tf_ = tf;
   costmap_ = std::move(costmap_ros);
   plugin_name_ = std::move(name);
+  // Observe exactly the path installed by Nav2's FollowPath controller.
+  follow_path_publisher_ = node->create_publisher<std_msgs::msg::String>(
+    "/patrol_navigation/applied_follow_path", rclcpp::QoS(10));
+  follow_path_instance_ = std::to_string(
+    std::chrono::steady_clock::now().time_since_epoch().count());
+  follow_path_sequence_ = 0;
   using nav2_util::declare_parameter_if_not_declared;
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_pivot_max_angular", rclcpp::ParameterValue(1.05));
@@ -97,6 +107,7 @@ void SegmentedRPPController::cleanup()
     rpp_.reset();
   }
   collision_.reset();
+  follow_path_publisher_.reset();
   costmap_.reset();
   invalidatePlan();
 }
@@ -264,6 +275,25 @@ void SegmentedRPPController::setPlan(const nav_msgs::msg::Path & path)
     buildStages();
     activateStage();
     plan_ready_ = true;
+    // Announce the installed path; this does not issue motor commands.
+    if (follow_path_publisher_ && path_.poses.size() <= 5000) {
+      std::ostringstream json;
+      json << std::setprecision(17)
+           << "{\"source\":\"segmented_rpp\",\"instance\":\""
+           << follow_path_instance_ << "\",\"sequence\":"
+           << ++follow_path_sequence_ << ",\"path\":[";
+      for (size_t i = 0; i < path_.poses.size(); ++i) {
+        const auto & pose = path_.poses[i].pose;
+        if (i > 0) {json << ',';}
+        json << "{\"x\":" << pose.position.x
+             << ",\"y\":" << pose.position.y
+             << ",\"yaw\":" << tf2::getYaw(pose.orientation) << '}';
+      }
+      json << "]}";
+      std_msgs::msg::String notice;
+      notice.data = json.str();
+      follow_path_publisher_->publish(notice);
+    }
   } catch (...) {
     invalidatePlan();
     throw;

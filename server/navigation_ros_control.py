@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
@@ -23,6 +24,7 @@ try:
     from nav2_msgs.srv import LoadMap
     from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
     from rclpy.executors import SingleThreadedExecutor
@@ -53,6 +55,7 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     Odometry = None
     Path = None
     LaserScan = None
+    String = None
     ActionClient = None
     Duration = None
     SingleThreadedExecutor = None
@@ -104,6 +107,7 @@ class NavigationRosControl:
     MAP_TOPIC = "/map"
     AMCL_POSE_TOPIC = "/amcl_pose"
     GLOBAL_PATH_TOPIC = "/plan"
+    APPLIED_PATH_TOPIC = "/patrol_navigation/applied_follow_path"
     GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"
     NAV_COMMAND_TOPIC = "/cmd_vel_nav_dry_run"
     ROTATION_COMMAND_MAX_AGE_SEC = 0.5
@@ -132,6 +136,8 @@ class NavigationRosControl:
         self._route_poses_remaining: int | None = None
         self._route_feedback_epoch = 0
         self._navigate_action_kind = "navigate_to_pose"
+        self._route_generation = 0
+        self._applied_follow_path = None
         self._navigation_state = "IDLE"
         self._navigation_error = None
         self._last_scan_at = None
@@ -196,6 +202,9 @@ class NavigationRosControl:
                 self.GLOBAL_PATH_TOPIC,
                 self._on_global_path,
                 10,
+            )
+            self._node.create_subscription(
+                String, self.APPLIED_PATH_TOPIC, self._on_applied_follow_path, 10,
             )
             self._node.create_subscription(
                 OccupancyGrid,
@@ -548,6 +557,8 @@ class NavigationRosControl:
         with self._lock:
             self._navigate_goal_handle = handle
             self._navigate_result_future = future
+            self._route_generation += 1
+            self._applied_follow_path = None
             self._navigation_state = "NAVIGATING"
             self._navigation_error = None
         future.add_done_callback(
@@ -584,6 +595,8 @@ class NavigationRosControl:
         with self._lock:
             self._navigate_goal_handle = goal_handle
             self._navigate_result_future = result_future
+            self._route_generation += 1
+            self._applied_follow_path = None
             self._navigation_state = "NAVIGATING"
             self._navigation_error = None
         result_future.add_done_callback(
@@ -702,6 +715,19 @@ class NavigationRosControl:
                 "error": self._navigation_error,
                 "action": self._navigate_action_kind,
                 "number_of_poses_remaining": self._route_poses_remaining,
+                "route_generation": self._route_generation,
+            }
+
+    def applied_follow_path(self) -> dict[str, Any] | None:
+        """Controller-applied path observed during the current accepted action."""
+        with self._lock:
+            if (self._navigation_state != "NAVIGATING"
+                or self._navigate_goal_handle is None
+                or not isinstance(self._applied_follow_path, dict)):
+                return None
+            return {
+                **self._applied_follow_path,
+                "path": [dict(p) for p in self._applied_follow_path["path"]],
             }
 
     def navigation_ready(self) -> bool:
@@ -1009,6 +1035,45 @@ class NavigationRosControl:
             self._map.data = tuple(int(value) for value in message.data)
             self._map.received_at = time.monotonic()
             self._condition.notify_all()
+
+    def _on_applied_follow_path(self, message: Any) -> None:
+        """Reject anonymous /plan; accept only FollowPath controller notices."""
+        try:
+            event = json.loads(message.data)
+            if event.get("source") != "segmented_rpp":
+                return
+            instance = event.get("instance")
+            sequence = event.get("sequence")
+            raw = event.get("path")
+            if (not isinstance(instance, str) or not instance
+                or type(sequence) is not int or sequence <= 0
+                or not isinstance(raw, list) or not 2 <= len(raw) <= 5000):
+                return
+            path = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    return
+                coords = tuple(float(item[k]) for k in ("x", "y", "yaw"))
+                if not all(math.isfinite(v) for v in coords):
+                    return
+                path.append(dict(zip(("x", "y", "yaw"), coords)))
+            normalized = annotate_path(path)
+            if len(normalized) != len(raw):
+                return
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return
+        with self._lock:
+            if self._navigation_state != "NAVIGATING" or self._navigate_goal_handle is None:
+                return
+            previous = self._applied_follow_path
+            if (previous is not None and previous["instance"] == instance
+                and sequence <= previous["sequence"]):
+                return
+            self._applied_follow_path = {
+                "instance": instance, "sequence": sequence,
+                "route_generation": self._route_generation,
+                "path": normalized,
+            }
 
     def _on_global_path(self, message: Any) -> None:
         """Use the same forward/reverse/spin semantics as ComputePathToPose."""
