@@ -1030,6 +1030,88 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
         self.assertEqual([], self.map_api.ros_control.backup_distances)
 
+    async def test_loop_rejects_goals_with_overlapping_arrival_discs(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.3, "y": 0.5, "yaw": 0.0}
+        # A/B distance 1m exceeded old 0.5m check but both 0.55m
+        # arrival discs overlapped and could trigger an immediate false Goal.
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        self.assertEqual("INVALID_LOOP", raised.exception.error_code)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+
+    def test_loop_spin_rejects_translation_and_wrong_signed_turn(self):
+        now = time.time()
+        origin = {"x": 1.0, "y": 0.5, "yaw": math.pi}
+        drift = {"x": 1.20, "y": 0.5, "yaw": math.pi, "received_at": now}
+        self.assertTrue(self.api._loop_pose_confirmed(
+            origin, drift, need_yaw=False, now=now, after=now - 0.1,
+        ))
+        self.assertFalse(self.api._loop_pose_confirmed(
+            origin, drift, need_yaw=True, now=now, after=now - 0.1,
+        ))
+        good = {"signed_yaw_rad": math.pi - 0.05, "samples": 50,
+                "age_sec": 0.8, "invalid": False}
+        verify = self.api._loop_signed_turn_confirmed
+        self.assertTrue(verify(good, math.pi))
+        self.assertFalse(verify({**good, "signed_yaw_rad": -math.pi}, math.pi))
+        self.assertFalse(verify({**good, "samples": 1}, math.pi))
+        self.assertFalse(verify({**good, "age_sec": 3.1}, math.pi))
+        self.assertFalse(verify({**good, "invalid": True}, math.pi))
+        self.assertFalse(verify(good, -math.pi))
+
+    async def test_loop_pending_stage_timeout_fails_closed(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "turn_pending"
+            self.api._loop_pending = True
+            self.api._loop_pending_since = (
+                time.time() - self.api.LOOP_STAGE_PENDING_TIMEOUT_SEC - 1
+            )
+            self.api._state["active_goal"] = None
+            self.api._state["navigation_state"] = "READY"
+        await self.api._advance_loop_leg()
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("LOOP_STAGE_WAIT_TIMEOUT", state["last_error"])
+        self.assertFalse(state["loop_active"])
+        self.assertEqual([], self.map_api.ros_control.spin_radians)
+        self.assertIsNone(state["active_goal"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+
+    def test_ros_spin_odometry_unwraps_and_rejects_direction_reversal(self):
+        ros = NavigationRosControl()
+        ros._navigate_action_kind = "spin"
+        ros._navigation_state = "NAVIGATING"
+        ros._spin_last_odom_yaw = math.pi - 0.2
+        for angle in (math.pi - 0.1, -math.pi + 0.05, -math.pi + 0.2):
+            pose = SimpleNamespace(
+                pose=SimpleNamespace(orientation=SimpleNamespace(
+                    x=0.0, y=0.0, z=math.sin(angle / 2),
+                    w=math.cos(angle / 2),
+                ))
+            )
+            ros._on_odom(SimpleNamespace(pose=pose))
+        progress = ros.spin_progress()
+        self.assertEqual(3, progress["samples"])
+        self.assertAlmostEqual(0.4, progress["signed_yaw_rad"], places=5)
+        self.assertFalse(progress["invalid"])
+        # A 1.2 rad jump is not legitimate short-interval yaw motion.
+        angle = -math.pi + 1.4
+        pose = SimpleNamespace(pose=SimpleNamespace(
+            pose=SimpleNamespace(orientation=SimpleNamespace(
+                x=0.0, y=0.0, z=math.sin(angle / 2),
+                w=math.cos(angle / 2),
+            ))
+        ))
+        ros._on_odom(pose)
+        self.assertTrue(ros.spin_progress()["invalid"])
+
     async def test_loop_rejects_overlapping_a_b(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
