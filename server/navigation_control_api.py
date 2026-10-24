@@ -3319,6 +3319,22 @@ class NavigationControlApi:
         return cleaned
 
     @staticmethod
+    def _fresh_loop_pose(pose: Any, *, now: float | None = None) -> bool:
+        """Refuse stale/future AMCL samples when validating a cached route."""
+        if not isinstance(pose, dict):
+            return False
+        try:
+            current = time.time() if now is None else float(now)
+            values = [float(pose[key]) for key in ("x", "y", "yaw", "received_at")]
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        return (
+            math.isfinite(current)
+            and all(math.isfinite(value) for value in values)
+            and 0 <= current - values[3] <= 0.5
+        )
+
+    @staticmethod
     def _remaining_loop_path(
         path: list[dict[str, float]], pose: dict[str, float],
     ) -> list[dict[str, float]]:
@@ -3356,9 +3372,9 @@ class NavigationControlApi:
             index = self._loop_leg_index
         try:
             pose = self._safe_live_pose()
-            if not isinstance(pose, dict):
+            if not self._fresh_loop_pose(pose):
                 raise NavigationControlError(
-                    "LOOP_CACHE_POSE_STALE", "No live pose for cache validation.", 409,
+                    "LOOP_CACHE_POSE_STALE", "No fresh pose for cache validation.", 409,
                 )
             remainder = self._remaining_loop_path(path, pose)
             if len(remainder) < 2:
@@ -3562,7 +3578,7 @@ class NavigationControlApi:
                     # Preserve the learned trajectory for subsequent laps
                     # instead of deleting it due to temporary alignment.
                     aligned = (
-                        isinstance(current_pose, dict)
+                        self._fresh_loop_pose(current_pose)
                         and math.hypot(
                             current_pose["x"] - cached[0]["x"],
                             current_pose["y"] - cached[0]["y"],
