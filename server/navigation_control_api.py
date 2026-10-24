@@ -2598,7 +2598,11 @@ class NavigationControlApi:
                         recovery = self._loop_recovery
                         recovering_backup = bool(recovery and recovery["phase"] == "backing")
                         pose_ok = (
-                            self._loop_recovery_reverse_progress(recovery, physical_pose)
+                            (
+                                self._loop_recovery_reverse_progress(recovery, physical_pose)
+                                and 0 <= time.time() - float(physical_pose["received_at"]) <= 0.5
+                                and float(physical_pose["received_at"]) >= self._stop_commanded_at
+                            )
                             if recovering_backup and physical_pose else
                             self._original_goal_pose_confirmed(
                                 self._state["active_goal"], physical_pose,
@@ -2959,6 +2963,9 @@ class NavigationControlApi:
                     and self._robot_mode == "auto"
                     and self._pi_navigation_mode == "DRIVING"
                     and self._stop_confirmed_locked(now)
+                    and self._state["navigation_state"] in {
+                        "LOOP_RECOVERY_STOPPING", "READY",
+                    }
                     and self._pending_terminal_stop is None
                     and self._pending_goal_cancel is None
                     and self._watchdog_issue_locked(now) is None
