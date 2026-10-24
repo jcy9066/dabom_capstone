@@ -90,18 +90,9 @@ controller_server:
     # Dedicated forward-only loop controller. If Nav2 suggests backing up,
     # fail closed rather than violate the mandatory 180-degree pivot.
     LoopFollowPath:
-      # SegmentedRPP, not RotationShim, collision-checks final goal yaw.
-      # Disable initial heading shimming to prevent unintended 180-degree
-      # turns at the start of a reverse segment.
+      # Loop-only direct SegmentedRPP. Lattice pivots are collision checked;
+      # backwards paths are rejected, never silently used as an alternative.
       plugin: "patrol_navigation_controller::SegmentedRPPController"
-      primary_controller: "patrol_navigation_controller::SegmentedRPPController"
-      angular_dist_threshold: 3.15
-      angular_disengage_threshold: 3.15
-      forward_sampling_distance: 0.20
-      rotate_to_heading_angular_vel: 1.05
-      max_angular_accel: 1.00
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false
       segment_pivot_max_angular: 1.05
       segment_pivot_acceleration: 1.00
       segment_pivot_yaw_tolerance: 0.10
