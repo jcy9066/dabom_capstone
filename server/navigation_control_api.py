@@ -171,6 +171,12 @@ class NavigationControlApi:
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
+        # A/B loop is server-owned. An epoch invalidates any in-flight leg plan.
+        self._loop_goals: list[dict[str, float]] = []
+        self._loop_leg_index = 0
+        self._loop_started = False
+        self._loop_pending = False
+        self._loop_epoch = 0
         self._replan_refresh_started_at = 0.0
         self._replan_refresh_inflight = False
         self._estop_attempt_reason: str | None = None
@@ -695,6 +701,7 @@ class NavigationControlApi:
                 self._touch_locked(current)
             return None
         self._pending_nav_success = None
+        self._clear_loop_locked()
         # A Nav2 terminal state is not evidence that Pi motor output stopped.
         # Arm the output gate immediately, even if this state is first read by
         # the dashboard; the async watchdog must deliver physical STOP.
@@ -747,6 +754,10 @@ class NavigationControlApi:
                     self._last_goal_cancel and self._last_goal_cancel.get("completed")
                 ),
                 "goal_generation": self._goal_motion_generation,
+                "loop_goals": [dict(p) for p in self._loop_goals],
+                "loop_leg_index": self._loop_leg_index if self._loop_goals else None,
+                "loop_pending": self._loop_pending,
+                "loop_active": bool(self._loop_goals and self._loop_started),
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
                 "patrol_ready": bool(
@@ -842,6 +853,9 @@ class NavigationControlApi:
         target = str(payload.get("mode") or "").strip().lower()
         if target not in {"auto", "manual"}:
             raise NavigationControlError("INVALID_PATROL_MODE", "mode must be auto or manual.", 400)
+        if target == "manual":
+            with self._lock:
+                self._clear_loop_locked()
         with self._lock:
             if self._patrol_transition is not None:
                 raise NavigationControlError("PATROL_TRANSITION_BUSY", "Mode change in progress.", 409)
@@ -957,6 +971,7 @@ class NavigationControlApi:
 
         if mode == "MAPPING":
             with self._lock:
+                self._clear_loop_locked()
                 navigation_in_progress = self._state["navigation_state"] in {
                     "NAVIGATING",
                     "RESUMING",
@@ -1339,6 +1354,21 @@ class NavigationControlApi:
     async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal = self._validated_goal(payload.get("goal", payload))
         waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
+        raw_loop = payload.get("loop_goals")
+        loop_goals: list[dict[str, float]] = []
+        if raw_loop is not None:
+            if not isinstance(raw_loop, list) or len(raw_loop) != 2 or waypoints:
+                raise NavigationControlError(
+                    "INVALID_LOOP", "Loop requires exactly A and B without intermediate waypoints.", 400,
+                )
+            loop_goals = [self._validated_goal(p) for p in raw_loop]
+            if goal != loop_goals[0] or math.hypot(
+                loop_goals[0]["x"] - loop_goals[1]["x"],
+                loop_goals[0]["y"] - loop_goals[1]["y"],
+            ) <= 0.50:
+                raise NavigationControlError(
+                    "INVALID_LOOP", "The first Goal must be A; A and B must be more than 0.5m apart.", 400,
+                )
         with self._lock:
             if self._pending_goal_cancel is not None:
                 raise NavigationControlError("CANCEL_IN_PROGRESS", "Wait for the encoder-confirmed Goal cancel.", 409)
@@ -1354,6 +1384,8 @@ class NavigationControlApi:
         self._validate_goal_in_active_map(goal)
         for intermediate in waypoints:
             self._validate_goal_in_active_map(intermediate)
+        if loop_goals:
+            self._validate_goal_in_active_map(loop_goals[1])
         if replacing:
             await self._stop_for_goal_replacement()
 
@@ -1394,6 +1426,9 @@ class NavigationControlApi:
                     "GOAL_REPLACEMENT_INTERRUPTED", "Goal replacement was interrupted.", 409,
                 )
             self._goal_motion_generation += 1
+            self._clear_loop_locked()
+            self._loop_goals = [dict(p) for p in loop_goals]
+            self._loop_leg_index = 0
             self._last_goal_cancel = None
             self._state["active_goal"] = goal
             self._state["waypoints"] = [dict(point) for point in waypoints]
@@ -1443,6 +1478,8 @@ class NavigationControlApi:
             if not interrupted:
                 self._state["navigation_state"] = "NAVIGATING"
                 self._state["last_error"] = None
+                if self._loop_goals:
+                    self._loop_started = True
                 # Only an accepted run supersedes the previous stop baseline.
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
@@ -1461,6 +1498,21 @@ class NavigationControlApi:
 
     async def cancel_goal(self) -> dict[str, Any]:
         with self._lock:
+            loop_pending = self._loop_pending
+            self._clear_loop_locked()
+            # The preceding leg already completed a physical STOP; no
+            # second Nav2 cancel or motor STOP is needed between loop legs.
+            if loop_pending and self._state["active_goal"] is None and self._stop_confirmed_locked(time.time()):
+                self._state["navigation_state"] = "CANCELED"
+                self._state["waypoints"] = []
+                self._state["planned_path"] = []
+                self._last_goal_cancel = {
+                    "completed": True, "nav_cancel_confirmed": True,
+                    "stop_delivered": True, "physical_stop_confirmed": True,
+                }
+                self._touch_locked()
+                return {**self.state_response(), "stop_delivered": True,
+                        "physical_stop_confirmed": True, "cancel_completed": True}
             if (self._pending_goal_cancel is None and self._state["active_goal"] is None
                     and self._last_goal_cancel and self._last_goal_cancel.get("completed")):
                 return {**self.state_response(), "stop_delivered": True,
@@ -1672,6 +1724,8 @@ class NavigationControlApi:
         }
 
     async def emergency_stop(self, reason: str, automatic: bool = False, force: bool = False) -> dict[str, Any]:
+        with self._lock:
+            self._clear_loop_locked()
         normalized_reason = (str(reason).strip() or "dashboard_emergency_stop")[:96]
         try:
             last_route_status = self._ros.navigation_status()
@@ -2020,6 +2074,8 @@ class NavigationControlApi:
             recovering = self._sensor_recovery is not None
         if pending_terminal_stop and not hard_fault:
             await self._deliver_terminal_stop()
+        if not recovering and not hard_fault and self._loop_pending:
+            await self._advance_loop_leg()
         if recovering and not hard_fault:
             await self._advance_sensor_recovery(current)
             return None
@@ -2474,7 +2530,15 @@ class NavigationControlApi:
                             self._reset_navigation_progress_locked()
                             self._touch_locked()
                             return
-                        self._state["navigation_state"] = "SUCCEEDED"
+                        if (self._loop_goals and self._loop_started
+                            and self._robot_mode == "auto"
+                            and self._state["navigation_mode"] == "DRIVING"):
+                            self._loop_leg_index = 1 - self._loop_leg_index
+                            self._loop_pending = True
+                            self._state["navigation_state"] = "READY"
+                        else:
+                            self._clear_loop_locked()
+                            self._state["navigation_state"] = "SUCCEEDED"
                         self._state["active_goal"] = None
                         self._state["waypoints"] = []
                         self._state["planned_path"] = []
@@ -2618,6 +2682,68 @@ class NavigationControlApi:
             except Exception:
                 # State reads remain available even if a health adapter temporarily fails.
                 continue
+
+    def _clear_loop_locked(self) -> None:
+        self._loop_epoch += 1
+        self._loop_goals = []
+        self._loop_pending = False
+        self._loop_started = False
+        self._loop_leg_index = 0
+
+    async def _advance_loop_leg(self) -> None:
+        """Plan each next leg from the current pose; never reuse an old route."""
+        async with self._operation_lock:
+            with self._lock:
+                if not self._loop_pending or len(self._loop_goals) != 2:
+                    return
+                epoch = self._loop_epoch
+                target = dict(self._loop_goals[self._loop_leg_index])
+                # Mode changes, emergencies, cancel and sensor faults may
+                # invalidate the loop while planning runs outside the lock.
+                permitted = (
+                    self._loop_started and self._state["navigation_state"] == "READY"
+                    and self._state["navigation_mode"] == "DRIVING"
+                    and self._robot_mode == "auto" and self._pi_navigation_mode == "DRIVING"
+                    and self._state["localization_ready"] and self._state["nav2_ready"]
+                    and not self._state["emergency_stop"]
+                    and self._pending_goal_cancel is None
+                    and self._motion_allowed_locked(time.time())
+                )
+                if not permitted:
+                    self._clear_loop_locked()
+                    return
+                self._loop_pending = False
+            try:
+                self._assert_watchdogs_healthy()
+                path = self._normalized_path(
+                    await asyncio.to_thread(self._compute_path_for_route, target, [])
+                )
+                if len(path) < 2:
+                    raise NavigationControlError("LOOP_PATH_NOT_FOUND", "Next loop leg has no safe path.", 422)
+                with self._lock:
+                    if (epoch != self._loop_epoch or not self._loop_started
+                        or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "READY"
+                        or self._robot_mode != "auto"
+                        or self._state["navigation_mode"] != "DRIVING"
+                        or not self._motion_allowed_locked(time.time())):
+                        return
+                    self._goal_motion_generation += 1
+                    self._state["active_goal"] = target
+                    self._state["waypoints"] = []
+                    self._state["planned_path"] = path
+                    self._state["navigation_state"] = "PATH_READY"
+                    self._touch_locked()
+                # start_navigation rechecks STOP, Pi safety, Nav2 and E-STOP.
+                await self.start_navigation()
+            except Exception:
+                with self._lock:
+                    if epoch == self._loop_epoch and self._loop_goals:
+                        self._clear_loop_locked()
+                        if not self._state["emergency_stop"]:
+                            self._state["navigation_state"] = "FAILED"
+                            self._state["last_error"] = "LOOP_NEXT_FAILED"
+                            self._touch_locked()
 
     @staticmethod
     def _cancel_terminal(cancel: Any) -> str | None:
