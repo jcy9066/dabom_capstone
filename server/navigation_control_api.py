@@ -4142,10 +4142,34 @@ class NavigationControlApi:
         abort_requested = (abort_loop or (abort_loop_for_mode is not None
             and str(payload.get("mode", "")).strip().lower() == abort_loop_for_mode))
         loop_was_active = False
+        urgent_loop_stop = False
         if abort_requested:
             with self._lock:
                 loop_was_active = bool(self._loop_goals)
+                # Normally cancel_goal owns one STOP command. Only if a
+                # running route update already owns the operation lock do we
+                # front-load an emergency motor STOP before waiting on it.
+                urgent_loop_stop = bool(
+                    loop_was_active and self._operation_lock.locked()
+                    and self._state["navigation_state"] in {
+                        "NAVIGATING", "LOOP_STAGE_STARTING", "LOOP_RECOVERY_STARTING",
+                    }
+                )
                 self._clear_loop_locked()
+                if urgent_loop_stop:
+                    self._arm_pending_stop_locked()
+        if urgent_loop_stop:
+            try:
+                # Do not wait for the serialized Nav2 mutation to STOP the Pi:
+                # it may still be waiting on FollowPath goal acceptance.
+                await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "operator_loop_abort_during_preemption"},
+                )
+            except Exception:
+                # The normal Cancel/Manual/Mapping path still sends its own
+                # STOP and handles physical acknowledgement/failure.
+                pass
         try:
             async def invoke():
                 if include_user:
