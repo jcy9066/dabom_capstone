@@ -196,6 +196,7 @@ class NavigationControlApi:
         self._loop_path_cache: dict[int, list[dict[str, float]]] = {}
         self._loop_active_path: list[dict[str, float]] = []
         self._loop_follow_active = False
+        self._loop_failed_follow_retry = False
         self._loop_validity_last_at = 0.0
         self._loop_cache_hits = 0
         self._loop_replans = 0
@@ -733,7 +734,31 @@ class NavigationControlApi:
             and self._loop_recovery is None
             and self._arm_loop_pivot_recovery_locked(ros_nav, current)
         )
-        if not recovering_pivot:
+        # Cached FollowPath can abort before the periodic obstacle monitor
+        # gets its next IsPathValid result. Give that specific leg ONE
+        # forward-only replan, but ONLY after an actual Pi/encoder STOP.
+        # Never retry a Spin, backup, operator cancel, or general Nav2 fault.
+        recovering_cached = (
+            terminal == "FAILED"
+            and not recovering_pivot
+            and self._loop_started and self._loop_stage == "drive"
+            and self._loop_follow_active and not self._loop_failed_follow_retry
+            and ros_nav.get("action") == "follow_path"
+            and self._pending_goal_cancel is None
+            and not self._state["emergency_stop"]
+        )
+        if recovering_cached:
+            self._loop_failed_follow_retry = True
+            self._loop_path_cache.pop(self._loop_leg_index, None)
+            self._loop_active_path = []
+            self._loop_follow_active = False
+            self._loop_replans += 1
+            self._loop_stage = "drive_pending"
+            self._loop_pending = True
+            self._loop_pending_since = current
+            self._state["active_goal"] = None
+            self._state["planned_path"] = []
+        elif not recovering_pivot:
             # A failed backup/reapproach/spin is terminal: no second reverse.
             self._clear_loop_locked()
         # A Nav2 terminal state is not evidence that Pi motor output stopped.
@@ -748,7 +773,8 @@ class NavigationControlApi:
         }
         self._state["navigation_state"] = (
             "LOOP_RECOVERY_STOPPING" if recovering_pivot
-            else ("CANCELING_STOP" if terminal == "CANCELED" else terminal)
+            else ("READY" if recovering_cached
+            else ("CANCELING_STOP" if terminal == "CANCELED" else terminal))
         )
         if terminal == "CANCELED":
             self._pending_goal_cancel = {
@@ -2763,6 +2789,7 @@ class NavigationControlApi:
                                             self._loop_path_cache[direction] = certified
                                 self._loop_active_path = []
                                 self._loop_follow_active = False
+                                self._loop_failed_follow_retry = False
                                 self._loop_completed_legs += 1
                                 self._loop_stage = "turn_pending"
                             elif self._loop_stage == "turn":
@@ -2949,6 +2976,7 @@ class NavigationControlApi:
         self._loop_path_cache.clear()
         self._loop_active_path = []
         self._loop_follow_active = False
+        self._loop_failed_follow_retry = False
         self._loop_validity_last_at = 0.0
         self._loop_cache_hits = 0
         self._loop_replans = 0
