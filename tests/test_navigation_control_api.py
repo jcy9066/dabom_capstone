@@ -1228,6 +1228,31 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.map_api.ros_control.follow_path_calls)
         self.assertEqual("drive", self.api.state_response()["loop_stage"])
 
+    async def test_cached_loop_ignores_anonymous_nav2_plan_refresh(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._loop_path_cache[1] = [
+                {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+                for i in range(14)
+            ]
+            self.api._state["planned_path"] = list(self.api._loop_path_cache[1])
+        old_plan = list(self.api.state_response()["planned_path"])
+        old_calls = self.map_api.ros_control.plan_calls
+        self.api.note_nav2_replan_signal()
+        self.api.note_replanned_path([
+            {"x": 50.0, "y": 50.0, "yaw": 0.0},
+            {"x": 51.0, "y": 50.0, "yaw": 0.0},
+        ])
+        self.assertEqual(old_calls, self.map_api.ros_control.plan_calls)
+        self.assertEqual(old_plan, self.api.state_response()["planned_path"])
+        self.assertFalse(self.api._replan_refresh_inflight)
+
     async def test_obstructed_cached_leg_discards_cache_and_replans(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
