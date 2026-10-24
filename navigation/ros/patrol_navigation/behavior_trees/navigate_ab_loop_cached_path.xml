@@ -7,7 +7,8 @@
   * Valid Global Path is reused at 10Hz. If changed Goals or invalidity is detected,
     at most 5 planner retries within a 5s deadline are permitted.
   * No autonomous blind Spin, BackUp or costmap-clearing recovery.
-  * The existing FollowPath controller executes reverse/pivot segments.
+  * The loop-only SegmentedRPP controller rejects reverse segments and
+    collision-checks the required 180-degree in-place pivot stages.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -31,7 +32,7 @@
             </Timeout>
           </Fallback>
         </RateController>
-        <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="loop_goal_checker"/>
+        <FollowPath path="{path}" controller_id="LoopFollowPath" goal_checker_id="loop_goal_checker"/>
       </PipelineSequence>
     </Sequence>
   </BehaviorTree>
