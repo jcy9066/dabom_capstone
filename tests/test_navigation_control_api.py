@@ -1357,6 +1357,43 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.api.state_response()["loop_replans"])
         self.assertFalse(self.api.state_response()["emergency_stop"])
 
+    async def test_operator_cancel_sends_stop_before_blocked_operation_lock(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        async def read_json():
+            return {}
+        request = SimpleNamespace(json=read_json)
+        async def action(_):
+            return {"ok": True}
+        await self.api._operation_lock.acquire()
+        try:
+            with patch.object(self.api, "_access", return_value=None):
+                pending = asyncio.create_task(self.api._mutation(
+                    request, action, abort_loop=True,
+                ))
+                # The API must send Pi STOP without waiting for a slow
+                # FollowPath preemption already holding this operation lock.
+                for _ in range(50):
+                    if any(
+                        cmd.get("reason") == "operator_loop_abort_during_preemption"
+                        for _, cmd in self.commands
+                    ):
+                        break
+                    await asyncio.sleep(0.005)
+                self.assertTrue(any(
+                    cmd.get("reason") == "operator_loop_abort_during_preemption"
+                    for _, cmd in self.commands
+                ))
+                self.assertFalse(pending.done())
+                self.assertEqual([], self.api.state_response()["loop_goals"])
+        finally:
+            self.api._operation_lock.release()
+        result = await asyncio.wait_for(pending, 1.0)
+        self.assertEqual({"ok": True}, result)
+
     async def test_cancel_epoch_remains_unblocked_during_cache_replan(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
