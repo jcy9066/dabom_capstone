@@ -14,6 +14,7 @@
         pointerStart: null,
         csrf: null,
         busy: false,
+        cancelPending: false,
         drivePending: false,
         navigationPending: false,
         estopPending: false,
@@ -667,8 +668,16 @@
     }
 
     async function simpleAction(path, progress) {
-        if (state.busy || state.drivePending) return;
-        state.busy = true;
+        const cancellation = path.endsWith('/cancel');
+        if (cancellation) {
+            // Cancel must remain available even during an in-flight plan or
+            // mode request. The server revokes the loop epoch immediately.
+            if (state.cancelPending) return;
+            state.cancelPending = true;
+        } else {
+            if (state.busy || state.drivePending) return;
+            state.busy = true;
+        }
         setFeedback(progress);
         try {
             const response = await mutate(path);
@@ -705,7 +714,8 @@
                 setFeedback(`요청 실패: ${error.message}`, true);
             }
         } finally {
-            state.busy = false;
+            if (cancellation) state.cancelPending = false;
+            else state.busy = false;
         }
     }
 
