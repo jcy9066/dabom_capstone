@@ -3242,11 +3242,16 @@ class NavigationControlApi:
 
         @self._app.post("/api/navigation/control/patrol-mode")
         async def set_patrol_mode(request: Request):
-            return await self._mutation(request, self.switch_patrol_mode)
+            return await self._mutation(
+                request, self.switch_patrol_mode, abort_loop_for_mode="manual",
+            )
 
         @self._app.post("/api/navigation/control/mode")
         async def set_navigation_control_mode(request: Request):
-            return await self._mutation(request, self.switch_mode, include_user=True)
+            return await self._mutation(
+                request, self.switch_mode, include_user=True,
+                abort_loop_for_mode="mapping",
+            )
 
         @self._app.post("/api/navigation/control/goal")
         async def set_navigation_goal(request: Request):
@@ -3258,7 +3263,9 @@ class NavigationControlApi:
 
         @self._app.post("/api/navigation/control/cancel")
         async def cancel_navigation(request: Request):
-            return await self._mutation(request, lambda _: self.cancel_goal())
+            return await self._mutation(
+                request, lambda _: self.cancel_goal(), abort_loop=True,
+            )
 
         @self._app.post("/api/navigation/control/pause-for-manual")
         async def pause_navigation_for_manual(request: Request):
@@ -3300,6 +3307,8 @@ class NavigationControlApi:
         action: Callable[..., Awaitable[dict[str, Any]]],
         include_user: bool = False,
         serialize: bool = True,
+        abort_loop: bool = False,
+        abort_loop_for_mode: str | None = None,
     ):
         denied = self._access(request, csrf=True)
         if denied:
@@ -3310,6 +3319,13 @@ class NavigationControlApi:
             payload = {}
         if not isinstance(payload, dict):
             return self._error("INVALID_REQUEST", "JSON object required.", 400)
+        # Revoke background loop ownership as soon as an authenticated
+        # operator STOP/Manual/Mapping request arrives; do not wait behind
+        # a slow planner or rolling Nav2 goal preemption.
+        if (abort_loop or (abort_loop_for_mode is not None
+            and str(payload.get("mode", "")).strip().lower() == abort_loop_for_mode)):
+            with self._lock:
+                self._clear_loop_locked()
         try:
             async def invoke():
                 if include_user:
