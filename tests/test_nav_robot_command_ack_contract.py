@@ -126,6 +126,31 @@ def test_ack_observer_receives_only_command_id_matched_live_pi_acks():
     asyncio.run(scenario())
 
 
+def test_transport_failure_observer_reports_preflight_and_timeout():
+    async def scenario():
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        failures = []
+        manager.command_transport_observer = (
+            lambda robot, kind, reason: failures.append((robot, kind, reason))
+        )
+        assert not await manager.send_command_wait_ack(
+            "pi-01", {"type": "auto_drive"}, preflight=lambda: False,
+        )
+        assert ws.commands == []
+        assert failures == [
+            ("pi-01", "auto_drive", "WebSocket send/preflight rejected"),
+        ]
+        assert not await manager.send_command_wait_ack(
+            "pi-01", {"type": "auto_drive"},
+        )
+        assert failures[-1] == (
+            "pi-01", "auto_drive", "ACK/send deadline exceeded",
+        )
+    asyncio.run(scenario())
+
+
 def test_motion_safety_generation_must_match_pi_ack():
     command = {
         "type": "auto_drive", "safety_session": "pi-session-1",
