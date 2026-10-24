@@ -1394,6 +1394,43 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(pending, 1.0)
         self.assertEqual({"ok": True}, result)
 
+    async def test_cancel_epoch_during_new_loop_leg_planning_never_dispatches_goal(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_leg_index = 1
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        entered, release = threading.Event(), threading.Event()
+        original_compute = self.api._compute_path_for_route
+
+        def slow_plan(*args, **kwargs):
+            entered.set()
+            if not release.wait(2.0):
+                raise RuntimeError("loop planning test timeout")
+            return original_compute(*args, **kwargs)
+
+        before = self.map_api.ros_control.navigate_calls
+        try:
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    with patch.object(self.api, "_compute_path_for_route", side_effect=slow_plan):
+                        task = asyncio.create_task(self.api._advance_loop_leg())
+                        self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
+                        # Slow planning must not block authenticated cancellation.
+                        self.assertFalse(self.api._operation_lock.locked())
+                        await asyncio.wait_for(self.api.cancel_goal(), 1.0)
+                        release.set()
+                        await asyncio.wait_for(task, 3.0)
+        finally:
+            release.set()
+        self.assertEqual(before, self.map_api.ros_control.navigate_calls)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+
     async def test_cancel_epoch_remains_unblocked_during_cache_replan(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
