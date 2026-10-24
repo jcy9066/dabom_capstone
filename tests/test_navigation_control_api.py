@@ -56,6 +56,35 @@ class FakeRos:
         self.backup_distances = []
         self.spin_radians = []
         self.loop_reapproach_calls = []
+        self.follow_path_calls = []
+        self.trace = []
+        self.trace_started = False
+        self.cache_valid = True
+        self.validity_queries = 0
+
+    def begin_loop_trace(self):
+        self.trace_started = True
+
+    def finish_loop_trace(self):
+        self.trace_started = False
+        return [dict(p) for p in self.trace]
+
+    def discard_loop_trace(self):
+        self.trace_started = False
+        self.trace = []
+
+    def loop_path_valid(self, poses):
+        self.validity_queries += 1
+        return self.cache_valid
+
+    def follow_loop_path(self, poses, *, preempt=False):
+        self.navigate_calls += 1
+        self.follow_path_calls.append({
+            "poses": [dict(p) for p in poses],
+            "preempt": preempt,
+        })
+        self.state = "NAVIGATING"
+        return {"accepted": True, "action": "/follow_path", "cached": True}
 
     def compute_path(self, goal):
         self.plan_calls += 1
@@ -1029,6 +1058,97 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("drive", self.api.state_response()["loop_stage"])
         self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
         self.assertEqual([], self.map_api.ros_control.backup_distances)
+
+    def test_physical_path_cache_uses_driven_samples_not_global_plan(self):
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        driven = [
+            {"x": 0.3 + i * 0.1, "y": 0.5 + 0.04 * math.sin(i / 4),
+             "yaw": 0.0}
+            for i in range(14)
+        ]
+        saved = self.api._certify_physical_loop_path(driven, a, b)
+        self.assertEqual(driven, saved)
+        self.assertNotEqual(
+            saved, self.map_api.ros_control.compute_path(b),
+        )
+        self.assertEqual([], self.api._certify_physical_loop_path(
+            [{**p, "yaw": math.pi} for p in driven], a, b,
+        ))
+        self.assertEqual([], self.api._certify_physical_loop_path(
+            driven[:3], a, b,
+        ))
+
+    async def test_second_a_to_b_reuses_physical_path_without_planner(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = recorded
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_leg_index = 1
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        plans = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": a["x"], "y": a["y"], "yaw": 0.0,
+            "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual(plans, self.map_api.ros_control.plan_calls)
+        self.assertEqual(1, len(self.map_api.ros_control.follow_path_calls))
+        self.assertEqual(recorded, self.map_api.ros_control.follow_path_calls[-1]["poses"])
+        self.assertEqual(1, self.api.state_response()["loop_cache_hits"])
+        self.assertEqual([1], self.api.state_response()["loop_cached_directions"])
+
+    async def test_obstructed_cached_leg_discards_cache_and_replans(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recorded = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = recorded
+            self.api._loop_stage = "drive_pending"
+            self.api._loop_leg_index = 1
+            self.api._loop_pending = True
+            self.api._state["navigation_state"] = "READY"
+        self.map_api.ros_control.cache_valid = False
+        plans = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": a["x"], "y": a["y"], "yaw": 0.0,
+            "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
+        self.assertEqual(plans + 1, self.map_api.ros_control.plan_calls)
+        self.assertEqual([], self.map_api.ros_control.follow_path_calls)
+        self.assertEqual([], self.api.state_response()["loop_cached_directions"])
+        self.assertEqual(1, self.api.state_response()["loop_replans"])
+
+    def test_cache_validation_ignores_traversed_behind_robot_path(self):
+        path = [{"x": i / 10, "y": 0.0, "yaw": 0.0} for i in range(20)]
+        remaining = self.api._remaining_loop_path(
+            path, {"x": 1.1, "y": 0.0},
+        )
+        self.assertGreaterEqual(remaining[0]["x"], 0.9)
+        self.assertEqual(path[-1], remaining[-1])
+        self.assertEqual([], self.api._remaining_loop_path(
+            path, {"x": 1.1, "y": 2.0},
+        ))
 
     async def test_loop_rejects_goals_with_overlapping_arrival_discs(self):
         await self.driving_ready()
