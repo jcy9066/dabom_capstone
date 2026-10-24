@@ -12,6 +12,7 @@ import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -262,7 +263,7 @@ class Nav2CommandBridge(Node):
             LaserScan,
             "/scan",
             self.on_scan,
-            10,
+            qos_profile_sensor_data,
         )
 
         self.create_timer(
