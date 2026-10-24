@@ -842,9 +842,8 @@ class NavigationControlApi:
                 raise NavigationControlError("PI_CONNECTION_LOSS", "Fresh Pi status is required.", 503)
             if self._state["emergency_stop"] or self._pi_estop_latched is not False:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Release the safety stop first.", 409)
-            if target == "auto" and (
-                self._state["navigation_mode"] != "DRIVING"
-                or self._pi_navigation_mode != "DRIVING"
+            if target == "auto" and self._state["navigation_mode"] == "DRIVING" and (
+                self._pi_navigation_mode != "DRIVING"
                 or not self._state["localization_ready"]
                 or not self._state["nav2_ready"]
                 or not self._state["active_map"]
@@ -869,15 +868,16 @@ class NavigationControlApi:
                     raise NavigationControlError(
                         "STOP_NOT_CONFIRMED", "Verify a fresh encoder STOP before retrying mode sync.", 409
                     )
+            expected_navigation_mode = self._state["navigation_mode"]
             self._patrol_transition = target
             self._patrol_transition_error = None
             self._touch_locked()
         try:
-            if target == "auto":
+            if target == "auto" and expected_navigation_mode == "DRIVING":
                 self._assert_watchdogs_healthy()
                 if hasattr(self._ros, "navigation_ready") and not await asyncio.to_thread(self._ros.navigation_ready):
                     raise NavigationControlError("NAV2_NOT_READY", "Nav2 is unavailable.", 503)
-            else:
+            elif target == "manual" and expected_navigation_mode == "DRIVING":
                 paused = await self.pause_for_manual()
                 if (paused.get("stop_delivered") is not True
                     or paused.get("emergency_stop") is True
@@ -885,6 +885,7 @@ class NavigationControlApi:
                         "FAILED", "NAVIGATING", "RESUMING", "EMERGENCY_STOPPED"
                     }):
                     raise NavigationControlError("MANUAL_STOP_FAILED", "Navigation could not be safely paused.", 409)
+            # MAPPING has no Nav2 Goal to pause; Pi mode command stops motors.
             with self._lock:
                 # E-STOP is intentionally not serialized behind dashboard
                 # mutations, so it may interrupt the pause or Nav2 checks.
@@ -908,7 +909,7 @@ class NavigationControlApi:
                         and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                         and self._robot_mode == target and self._pi_estop_latched is False
                         and not self._state["emergency_stop"]
-                        and (target != "auto" or self._pi_navigation_mode == "DRIVING")
+                        and (target != "auto" or self._pi_navigation_mode == expected_navigation_mode)
                     )
                 if confirmed:
                     break
