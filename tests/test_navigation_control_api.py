@@ -728,6 +728,49 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
         self.assertFalse(state["loop_pending"])
 
+    async def test_loop_cancel_between_actions_needs_no_second_nav_cancel(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "turn_pending"
+            self.api._loop_pending = True
+            self.api._state["active_goal"] = None
+            self.api._state["navigation_state"] = "READY"
+            # The HTTP handler revokes loop ownership *before* serializing
+            # the cancel operation.
+            self.api._clear_loop_locked()
+        before = self.map_api.ros_control.cancel_calls
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            result = await self.api.cancel_goal()
+        self.assertTrue(result["cancel_completed"])
+        self.assertFalse(result["loop_active"])
+        self.assertEqual(before, self.map_api.ros_control.cancel_calls)
+
+    async def test_late_loop_start_acceptance_after_cancel_is_revoked(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        original = self.map_api.ros_control.navigate_to_pose
+
+        def late_acceptance(goal, *, loop_reapproach=False):
+            # Simulate authenticated operator cancel while Nav2 accepts
+            # the first action from another thread.
+            with self.api._lock:
+                self.api._clear_loop_locked()
+            return original(goal, loop_reapproach=loop_reapproach)
+
+        with patch.object(self.map_api.ros_control, "navigate_to_pose",
+                          side_effect=late_acceptance):
+            with self.assertRaises(NavigationControlError) as raised:
+                await self.api.start_navigation()
+        self.assertEqual("NAVIGATION_START_INTERRUPTED", raised.exception.error_code)
+        self.assertTrue(self.api.state_response()["emergency_stop"])
+        self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
+
     async def test_loop_without_verified_stop_never_starts_spin(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
