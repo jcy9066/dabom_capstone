@@ -2755,24 +2755,23 @@ class NavigationControlApi:
     def _loop_route_points(
         goals: list[dict[str, float]], first: int, count: int = 12,
     ) -> list[dict[str, float]]:
-        """Build a rolling route; intermediate poses use XY-only arrival."""
-        points = []
-        for index in range(count):
-            goal = goals[(first + index) % 2]
-            following = goals[(first + index + 1) % 2]
-            if index == count - 1:
-                # If rolling preemption loses the race, final yaw should
-                # follow the arrival heading, never force a 180 degree turn.
-                previous = goals[(first + index - 1) % 2]
-                heading = math.atan2(
-                    goal["y"] - previous["y"], goal["x"] - previous["x"],
-                )
-            else:
-                heading = math.atan2(
-                    following["y"] - goal["y"], following["x"] - goal["x"],
-                )
-            points.append({"x": goal["x"], "y": goal["y"], "yaw": heading})
-        return points
+        """Shuttle without A/B yaw pivots; reverse on alternating legs.
+
+        Same heading at A and B lets the reversible segmented controller
+        travel A->B forward, B->A backward. Intermediate arrival is XY-only.
+        """
+        heading = math.atan2(
+            goals[1]["y"] - goals[0]["y"],
+            goals[1]["x"] - goals[0]["x"],
+        )
+        return [
+            {
+                "x": goals[(first + index) % 2]["x"],
+                "y": goals[(first + index) % 2]["y"],
+                "yaw": heading,
+            }
+            for index in range(count)
+        ]
 
     async def _refresh_loop_route(self, ros_nav: dict[str, Any]) -> None:
         """Extend NavigateThroughPoses before final arrival without STOP."""
