@@ -10,7 +10,7 @@ python3 -m py_compile server/navigation_control_api.py server/navigation_ros_con
 
 echo "[2/4] Check dashboard JavaScript syntax"
 node --check frontend/services/static/navigation_control.js
-node --check frontend/services/static/lidar_3d_viewer.js
+node --input-type=module --check < frontend/services/static/lidar_3d_viewer.js
 
 echo "[3/4] Execute navigation and A/B cache regression tests"
 PYTHONPATH="$ROOT" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
