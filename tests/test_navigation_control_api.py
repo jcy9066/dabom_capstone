@@ -1319,6 +1319,50 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.api.state_response()["loop_replans"])
         self.assertFalse(self.api.state_response()["emergency_stop"])
 
+    async def test_cancel_epoch_remains_unblocked_during_cache_replan(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        path = [
+            {"x": 0.3 + 0.1 * i, "y": 0.5, "yaw": 0.0}
+            for i in range(14)
+        ]
+        with self.api._lock:
+            self.api._loop_path_cache[1] = path
+            self.api._loop_stage = "drive"
+            self.api._loop_leg_index = 1
+            self.api._loop_follow_active = True
+            self.api._loop_active_path = path
+            self.api._state["active_goal"] = b
+            self.api._state["navigation_state"] = "NAVIGATING"
+        started, release = threading.Event(), threading.Event()
+        def delayed_plan(goal, waypoints, *, loop_forward=False):
+            started.set()
+            release.wait(2.0)
+            return self.map_api.ros_control.compute_path(goal)
+        self.map_api.ros_control.path_valid_results = [False, True]
+        try:
+            with patch.object(self.api, "_safe_live_pose", return_value={
+                "x": 0.8, "y": 0.5, "yaw": 0.0,
+                "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_compute_path_for_route",
+                                  side_effect=delayed_plan):
+                    worker = asyncio.create_task(self.api._monitor_loop_cached_path())
+                    self.assertTrue(await asyncio.to_thread(started.wait, 1.0))
+                    self.assertFalse(self.api._operation_lock.locked())
+                    with self.api._lock:
+                        self.api._clear_loop_locked()  # authenticated Cancel epoch
+                    release.set()
+                    await asyncio.wait_for(worker, 3.0)
+        finally:
+            release.set()
+        self.assertEqual([], self.map_api.ros_control.follow_path_calls)
+        self.assertEqual([], self.api.state_response()["loop_cached_directions"])
+        self.assertFalse(self.api._loop_pending)
+
     async def test_cached_drive_validation_fails_closed_if_no_safe_replan(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
