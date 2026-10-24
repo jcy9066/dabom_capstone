@@ -2661,9 +2661,12 @@ class NavigationControlApi:
                                 after=self._stop_commanded_at,
                             )
                         elif self._loop_goals and self._loop_started:
+                            # Recovery stages override the prior failed
+                            # loop Spin; reapproach must not be mistaken for
+                            # another rotation just because loop_stage is turn.
                             in_spin = (
-                                self._loop_stage == "turn"
-                                or bool(recovery and recovery["phase"] == "turning")
+                                recovery["phase"] == "turning" if recovery
+                                else self._loop_stage == "turn"
                             )
                             pose_ok = self._loop_pose_confirmed(
                                 self._state["active_goal"], physical_pose,
@@ -2678,8 +2681,8 @@ class NavigationControlApi:
                                 min_received_at=self._stop_commanded_at,
                             )
                         if self._motor_output_enabled and pose_ok and (
-                            self._loop_stage == "turn"
-                            or bool(recovery and recovery["phase"] == "turning")
+                            recovery["phase"] == "turning" if recovery
+                            else self._loop_stage == "turn"
                         ):
                             try:
                                 progress = self._ros.spin_progress()
