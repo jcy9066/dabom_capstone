@@ -242,6 +242,7 @@ void SegmentedRPPController::invalidatePlan() noexcept
   stages_.clear();
   stage_index_ = 0;
   pivot_started_ = false;
+  loop_half_turn_in_progress_ = false;
   path_.poses.clear();
 }
 
@@ -510,6 +511,11 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     {
       return stopped(pose);
     }
+    if (loop_forward_only_ && loop_half_turn_in_progress_) {
+      // Toggle ONLY after the encoder/odometry-gated pivot has completed.
+      loop_turn_clockwise_ = !loop_turn_clockwise_;
+      loop_half_turn_in_progress_ = false;
+    }
     advanceStage();
     return stopped(pose);
   }
@@ -518,7 +524,22 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   checkRotationCollision(pose, remaining);
   const double magnitude = std::min(
     pivot_max_angular_, std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
-  const double desired = std::copysign(magnitude, remaining);
+  // A half-turn admits both +pi and -pi solutions. The loop alone picks
+  // a deterministic sign, alternating after each completed 180-degree turn.
+  // The next cycle retains the existing turn direction as remaining yaw
+  // decreases; path changes never count as a completed pivot.
+  if (loop_forward_only_ && !pivot_started_
+      && std::abs(std::abs(remaining) - M_PI) <= 0.15)
+  {
+    loop_half_turn_in_progress_ = true;
+    loop_half_turn_target_yaw_ = yaw(rotation_goal);
+  }
+  const double controlled_remaining = (
+    loop_forward_only_ && loop_half_turn_in_progress_ && !pivot_started_
+    ? std::copysign(std::abs(remaining), loop_turn_clockwise_ ? -1.0 : 1.0)
+    : remaining
+  );
+  const double desired = std::copysign(magnitude, controlled_remaining);
   const double maximum_step = pivot_acceleration_ / controller_frequency_;
   geometry_msgs::msg::TwistStamped command = stopped(pose);
   command.twist.angular.z = std::clamp(
