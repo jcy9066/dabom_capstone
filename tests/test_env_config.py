@@ -95,6 +95,17 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     assert set(keys) == runtime_env_keys()
 
 
+def test_gpu_launcher_rejects_missing_control_token_before_starting_fastapi():
+    """A missing GPU/Pi shared secret must fail before the server starts."""
+    script = (ROOT_DIR / "start_gpu_server.sh").read_text(encoding="utf-8")
+    match = re.search(r"required_env\s*=\s*\((.*?)\)", script, re.DOTALL)
+    assert match is not None
+    required = match.group(1).split()
+    assert "ROBOT_CONTROL_TOKEN" in required
+    assert script.index('for key in "${required_env[@]}"') < script.index('log "Starting FastAPI"')
+    assert '[[ -n "${!key:-}" ]] || fail "${key} is required"' in script
+
+
 def test_boolean_parser_is_strict_and_motor_default_is_safe(monkeypatch):
     monkeypatch.delenv("MOTOR_OUTPUT_ENABLED", raising=False)
     assert env_bool("MOTOR_OUTPUT_ENABLED", default=False) is False
