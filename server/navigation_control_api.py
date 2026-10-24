@@ -3597,8 +3597,16 @@ class NavigationControlApi:
                 with self._lock:
                     cached = [dict(p) for p in self._loop_path_cache.get(next_index, [])]
                 reuse = False
+                # Even first-time planning requires current localization.
+                # Reject both cached replay and new planning on a stale pose.
+                current_pose = self._safe_live_pose()
+                if not self._fresh_loop_pose(current_pose):
+                    raise NavigationControlError(
+                        "LOOP_POSE_STALE",
+                        "Cannot start a loop leg without fresh localization.",
+                        409,
+                    )
                 if cached and hasattr(self._ros, "loop_path_valid"):
-                    current_pose = self._safe_live_pose()
                     # A small start-pose mismatch is not an obstruction.
                     # Preserve the learned trajectory for subsequent laps
                     # instead of deleting it due to temporary alignment.
