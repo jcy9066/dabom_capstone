@@ -2598,10 +2598,9 @@ class NavigationControlApi:
                         recovery = self._loop_recovery
                         recovering_backup = bool(recovery and recovery["phase"] == "backing")
                         pose_ok = (
-                            (
-                                self._loop_recovery_reverse_progress(recovery, physical_pose)
-                                and 0 <= time.time() - float(physical_pose["received_at"]) <= 0.5
-                                and float(physical_pose["received_at"]) >= self._stop_commanded_at
+                            self._loop_recovery_reverse_progress(
+                                recovery, physical_pose, now=time.time(),
+                                after=self._stop_commanded_at,
                             )
                             if recovering_backup and physical_pose else
                             self._original_goal_pose_confirmed(
@@ -2925,15 +2924,27 @@ class NavigationControlApi:
         return True
 
     @staticmethod
-    def _loop_recovery_reverse_progress(recovery: dict[str, Any], pose: dict) -> bool:
-        """Require actual backward displacement; an ACK alone is insufficient."""
+    def _loop_recovery_reverse_progress(
+        recovery: dict[str, Any], pose: dict, *,
+        now: float | None = None, after: float | None = None,
+    ) -> bool:
+        """Prove fresh, post-STOP odometry moved backward at least 0.15m."""
         try:
             before = recovery["failed_pose"]
             heading = float(before["yaw"])
             dx = float(pose["x"]) - float(before["x"])
             dy = float(pose["y"]) - float(before["y"])
-            return (all(math.isfinite(x) for x in (heading, dx, dy))
-                and dx * math.cos(heading) + dy * math.sin(heading) <= -0.15)
+            received = float(pose["received_at"])
+            current = time.time() if now is None else float(now)
+            return (
+                after is not None
+                and all(math.isfinite(x) for x in (
+                    heading, dx, dy, received, current, float(after)
+                ))
+                and 0 <= current - received <= 0.5
+                and received >= float(after)
+                and dx * math.cos(heading) + dy * math.sin(heading) <= -0.15
+            )
         except (KeyError, ValueError, TypeError, OverflowError):
             return False
 
