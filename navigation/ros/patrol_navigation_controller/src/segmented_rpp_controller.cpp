@@ -428,7 +428,25 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     if (stage_index_ + 1 >= stages_.size()) {
       const auto terminal = inControllerFrame(
         path_.poses.back(), pose.header.frame_id);
-      if (distance(pose, terminal) <= (loop_forward_only_ ? 0.55 : 0.25)) {
+      // A freshly planned loop leg uses XY=0.55m, but replayed physical
+      // FollowPath has XY=0.10m. Obey the selected Nav2 goal checker;
+      // stopping at 0.55m for a 0.10m goal causes a permanent stall.
+      double terminal_xy_tolerance = 0.25;
+      if (loop_forward_only_) {
+        terminal_xy_tolerance = 0.55;
+        if (goal_checker != nullptr) {
+          geometry_msgs::msg::Pose pose_tolerance;
+          geometry_msgs::msg::Twist velocity_tolerance;
+          if (goal_checker->getTolerances(pose_tolerance, velocity_tolerance)
+              && std::isfinite(pose_tolerance.position.x)
+              && pose_tolerance.position.x > 0.0)
+          {
+            terminal_xy_tolerance = std::clamp(
+              pose_tolerance.position.x, 0.05, 0.55);
+          }
+        }
+      }
+      if (distance(pose, terminal) <= terminal_xy_tolerance) {
         // Loop arrival is XY-only. The server authorizes a separate Spin
         // after an encoder-confirmed STOP. Terminal yaw alignment here would
         // add an unrequested pivot and unnecessary motor-driver loading.
