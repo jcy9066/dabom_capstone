@@ -47,12 +47,15 @@ void SegmentedRPPController::configure(
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_pivot_yaw_tolerance", rclcpp::ParameterValue(0.12));
   declare_parameter_if_not_declared(
+    node, plugin_name_ + ".loop_forward_only", rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_transfer_position_tolerance",
     rclcpp::ParameterValue(0.08));
   node->get_parameter("controller_frequency", controller_frequency_);
   node->get_parameter(plugin_name_ + ".segment_pivot_max_angular", pivot_max_angular_);
   node->get_parameter(plugin_name_ + ".segment_pivot_acceleration", pivot_acceleration_);
   node->get_parameter(plugin_name_ + ".segment_pivot_yaw_tolerance", pivot_yaw_tolerance_);
+  node->get_parameter(plugin_name_ + ".loop_forward_only", loop_forward_only_);
   node->get_parameter(
     plugin_name_ + ".segment_transfer_position_tolerance", transfer_position_tolerance_);
 
@@ -171,6 +174,11 @@ void SegmentedRPPController::buildStages()
   int previous_kind = -1;
   for (size_t edge = 0; edge < n - 1; ++edge) {
     const int current_kind = kind(edge);
+    if (loop_forward_only_ && current_kind == 1) {
+      // A/B loop requires a stationary in-place pivot followed by forward
+      // movement. Reject reverse candidates before any motion is authorized.
+      throw std::runtime_error("Loop path contains reverse drive instead of a 180-degree pivot");
+    }
     if (current_kind == 4) {
       // Treat a duplicate as a path separator, never invent a spin.
       if (previous_kind != -1 && edge > run_begin) {
