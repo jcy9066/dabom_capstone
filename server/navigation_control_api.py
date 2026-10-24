@@ -1443,7 +1443,10 @@ class NavigationControlApi:
                 self._assert_watchdogs_healthy()
             # Nav2's ComputePathToPose(use_start=False) starts at the latest
             # robot pose, not the old Goal or the old planned path origin.
-            path = await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
+            path = await asyncio.to_thread(
+                self._compute_path_for_route, goal, waypoints,
+                loop_forward=bool(loop_goals),
+            )
             normalized_path = self._normalized_path(path)
             if len(normalized_path) < 2:
                 raise NavigationControlError(
@@ -3331,7 +3334,9 @@ class NavigationControlApi:
                 # route only after the costmap has rejected its remaining
                 # physical trajectory.
                 fresh = self._normalized_path(
-                    await asyncio.to_thread(self._compute_path_for_route, goal, [])
+                    await asyncio.to_thread(
+                        self._compute_path_for_route, goal, [], loop_forward=True,
+                    )
                 )
                 if len(fresh) < 2 or not await asyncio.to_thread(
                     self._ros.loop_path_valid, fresh,
@@ -3524,7 +3529,9 @@ class NavigationControlApi:
                         # First physical passage, unsafe cache, or unusable
                         # start alignment: compute via existing Nav2 planner.
                         plan = self._normalized_path(
-                            await asyncio.to_thread(self._compute_path_for_route, target, [])
+                            await asyncio.to_thread(
+                                self._compute_path_for_route, target, [], loop_forward=True,
+                            )
                         )
                     if len(plan) < 2:
                         raise NavigationControlError(
@@ -3857,10 +3864,17 @@ class NavigationControlApi:
         return points
 
     def _compute_path_for_route(
-        self, final_goal: dict[str, float], waypoints: list[dict[str, float]]
+        self, final_goal: dict[str, float], waypoints: list[dict[str, float]],
+        *, loop_forward: bool = False,
     ) -> Any:
         if waypoints:
+            if loop_forward:
+                raise NavigationControlError(
+                    "INVALID_LOOP", "Loop legs require one forward goal.", 400,
+                )
             return self._ros.compute_path_through_poses([*waypoints, final_goal])
+        if loop_forward:
+            return self._ros.compute_path(final_goal, loop_forward=True)
         return self._ros.compute_path(final_goal)
 
     def _navigate_route(
