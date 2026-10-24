@@ -1128,6 +1128,8 @@ def read_runtime_model_config():
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
     pipeline = env_text("PIPELINE")
+    if pipeline != "8":
+        raise ValueError("Only PIPELINE=8 (RTMO-M + BotSORT + X3D-M) is supported.")
     stream_infer_every_n = env_int("STREAM_INFER_EVERY_N", minimum=1)
     inference_max_fps = env_float("INFERENCE_MAX_FPS", minimum=0.1)
     effective_request_fps = min(

@@ -469,10 +469,9 @@ case "${inference_enabled,,},${visualization_enabled,,}" in
 esac
 
 if (( model_active == 1 )); then
-    [[ -n "${PIPELINE:-}" ]] || fail "PIPELINE is required when model runtime is enabled"
+    [[ "${PIPELINE:-}" == "8" ]] || fail "Only PIPELINE=8 (RTMO-M + BotSORT + X3D-M) is supported"
 
-    if [[ "${PIPELINE}" == "8" ]]; then
-        "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "Pipeline 8 runtime packages are missing; install requirements.txt"
+    "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "Pipeline 8 runtime packages are missing; install requirements.txt"
 from importlib.metadata import PackageNotFoundError, version
 
 def installed(dist_name):
@@ -509,41 +508,6 @@ if "CUDAExecutionProvider" not in ort.get_available_providers():
         "onnxruntime-gpu is installed but CUDAExecutionProvider is unavailable"
     )
 PY
-    else
-        "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1 || fail "AI runtime packages are missing; install requirements.txt and a compatible MMCV build"
-from importlib.metadata import PackageNotFoundError, version
-
-def installed(dist_name):
-    try:
-        version(dist_name)
-        return True
-    except PackageNotFoundError:
-        return False
-
-if not installed("opencv-contrib-python"):
-    raise RuntimeError("opencv-contrib-python is required by the MMAction2 runtime")
-if installed("opencv-python"):
-    raise RuntimeError(
-        "Both opencv-python and opencv-contrib-python are installed; "
-        "remove opencv-python and force-reinstall opencv-contrib-python"
-    )
-
-import decord
-import einops
-import lap
-import mmaction
-import mmaction.models.localizers.drn
-import mmcv
-import mmengine
-import scipy
-import torch
-import ultralytics
-
-if not torch.cuda.is_available():
-    raise RuntimeError("CUDA is not available to PyTorch")
-PY
-    fi
-
     log "Ensuring model assets for pipeline ${PIPELINE:-unset}"
     "${PYTHON_BIN}" -m perception.model_assets --pipeline "${PIPELINE}" \
         || fail "Model asset preparation failed for pipeline ${PIPELINE}"

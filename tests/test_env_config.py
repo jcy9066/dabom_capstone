@@ -79,6 +79,7 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     assert len(keys) == len(set(keys))
     assert dict(entries)["MAX_WHEEL_MPS"] == "0.212"
     defaults = {
+        "PIPELINE": "8",
         "MAX_WHEEL_MPS": "0.212",
         "MIN_AUTO_DRIVE_PWM": "0.30",
         "LIDAR_YAW": "3.141592653589793",
