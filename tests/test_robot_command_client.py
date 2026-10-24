@@ -309,6 +309,20 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         client.motor.volume_percent = object()
         self.assertIsNone(client._current_speaker_volume())
 
+    def test_missing_speaker_volume_recovers_only_verified_pico_values(self):
+        client = self.make_client()
+        client.motor.volume_percent = None
+        client.motor.get_volume.return_value = 35
+        self.assertEqual(35, client._current_speaker_volume())
+        client.motor.get_volume.assert_called_once_with()
+
+        client.motor.get_volume.return_value = 101
+        self.assertIsNone(client._current_speaker_volume())
+        client.motor.get_volume.return_value = object()
+        self.assertIsNone(client._current_speaker_volume())
+        client.motor.get_volume.side_effect = RuntimeError("Pico UART timeout")
+        self.assertIsNone(client._current_speaker_volume())
+
     async def test_beep_led_and_warning_use_pico_contract(self):
         client = self.make_client()
         socket = FakeWebSocket()

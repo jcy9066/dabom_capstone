@@ -88,6 +88,24 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     assert set(keys) == runtime_env_keys()
 
 
+
+def test_model_cuda_device_defaults_to_selected_cuda_index():
+    """Device selection must survive env reload even without DEVICE in .env."""
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+    assert 'DEVICE = env_text("DEVICE", default=f"cuda:{CUDA_DEVICE_INDEX}").lower()' in source
+    assert 'device = env_text("DEVICE", default=f"cuda:{cuda_device_index}").lower()' in source
+
+
+def test_model_toggle_reports_invalid_runtime_configuration():
+    source = (ROOT_DIR / "server" / "app.py").read_text(encoding="utf-8")
+    route = source.split('@app.post("/api/model-pipeline")', 1)[1].split(
+        '@app.websocket(', 1
+    )[0]
+    assert "except (EnvConfigurationError, ValueError) as exc:" in route
+    assert '"enabled": bool(MODEL_ACTIVE and frame_processor is not None)' in route
+    assert "status_code=400" in route
+
+
 def test_boolean_parser_is_strict_and_motor_default_is_safe(monkeypatch):
     monkeypatch.delenv("MOTOR_OUTPUT_ENABLED", raising=False)
     assert env_bool("MOTOR_OUTPUT_ENABLED", default=False) is False
