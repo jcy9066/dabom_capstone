@@ -11,6 +11,8 @@ HTML = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
 CONFIG = (ROOT / "navigation/ros/patrol_navigation/config/nav2_params.yaml").read_text(encoding="utf-8")
 LOOP_CPP = (ROOT / "navigation/ros/patrol_navigation_controller/src/segmented_rpp_controller.cpp").read_text(encoding="utf-8")
 RECOVERY_TREE = ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_loop_reapproach_forward.xml"
+LAUNCH = (ROOT / "navigation/ros/patrol_navigation/launch/navigation.launch.py").read_text(encoding="utf-8")
+CONFIG_DIR = ROOT / "navigation/ros/patrol_navigation/config"
 
 
 def test_each_loop_leg_has_obstacle_replanning_but_no_passed_goal_culling():
@@ -82,6 +84,62 @@ def test_arrival_regions_are_separate_and_spin_requires_signed_odometry():
     assert "LOOP_STAGE_PENDING_TIMEOUT_SEC = 8.0" in SERVER
     assert "LOOP_STAGE_WAIT_TIMEOUT" in SERVER
     assert ") < 1.2)" in CONTROL
+
+
+def test_loop_caches_two_physically_driven_directions_and_reuses_them():
+    assert "def begin_loop_trace(self)" in ROS
+    assert "def finish_loop_trace(self)" in ROS
+    assert "self._loop_trace.append(sample)" in ROS
+    assert "def _certify_physical_loop_path(" in SERVER
+    assert "self._loop_path_cache[direction] = certified" in SERVER
+    assert "direction not in self._loop_path_cache" in SERVER
+    assert "self._loop_completed_legs >= 1" in SERVER
+    assert "self._loop_path_cache.get(next_index, [])" in SERVER
+    assert "if reuse:" in SERVER
+    assert "self._ros.follow_loop_path, plan" in SERVER
+    assert "self._loop_cache_hits += 1" in SERVER
+    assert "self._loop_path_cache.clear()" in SERVER
+    assert "self._ros.discard_loop_trace()" in SERVER
+
+
+def test_cached_followpath_checks_dynamic_obstacles_before_replanning():
+    assert "def loop_path_valid(self, poses" in ROS
+    assert 'self._path_validity_client.call_async(request)' in ROS
+    assert "def _remaining_loop_path(" in SERVER
+    assert "if await asyncio.to_thread(self._ros.loop_path_valid, remainder)" in SERVER
+    assert "self._loop_path_cache.pop(index, None)" in SERVER
+    assert "self._loop_replans += 1" in SERVER
+    assert "self._ros.follow_loop_path, fresh, preempt=True" in SERVER
+    assert '"LOOP_CACHE_VALIDATION_FAILED"' in SERVER
+    assert "self._pending_nav_success is None" in SERVER
+
+
+def test_forward_only_loop_planner_is_separate_from_existing_goal_settings():
+    assert 'planner_plugins: ["GridBased", "LoopGridBased"]' in CONFIG
+    assert 'LoopGridBased:' in CONFIG
+    section = CONFIG.split("    LoopGridBased:", 1)[1].split("smoother_server:", 1)[0]
+    assert section.count("allow_reverse_expansion: false") == 2
+    assert "allow_reverse_expansion: true" not in section
+    regular = CONFIG.split("    GridBased:", 1)[1].split("    LoopGridBased:", 1)[0]
+    assert regular.count("allow_reverse_expansion: true") == 2
+    assert '"LoopGridBased.QuickMotion.lattice_filepath"' in LAUNCH
+    assert '"LoopGridBased.StableTurns.lattice_filepath"' in LAUNCH
+    assert "lattice_diff32_loop.json" in LAUNCH
+    assert "lattice_diff32_loop_stable.json" in LAUNCH
+    assert (CONFIG_DIR / "lattice_diff32_loop.json").read_bytes() == (
+        CONFIG_DIR / "lattice_diff32.json"
+    ).read_bytes()
+    assert (CONFIG_DIR / "lattice_diff32_loop_stable.json").read_bytes() == (
+        CONFIG_DIR / "lattice_diff32_stable.json"
+    ).read_bytes()
+    tree = ET.parse(RECOVERY_TREE)
+    assert all(
+        node.attrib.get("planner_id") == "LoopGridBased"
+        for node in tree.iter("ComputePathToPose")
+    )
+    assert "loop_forward=bool(loop_goals)" in SERVER
+    assert "loop_forward=True" in SERVER
+    assert 'request.planner_id = "LoopGridBased"' in ROS
 
 
 def test_operator_cancel_manual_mapping_estop_revoke_loop_before_next_motor_action():
