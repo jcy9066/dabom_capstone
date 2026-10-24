@@ -720,6 +720,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
         await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
         await self.api.start_navigation()
+        self.api._loop_stage = "turn"
+        self.api._loop_leg_index = 1
+        self.api._loop_turn_requested = math.pi
         now = time.time()
         self.map_api.ros_control.rotation = {
             "command_age_sec": 0.1,
@@ -731,7 +734,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         }):
             with self.api._lock:
                 terminal = self.api._sync_ros_navigation_terminal_locked(
-                    {"state": "FAILED", "action": "navigate_through_poses"}, now,
+                    {"state": "FAILED", "action": "spin"}, now,
                 )
         self.assertEqual("FAILED", terminal)
         self.assertIsNotNone(self.api._loop_recovery)
@@ -800,6 +803,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
         await self.api.start_navigation()
         self.api._loop_reverse_used = True
+        self.api._loop_stage = "turn"
+        self.api._loop_leg_index = 1
         now = time.time()
         self.map_api.ros_control.rotation = {
             "command_age_sec": 0.1, "command_angular_z": -0.4,
@@ -810,7 +815,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         }):
             with self.api._lock:
                 result = self.api._sync_ros_navigation_terminal_locked(
-                    {"state": "FAILED", "action": "navigate_through_poses"}, now,
+                    {"state": "FAILED", "action": "spin"}, now,
                 )
         self.assertEqual("FAILED", result)
         self.assertIsNone(self.api._loop_recovery)
@@ -847,15 +852,16 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
         await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
         await self.api.start_navigation()
-        before = len(self.map_api.ros_control.through_navigation_calls)
+        before = self.map_api.ros_control.navigate_calls
         stopped = await self.api.emergency_stop("test_loop_estop")
         self.assertTrue(stopped["emergency_stop"])
         self.assertFalse(stopped["loop_active"])
         self.assertEqual([], stopped["loop_goals"])
         self.assertIsNone(stopped["active_goal"])
         self.assertEqual([], stopped["waypoints"])
-        await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
-        self.assertEqual(before, len(self.map_api.ros_control.through_navigation_calls))
+        await self.api._advance_loop_leg()
+        self.assertEqual(before, self.map_api.ros_control.navigate_calls)
+        self.assertEqual([], self.map_api.ros_control.spin_radians)
 
     def test_loop_reverse_requires_fresh_post_stop_real_displacement(self):
         now = time.time()
@@ -909,10 +915,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                 await self.api._advance_loop_recovery()
         self.assertIsNone(self.api._loop_recovery)
         self.assertTrue(self.api._loop_reverse_used)
+        self.assertEqual("drive_pending", self.api.state_response()["loop_stage"])
+        self.assertEqual(0, self.api.state_response()["loop_leg_index"])
+        self.assertTrue(self.api._loop_pending)
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                await self.api._advance_loop_leg()
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
-        self.assertEqual([b["x"], a["x"]], [
-            p["x"] for p in self.map_api.ros_control.through_navigation_calls[-1][:2]
-        ])
+        self.assertEqual("drive", self.api.state_response()["loop_stage"])
+        self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
         self.assertEqual([], self.map_api.ros_control.backup_distances)
 
     async def test_loop_rejects_overlapping_a_b(self):
