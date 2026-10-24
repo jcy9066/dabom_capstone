@@ -77,7 +77,7 @@ class Nav2CommandBridge(Node):
         )
         self.declare_parameter(
             "min_auto_drive_pwm",
-            0.50,
+            0.30,
         )
 
         self.cmd_vel_topic = str(
@@ -145,10 +145,9 @@ class Nav2CommandBridge(Node):
                 "base_frame"
             ).value
         )
-        self.min_auto_drive_pwm = float(
-            self.get_parameter(
-                "min_auto_drive_pwm"
-            ).value
+        self.min_auto_drive_pwm = min(
+            float(self.get_parameter("min_auto_drive_pwm").value),
+            0.30,
         )
 
         if not math.isfinite(self.wheel_track_m) or self.wheel_track_m <= 0.0:
@@ -653,6 +652,13 @@ class Nav2CommandBridge(Node):
             left_pwm *= scale
             right_pwm *= scale
 
+        # Diagnostics reflect the Pi/Pico physical ceiling even with
+        # a larger legacy minimum-PWM configuration.
+        peak = max(abs(left_pwm), abs(right_pwm))
+        if peak > 0.30:
+            scale = 0.30 / peak
+            left_pwm *= scale
+            right_pwm *= scale
         return left_pwm, right_pwm
 
     def _lookup_pose(

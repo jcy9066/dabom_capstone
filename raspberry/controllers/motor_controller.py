@@ -41,7 +41,25 @@ ALLOWED_DIRECTIONS = frozenset(
 )
 
 _REASON_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
-MIN_AUTO_DRIVE_PWM = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0)
+# Hard motor duty-cycle ceiling, independent of the .env breakaway setting.
+# The Pico independently enforces this exact same physical limit.
+MOTOR_MAX_PWM = 0.30
+MIN_AUTO_DRIVE_PWM = min(
+    env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0),
+    MOTOR_MAX_PWM,
+)
+
+
+def cap_motor_pwm_pair(left: float, right: float) -> tuple[float, float]:
+    """Proportional peak clipping preserves differential steering curvature."""
+    peak = max(abs(left), abs(right))
+    if not math.isfinite(peak):
+        raise MotorControllerError("Non-finite motor PWM command")
+    if peak > MOTOR_MAX_PWM:
+        scale = MOTOR_MAX_PWM / peak
+        return left * scale, right * scale
+    return left, right
+
 
 
 class MotorControllerError(RuntimeError):
@@ -649,7 +667,7 @@ class MotorController:
 
         normalized_speed = max(
             0.0,
-            min(normalized_speed, 1.0),
+            min(normalized_speed, MOTOR_MAX_PWM),
         )
 
         if normalized_speed <= 0.0:
@@ -750,17 +768,16 @@ class MotorController:
             abs(right_normalized),
         )
 
-        if rear_blind_limited:
-            # A safety cap MUST take precedence over motor breakaway PWM.
-            # The motor may fail to move at 30% duty, but silently raising
-            # it to MIN_AUTO_DRIVE_PWM (often 50%) is not permitted.
-            if peak > 0.30:
-                left_normalized *= 0.30 / peak
-                right_normalized *= 0.30 / peak
-        elif 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+        if not rear_blind_limited and 0.0 < peak < MIN_AUTO_DRIVE_PWM:
             pwm_scale = MIN_AUTO_DRIVE_PWM / peak
             left_normalized *= pwm_scale
             right_normalized *= pwm_scale
+
+        # Apply the 30% hard ceiling to BOTH normal and rear-blind driving.
+        # Never raise output above this bound to overcome stiction.
+        left_normalized, right_normalized = cap_motor_pwm_pair(
+            left_normalized, right_normalized,
+        )
 
         with self._command_lock:
             self._ensure_connected_locked()
@@ -814,14 +831,15 @@ class MotorController:
             limited_left, limited_right = self._jerk_limiter.step(
                 left_normalized, right_normalized, time.monotonic(),
             )
-            if rear_blind_limited:
-                # Deceleration is allowed to bypass jerk smoothing when a
-                # fresh safety restriction lowers the permitted output.
-                final_peak = max(abs(limited_left), abs(limited_right))
-                if final_peak > 0.30:
-                    limited_left *= 0.30 / final_peak
-                    limited_right *= 0.30 / final_peak
-                    self._jerk_limiter.reset()
+            # The jerk limiter can overshoot a new target during a sharp
+            # reversal. Apply the physical ceiling *again* before UART.
+            final_peak = max(abs(limited_left), abs(limited_right))
+            limited_left, limited_right = cap_motor_pwm_pair(
+                limited_left, limited_right,
+            )
+            if final_peak > MOTOR_MAX_PWM:
+                # Clear the profile's pre-cap acceleration/target state.
+                self._jerk_limiter.reset()
             try:
                 self._exchange_locked(
                     "DRIVE,"

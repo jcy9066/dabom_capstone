@@ -356,3 +356,45 @@ timestamps rather than trusting unsynchronized Pi timestamps. This prevents
 future-stamp warnings while preserving LiDAR delivery, but it cannot provide
 accurate sensor exposure times. After updating both ends, the authenticated
 clock probe supplies corrected source timestamps.
+
+## 30% motor PWM hardware-safety ceiling (PR #90)
+
+All **motor-drive** PWM outputs are limited to 30% duty magnitude on both
+hosts: manual `MOVE` (forward, reverse, turns, spin), Nav2 autonomous
+`DRIVE`, and the Pico's physical PWM channels. Left/right commands preserve
+their steering ratio when scaled. STOP, emergency STOP, direction-reversal
+interlocks, watchdogs and buzzer volume are unchanged.
+
+- Pi `raspberry/controllers/motor_controller.py`: always caps signed PWM
+  to ±0.300 before UART, including the output **after** jerk limiting.
+- Pico `raspberry/pico_w_sdk/main.c`: `MOTOR_MAX_PWM=0.30f`; directly
+  received commands are capped in the command handlers and again in
+  `motor_request_signed_speed()` / `motor_write_pwm()`.
+- GPU Nav2 `nav2_command_bridge.py` diagnostic estimates cap at 0.300.
+  `MIN_AUTO_DRIVE_PWM` can never override the physical ceiling.
+
+**Important:** Flashing the **updated firmware** is required for the Pico-side
+change. Pulling the GitHub branch only updates source files, not the
+firmware already running on the MCU. With wheel power safely disconnected,
+compile the firmware using the installed Pico SDK:
+
+```bash
+cmake -S raspberry/pico_w_sdk -B raspberry/pico_w_sdk/build
+cmake --build raspberry/pico_w_sdk/build -j2
+```
+
+Deploy `raspberry/pico_w_sdk/build/pico_motor_controller.uf2` to the
+Pico W via BOOTSEL. Check Pico startup/UART STOP behavior before
+reconnecting motor power. The Pi runtime must also be restarted to load
+the new Python code; GPU runtime/rebuilt ROS overlay is required for new
+Nav2 diagnostic output.
+
+**This is a duty-cycle limit, not current limiting.** A stalled motor,
+mechanical obstruction, high startup current, undersized wiring or a
+damaged MDD10A can still exceed its thermal/electrical capacity at 30%.
+Check wheel freedom, wiring and driver temperature/current before
+resuming physical navigation. `MAX_WHEEL_MPS=0.212` was only a theoretical
+100%-PWM wheel-speed ceiling; remeasure actual wheel speed at <=30% and
+recalibrate Nav2 and both hosts before relying on traversal-time or
+blocked-progress thresholds. Low PWM may fail to overcome stiction and
+trigger `BLOCKED_TIMEOUT`; never automatically raise PWM to compensate.
