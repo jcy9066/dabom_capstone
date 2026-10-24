@@ -2135,6 +2135,8 @@ class NavigationControlApi:
             await self._deliver_terminal_stop()
         if not recovering and not hard_fault and self._loop_pending:
             await self._advance_loop_leg()
+        if not recovering and not hard_fault and self._loop_recovery is not None:
+            await self._advance_loop_recovery()
         with self._lock:
             remaining = ros_nav.get("number_of_poses_remaining")
             extend = bool(
@@ -2930,6 +2932,166 @@ class NavigationControlApi:
                 and dx * math.cos(heading) + dy * math.sin(heading) <= -0.15)
         except (KeyError, ValueError, TypeError, OverflowError):
             return False
+
+    async def _advance_loop_recovery(self) -> None:
+        """Once-only: stop -> guarded short backup -> same Goal -> spin -> loop.
+
+        Every stage waits for fresh Pi STOP ACK and stationary encoder proof.
+        No direct manual MOVE command can bypass the Nav2 collision guards.
+        """
+        async with self._operation_lock:
+            with self._lock:
+                recovery = self._loop_recovery
+                if recovery is None:
+                    return
+                phase = recovery["phase"]
+                if phase not in {
+                    "backup_wait_stop", "reapproach_wait_stop",
+                    "spin_wait_stop", "resume_wait_stop",
+                }:
+                    return
+                now = time.time()
+                allowed = (
+                    recovery["epoch"] == self._loop_epoch
+                    and self._loop_started and self._loop_goals
+                    and not self._state["emergency_stop"]
+                    and self._state["navigation_mode"] == "DRIVING"
+                    and self._robot_mode == "auto"
+                    and self._pi_navigation_mode == "DRIVING"
+                    and self._stop_confirmed_locked(now)
+                    and self._pending_terminal_stop is None
+                    and self._pending_goal_cancel is None
+                    and self._watchdog_issue_locked(now) is None
+                )
+                if not allowed:
+                    # Physical STOP may still be pending. Never take over
+                    # until the interlock is verified.
+                    return
+                epoch = self._loop_epoch
+                recovery["phase"] = "launching"
+                self._state["navigation_state"] = "LOOP_RECOVERY_STARTING"
+                self._touch_locked()
+                target = dict(recovery["goal"])
+                stage_goal: dict[str, float] | None = None
+
+            try:
+                if phase == "backup_wait_stop":
+                    source = recovery["failed_pose"]
+                    stage_goal = {
+                        "x": source["x"] - 0.35 * math.cos(source["yaw"]),
+                        "y": source["y"] - 0.35 * math.sin(source["yaw"]),
+                        "yaw": source["yaw"],
+                    }
+                    # Nav2 BackUp checks its footprint and the existing
+                    # rear sector guard independently limits unseen reverse.
+                    action = await asyncio.to_thread(
+                        self._ros.reverse_loop_recovery, 0.35,
+                    )
+                    next_phase = "backing"
+                elif phase == "reapproach_wait_stop":
+                    self._validate_goal_in_active_map(target)
+                    action = await asyncio.to_thread(
+                        self._ros.navigate_to_pose, target, loop_reapproach=True,
+                    )
+                    stage_goal = target
+                    next_phase = "reapproaching"
+                elif phase == "spin_wait_stop":
+                    latest = self._safe_live_pose()
+                    if latest is None:
+                        raise NavigationControlError(
+                            "LOOP_POSE_MISSING", "Fresh pose required before spin.",
+                        )
+                    spin_yaw = float(recovery["spin_angle"])
+                    stage_goal = {
+                        "x": float(latest["x"]),
+                        "y": float(latest["y"]),
+                        "yaw": math.atan2(
+                            math.sin(float(latest["yaw"]) + spin_yaw),
+                            math.cos(float(latest["yaw"]) + spin_yaw),
+                        ),
+                    }
+                    if (not all(math.isfinite(z) for z in stage_goal.values())
+                        or not 0 <= time.time() - float(latest["received_at"]) <= 0.5):
+                        raise NavigationControlError(
+                            "LOOP_POSE_STALE", "Cannot certify turn origin.",
+                        )
+                    action = await asyncio.to_thread(
+                        self._ros.spin_loop_turn, spin_yaw,
+                    )
+                    next_phase = "turning"
+                else:
+                    # At the same original Goal, the robot now faces the next
+                    # leg after a full 180 degree Spin. Resume the standard
+                    # obstacle-aware, forward-only rolling loop.
+                    first = int(recovery["goal_index"])
+                    batch = self._loop_route_points(self._loop_goals, first)
+                    goal, waypoints = batch[-1], batch[:-1]
+                    path = self._normalized_path(
+                        await asyncio.to_thread(
+                            self._compute_path_for_route, goal, waypoints,
+                        )
+                    )
+                    if len(path) < 2:
+                        raise NavigationControlError(
+                            "LOOP_RESUME_PATH_MISSING", "Cannot resume safe loop.",
+                        )
+                    stage_goal = goal
+                    action = await asyncio.to_thread(
+                        self._ros.navigate_through_poses, batch, loop=True,
+                    )
+                    next_phase = "resumed"
+                if not isinstance(action, dict) or action.get("accepted") is not True:
+                    raise NavigationControlError(
+                        "LOOP_RECOVERY_REJECTED", "Nav2 rejected the recovery action.",
+                    )
+            except Exception:
+                with self._lock:
+                    if self._loop_recovery is recovery and epoch == self._loop_epoch:
+                        self._clear_loop_locked()
+                        self._arm_pending_stop_locked()
+                        self._pending_terminal_stop = {
+                            "reason": "loop_recovery_failed",
+                            "attempts": 0, "last_attempt_at": None,
+                            "processing": False,
+                        }
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = "LOOP_RECOVERY_FAILED"
+                        self._touch_locked()
+                return
+
+            with self._lock:
+                interrupted = (
+                    self._loop_recovery is not recovery
+                    or epoch != self._loop_epoch
+                    or self._state["emergency_stop"]
+                    or self._robot_mode != "auto"
+                    or self._state["navigation_mode"] != "DRIVING"
+                )
+                if not interrupted:
+                    self._state["active_goal"] = stage_goal
+                    self._state["navigation_state"] = "NAVIGATING"
+                    self._state["last_error"] = None
+                    self._stop_commanded_at = None
+                    self._stop_encoder_ticks = None
+                    self._stop_confirmation_after_sequence = None
+                    self._post_resume_motion_ready = False
+                    if next_phase == "resumed":
+                        self._loop_route_start_index = int(recovery["goal_index"])
+                        self._loop_route_size = len(batch)
+                        self._loop_leg_index = int(recovery["goal_index"])
+                        self._state["waypoints"] = [dict(p) for p in waypoints]
+                        self._state["planned_path"] = path
+                        self._loop_recovery = None
+                    else:
+                        recovery["phase"] = next_phase
+                    self._start_navigation_progress_locked(
+                        self._safe_live_pose(), time.time(),
+                    )
+                    self._touch_locked()
+            if interrupted:
+                # A user cancellation may have landed during an async Nav2
+                # action acceptance. Do not leave that action running.
+                await asyncio.to_thread(self._ros.cancel_navigation)
 
     async def _advance_loop_leg(self) -> None:
         """Fail closed if rolling route preemption missed the final pose.
