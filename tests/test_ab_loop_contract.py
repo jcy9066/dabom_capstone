@@ -1,6 +1,8 @@
 """Source-contract regression checks for physically verified A/B loop turns."""
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import json
+import math
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
@@ -94,6 +96,28 @@ def test_arrival_regions_are_separate_and_spin_requires_signed_odometry():
     assert "LOOP_STAGE_PENDING_TIMEOUT_SEC = 8.0" in SERVER
     assert "LOOP_STAGE_WAIT_TIMEOUT" in SERVER
     assert ") < 1.2)" in CONTROL
+
+
+def test_lattice_pivot_samples_survive_loop_segmentation():
+    # Approved lattice JSON carries 0.19635 rad pivots sampled 8 times:
+    # each increment ~0.02454 rad, below the old controller's 0.03 rad
+    # pivot threshold. Verify the exact on-disk motion primitives.
+    lattice = json.loads((CONFIG_DIR / "lattice_diff32_loop.json").read_text())
+    pivot_edges = []
+    for primitive in lattice["primitives"]:
+        poses = primitive["poses"]
+        for before, after in zip(poses, poses[1:]):
+            if math.hypot(after[0] - before[0], after[1] - before[1]) < 0.003:
+                yaw = math.atan2(
+                    math.sin(after[2] - before[2]),
+                    math.cos(after[2] - before[2]),
+                )
+                if abs(yaw) > 1e-5:
+                    pivot_edges.append(yaw)
+    assert pivot_edges, "Loop motion lattice must support stationary turns"
+    assert any(0.005 < abs(v) < 0.03 for v in pivot_edges)
+    assert "minimum_pivot_yaw = loop_forward_only_ ? 0.005 : 0.03" in LOOP_CPP
+    assert "std::abs(delta_yaw) > minimum_pivot_yaw" in LOOP_CPP
 
 
 def test_loop_caches_two_physically_driven_directions_and_reuses_them():
