@@ -348,6 +348,19 @@ def robot_id_failure(payload):
     )
 
 
+@app.get("/api/time/sync")
+async def gpu_time_sync(request: Request):
+    """Authenticated wall-clock sample for Pi/GPU LiDAR timestamp alignment.
+
+    This endpoint never changes either system clock. Client estimates transport
+    offset using multiple bounded RTT probes and falls back if unavailable.
+    """
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
+    return {"server_time_sec": time.time()}
+
+
 @app.get("/api/auth/csrf")
 async def get_auth_csrf_token(request: Request):
     return {"ok": True, "csrf_token": issue_csrf_token(request)}

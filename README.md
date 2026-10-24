@@ -293,3 +293,59 @@ dabom_capstone/
 - `review-change`
 
 하드웨어가 연결되지 않은 개발 환경에서는 shell syntax와 정적 코드 검증까지만 수행하고 실제 Camera/LiDAR/Pico 동작을 검증했다고 간주하지 않습니다.
+
+## Pi/GPU clock alignment and LiDAR TF
+
+The GPU server (including WSL2) and Raspberry Pi are independent hosts.
+Copying `.env` does **not** change OS time. When
+`LIDAR_USE_SOURCE_TIMESTAMP=true`, raw Pi scan stamps previously appeared
+0.1-0.4 seconds in the GPU's future, causing TF future-stamp warnings.
+
+With this revision the Pi's LiDAR sender takes authenticated, short-RTT
+samples from `/api/time/sync` every 15 seconds, estimates the GPU-minus-Pi
+offset, and translates LiDAR stamps to the GPU's clock domain. No root
+permissions, OS clock changes, or new `.env` secrets are required. During
+startup, loss of synchronization or high network latency, the GPU stamps
+incoming scans with its own receipt time. This **fallback is approximate**:
+it may introduce latency error, so persistent bad sync still needs repair.
+
+On the **Pi**, with the GPU server already running:
+
+```bash
+cd ~/dabom_capstone
+python3 scripts/check_gpu_pi_clock.py
+timedatectl status
+```
+
+On the **GPU server**:
+
+```bash
+timedatectl status
+date -u '+%Y-%m-%dT%H:%M:%S.%NZ'
+```
+
+For a Pi using systemd-timesyncd, enable its normal automatic NTP sync
+(when running a different time client such as chrony, use that instead):
+
+```bash
+sudo timedatectl set-ntp true
+timedatectl timesync-status
+```
+
+For a GPU host running WSL2, synchronize **Windows** time first; WSL2
+normally receives its time from the Windows/Hyper-V host. Run
+`w32tm /query /status` from Windows PowerShell. Reinitialize WSL using
+`wsl --shutdown` **only with all robot/GPU processes safely stopped**;
+this forcibly terminates WSL sessions. Do not automatically set host time
+while motors or navigation are running.
+
+Review only non-secret settings on each machine; the user-managed local
+`.env` is not stored in GitHub:
+
+```bash
+grep -nE '^(LIDAR_USE_SOURCE_TIMESTAMP|PIPELINE|STATUS_REQUEST_TIMEOUT_SEC)=' .env
+```
+
+`STATUS_REQUEST_TIMEOUT_SEC` governs Pi HTTP `/status` telemetry and
+is unrelated to LiDAR clock skew. Repeated HTTP timeouts or WebSocket
+`InvalidMessage` still need an independent network/server-load check.

@@ -366,7 +366,9 @@ class LidarRosBridge:
         # Only evidently future source stamps are replaced by GPU receipt
         # time; otherwise keep the original measurement time for SLAM.
         received_stamp = self.node.get_clock().now().to_msg()
-        if self.use_source_timestamp:
+        # A current Pi clock estimate is required for newly updated senders.
+        # Legacy senders without this field retain the pre-existing behavior.
+        if self.use_source_timestamp and header.get("clock_sync_valid", True) is True:
             stamp_sec = int(header.get("stamp_sec") or 0)
             stamp_nanosec = int(header.get("stamp_nanosec") or 0)
             valid_source = stamp_sec > 0 and 0 <= stamp_nanosec < 1_000_000_000

@@ -17,8 +17,10 @@ import websockets
 
 try:
     from raspberry.env_config import env_float, env_text
+    from raspberry.clock_sync import probe_gpu_clock
 except ModuleNotFoundError:  # Direct script execution from raspberry/.
     from env_config import env_float, env_text
+    from clock_sync import probe_gpu_clock
 
 
 def utc_now_iso() -> str:
@@ -50,6 +52,7 @@ class LidarScanSender(Node):
         self.control_token = env_text("ROBOT_CONTROL_TOKEN")
         self.scan_topic = env_text("LIDAR_SCAN_TOPIC")
         server_base_url = env_text("SERVER_BASE_URL").rstrip("/")
+        self.server_base_url = server_base_url
         ws_base_url = server_base_url.replace("http://", "ws://").replace(
             "https://", "wss://"
         )
@@ -65,6 +68,16 @@ class LidarScanSender(Node):
         self.sent_count = 0
         self.dropped_count = 0
         self.last_warning_at = 0.0
+        self.clock_offset_sec = None
+        self.clock_sample_monotonic = 0.0
+        self.clock_wall_minus_monotonic = None
+        self.clock_lock = threading.Lock()
+        self.clock_sync_thread = threading.Thread(
+            target=self.clock_sync_loop,
+            name="lidar-clock-sync",
+            daemon=True,
+        )
+        self.clock_sync_thread.start()
 
         self.subscription = self.create_subscription(
             LaserScan,
@@ -86,8 +99,50 @@ class LidarScanSender(Node):
             f"topic={self.scan_topic}"
         )
 
+    def clock_sync_loop(self) -> None:
+        """Measure clock difference without changing the Pi/WSL2 system clocks."""
+        while not self.stop_event.is_set():
+            try:
+                estimate = probe_gpu_clock(self.server_base_url, self.control_token)
+                with self.clock_lock:
+                    previous = self.clock_offset_sec
+                    self.clock_offset_sec = estimate.offset_sec
+                    self.clock_sample_monotonic = time.monotonic()
+                    self.clock_wall_minus_monotonic = time.time() - self.clock_sample_monotonic
+                if previous is None or abs(previous - estimate.offset_sec) >= 0.05:
+                    self.get_logger().info(
+                        f"GPU/Pi clock offset={estimate.offset_sec:+.3f}s "
+                        f"RTT={estimate.rtt_sec:.3f}s; correcting LiDAR stamps"
+                    )
+            except RuntimeError:
+                self.warn_throttled(
+                    "GPU/Pi clock probe unavailable; LiDAR uses GPU receipt timestamps"
+                )
+            self.stop_event.wait(15.0)
+
     def on_scan(self, msg: LaserScan) -> None:
         self.scan_count += 1
+
+        # No correction until a recent authenticated, low-RTT GPU measurement.
+        # The GPU bridge then uses its local receipt clock as a safe fallback.
+        mono_now = time.monotonic()
+        wall_now = time.time()
+        with self.clock_lock:
+            valid_sync = (
+                self.clock_offset_sec is not None
+                and self.clock_wall_minus_monotonic is not None
+                and mono_now - self.clock_sample_monotonic <= 45.0
+                and abs(
+                    wall_now - mono_now - self.clock_wall_minus_monotonic
+                ) <= 0.05
+            )
+            offset_sec = self.clock_offset_sec if valid_sync else 0.0
+        stamp_ns = (
+            int(msg.header.stamp.sec) * 1_000_000_000
+            + int(msg.header.stamp.nanosec)
+            + round(offset_sec * 1_000_000_000)
+        )
+        valid_sync = bool(valid_sync and stamp_ns > 0)
 
         payload = {
             "type": "laser_scan",
@@ -95,8 +150,9 @@ class LidarScanSender(Node):
             "sequence": self.scan_count,
             "sent_at": utc_now_iso(),
             "header": {
-                "stamp_sec": int(msg.header.stamp.sec),
-                "stamp_nanosec": int(msg.header.stamp.nanosec),
+                "stamp_sec": int(stamp_ns // 1_000_000_000),
+                "stamp_nanosec": int(stamp_ns % 1_000_000_000),
+                "clock_sync_valid": valid_sync,
                 "frame_id": msg.header.frame_id or "laser",
             },
             "scan_time": float(msg.scan_time),
