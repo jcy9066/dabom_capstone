@@ -135,12 +135,9 @@ def test_http_worker_survives_unexpected_send_exception():
         with bridge._command_condition:
             bridge._pending_command = {"type": "auto_drive"}
             bridge._command_condition.notify_all()
-        limit = time.monotonic() + 2.0
-        while len(attempts) < 1 and time.monotonic() < limit:
-            time.sleep(0.005)
-        assert len(attempts) == 1
-        # Failed auto_drive ACK must itself schedule a STOP. The worker
-        # cannot require a second external STOP input to recover safely.
+        # The worker may already send the mandatory STOP before this thread
+        # wakes up. Do not assert a transient intermediate attempt count.
+        # Wait for the STOP and verify the exact ordered sequence below.
         assert done.wait(2.0), "STOP was not processed after a prior exception"
         assert [item["type"] for item in attempts] == ["auto_drive", "stop"]
         assert bridge.send_error_count == 1
