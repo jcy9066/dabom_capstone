@@ -158,7 +158,13 @@ void SegmentedRPPController::buildStages()
       const auto & q = path_.poses[index + 1];
       const double separation = distance(p, q);
       const double delta_yaw = angles::shortest_angular_distance(yaw(p), yaw(q));
-      if (separation < 0.003 && std::abs(delta_yaw) > 0.03) {
+      // The approved 32-heading loop lattice samples a stationary pivot
+      // in ~0.02454 rad increments. The legacy 0.03 rad threshold silently
+      // classified EVERY sampled pivot edge as a duplicate (kind 4).
+      // Restrict this fix to the loop controller; normal SET GOAL keeps
+      // its existing segmentation threshold and behavior.
+      const double minimum_pivot_yaw = loop_forward_only_ ? 0.005 : 0.03;
+      if (separation < 0.003 && std::abs(delta_yaw) > minimum_pivot_yaw) {
         return delta_yaw > 0 ? 2 : 3;  // spin left, spin right
       }
       if (separation < 0.003) {
