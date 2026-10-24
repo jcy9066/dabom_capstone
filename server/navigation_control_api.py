@@ -3149,26 +3149,163 @@ class NavigationControlApi:
                 await asyncio.to_thread(self._ros.cancel_navigation)
 
     async def _advance_loop_leg(self) -> None:
-        """Fail closed if rolling route preemption missed the final pose.
+        """Advance only after the last action physically stopped.
 
-        The old fallback restarted a single NavigateToPose, which could
-        reverse without a 180-degree pivot. Do not permit that transition.
-        Nav2's terminal success already triggers the existing Pi STOP and
-        fresh encoder proof before this method is called.
+        Each A/B is a terminal single-leg Goal. Its arrival always requires
+        fresh Pi STOP ACK + stationary encoder samples. A distinct Nav2 Spin
+        must then finish before the next forward-only navigation action.
         """
         async with self._operation_lock:
             with self._lock:
-                if not self._loop_pending:
+                if not self._loop_pending or len(self._loop_goals) != 2:
                     return
-                self._clear_loop_locked()
-                if self._state["emergency_stop"]:
+                phase = self._loop_stage
+                epoch = self._loop_epoch
+                now = time.time()
+                allowed = (
+                    phase in {"turn_pending", "drive_pending"}
+                    and self._loop_started
+                    and self._state["navigation_state"] == "READY"
+                    and self._state["navigation_mode"] == "DRIVING"
+                    and self._robot_mode == "auto"
+                    and self._pi_navigation_mode == "DRIVING"
+                    and self._pi_estop_latched is False
+                    and not self._state["emergency_stop"]
+                    and self._pending_goal_cancel is None
+                    and self._stop_confirmed_locked(now)
+                    and self._motion_allowed_locked(now)
+                    and self._watchdog_issue_locked(now) is None
+                )
+                if not allowed:
+                    # A stop or sensor handshake can still be in flight.
                     return
-                self._state["navigation_state"] = "FAILED"
-                self._state["last_error"] = "LOOP_CONTINUITY_LOST"
-                self._state["active_goal"] = None
-                self._state["waypoints"] = []
-                self._state["planned_path"] = []
+                index = self._loop_leg_index
+                goals = [dict(p) for p in self._loop_goals]
+                half_turn = self._loop_completed_legs >= 2
+                clockwise = self._loop_next_turn_clockwise
+                self._loop_pending = False
+                self._state["navigation_state"] = "LOOP_STAGE_STARTING"
                 self._touch_locked()
+            action_accepted = False
+            try:
+                self._assert_watchdogs_healthy()
+                if phase == "turn_pending":
+                    pose = self._safe_live_pose()
+                    now = time.time()
+                    if not isinstance(pose, dict) or not 0 <= now - float(
+                        pose["received_at"]
+                    ) <= 0.5:
+                        raise NavigationControlError(
+                            "LOOP_POSE_STALE", "Cannot verify 180-degree turn origin.", 409,
+                        )
+                    # A first arrival may come from any direction: align to
+                    # A->B; every subsequent B/A turnaround turns 180 deg.
+                    heading = math.atan2(
+                        goals[1]["y"] - goals[0]["y"],
+                        goals[1]["x"] - goals[0]["x"],
+                    )
+                    if half_turn:
+                        angle = -math.pi if clockwise else math.pi
+                    else:
+                        desired = heading if index == 0 else heading + math.pi
+                        angle = math.atan2(
+                            math.sin(desired - float(pose["yaw"])),
+                            math.cos(desired - float(pose["yaw"])),
+                        )
+                    target = {
+                        "x": float(pose["x"]), "y": float(pose["y"]),
+                        "yaw": math.atan2(
+                            math.sin(float(pose["yaw"]) + angle),
+                            math.cos(float(pose["yaw"]) + angle),
+                        ),
+                    }
+                    if abs(angle) < 0.12 and not half_turn:
+                        # Already aligned at the initial A. No 180 turn is
+                        # skipped: the first arrival is not yet a turnaround.
+                        with self._lock:
+                            if epoch != self._loop_epoch or not self._loop_started:
+                                return
+                            self._loop_leg_index = 1 - index
+                            self._loop_stage = "drive_pending"
+                            self._loop_pending = True
+                            self._state["navigation_state"] = "READY"
+                            self._touch_locked()
+                        return
+                    action = await asyncio.to_thread(self._ros.spin_loop_turn, angle)
+                    next_phase = "turn"
+                    plan = []
+                else:
+                    next_index = index  # Index was flipped after the turn.
+                    previous = goals[1 - next_index]
+                    destination = goals[next_index]
+                    heading = math.atan2(
+                        destination["y"] - previous["y"],
+                        destination["x"] - previous["x"],
+                    )
+                    target = {
+                        "x": destination["x"], "y": destination["y"], "yaw": heading,
+                    }
+                    self._validate_goal_in_active_map(target)
+                    plan = self._normalized_path(
+                        await asyncio.to_thread(self._compute_path_for_route, target, [])
+                    )
+                    if len(plan) < 2:
+                        raise NavigationControlError(
+                            "LOOP_PATH_NOT_FOUND", "No safe forward loop leg.", 422,
+                        )
+                    with self._lock:
+                        if epoch != self._loop_epoch or not self._loop_started:
+                            return
+                    action = await asyncio.to_thread(
+                        self._ros.navigate_to_pose, target, loop_reapproach=True,
+                    )
+                    next_phase = "drive"
+                if not isinstance(action, dict) or action.get("accepted") is not True:
+                    raise NavigationControlError(
+                        "LOOP_ACTION_REJECTED", "Nav2 rejected a loop action.", 422,
+                    )
+                action_accepted = True
+            except Exception:
+                with self._lock:
+                    if epoch == self._loop_epoch and self._loop_goals:
+                        self._clear_loop_locked()
+                        self._arm_pending_stop_locked()
+                        self._pending_terminal_stop = {
+                            "reason": "loop_stage_failed",
+                            "attempts": 0, "last_attempt_at": None,
+                            "processing": False,
+                        }
+                        self._state["navigation_state"] = "FAILED"
+                        self._state["last_error"] = "LOOP_STAGE_FAILED"
+                        self._touch_locked()
+                return
+            with self._lock:
+                interrupted = (
+                    epoch != self._loop_epoch or self._state["emergency_stop"]
+                    or self._robot_mode != "auto"
+                    or self._state["navigation_mode"] != "DRIVING"
+                )
+                if not interrupted:
+                    self._loop_stage = next_phase
+                    self._state["active_goal"] = target
+                    self._state["waypoints"] = []
+                    self._state["planned_path"] = plan
+                    self._state["navigation_state"] = "NAVIGATING"
+                    self._state["last_error"] = None
+                    self._stop_commanded_at = None
+                    self._stop_encoder_ticks = None
+                    self._stop_confirmation_after_sequence = None
+                    self._post_resume_motion_ready = False
+                    if phase == "turn_pending":
+                        self._loop_turn_target = dict(target)
+                        self._loop_turn_requested = angle
+                    self._start_navigation_progress_locked(
+                        self._safe_live_pose(), time.time(),
+                    )
+                    self._touch_locked()
+            if interrupted and action_accepted:
+                # Cancel accepted action if user canceled during ROS handshake.
+                await asyncio.to_thread(self._ros.cancel_navigation)
 
     @staticmethod
     def _cancel_terminal(cancel: Any) -> str | None:
