@@ -43,7 +43,9 @@ def test_loop_does_not_modify_regular_goal_mode():
 def test_pivot_turnaround_does_not_fall_back_to_reverse_navigation():
     assert "heading_ab if (first + index) % 2 == 0 else heading_ba" in SERVER
     assert "LOOP_CONTINUITY_LOST" in SERVER
-    assert "No automatic reverse fallback" not in SERVER or "_advance_loop_leg" in SERVER
+    assert "await self.start_navigation()" not in SERVER.split(
+        "async def _advance_loop_leg", 1
+    )[1].split("def _cancel_terminal", 1)[0]
 
 
 def test_cancel_manual_mapping_estop_revoke_loop_ownership():
