@@ -483,11 +483,7 @@
             setFeedback('Pi 연결 상태를 확인할 수 없어 주행 모드를 변경하지 않습니다.', true);
             return false;
         }
-        // Selecting AUTO prepares navigation only. It never starts a Goal.
-        if (target === 'AUTO' && state.control?.navigation_mode !== 'DRIVING') {
-            const ready = await requestNavigationMode('DRIVING');
-            if (ready !== true) return false; // e.g. operator must select a map/Initial Pose
-        }
+        // AUTO/MANUAL selection must not change MAPPING/DRIVING mode.
         state.drivePending = true;
         state.pointerId = null;
         state.pointerStart = null;
@@ -502,7 +498,9 @@
             if (confirmed.patrol_transition
                 || String(confirmed.robot_mode || '').toUpperCase() !== target
                 || confirmed.patrol_transition_error
-                || (target === 'AUTO' && confirmed.patrol_ready !== true)) {
+                || (target === 'AUTO'
+                    && String(confirmed.navigation_mode || '').toUpperCase() === 'DRIVING'
+                    && confirmed.patrol_ready !== true)) {
                 throw new Error('GPU·Pi 주행 모드가 일치하지 않습니다.');
             }
             if (options.announce !== false) {
