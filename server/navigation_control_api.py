@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import threading
 import time
@@ -313,6 +314,43 @@ class NavigationControlApi:
             elif received_at >= self._volume_override_until:
                 self._speaker_volume_percent = None
             self._touch_locked(received_at)
+
+    def note_pi_command_ack(
+        self, robot_id: str, command: dict[str, Any], ack: dict[str, Any],
+    ) -> None:
+        """Synchronize STOP safety epoch from a command_id-matched Pi ACK.
+
+        This is called only after RobotConnectionManager has matched the ACK
+        to the current Pi WebSocket and pending command_id. Never infer a
+        successful physical STOP from missing/malformed/negative ACK data.
+        """
+        if robot_id != self._robot_id or not isinstance(ack, dict):
+            return
+        command_type = command.get("type") if isinstance(command, dict) else None
+        if command_type == "auto_drive" and ack.get("ok") is not True:
+            detail = str(ack.get("error") or "negative Pi ACK")[:200]
+            logging.getLogger(__name__).warning(
+                "Pi rejected auto_drive command: %s", detail,
+            )
+            return
+        if command_type != "stop" or ack.get("ok") is not True:
+            return
+        session = ack.get("safety_session")
+        epoch = ack.get("safety_epoch")
+        with self._lock:
+            # Do not refresh status, release a STOP gate, or adopt an unknown
+            # Pi session. Only advance the monotonically increasing epoch
+            # for the already established live Pi identity.
+            if (
+                self._connected
+                and isinstance(session, str)
+                and session == self._pi_safety_session
+                and type(epoch) is int
+                and epoch >= 0
+                and type(self._pi_safety_epoch) is int
+                and epoch >= self._pi_safety_epoch
+            ):
+                self._pi_safety_epoch = epoch
 
     def note_navigation_sample(
         self,
