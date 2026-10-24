@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import threading
 import time
+from uuid import uuid4
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import websockets
@@ -14,6 +15,19 @@ from dotenv import load_dotenv
 
 from controllers.motor_controller import MotorController
 from controllers.speaker_controller import SpeakerController
+
+try:
+    from raspberry.encoder_ros_publisher import EncoderRosPublisher
+except ModuleNotFoundError:
+    from encoder_ros_publisher import EncoderRosPublisher
+try:
+    from raspberry.gps_reader import GpsReader
+except ModuleNotFoundError:
+    from gps_reader import GpsReader
+try:
+    from raspberry.env_config import env_float, env_int, env_text
+except ModuleNotFoundError:  # Direct script execution from raspberry/.
+    from env_config import env_float, env_int, env_text
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -24,21 +38,25 @@ class RobotCommandClient:
     def __init__(self, args: argparse.Namespace) -> None:
         self.robot_id = args.robot_id
         self.server_base_url = args.server_base_url.rstrip("/")
+        self.control_token = args.control_token
 
         self.status_url = (
             f"{self.server_base_url}/status"
         )
 
-        self.ws_url = (
-            args.ws_url
-            or self.server_base_url
+        ws_url = (
+            self.server_base_url
             .replace("http://", "ws://")
             .replace("https://", "wss://")
-            + f"/ws/robot/{self.robot_id}"
+            + f"/ws/robot/{quote(self.robot_id, safe='')}"
         )
+        self.ws_url = ws_url
 
         self.status_interval_sec = (
             args.status_interval_sec
+        )
+        self.status_request_timeout_sec = (
+            args.status_request_timeout_sec
         )
         self.ws_reconnect_delay_sec = (
             args.ws_reconnect_delay_sec
@@ -48,7 +66,21 @@ class RobotCommandClient:
         )
 
         self.running = True
-        self.current_mode = "auto"
+        self.current_mode = "manual"
+        self.navigation_mode = "mapping"
+        self._safety_lock = threading.Lock()
+        self.emergency_stop_latched = False
+        self._safety_session = uuid4().hex
+        self._safety_epoch = 0
+        self._resume_safety_prepared = False
+        self._pico_reboot_generation = 0
+        self.led_enabled = False
+        self._manual_led_enabled = False
+        self._led_task = None
+        self._warning_task = None
+        self._cpu_sample = None
+        self._last_status_latency_ms = None
+        self._server_reachable = None
 
         self.motor = MotorController(
             serial_port=args.serial_port,
@@ -59,8 +91,19 @@ class RobotCommandClient:
         )
 
         self.speaker = SpeakerController()
+        self.encoder_ros = EncoderRosPublisher(
+            topic=env_text("WHEEL_TICKS_TOPIC")
+        )
+
+        self.gps = GpsReader(
+            port="/dev/ttyAMA1",
+            baudrate=9600,
+        )
 
     def start(self) -> None:
+        self.gps.start()
+        self.encoder_ros.start()
+
         threads = [
             threading.Thread(
                 target=self.status_loop,
@@ -83,31 +126,145 @@ class RobotCommandClient:
 
         finally:
             self.running = False
+            self.gps.close()
+            self.encoder_ros.close()
             self.motor.close()
 
+    @staticmethod
+    def _read_cpu_times() -> tuple[int, int] | None:
+        try:
+            line = Path("/proc/stat").read_text(
+                encoding="utf-8"
+            ).splitlines()[0]
+            fields = line.split()
+            if not fields or fields[0] != "cpu":
+                return None
+            values = [int(value) for value in fields[1:]]
+            if len(values) < 4:
+                return None
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            return sum(values), idle
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _cpu_usage_percent(self) -> float | None:
+        current = self._read_cpu_times()
+        if current is None:
+            return None
+        previous = self._cpu_sample
+        self._cpu_sample = current
+        if previous is None:
+            return None
+        total_delta = current[0] - previous[0]
+        idle_delta = current[1] - previous[1]
+        if total_delta <= 0:
+            return None
+        busy = 100.0 * (total_delta - idle_delta) / total_delta
+        return round(max(0.0, min(100.0, busy)), 1)
+
+    @staticmethod
+    def _ram_usage_percent() -> float | None:
+        try:
+            values = {}
+            for line in Path("/proc/meminfo").read_text(
+                encoding="utf-8"
+            ).splitlines():
+                key, _, raw = line.partition(":")
+                if key in {"MemTotal", "MemAvailable"}:
+                    values[key] = int(raw.strip().split()[0])
+            total = values.get("MemTotal", 0)
+            available = values.get("MemAvailable", 0)
+            if total <= 0:
+                return None
+            used = 100.0 * (total - available) / total
+            return round(max(0.0, min(100.0, used)), 1)
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _cpu_temp_c() -> float | None:
+        for path in (
+            Path("/sys/class/thermal/thermal_zone0/temp"),
+            Path("/sys/devices/virtual/thermal/thermal_zone0/temp"),
+        ):
+            try:
+                raw = float(path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                continue
+            value = raw / 1000.0 if raw > 200.0 else raw
+            if -40.0 <= value <= 150.0:
+                return round(value, 1)
+        return None
+
+    def _current_speaker_volume(self) -> int | None:
+        if not self.motor.connected or self.motor.pico_reboot_pending():
+            return None
+        volume = getattr(self.motor, "volume_percent", None)
+        return volume if type(volume) is int and 0 <= volume <= 100 else None
+
     def status_payload(self) -> dict:
+        gps = self.gps.snapshot()
+        with self._safety_lock:
+            safety_epoch = self._safety_epoch
+            emergency_stop_latched = self.emergency_stop_latched
+
+        if self._server_reachable is True:
+            internet = "ok"
+        elif self._server_reachable is False:
+            internet = "offline"
+        else:
+            internet = "unknown"
+
         return {
             "robot_id": self.robot_id,
-            "cpu_usage": "0.0",
-            "cpu_temp": "0.0",
-            "ram_usage": "0.0",
-            "battery": "100",
-            "internet": "ok",
+            "cpu_usage": self._cpu_usage_percent(),
+            "cpu_temp": self._cpu_temp_c(),
+            "ram_usage": self._ram_usage_percent(),
+            "gps_fix": gps["fix"],
+            "gps_lat": gps["lat"],
+            "gps_lng": gps["lng"],
+            "gps_alt": gps["alt"],
+            "gps_satellites": gps["satellites"],
+            "gps_hdop": gps["hdop"],
+            "gps_updated_at": gps["updated_at"],
+            "internet": internet,
+            "ping": self._last_status_latency_ms,
             "mode": self.current_mode,
+            "navigation_mode": self.navigation_mode,
+            "safety_session": self._safety_session,
+            "safety_epoch": safety_epoch,
+            "navigation_state": (
+                "EMERGENCY_STOPPED"
+                if emergency_stop_latched
+                else "IDLE"
+            ),
+            "emergency_stop": emergency_stop_latched,
+            "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
+            "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
+            "max_wheel_mps": self.motor.max_wheel_mps,
         }
 
     def status_loop(self) -> None:
         while self.running:
+            started_at = time.monotonic()
             try:
                 requests.post(
                     self.status_url,
                     json=self.status_payload(),
-                    timeout=1.0,
+                    headers={"X-Robot-Control-Token": self.control_token},
+                    timeout=self.status_request_timeout_sec,
                 )
+                self._last_status_latency_ms = round(
+                    (time.monotonic() - started_at) * 1000.0,
+                    1,
+                )
+                self._server_reachable = True
 
             except requests.RequestException as exc:
+                self._last_status_latency_ms = None
+                self._server_reachable = False
                 print(f"[status] 전송 실패: {exc}")
 
             time.sleep(self.status_interval_sec)
@@ -122,15 +279,14 @@ class RobotCommandClient:
             try:
                 async with websockets.connect(
                     self.ws_url,
+                    extra_headers={"X-Robot-Control-Token": self.control_token},
                     ping_interval=10,
                     ping_timeout=5,
                     close_timeout=1,
                     max_queue=16,
                 ) as websocket:
 
-                    print(
-                        f"[ws] connected: {self.ws_url}"
-                    )
+                    print(f"[ws] connected: robot_id={self.robot_id}")
 
                     encoder_task = asyncio.create_task(
                         self.encoder_telemetry_loop(
@@ -154,17 +310,25 @@ class RobotCommandClient:
                             await encoder_task
                         except asyncio.CancelledError:
                             pass
+                        except Exception as exc:
+                            print(f"[encoder] telemetry stopped: {exc}")
+                        finally:
+                            self._resume_safety_prepared = False
+                            was_moving = self.motor.current_motion != "stop"
+                            self.motor.stop(
+                                reason="websocket_disconnected",
+                                suppress_errors=True,
+                            )
+                            if was_moving:
+                                with self._safety_lock:
+                                    self.emergency_stop_latched = True
+                                    self._safety_epoch += 1
 
             except asyncio.CancelledError:
                 raise
 
             except Exception as exc:
-                print(f"[ws] disconnected: {exc}")
-
-                self.motor.stop(
-                    reason="websocket_disconnected",
-                    suppress_errors=True,
-                )
+                print(f"[ws] disconnected: {type(exc).__name__}")
 
                 await asyncio.sleep(
                     self.ws_reconnect_delay_sec
@@ -192,6 +356,11 @@ class RobotCommandClient:
 
         while self.running:
             if self.motor.pico_reboot_pending():
+                self._pico_reboot_generation += 1
+                self._resume_safety_prepared = False
+                with self._safety_lock:
+                    self.emergency_stop_latched = True
+                    self._safety_epoch += 1
                 try:
                     await asyncio.to_thread(
                         self.motor.recover_after_pico_reboot
@@ -211,6 +380,8 @@ class RobotCommandClient:
                 != previous_sequence
             ):
                 previous_sequence = snapshot["sequence"]
+
+                self.encoder_ros.publish(snapshot)
 
                 message = {
                     "type": "encoder",
@@ -263,9 +434,11 @@ class RobotCommandClient:
 
         ok = True
         error = None
+        encoder_sequence = None
 
         try:
             if command_type == "move":
+                self._require_current_motion_safety(message)
                 if self.current_mode != "manual":
                     raise RuntimeError(
                         "수동 모드가 아니므로 "
@@ -273,12 +446,15 @@ class RobotCommandClient:
                     )
 
                 await asyncio.to_thread(
+                    self._run_guarded_motor_motion,
+                    message,
                     self.motor.move,
                     message.get("direction", ""),
-                    message.get("speed", 0.35),
+                    message.get("speed", 1.0),
                 )
 
             elif command_type == "auto_drive":
+                self._require_current_motion_safety(message)
                 if self.current_mode != "auto":
                     raise RuntimeError(
                         "자동 모드가 아니므로 "
@@ -286,12 +462,19 @@ class RobotCommandClient:
                     )
 
                 await asyncio.to_thread(
+                    self._run_guarded_motor_motion,
+                    message,
                     self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
                 )
 
             elif command_type == "stop":
+                # Invalidate commands issued before this stop, including motor
+                # work still waiting for the UART command lock.
+                with self._safety_lock:
+                    self._safety_epoch += 1
+                self._resume_safety_prepared = False
                 await asyncio.to_thread(
                     self.motor.stop,
                     message.get(
@@ -301,10 +484,75 @@ class RobotCommandClient:
                 )
 
             elif command_type == "emergency_stop":
+                with self._safety_lock:
+                    self.emergency_stop_latched = True
+                    self._safety_epoch += 1
+                self._resume_safety_prepared = False
                 await asyncio.to_thread(
                     self.motor.stop,
                     "emergency_stop",
                 )
+
+            elif command_type == "resume_safety_check":
+                with self._safety_lock:
+                    if not self.emergency_stop_latched:
+                        raise RuntimeError("emergency stop is not latched")
+                    check_epoch = self._safety_epoch
+                reboot_generation = self._pico_reboot_generation
+                self._resume_safety_prepared = False
+                await asyncio.to_thread(
+                    self.motor.stop,
+                    "resume_safety_check",
+                )
+                snapshot = self.motor.encoder_snapshot()
+                if not isinstance(snapshot, dict) or "sequence" not in snapshot:
+                    raise RuntimeError("encoder sequence unavailable")
+                if self._pico_reboot_generation != reboot_generation or self.motor.pico_reboot_pending():
+                    raise RuntimeError("Pico reboot interrupted resume safety check")
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or self._safety_epoch != check_epoch:
+                        raise RuntimeError("emergency stop changed during safety check")
+                encoder_sequence = int(snapshot["sequence"])
+                self._resume_safety_prepared = True
+
+            elif command_type == "resume_navigation":
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or not self._resume_safety_prepared:
+                        raise RuntimeError("resume safety check is required")
+                    if (
+                        message.get("safety_session") != self._safety_session
+                        or message.get("safety_epoch") != self._safety_epoch
+                    ):
+                        raise RuntimeError("resume safety epoch changed")
+                reboot_generation = self._pico_reboot_generation
+                self._resume_safety_prepared = False
+                await asyncio.to_thread(
+                    self.motor.stop,
+                    "resume_safety_check",
+                )
+                if (
+                    self._pico_reboot_generation != reboot_generation
+                    or self.motor.pico_reboot_pending()
+                ):
+                    raise RuntimeError("Pico reboot interrupted resume release")
+                with self._safety_lock:
+                    if not self.emergency_stop_latched or message.get("safety_epoch") != self._safety_epoch:
+                        raise RuntimeError("emergency stop changed during resume release")
+                    self.emergency_stop_latched = False
+
+            elif command_type == "navigation_mode":
+                target_navigation_mode = str(
+                    message.get("mode", "")
+                ).strip().lower()
+                if target_navigation_mode not in {"mapping", "driving"}:
+                    raise RuntimeError(
+                        f"unsupported navigation mode: {target_navigation_mode}"
+                    )
+                await asyncio.to_thread(
+                    self.motor.stop,
+                    f"navigation_mode_{target_navigation_mode}",
+                )
+                self.navigation_mode = target_navigation_mode
 
             elif command_type == "mode":
                 target_mode = str(
@@ -341,10 +589,50 @@ class RobotCommandClient:
                     str(message.get("text", ""))
                 )
 
-            elif command_type == "camera_config":
-                print(
-                    f"[camera_config] {message}"
+            elif command_type == "set_volume":
+                volume = message.get("volume_percent")
+                if type(volume) is not int or not 0 <= volume <= 100:
+                    raise RuntimeError("volume_percent must be an integer between 0 and 100")
+                await asyncio.to_thread(self.motor.set_volume, volume)
+
+            elif command_type == "beep":
+                duration_ms = self._duration_ms(
+                    message.get("duration_ms", 350)
                 )
+                await asyncio.to_thread(
+                    self.motor.beep,
+                    duration_ms,
+                )
+
+            elif command_type == "led":
+                enabled = message.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise RuntimeError("led.enabled must be boolean")
+                duration_ms = self._duration_ms(
+                    message.get("duration_ms", 0)
+                )
+
+                # 수동 LED 명령이 들어오면 진행 중인 경고 패턴을 중단한다.
+                await self._cancel_warning_pattern()
+
+                # duration=0인 Dashboard LED 제어만 persistent manual state다.
+                self._manual_led_enabled = (
+                    enabled if duration_ms == 0 else False
+                )
+
+                await asyncio.to_thread(self.motor.set_led, enabled)
+                self.led_enabled = enabled
+                self._schedule_led_off(
+                    duration_ms if enabled else 0
+                )
+
+            elif command_type == "warning":
+                # Dashboard warning contract:
+                # always run LED + Pico speaker for exactly 10 seconds.
+                duration_ms = 10000
+
+                # ACK를 10초 동안 막지 않고 background task로 실행한다.
+                await self._start_warning_pattern(duration_ms)
 
             else:
                 raise RuntimeError(
@@ -365,6 +653,9 @@ class RobotCommandClient:
                     suppress_errors=True,
                 )
 
+        with self._safety_lock:
+            safety_epoch = self._safety_epoch
+            emergency_stop_latched = self.emergency_stop_latched
         await websocket.send(
             json.dumps(
                 {
@@ -374,14 +665,185 @@ class RobotCommandClient:
                     ),
                     "ok": ok,
                     "error": error,
+                    "encoder_sequence": encoder_sequence,
+                    "safety_session": self._safety_session,
+                    "safety_epoch": safety_epoch,
                     "mode": self.current_mode,
+                    "navigation_mode": self.navigation_mode,
+                    "emergency_stop": emergency_stop_latched,
+            "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
                     "motion": self.motor.current_motion,
                     "motor_connected": (
                         self.motor.connected
                     ),
+                    "speaker_volume_percent": self._current_speaker_volume(),
                 }
             )
         )
+
+    def _run_guarded_motor_motion(self, message: dict, operation, *args) -> None:
+        # Share the actual MotorController's UART command lock.
+        # A STOP and a stale motion command cannot overtake each other.
+        with self.motor._command_lock:
+            self._require_current_motion_safety(message)
+            operation(*args)
+            self._require_current_motion_safety(message)
+
+    def _require_current_motion_safety(self, message: dict) -> None:
+        with self._safety_lock:
+            if self.emergency_stop_latched:
+                raise RuntimeError("emergency stop is latched")
+            if (
+                message.get("safety_session") != self._safety_session
+                or type(message.get("safety_epoch")) is not int
+                or message["safety_epoch"] != self._safety_epoch
+            ):
+                raise RuntimeError(
+                    "stale or missing motion safety generation"
+                )
+
+    @staticmethod
+    def _duration_ms(value) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise RuntimeError("duration must be an integer")
+        if isinstance(value, str) and not value.strip().lstrip("+-").isdigit():
+            raise RuntimeError("duration must be an integer")
+        try:
+            duration = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("duration must be an integer") from exc
+        if duration < 0 or duration > 10000:
+            raise RuntimeError("duration must be between 0 and 10000 ms")
+        return duration
+
+    async def _cancel_warning_pattern(self) -> None:
+        task = self._warning_task
+
+        if task is None:
+            return
+
+        if not task.done():
+            task.cancel()
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        if self._warning_task is task:
+            self._warning_task = None
+
+    async def _start_warning_pattern(
+        self,
+        duration_ms: int,
+    ) -> None:
+        await self._cancel_warning_pattern()
+
+        # 다른 LED 테스트 타이머가 경고 도중 LED를 끄지 못하게 한다.
+        self._schedule_led_off(0)
+
+        self._warning_task = asyncio.create_task(
+            self._run_warning_pattern(duration_ms),
+            name="warning-led-speaker-pattern",
+        )
+
+    async def _run_warning_pattern(
+        self,
+        duration_ms: int,
+    ) -> None:
+        phase_ms = 500
+        remaining_ms = duration_ms
+        current_task = asyncio.current_task()
+
+        print(
+            f"[warning] LED + speaker pattern start: "
+            f"{duration_ms} ms"
+        )
+
+        try:
+            while remaining_ms > 0:
+                # ON phase
+                on_ms = min(phase_ms, remaining_ms)
+
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    True,
+                )
+                self.led_enabled = True
+
+                if on_ms >= 50:
+                    await asyncio.to_thread(
+                        self.motor.beep,
+                        on_ms,
+                    )
+
+                await asyncio.sleep(on_ms / 1000.0)
+                remaining_ms -= on_ms
+
+                if remaining_ms <= 0:
+                    break
+
+                # OFF phase
+                off_ms = min(phase_ms, remaining_ms)
+
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    False,
+                )
+                self.led_enabled = False
+
+                await asyncio.sleep(off_ms / 1000.0)
+                remaining_ms -= off_ms
+
+        except asyncio.CancelledError:
+            print("[warning] pattern cancelled")
+            raise
+
+        except Exception as exc:
+            print(f"[warning] pattern error: {exc}")
+
+        finally:
+            # 경고 전 수동 LED 상태를 보존한다.
+            restore_led = bool(self._manual_led_enabled)
+
+            try:
+                await asyncio.to_thread(
+                    self.motor.set_led,
+                    restore_led,
+                )
+                self.led_enabled = restore_led
+            except Exception as exc:
+                print(
+                    f"[warning] LED restore failed: {exc}"
+                )
+
+            if self._warning_task is current_task:
+                self._warning_task = None
+
+            print(
+                f"[warning] pattern finished; "
+                f"manual_led={restore_led}"
+            )
+
+    def _schedule_led_off(self, duration_ms: int) -> None:
+        if self._led_task is not None:
+            self._led_task.cancel()
+            self._led_task = None
+        if duration_ms > 0:
+            self._led_task = asyncio.create_task(
+                self._turn_led_off_after(duration_ms)
+            )
+
+    async def _turn_led_off_after(self, duration_ms: int) -> None:
+        try:
+            await asyncio.sleep(duration_ms / 1000.0)
+            await asyncio.to_thread(self.motor.set_led, False)
+            self.led_enabled = False
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._led_task is asyncio.current_task():
+                self._led_task = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -389,114 +851,85 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--server-base-url",
-        default=os.getenv("SERVER_BASE_URL"),
+        default=env_text("SERVER_BASE_URL"),
     )
 
     parser.add_argument(
         "--robot-id",
-        default=os.getenv(
-            "ROBOT_ID",
-            "pi-01",
-        ),
+        default=env_text("ROBOT_ID"),
     )
 
     parser.add_argument(
-        "--ws-url",
-        default=os.getenv("COMMAND_WS_URL"),
+        "--control-token",
+        default=env_text("ROBOT_CONTROL_TOKEN"),
     )
 
     parser.add_argument(
         "--serial-port",
-        default=os.getenv(
-            "MOTOR_SERIAL_PORT",
-            "/dev/serial0",
-        ),
+        default=env_text("MOTOR_SERIAL_PORT"),
     )
 
     parser.add_argument(
         "--serial-baudrate",
         type=int,
-        default=int(
-            os.getenv(
-                "MOTOR_SERIAL_BAUDRATE",
-                "115200",
-            )
-        ),
+        default=env_int("MOTOR_SERIAL_BAUDRATE", minimum=1),
     )
 
     parser.add_argument(
         "--serial-timeout-sec",
         type=float,
-        default=float(
-            os.getenv(
-                "MOTOR_SERIAL_TIMEOUT_SEC",
-                "0.25",
-            )
-        ),
+        default=env_float("MOTOR_SERIAL_TIMEOUT_SEC", minimum=0.0),
     )
 
     parser.add_argument(
         "--command-timeout-sec",
         type=float,
-        default=float(
-            os.getenv(
-                "COMMAND_TIMEOUT_SEC",
-                "0.45",
-            )
-        ),
+        default=env_float("COMMAND_TIMEOUT_SEC", minimum=0.01),
     )
 
     parser.add_argument(
         "--max-wheel-mps",
         type=float,
-        default=float(
-            os.getenv(
-                "MAX_WHEEL_MPS",
-                "0.50",
-            )
-        ),
+        default=env_float("MAX_WHEEL_MPS", minimum=0.01),
     )
 
     parser.add_argument(
         "--status-interval-sec",
         type=float,
-        default=float(
-            os.getenv(
-                "STATUS_INTERVAL_SEC",
-                "1.0",
-            )
-        ),
+        default=env_float("STATUS_INTERVAL_SEC", minimum=0.01),
+    )
+
+    parser.add_argument(
+        "--status-request-timeout-sec",
+        type=float,
+        default=env_float("STATUS_REQUEST_TIMEOUT_SEC", minimum=0.01),
     )
 
     parser.add_argument(
         "--ws-reconnect-delay-sec",
         type=float,
-        default=float(
-            os.getenv(
-                "WS_RECONNECT_DELAY_SEC",
-                "1.0",
-            )
-        ),
+        default=env_float("WS_RECONNECT_DELAY_SEC", minimum=0.01),
     )
 
     parser.add_argument(
         "--encoder-interval-sec",
         type=float,
-        default=float(
-            os.getenv(
-                "ENCODER_INTERVAL_SEC",
-                "0.05",
-            )
-        ),
+        default=env_float("ENCODER_INTERVAL_SEC", minimum=0.001),
     )
 
     args = parser.parse_args()
+
+    if args.max_wheel_mps != env_float("MAX_WHEEL_MPS", minimum=0.01):
+        parser.error("--max-wheel-mps must match MAX_WHEEL_MPS on both hosts")
 
     if not args.server_base_url:
         parser.error(
             "SERVER_BASE_URL 또는 "
             "--server-base-url이 필요합니다."
         )
+
+    if not args.control_token:
+        parser.error("ROBOT_CONTROL_TOKEN 또는 --control-token이 필요합니다.")
 
     return args
 

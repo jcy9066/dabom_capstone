@@ -8,15 +8,16 @@
 #       -> map_bridge
 #       -> FastAPI server
 #
-# 현재 엔코더 odometry가 연결되지 않았으므로 임시 static
-# odom->base_link TF를 사용할 수 있다.
-# 실제 odometry 연결 후 start_fake_odom:=false로 실행한다.
+# 최종 runtime에서는 RC카의 실제 encoder가
+# Pi -> WebSocket -> EncoderRosBridge -> /wheel_ticks로 들어오고,
+# root start_gpu_server.sh의 server/wheel_odometry.py가
+# /odom과 dynamic odom->base_link TF를 생성한다.
+# static/fake odometry fallback은 사용하지 않는다.
 
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -44,12 +45,7 @@ def generate_launch_description():
     # 실행 여부 제어
     start_lidar = LaunchConfiguration("start_lidar")
     start_bridge = LaunchConfiguration("start_bridge")
-    start_fake_odom = LaunchConfiguration("start_fake_odom")
     start_rviz = LaunchConfiguration("start_rviz")
-
-    # TF frame
-    odom_frame = LaunchConfiguration("odom_frame")
-    base_frame = LaunchConfiguration("base_frame")
 
     # RViz 설정
     rviz_config = LaunchConfiguration("rviz_config")
@@ -81,42 +77,40 @@ def generate_launch_description():
     # 2. map_bridge
     # ---------------------------------------------------------
     #
-    # slam_toolbox가 활성화되고 /map 및 TF를 생성할 시간을 주기
-    # 위해 8초 뒤 실행한다.
-    map_bridge_node = TimerAction(
-        period=8.0,
-        actions=[
-            Node(
-                package="patrol_navigation",
-                executable="map_bridge",
-                name="map_bridge",
-                output="screen",
-                condition=IfCondition(start_bridge),
-                parameters=[{
-                    "robot_id": robot_id,
-                    "server_base_url": server_base_url,
+    # Start immediately. It can stream /scan before the first /map or
+    # map->base_link TF exists; missing map/TF is handled by map_bridge itself.
+    # This keeps the dashboard 3D Viewer live from the beginning of Mapping.
+    map_bridge_node = Node(
+        package="patrol_navigation",
+        executable="map_bridge",
+        name="map_bridge",
+        output="screen",
+        condition=IfCondition(start_bridge),
+        parameters=[{
+            "robot_id": robot_id,
+            "server_base_url": server_base_url,
 
-                    # ROS topic
-                    "map_topic": "/map",
-                    "scan_topic": "/scan",
+            # ROS topic
+            "map_topic": "/map",
+            "scan_topic": "/scan",
 
-                    # 로봇 위치를 읽을 TF
-                    "pose_parent_frame": "map",
-                    "pose_child_frame": "base_link",
+            # 로봇 위치를 읽을 TF
+            "pose_parent_frame": "map",
+            "pose_child_frame": "base_link",
 
-                    # 서버 전송 주기
-                    "map_publish_period_sec": 2.0,
-                    "pose_publish_period_sec": 0.5,
-                    "scan_publish_period_sec": 0.2,
-                    "request_timeout_sec": 5.0,
+            # 서버 전송 주기
+            # RViz2처럼 live LaserScan은 Pi WebSocket 최신값을 사용하고,
+            # TF pose는 20 Hz로 전달하고, slam_toolbox /map은 callback 즉시 GPU로 전달한다. GPU는 /map을 기본으로 유지하면서 최신 LiDAR를 1 Hz로 합성한다.
+            "map_publish_period_sec": 0.0,
+            "pose_publish_period_sec": 0.05,
+            "scan_publish_period_sec": 0.0,
+            "request_timeout_sec": 5.0,
 
-                    # 서버로 전송할 데이터
-                    "send_map": True,
-                    "send_pose": True,
-                    "send_scan": True,
-                }],
-            )
-        ],
+            # 서버로 전송할 데이터
+            "send_map": True,
+            "send_pose": True,
+            "send_scan": False,
+        }],
     )
 
     return LaunchDescription([
@@ -142,22 +136,8 @@ def generate_launch_description():
             default_value="true",
         ),
         DeclareLaunchArgument(
-            "start_fake_odom",
-            default_value="true",
-        ),
-        DeclareLaunchArgument(
             "start_rviz",
             default_value="false",
-        ),
-
-        # TF frame
-        DeclareLaunchArgument(
-            "odom_frame",
-            default_value="odom",
-        ),
-        DeclareLaunchArgument(
-            "base_frame",
-            default_value="base_link",
         ),
 
         DeclareLaunchArgument(
@@ -207,31 +187,6 @@ def generate_launch_description():
                     "serial_baudrate"
                 ),
             }.items(),
-        ),
-
-        # -----------------------------------------------------
-        # 임시 odom -> base_link TF
-        # -----------------------------------------------------
-        #
-        # 엔코더 odometry 연결 전 테스트용이다.
-        # 실제 /odom과 odom->base_link TF가 생성되면 반드시
-        # start_fake_odom:=false로 실행해야 한다.
-        Node(
-            package="tf2_ros",
-            executable="static_transform_publisher",
-            name="temporary_odom_to_base_tf",
-            output="screen",
-            condition=IfCondition(start_fake_odom),
-            arguments=[
-                "--x", "0",
-                "--y", "0",
-                "--z", "0",
-                "--roll", "0",
-                "--pitch", "0",
-                "--yaw", "0",
-                "--frame-id", odom_frame,
-                "--child-frame-id", base_frame,
-            ],
         ),
 
         # -----------------------------------------------------

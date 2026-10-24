@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+import os
 import queue
 import threading
 import time
@@ -71,6 +72,23 @@ def dashboard_range(value: Any):
     return result
 
 
+def quaternion_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    half_roll = roll / 2.0
+    half_pitch = pitch / 2.0
+    half_yaw = yaw / 2.0
+
+    cr, sr = math.cos(half_roll), math.sin(half_roll)
+    cp, sp = math.cos(half_pitch), math.sin(half_pitch)
+    cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+
+    return (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+
+
 class LidarPublisherNode(Node):
     def __init__(self, bridge: "LidarRosBridge"):
         super().__init__("lidar_websocket_bridge")
@@ -99,12 +117,15 @@ class LidarPublisherNode(Node):
         transform.transform.translation.y = self.bridge.lidar_y
         transform.transform.translation.z = self.bridge.lidar_z
 
-        half_yaw = self.bridge.lidar_yaw / 2.0
-
-        transform.transform.rotation.x = 0.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = math.sin(half_yaw)
-        transform.transform.rotation.w = math.cos(half_yaw)
+        qx, qy, qz, qw = quaternion_from_rpy(
+            self.bridge.lidar_roll,
+            self.bridge.lidar_pitch,
+            self.bridge.lidar_yaw,
+        )
+        transform.transform.rotation.x = qx
+        transform.transform.rotation.y = qy
+        transform.transform.rotation.z = qz
+        transform.transform.rotation.w = qw
 
         self.static_tf_broadcaster.sendTransform(transform)
 
@@ -114,6 +135,8 @@ class LidarPublisherNode(Node):
             f"x={self.bridge.lidar_x} "
             f"y={self.bridge.lidar_y} "
             f"z={self.bridge.lidar_z} "
+            f"roll={self.bridge.lidar_roll} "
+            f"pitch={self.bridge.lidar_pitch} "
             f"yaw={self.bridge.lidar_yaw}"
         )
 
@@ -142,6 +165,8 @@ class LidarRosBridge:
         lidar_x: float = 0.0,
         lidar_y: float = 0.0,
         lidar_z: float = 0.12,
+        lidar_roll: float | None = None,
+        lidar_pitch: float | None = None,
         lidar_yaw: float = 0.0,
         dashboard_max_points: int = 360,
         use_source_timestamp: bool = True,
@@ -153,7 +178,21 @@ class LidarRosBridge:
         self.lidar_x = float(lidar_x)
         self.lidar_y = float(lidar_y)
         self.lidar_z = float(lidar_z)
-        self.lidar_yaw = float(lidar_yaw)
+        self.lidar_roll = float(
+            os.getenv("LIDAR_ROLL", "0") if lidar_roll is None else lidar_roll
+        )
+        self.lidar_pitch = float(
+            os.getenv("LIDAR_PITCH", "0") if lidar_pitch is None else lidar_pitch
+        )
+        configured_lidar_yaw = float(lidar_yaw)
+        # The project LiDAR is physically mounted 180 degrees around +Z.
+        # Historically only WebGL applied this correction, so slam_toolbox
+        # interpreted /scan 180 degrees away from the displayed scan.
+        self.lidar_yaw = (
+            math.pi
+            if abs(configured_lidar_yaw) < 1e-9
+            else configured_lidar_yaw
+        )
 
         self.dashboard_max_points = max(0, int(dashboard_max_points))
         self.use_source_timestamp = bool(use_source_timestamp)
@@ -164,7 +203,6 @@ class LidarRosBridge:
         self.node = None
         self.executor = None
         self.thread = None
-        self.owns_rclpy = False
         self.started = False
 
         self.stats_lock = threading.Lock()
@@ -188,7 +226,6 @@ class LidarRosBridge:
 
         if not rclpy.ok():
             rclpy.init(args=None)
-            self.owns_rclpy = True
 
         self.node = LidarPublisherNode(self)
         self.executor = SingleThreadedExecutor()
@@ -229,12 +266,11 @@ class LidarRosBridge:
             except Exception:
                 pass
 
-        if self.owns_rclpy and rclpy.ok():
-            try:
-                rclpy.shutdown()
-            except Exception:
-                pass
-
+        # Do not call rclpy.shutdown() here. The FastAPI process can share
+        # this global context with encoder and navigation ROS nodes.
+        self.node = None
+        self.executor = None
+        self.thread = None
         self.started = False
 
     def mark_connected(self, robot_id: str) -> None:

@@ -2,7 +2,7 @@
 .lidar-map-select-btn {
     position: absolute;
     top: 6px;
-    right: 82px;
+    right: 34px;
     min-width: 42px;
     height: 24px;
     padding: 0 6px;
@@ -48,8 +48,18 @@
 .saved-map-pose { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .saved-map-pose label { display: grid; gap: 4px; color: var(--text-muted); font-size: 11px; }
 .saved-map-pose input { width: 100%; box-sizing: border-box; padding: 7px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--card-bg); color: var(--text-dark); }
-.saved-map-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.saved-map-actions button { padding: 8px 10px; border: 1px solid var(--border-bright); border-radius: 5px; background: transparent; color: var(--text-dark); font: 700 11px var(--mono); cursor: pointer; }
-.saved-map-actions .saved-map-load { border-color: var(--accent); color: var(--accent); }
-.saved-map-actions button:disabled { cursor: wait; opacity: 0.55; }
-@media (max-width: 560px) { .saved-map-pose { grid-template-columns: 1fr; } }
+.saved-map-mode-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+
+.saved-map-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+
+
+
+
+.saved-map-modal.is-pending .saved-map-actions button:disabled { cursor: progress; }
+/* Saved map metadata may include the original map's location, even though
+   this dialog no longer provides location or GPS editing controls. */
+.saved-map-location-meta { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin-top: 3px; }
+@media (max-width: 560px) {
+    .saved-map-pose,
+    .saved-map-mode-actions { grid-template-columns: 1fr; }
+}

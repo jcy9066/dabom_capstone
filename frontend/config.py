@@ -1,12 +1,10 @@
-import os
+from server.env_config import env_float, env_int, env_text
 
-# capstone/.env에서 필요한 값만 읽습니다.
-# 값이 없으면 기존 app.py와 동일한 기본값을 사용합니다.
-CAMERA_TIMEOUT_SEC = float(os.getenv("CAMERA_TIMEOUT_SEC", "3.0"))
-ROBOT_STATUS_TIMEOUT_SEC = float(os.getenv("ROBOT_STATUS_TIMEOUT_SEC", "5.0"))
+CAMERA_TIMEOUT_SEC = env_float("CAMERA_TIMEOUT_SEC", minimum=0.1)
+ROBOT_STATUS_TIMEOUT_SEC = env_float("ROBOT_STATUS_TIMEOUT_SEC", minimum=0.1)
 
-STATUS_FRAME_WIDTH = 640
-STATUS_FRAME_HEIGHT = 480
+STATUS_FRAME_WIDTH = env_int("STREAM_WIDTH", minimum=1)
+STATUS_FRAME_HEIGHT = env_int("STREAM_HEIGHT", minimum=1)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = env_text("TELEGRAM_TOKEN", allow_empty=True)
+TELEGRAM_CHAT_ID = env_text("TELEGRAM_CHAT_ID", allow_empty=True)

@@ -1,82 +1,155 @@
 # 프로젝트 명세서: 자율주행 AI 방범 로봇 (Autonomous Patrol Bot)
 
 ## 1. 프로젝트 개요
-* **프로젝트명:** 자율주행 AI 방범 로봇
-* **목표:** 자율주행 기술과 컴퓨터 비전 기술을 결합하여 특정 구역을 순찰하고 이상 상황을 탐지하는 지능형 모바일 로봇 시스템 구축.
+- **프로젝트명:** 자율주행 AI 방범 로봇
+- **목표:** 자율주행과 컴퓨터 비전을 결합하여 특정 구역을 순찰하고 이상 상황을 탐지하는 지능형 모바일 로봇 시스템 구축
 
-## 2. 시스템 아키텍처 (System Architecture)
-### 2.1. 하드웨어 구성 (Hardware Specifications)
-* **메인 컴퓨팅 유닛:** Raspberry Pi 4
-* **구동부 (모빌리티):** RC카 프레임
-* **센서부:**
-  * 2D LiDAR 센서 (공간 매핑 및 장애물 회피 목적)
-  * 비전 카메라 (실시간 영상 수집 및 객체 인식 목적)
+## 2. 시스템 아키텍처
 
-### 2.2. 소프트웨어 스택 (Software Stack)
-* **운영체제 및 미들웨어:** ROS (Robot Operating System)
-* **주요 프로그래밍 언어:** Python
-* **인공지능 프레임워크:** PyTorch
+### 2.1. Raspberry Pi 3B
+- **보드:** Raspberry Pi 3 Model B 1GB / Ubuntu Server 22.04 arm64
+- **역할:** 실시간 센서 수집과 저수준 장치 연결
+  - OV5647 카메라 H.264 스트리밍
+  - RPLIDAR `/scan` 수집
+  - Pico W UART를 통한 모터·엔코더 통신
+  - Robot/LiDAR/Encoder/Camera 데이터를 GPU Server로 전송
+- **ROS 2:** Humble
+- **DDS 범위:** `ROS_LOCALHOST_ONLY=1`
+  - Pi↔GPU 센서 전달은 ROS DDS가 아니라 WebSocket/HTTP를 사용
 
-## 3. 핵심 모듈 및 구현 기능 (Core Capabilities)
-### 3.1. 자율주행 및 매핑 (Autonomous Navigation & SLAM)
-* 2D LiDAR 데이터를 기반으로 한 실시간 맵 생성 (SLAM).
-* ROS 내비게이션 스택을 활용한 동적 장애물 회피 및 지정된 순찰 경로 자율 주행.
+### 2.2. Pico W / 구동부
+- Pico W가 MDD10A 모터 제어와 엔코더 수집을 담당
+- Raspberry Pi와 UART 115200 bps로 통신
+- 통신 단절 및 command timeout 시 안전 정지
 
-### 3.2. 비전 AI 기반 이상 탐지 (Vision-based Anomaly Detection)
-* 카메라 스트리밍 데이터를 활용한 실시간 분석.
-* **침입 탐지:** YOLO 객체 탐지 모델을 사용하여 인가되지 않은 인원 식별.
-* **폭력 및 이상 행동 탐지:** Pose Estimation (자세 추정) 모델을 적용하여 인체의 주요 관절 포인트를 분석하고, 폭력성 혹은 비정상적인 행동 패턴을 분류.
+### 2.3. GPU Server
+- FastAPI 관제 서버 및 웹 대시보드
+- AI perception
+- Encoder WebSocket → ROS `/wheel_ticks`
+- Wheel Odometry → `/odom` + `odom -> base_link` TF
+- LiDAR WebSocket → ROS `/scan`
+- SLAM Toolbox Mapping
+- AMCL Localization
+- Navigation2 Path Planning / Navigation
+- DB 및 이벤트/조치 기록
 
-### 3.3. 실시간 관제 대시보드 (Real-time Web Dashboard)
-* 로봇의 현재 위치, 주행 상태, 센서 데이터 모니터링.
-* 카메라 스트리밍 영상 실시간 확인 기능.
-* 침입 및 이상 행동 탐지 시 관리자에게 즉각적인 경고 알림 전송.
+### 2.4. 최종 Runtime 진입점
+```text
+GPU Server : start_gpu_server.sh
+Raspberry Pi: start_pi_stack.sh
+```
 
-## 4. 시스템 데이터 흐름 (Data Flow)
-1. **데이터 수집:** LiDAR 및 카메라 센서가 실시간 환경 데이터 획득.
-2. **연산 및 처리 (Edge Computing):** Raspberry Pi 내부에서 ROS 노드를 통한 주행 연산 및 Python 기반 AI 모델을 통한 영상 분석 동시 수행.
-3. **제어 및 통신:** 분석 결과에 따라 RC카 모터 제어 명령 하달 및 관제 대시보드로 상태 데이터 송신.
+개별 legacy launcher는 최종 운용 경로로 사용하지 않는다. 두 root launcher가 동일 역할 프로세스 중복 제거, preflight, readiness와 종료 처리를 담당한다.
 
-## 5. 시스템 활동 흐름 (Activity Flow)
-세부 활동 흐름은 `Activity_Diagram.png`를 기준으로 한다.
+## 3. 핵심 기능
 
-### 5.1. Raspberry Pi 영역
-* 시스템 초기화 후 부품 연결 상태를 확인한다.
-* 순찰 모드 판별 결과에 따라 자율 주행 또는 수동 조종 명령 수신 흐름으로 분기한다.
-* 주행 중 센서 데이터를 수집하고, 네트워크 연결 상태에 따라 서버 전송 또는 오프라인 큐 저장 후 재전송을 수행한다.
-* 카메라 녹화 영상과 기기 상태 데이터를 관제/분석 영역으로 전송한다.
+### 3.1. 자율주행 및 Mapping
+- 2D LiDAR 기반 실시간 Mapping
+- 저장 지도 관리
+- AMCL 기반 Localization
+- Nav2 기반 path planning 및 goal navigation
+- 장애물 회피
+- Mapping과 Driving runtime의 상호배타 실행
 
-### 5.2. GPU/AI 분석 영역
-* 실시간 또는 녹화 영상을 수신한다.
-* AI 객체 탐지를 수행하고, 의심 객체 또는 침입 여부를 판단한다.
-* 의심 객체가 검출되면 pose estimation 기반 행동 분석을 수행한다.
-* 이벤트를 경고 또는 위험으로 분류하고, 경고 알림, TTS 음성 전송, 관리자 수동 신고, 관리자 통신 흐름으로 연결한다.
-* 이벤트 발생 전후 영상 구간을 유지하고, 편집 후 저장하며, 순찰 로그를 기록한다.
+### 3.2. 주행 안전
+- 수동/자동 모드 분리
+- Emergency Stop
+- Nav2 command timeout 정지
+- Navigation watchdog
+- Encoder stop 검증
+- `MOTOR_OUTPUT_ENABLED=false` 상태에서 dry-run 검증 후 실제 모터 출력 활성화
+- 실제 encoder odometry를 사용하는 최종 runtime에서는 fake odom을 사용하지 않음
 
-### 5.3. 웹 관제 영역
-* 관리자가 관제 웹에 접속한다.
-* 실시간 영상을 수신하고 송출한다.
-* 주행 모드를 설정하며, 수동 주행 시 방향키 조작을 모터 제어 명령으로 전송한다.
+### 3.3. Vision AI 이상 탐지
+- 카메라 스트리밍 실시간 분석
+- 사람/침입 이벤트 탐지
+- Pose/행동 분석 및 폭력·이상 행동 판정
+- 위험/경고 상태 생성
+- 관리자 알림 흐름과 이벤트 기록 연동
 
-## 6. 데이터베이스 설계 초안 (ERD)
-세부 ERD는 `ERD.png`를 기준으로 한다. 현재 설계 초안은 관리자 계정, 로봇 상태, 이벤트, 관리자 조치 로그를 중심으로 구성된다.
+### 3.4. Web Dashboard
+- 실시간 영상
+- 로봇 상태 및 센서 상태
+- Mapping / Driving 모드 전환
+- 수동 주행
+- 지도 저장·선택·초기 위치 지정·goal 지정
+- Emergency Stop
+- 순찰 기록, 관리자 조치 기록, 기기 상태 로그
+- 여러 dashboard session 간 control lease 기반 충돌 방지
 
-### 6.1. users
-* 관리자 계정 테이블.
-* 로그인 ID(email), 비밀번호 해시, 이름, 전화번호, 사번, 생성/로그인/삭제 시각, 소프트 삭제 여부를 관리한다.
+## 4. 데이터 흐름
 
-### 6.2. system_status
-* 로봇 및 네트워크 상태 스냅샷 테이블.
-* CPU 사용률, CPU 온도, RAM 사용률, ping, 배터리 잔량, 자율/수동 모드, 속도, GPS 좌표, LiDAR 로컬 좌표, 기록 시각을 관리한다.
+```text
+Raspberry Pi                               GPU Server
+────────────────────                       ────────────────────
+Pico W encoder/control
+        │
+        ▼
+robot_command_client.py ── WebSocket ───► Encoder ROS Bridge
+                                              │
+                                              ▼
+                                         /wheel_ticks
+                                              │
+                                              ▼
+                                       wheel_odometry
+                                              │
+                                       /odom + odom TF
 
-### 6.3. event_log
-* AI 또는 시스템 모니터링에서 발생한 이벤트 기록 테이블.
-* 이벤트 출처(`VISION_AI`, `SYSTEM_MONITOR`), 이벤트 유형(`INTRUSION`, `ASSAULT`, `SYSTEM_ERROR`, `NETWORK_LOSS`, `SENSOR_ANOMALY`), 영상 경로, AI 확신도, GPS/LiDAR 좌표, 해결/신고/알림/마이크/오탐 여부, 탐지/신고/삭제 시각을 관리한다.
+RPLIDAR → /scan
+        │
+        ▼
+lidar_scan_sender.py ───── WebSocket ───► LiDAR ROS Bridge
+                                              │
+                                              ▼
+                                            /scan
+                                              │
+                           ┌──────────────────┴─────────────────┐
+                           ▼                                    ▼
+                    SLAM Toolbox                         AMCL / Nav2
 
-### 6.4. action_log
-* 이벤트에 대한 관리자 또는 시스템 조치 기록 테이블.
-* 조치한 관리자 ID, 대응한 이벤트 ID, 조치 유형(`WARNING`, `MANUAL_MOVING`, `REPORT`, `COMMUNICATION`, `NOTE`), 상세 내용, 생성/삭제 시각, 소프트 삭제 여부를 관리한다.
+OV5647 → H.264 ───────────── HTTP ───────► FastAPI / AI / Dashboard
+```
 
-### 6.5. 관계
-* `users.user_id`는 `action_log.user_id`와 연결되어 조치한 관리자를 식별한다.
-* `event_log.event_id`는 `action_log.event_id`와 연결되어 특정 이벤트에 대한 조치 내역을 추적한다.
+## 5. Runtime / ROS 소유권
+- `start_gpu_server.sh`
+  - FastAPI와 wheel odometry를 소유
+  - wheel odometry가 비정상 종료되면 supervisor가 재시작
+  - stale Mapping/Driving/legacy standalone Map Bridge 정리
+- `start_pi_stack.sh`
+  - Robot Client, LiDAR Driver/Sender, Camera stream을 소유
+  - Pico PING/STOP, Camera detection, 실제 LaserScan 수신 확인 후 READY
+- Mapping/Driving launch가 `map_bridge`를 소유
+  - standalone `map_bridge`와 동시에 실행하지 않음
+- FastAPI 내부 LiDAR/Encoder/Navigation ROS node는 같은 process에서 rclpy context를 공유할 수 있으므로 개별 bridge 종료가 전역 ROS context를 종료하지 않음
+
+## 6. 통합 정상 기준
+```text
+Camera      GPU/Dashboard에서 지속 수신
+LiDAR       GPU /scan 지속 발행
+Encoder     GPU /wheel_ticks 지속 발행
+Odometry    /odom + odom -> base_link TF 지속 발행
+Mapping     map 생성 및 저장 가능
+Localization AMCL pose + map -> odom TF 정상
+Nav2        path planning / dry-run command 정상
+Control     Manual/Auto/E-stop 상태 일관성 유지
+Logging     상태/이벤트/관리자 조치 기록 정상
+```
+
+## 7. 실기기 검증 전 소프트웨어 완료 기준
+- root launcher 2개만 최종 runtime 진입점으로 사용
+- ROS bridge lifecycle 간 상호 간섭 제거
+- wheel odometry / map bridge process ownership 단일화
+- `/wheel_ticks`와 `/odom`은 publisher 존재뿐 아니라 실제 데이터 흐름도 검증
+- Pi/GPU 간 cross-host DDS 차단
+- Encoder/LiDAR/Camera freshness 확인
+- Mapping/Driving 상호배타 및 stale process 정리
+- Nav2 dry-run / motor output gate / watchdog / E-stop 코드 검토 완료
+- 가능한 unit/static test 완료 후 실제 H/W 검증으로 이동
+
+## 8. DB 핵심 구조
+- `users`: 관리자 계정
+- `system_status`: 로봇/네트워크 상태 기록
+- `event_log`: AI 및 시스템 이벤트 기록
+- `action_log`: 관리자/시스템 조치 기록
+
+세부 ERD는 `ERD.png`를 기준으로 한다.

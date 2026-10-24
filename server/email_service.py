@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
 
+from server.env_config import EnvConfigurationError, env_bool, env_int, env_text
+
 
 class EmailDeliveryError(RuntimeError):
     """Raised without exposing SMTP credentials or provider details to clients."""
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -31,21 +28,19 @@ class SmtpConfig:
     @classmethod
     def from_environment(cls) -> "SmtpConfig":
         try:
-            port = int(os.getenv("SMTP_PORT", "587"))
-            timeout = int(os.getenv("SMTP_TIMEOUT_SEC", "10"))
-        except ValueError as exc:
+            return cls(
+                host=env_text("SMTP_HOST", allow_empty=True),
+                port=env_int("SMTP_PORT", minimum=1, maximum=65535),
+                username=env_text("SMTP_USERNAME", allow_empty=True),
+                password=env_text("SMTP_PASSWORD", allow_empty=True),
+                from_email=env_text("SMTP_FROM_EMAIL", allow_empty=True),
+                from_name=env_text("SMTP_FROM_NAME"),
+                use_tls=env_bool("SMTP_USE_TLS"),
+                use_ssl=env_bool("SMTP_USE_SSL"),
+                timeout_sec=env_int("SMTP_TIMEOUT_SEC", minimum=1),
+            )
+        except EnvConfigurationError as exc:
             raise EmailDeliveryError("SMTP configuration is invalid.") from exc
-        return cls(
-            host=os.getenv("SMTP_HOST", "").strip(),
-            port=port,
-            username=os.getenv("SMTP_USERNAME", "").strip(),
-            password=os.getenv("SMTP_PASSWORD", ""),
-            from_email=os.getenv("SMTP_FROM_EMAIL", "").strip(),
-            from_name=os.getenv("SMTP_FROM_NAME", "Dabom no-reply").strip() or "Dabom no-reply",
-            use_tls=_env_bool("SMTP_USE_TLS", True),
-            use_ssl=_env_bool("SMTP_USE_SSL", False),
-            timeout_sec=max(1, timeout),
-        )
 
     def validate(self) -> None:
         if not all((self.host, self.username, self.password, self.from_email)):

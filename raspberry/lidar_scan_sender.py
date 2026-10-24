@@ -3,17 +3,22 @@
 import asyncio
 import json
 import math
-import os
 import queue
 import threading
 import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 import websockets
+
+try:
+    from raspberry.env_config import env_float, env_text
+except ModuleNotFoundError:  # Direct script execution from raspberry/.
+    from env_config import env_float, env_text
 
 
 def utc_now_iso() -> str:
@@ -41,16 +46,17 @@ class LidarScanSender(Node):
     def __init__(self):
         super().__init__("lidar_scan_sender")
 
-        self.robot_id = os.getenv("ROBOT_ID", "pi-01")
-        self.scan_topic = os.getenv("LIDAR_SCAN_TOPIC", "/scan")
-        self.ws_url = os.getenv(
-            "LIDAR_WS_URL",
-            "ws://100.100.248.122:21063/ws/sensors/pi-01/lidar",
+        self.robot_id = env_text("ROBOT_ID")
+        self.control_token = env_text("ROBOT_CONTROL_TOKEN")
+        self.scan_topic = env_text("LIDAR_SCAN_TOPIC")
+        server_base_url = env_text("SERVER_BASE_URL").rstrip("/")
+        ws_base_url = server_base_url.replace("http://", "ws://").replace(
+            "https://", "wss://"
         )
-
-        self.reconnect_sec = float(
-            os.getenv("LIDAR_WS_RECONNECT_SEC", "1.0")
+        self.ws_url = (
+            f"{ws_base_url}/ws/sensors/{quote(self.robot_id, safe='')}/lidar"
         )
+        self.reconnect_sec = env_float("LIDAR_WS_RECONNECT_SEC", minimum=0.01)
 
         self.message_queue: queue.Queue[str] = queue.Queue(maxsize=1)
         self.stop_event = threading.Event()
@@ -77,8 +83,7 @@ class LidarScanSender(Node):
         self.get_logger().info(
             f"LiDAR sender ready "
             f"robot_id={self.robot_id} "
-            f"topic={self.scan_topic} "
-            f"server={self.ws_url}"
+            f"topic={self.scan_topic}"
         )
 
     def on_scan(self, msg: LaserScan) -> None:
@@ -154,7 +159,7 @@ class LidarScanSender(Node):
             asyncio.run(self.websocket_loop())
         except Exception as exc:
             self.warn_throttled(
-                f"WebSocket thread terminated: {exc}"
+                f"WebSocket thread terminated: {type(exc).__name__}"
             )
 
     async def get_next_message(self):
@@ -172,6 +177,7 @@ class LidarScanSender(Node):
             try:
                 async with websockets.connect(
                     self.ws_url,
+                    extra_headers={"X-Robot-Control-Token": self.control_token},
                     ping_interval=10,
                     ping_timeout=5,
                     close_timeout=2,
@@ -194,7 +200,7 @@ class LidarScanSender(Node):
                     )
 
                     self.get_logger().info(
-                        f"LiDAR WebSocket connected: {self.ws_url}"
+                        f"LiDAR WebSocket connected robot_id={self.robot_id}"
                     )
 
                     while not self.stop_event.is_set():
@@ -211,7 +217,7 @@ class LidarScanSender(Node):
 
             except Exception as exc:
                 self.warn_throttled(
-                    f"LiDAR WebSocket disconnected: {exc}"
+                    f"LiDAR WebSocket disconnected: {type(exc).__name__}"
                 )
 
                 await asyncio.sleep(self.reconnect_sec)

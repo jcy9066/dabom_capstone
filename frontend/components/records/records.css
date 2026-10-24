@@ -1,0 +1,335 @@
+#records-toolbar-mount {
+    min-width: 0;
+}
+
+.records-view {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.record-filter-bar {
+    align-items: flex-end;
+}
+
+.record-filter-bar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.record-filter-bar input[type="datetime-local"],
+.record-filter-bar input[type="search"],
+.record-filter-bar input[type="number"] {
+    box-sizing: border-box;
+    min-height: 29px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text-dark);
+    padding: 5px 8px;
+    font: inherit;
+}
+
+.record-filter-bar input[type="search"] { width: 150px; }
+.record-filter-bar .confidence-filter { width: 82px; }
+
+.record-sort-button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.record-sort-button:hover,
+.record-sort-button:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+    outline: none;
+}
+
+.record-sort-button {
+    width: 100%;
+    padding: 0;
+    text-align: left;
+}
+
+.record-filter-error {
+    min-height: 17px;
+    margin: 0;
+    color: var(--danger-color);
+    font-size: 11px;
+}
+
+.records-view .modal-table-wrapper {
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+.record-data-table {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.record-data-table th,
+.record-data-table td {
+    box-sizing: border-box;
+    padding: 7px 6px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    vertical-align: middle;
+}
+
+.record-data-table td.record-description {
+    min-width: 0;
+    max-width: none;
+}
+
+.record-type-badge {
+    border: 1px solid currentColor;
+    font-weight: 700;
+}
+
+.record-event-intrusion {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.record-event-assault {
+    background: #ffe4e6;
+    color: #9f1239;
+}
+
+.record-event-system-error,
+.record-action-warning {
+    background: #ffedd5;
+    color: #c2410c;
+}
+
+.record-event-network-loss {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.record-event-sensor-anomaly {
+    background: #f3e8ff;
+    color: #6b21a8;
+}
+
+.record-action-manual-moving {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.record-action-report {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.record-action-communication {
+    background: #ccfbf1;
+    color: #0f766e;
+}
+
+.record-action-note,
+.record-type-unknown {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+body.dark-mode .record-event-intrusion {
+    background: rgba(127, 29, 29, 0.55);
+    color: #fecaca;
+}
+
+body.dark-mode .record-event-assault {
+    background: rgba(136, 19, 55, 0.55);
+    color: #fecdd3;
+}
+
+body.dark-mode .record-event-system-error,
+body.dark-mode .record-action-warning {
+    background: rgba(124, 45, 18, 0.55);
+    color: #fed7aa;
+}
+
+body.dark-mode .record-event-network-loss {
+    background: rgba(120, 53, 15, 0.55);
+    color: #fde68a;
+}
+
+body.dark-mode .record-event-sensor-anomaly {
+    background: rgba(88, 28, 135, 0.55);
+    color: #e9d5ff;
+}
+
+body.dark-mode .record-action-manual-moving {
+    background: rgba(30, 64, 175, 0.55);
+    color: #bfdbfe;
+}
+
+body.dark-mode .record-action-report {
+    background: rgba(127, 29, 29, 0.55);
+    color: #fecaca;
+}
+
+body.dark-mode .record-action-communication {
+    background: rgba(17, 94, 89, 0.55);
+    color: #99f6e4;
+}
+
+body.dark-mode .record-action-note,
+body.dark-mode .record-type-unknown {
+    background: rgba(55, 65, 81, 0.65);
+    color: #e5e7eb;
+}
+
+.record-data-table .record-selection-column {
+    width: 34px;
+    padding-right: 3px;
+    padding-left: 3px;
+    text-align: center;
+}
+
+.record-selection-column input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.records-view-statusModal th:nth-child(1) { width: 9%; }
+.records-view-statusModal th:nth-child(9) { width: 18%; }
+.records-view-statusModal th:nth-child(10) { width: 12%; }
+.records-view-patrolModal th:nth-child(2) { width: 10%; }
+.records-view-patrolModal th:nth-child(5),
+.records-view-patrolModal th:nth-child(6) { width: 14%; }
+.records-view-actionsModal th:nth-child(2) { width: 13%; }
+.records-view-actionsModal th:nth-child(3) { width: 17%; }
+.records-view-actionsModal th:nth-child(6) { width: 31%; }
+
+.records-pagination[hidden] {
+    display: none;
+}
+
+.records-pagination {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
+.records-pagination button {
+    min-height: 29px;
+    min-width: 64px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--card-bg2);
+    color: var(--text-dark);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.records-pagination button:hover:not(:disabled),
+.records-pagination button:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(8, 145, 178, 0.08);
+    outline: none;
+}
+
+.records-pagination button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.record-delete-zone {
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: min(100%, 680px);
+    margin: 2px auto 0;
+    padding: 10px 14px;
+    border: 1px solid color-mix(in srgb, var(--danger-color) 38%, var(--border-color));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--danger-color) 5%, var(--card-bg));
+    text-align: center;
+}
+
+.record-delete-zone[hidden] {
+    display: none;
+}
+
+.record-delete-selection {
+    color: var(--text-dark);
+    font-weight: 700;
+}
+
+.record-delete-impact {
+    display: grid;
+    gap: 3px;
+    color: var(--text-dark);
+}
+
+.record-delete-impact[hidden] {
+    display: none;
+}
+
+.record-delete-impact span,
+.record-delete-impact p,
+.record-delete-status {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.record-delete-status {
+    min-height: 16px;
+    color: var(--danger-color);
+}
+
+.record-delete-actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+}
+
+.record-delete-actions .filter-btn {
+    min-width: 72px;
+}
+
+.record-delete-actions .filter-btn.danger {
+    border-color: var(--danger-color);
+    background: var(--danger-color);
+    color: #fff;
+}
+
+.gallery-view {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.gallery-view .gallery-grid {
+    overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+    .record-data-table { table-layout: auto; }
+    .record-data-table th,
+    .record-data-table td { font-size: 9px; }
+}

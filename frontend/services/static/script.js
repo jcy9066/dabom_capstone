@@ -31,8 +31,43 @@ setInterval(() => {
 // ===================================================
 // 서버 상태 폴링
 // ===================================================
+const TELEMETRY_POLL_INTERVAL_MS = 2000;
+let telemetryPollTimer = null;
+let telemetryStatusRequest = null;
+let telemetryRefreshPending = false;
+
+function isDashboardDocumentVisible() {
+    return document.visibilityState !== 'hidden' && document.hidden !== true;
+}
+
+function clearTelemetryPollTimer() {
+    if (telemetryPollTimer !== null) {
+        clearTimeout(telemetryPollTimer);
+        telemetryPollTimer = null;
+    }
+}
+
+function scheduleTelemetryStatusPoll(delay = TELEMETRY_POLL_INTERVAL_MS) {
+    clearTelemetryPollTimer();
+    if (!isDashboardDocumentVisible()) return;
+    telemetryPollTimer = setTimeout(() => {
+        telemetryPollTimer = null;
+        fetchRobotStatus();
+    }, delay);
+}
+
 function fetchRobotStatus() {
-    fetch('/get_status')
+    if (!isDashboardDocumentVisible()) {
+        clearTelemetryPollTimer();
+        return Promise.resolve();
+    }
+    if (telemetryStatusRequest) {
+        telemetryRefreshPending = true;
+        return telemetryStatusRequest;
+    }
+
+    clearTelemetryPollTimer();
+    const request = fetch('/get_status')
         .then(response => {
             if (!response.ok) {
                 throw new Error(
@@ -43,53 +78,107 @@ function fetchRobotStatus() {
             return response.json();
         })
         .then(data => {
+            const displayMetric = value => (
+                Number.isFinite(Number(value))
+                    ? String(value)
+                    : '--'
+            );
+            const ping = Number(data.ping);
+
             document.getElementById(
                 'sys-cpu-usage',
-            ).innerText = data.cpu_usage;
+            ).innerText = displayMetric(data.cpu_usage);
 
             document.getElementById(
                 'sys-cpu-temp',
-            ).innerText = data.cpu_temp;
+            ).innerText = displayMetric(data.cpu_temp);
 
             document.getElementById(
                 'sys-ram',
-            ).innerText = data.ram_usage;
+            ).innerText = displayMetric(data.ram_usage);
+
+            // Unlike Number(null), an unavailable GPU reading must not display 0%.
+            const gpuRaw = data.gpu_usage_percent;
+            const gpuUsage = gpuRaw == null || gpuRaw === '' ? NaN : Number(gpuRaw);
+            document.getElementById(
+                'sys-gpu-usage',
+            ).innerText = Number.isFinite(gpuUsage) && gpuUsage >= 0 && gpuUsage <= 100
+                ? String(Math.round(gpuUsage))
+                : '--';
 
             document.getElementById(
                 'sys-internet',
-            ).innerText = data.internet;
+            ).innerText = Number.isFinite(ping)
+                ? `${ping.toFixed(1)} ms`
+                : (data.internet === 'offline' ? 'OFFLINE' : '--');
 
-            const reportedMode = String(
-                data.mode || '',
-            )
-                .trim()
-                .toLowerCase();
-
-            if (
-                reportedMode === 'auto'
-                || reportedMode === 'manual'
-            ) {
-                currentPatrolMode = reportedMode;
-                setPatrolModeUi(reportedMode);
-            }
+            document.dispatchEvent(new CustomEvent(
+                'dabom:telemetry-status',
+                { detail: { available: true, payload: data } },
+            ));
         })
         .catch(error => {
+            document.getElementById('sys-gpu-usage').innerText = '--';
+            document.dispatchEvent(new CustomEvent(
+                'dabom:telemetry-status',
+                { detail: { available: false, error: error.message } },
+            ));
             console.error(
                 '상태 업데이트 오류:',
                 error,
             );
         });
+
+    telemetryStatusRequest = request.finally(() => {
+        telemetryStatusRequest = null;
+        const delay = telemetryRefreshPending
+            ? 0
+            : TELEMETRY_POLL_INTERVAL_MS;
+        telemetryRefreshPending = false;
+        scheduleTelemetryStatusPoll(delay);
+    });
+    return telemetryStatusRequest;
 }
-setInterval(fetchRobotStatus, 1000);
+
+function pauseTelemetryStatusPolling() {
+    telemetryRefreshPending = false;
+    clearTelemetryPollTimer();
+}
+
+function refreshTelemetryStatusPolling() {
+    clearTelemetryPollTimer();
+    if (!isDashboardDocumentVisible()) return Promise.resolve();
+    return fetchRobotStatus();
+}
 
 // ===================================================
 // 카메라 연결 상태 폴링
 // ===================================================
+const CAMERA_STATUS_POLL_INTERVAL_MS = 4000;
+let cameraStatusPollTimer = null;
+let cameraStatusRequest = null;
+let cameraStatusRefreshPending = false;
+
+function clearCameraStatusPollTimer() {
+    if (cameraStatusPollTimer !== null) {
+        clearTimeout(cameraStatusPollTimer);
+        cameraStatusPollTimer = null;
+    }
+}
+
+function scheduleCameraStatusPoll(delay = CAMERA_STATUS_POLL_INTERVAL_MS) {
+    clearCameraStatusPollTimer();
+    if (!isDashboardDocumentVisible()) return;
+    cameraStatusPollTimer = setTimeout(() => {
+        cameraStatusPollTimer = null;
+        fetchCameraStatus();
+    }, delay);
+}
+
 function setLiveBadge(isLive) {
-    const badge = document.querySelector('.live-badge');
-    if (!badge) return;
-    badge.classList.toggle('offline', !isLive);
-    badge.textContent = isLive ? 'LIVE' : 'OFFLINE';
+    // Camera status remains in the camera preview. Header badge shows Pi state only.
+    const camera = document.getElementById('camera-card');
+    if (camera) camera.dataset.cameraLive = isLive ? 'true' : 'false';
 }
 
 function showCameraLive() {
@@ -117,7 +206,81 @@ function showCameraDisconnected(message, hideStream = false) {
     setLiveBadge(false);
 }
 
+function modelPipelineToggleController() {
+    return window.DabomDashboardComponents?.controls?.modelPipelineToggle || null;
+}
+
+function syncModelPipelineToggle(data = null, error = null) {
+    const controller = modelPipelineToggleController();
+    if (!controller) return;
+
+    if (error) {
+        controller.sync({
+            connected: false,
+            pending: false,
+            error,
+        });
+        return;
+    }
+
+    controller.sync({
+        enabled: Boolean(data?.model_active && data?.inference_available),
+        connected: true,
+        pending: false,
+        error: data?.model_error || null,
+    });
+}
+
+async function setModelPipelineEnabled(enabled) {
+    const controller = modelPipelineToggleController();
+    if (!controller || controller.pending) return false;
+
+    controller.sync({ pending: true, error: null });
+    try {
+        const csrfResponse = await fetch('/api/auth/csrf', {
+            credentials: 'same-origin',
+        });
+        const csrfData = await csrfResponse.json();
+        if (!csrfResponse.ok || !csrfData.csrf_token) {
+            throw new Error('보안 토큰을 준비하지 못했습니다.');
+        }
+
+        const response = await fetch('/api/model-pipeline', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfData.csrf_token,
+            },
+            body: JSON.stringify({ enabled: Boolean(enabled) }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            throw new Error(data.detail || data.error || 'Model pipeline 제어에 실패했습니다.');
+        }
+
+        controller.sync({
+            enabled: Boolean(data.enabled),
+            connected: true,
+            pending: false,
+            error: data.model_error || null,
+        });
+        refreshCameraStatusPolling();
+        return true;
+    } catch (error) {
+        console.error('Model pipeline toggle failed:', error);
+        controller.sync({
+            connected: true,
+            pending: false,
+            error: error.message || 'Model pipeline 제어에 실패했습니다.',
+        });
+        return false;
+    }
+}
+
 function updateCameraStatus(data) {
+    syncModelPipelineToggle(data);
+
     if (data.camera_state === 'live') {
         showCameraLive();
         return;
@@ -127,14 +290,48 @@ function updateCameraStatus(data) {
 }
 
 function fetchCameraStatus() {
-    fetch('/api/stream_status')
+    if (!isDashboardDocumentVisible()) {
+        clearCameraStatusPollTimer();
+        return Promise.resolve();
+    }
+    if (cameraStatusRequest) {
+        cameraStatusRefreshPending = true;
+        return cameraStatusRequest;
+    }
+
+    clearCameraStatusPollTimer();
+    const request = fetch('/api/stream_status')
         .then(response => response.json())
         .then(updateCameraStatus)
-        .catch(() => showCameraDisconnected('서버와 연결이 끊겼습니다', true));
+        .catch(error => {
+            syncModelPipelineToggle(null, 'GPU 서버 상태를 확인할 수 없습니다.');
+            showCameraDisconnected('서버와 연결이 끊겼습니다', true);
+            console.error('카메라 상태 조회 오류:', error);
+        });
+
+    cameraStatusRequest = request.finally(() => {
+        cameraStatusRequest = null;
+        const delay = cameraStatusRefreshPending
+            ? 0
+            : CAMERA_STATUS_POLL_INTERVAL_MS;
+        cameraStatusRefreshPending = false;
+        scheduleCameraStatusPoll(delay);
+    });
+    return cameraStatusRequest;
 }
 
-setInterval(fetchCameraStatus, 1000);
-fetchCameraStatus();
+function pauseCameraStatusPolling() {
+    cameraStatusRefreshPending = false;
+    clearCameraStatusPollTimer();
+}
+
+function refreshCameraStatusPolling() {
+    clearCameraStatusPollTimer();
+    if (!isDashboardDocumentVisible()) return Promise.resolve();
+    return fetchCameraStatus();
+}
+
+refreshCameraStatusPolling();
 
 // ===================================================
 // 카메라 에러 처리
@@ -143,29 +340,41 @@ function handleCameraError() {
     showCameraDisconnected('영상 스트림을 불러올 수 없습니다', true);
 }
 
+const cameraStream = document.getElementById('camera-stream');
+if (cameraStream) {
+    cameraStream.addEventListener('error', handleCameraError);
+}
+
 // ===================================================
 // LiDAR map 시각화
 // ===================================================
 const LIDAR_STALE_SECONDS = 3;
 const LIDAR_OFFLINE_SECONDS = 8;
-const SCAN_PULSE_DURATION_MS = 850;
+// RViz2-style live display: latest LaserScan is sampled at about 10 Hz.
+// Map bytes are still returned only when map_revision changes.
+// HTTP snapshot is fallback/recovery only; live visualization is WebSocket-driven.
+const NAVIGATION_SNAPSHOT_VISIBLE_MS = 1000;
+const NAVIGATION_SNAPSHOT_HIDDEN_MS = 2000;
+const NAVIGATION_SNAPSHOT_TIMEOUT_MS = 1000;
+// Replanning runs at 2 Hz; keep a conservative stale window for planner jitter.
+const GLOBAL_PATH_STALE_MS = 2200;
 
 const lidarState = {
     status: null,
+    statusObservedAtMs: 0,
     map: null,
     pose: null,
     scan: null,
-    mapImage: null,
-    mapImageKey: null,
-    renderPending: false,
+    globalPath: [],
+    globalPathStatus: "none",
+    costmap: null,
     lastScanKey: null,
     lastScanSeenAtMs: 0,
-    lastScanPulseAtMs: 0,
     scanIntervalsMs: [],
 };
 
-function fetchOptionalJson(url) {
-    return fetch(url)
+function fetchOptionalJson(url, options = {}) {
+    return fetch(url, options)
         .then(response => {
             if (!response.ok) return null;
             return response.json();
@@ -199,7 +408,6 @@ function noteScanUpdate(scan) {
 
     lidarState.lastScanKey = key;
     lidarState.lastScanSeenAtMs = now;
-    lidarState.lastScanPulseAtMs = now;
 }
 
 function getScanReceiveHz() {
@@ -209,19 +417,25 @@ function getScanReceiveHz() {
     return avg > 0 ? 1000 / avg : null;
 }
 
-function getNavigationAgeSec() {
+function getScanAgeSec() {
+    if (lidarState.status?.has_scan === false) return null;
     const statusAge = lidarState.status?.last_update_age_sec;
-    if (typeof statusAge === 'number' && Number.isFinite(statusAge)) return statusAge;
+    if (typeof statusAge === 'number' && Number.isFinite(statusAge)) {
+        const observedAgoSec = lidarState.statusObservedAtMs > 0
+            ? (performance.now() - lidarState.statusObservedAtMs) / 1000
+            : 0;
+        return statusAge + Math.max(0, observedAgoSec);
+    }
     if (lidarState.lastScanSeenAtMs > 0) return (performance.now() - lidarState.lastScanSeenAtMs) / 1000;
     return null;
 }
 
 function getLidarLiveState() {
     const backendStatus = lidarState.status?.status;
-    const hasData = Boolean(lidarState.map || lidarState.scan || lidarState.pose);
-    const age = getNavigationAgeSec();
+    const hasScan = Boolean(lidarState.scan) && lidarState.status?.has_scan !== false;
+    const age = getScanAgeSec();
 
-    if (!hasData) {
+    if (!hasScan) {
         return { level: 'offline', label: 'OFFLINE', title: 'LiDAR OFFLINE', detail: 'NO SCAN DATA', age };
     }
     if (backendStatus === 'offline') {
@@ -236,230 +450,19 @@ function getLidarLiveState() {
     return { level: 'live', label: 'LIVE', title: 'LiDAR LIVE', detail: `AGE ${formatAgeSeconds(age)}`, age };
 }
 
-function decodeRleMap(runs, expectedLength) {
-    const output = new Int16Array(expectedLength);
-    let index = 0;
-    if (!Array.isArray(runs)) return output;
-    for (const run of runs) {
-        if (!Array.isArray(run) || run.length < 2) continue;
-        const value = Number(run[0]);
-        const count = Number(run[1]);
-        for (let i = 0; i < count && index < expectedLength; i += 1) {
-            output[index] = value;
-            index += 1;
-        }
-        if (index >= expectedLength) break;
-    }
-    return output;
-}
-
-function buildMapImage(map) {
-    const width = Number(map?.width || 0);
-    const height = Number(map?.height || 0);
-    if (!width || !height || !map?.data) return null;
-
-    const key = `${map.timestamp || ''}:${map.received_at || ''}:${width}x${height}`;
-    if (lidarState.mapImage && lidarState.mapImageKey === key) return lidarState.mapImage;
-
-    const cells = decodeRleMap(map.data, width * height);
-    const offscreen = document.createElement('canvas');
-    offscreen.width = width;
-    offscreen.height = height;
-    const ctx = offscreen.getContext('2d');
-    const image = ctx.createImageData(width, height);
-
-    for (let row = 0; row < height; row += 1) {
-        for (let col = 0; col < width; col += 1) {
-            const src = row * width + col;
-            const dstRow = height - 1 - row;
-            const dst = (dstRow * width + col) * 4;
-            const value = cells[src];
-            let r = 54, g = 65, b = 84;
-            if (value === 0) {
-                r = 230; g = 238; b = 246;
-            } else if (value > 0) {
-                const shade = Math.max(26, 92 - Math.round(value * 0.58));
-                r = shade; g = shade + 6; b = shade + 16;
-            }
-            image.data[dst] = r;
-            image.data[dst + 1] = g;
-            image.data[dst + 2] = b;
-            image.data[dst + 3] = 255;
-        }
-    }
-
-    ctx.putImageData(image, 0, 0);
-    lidarState.mapImage = offscreen;
-    lidarState.mapImageKey = key;
-    return offscreen;
-}
-
-function getCanvasLayout(canvas, map) {
-    const padding = minimapExpanded ? 24 : 8;
-    const width = canvas.width;
-    const height = canvas.height;
-    const mapWidth = Number(map?.width || 0);
-    const mapHeight = Number(map?.height || 0);
-    const resolution = Number(map?.resolution || 0.05);
-    const worldWidth = mapWidth > 0 ? mapWidth * resolution : 8;
-    const worldHeight = mapHeight > 0 ? mapHeight * resolution : 8;
-    const scale = Math.min(
-        (width - padding * 2) / Math.max(worldWidth, 0.1),
-        (height - padding * 2) / Math.max(worldHeight, 0.1)
-    );
-    const drawWidth = worldWidth * scale;
-    const drawHeight = worldHeight * scale;
-    return {
-        padding,
-        scale,
-        x: (width - drawWidth) / 2,
-        y: (height - drawHeight) / 2,
-        width: drawWidth,
-        height: drawHeight,
-        worldWidth,
-        worldHeight,
-        originX: Number(map?.origin?.x || 0),
-        originY: Number(map?.origin?.y || 0),
-    };
-}
-
-function worldToCanvas(x, y, layout) {
-    return {
-        x: layout.x + (x - layout.originX) * layout.scale,
-        y: layout.y + layout.height - (y - layout.originY) * layout.scale,
-    };
-}
-
-function drawRobot(ctx, pose, layout) {
-    if (!pose) return;
-    const point = worldToCanvas(Number(pose.x || 0), Number(pose.y || 0), layout);
-    const yaw = Number(pose.yaw || 0);
-    const size = minimapExpanded ? 13 : 8;
-
-    ctx.save();
-    ctx.translate(point.x, point.y);
-    ctx.rotate(-yaw);
-    ctx.beginPath();
-    ctx.moveTo(size, 0);
-    ctx.lineTo(-size * 0.65, -size * 0.55);
-    ctx.lineTo(-size * 0.35, 0);
-    ctx.lineTo(-size * 0.65, size * 0.55);
-    ctx.closePath();
-    ctx.fillStyle = '#e11d48';
-    ctx.strokeStyle = 'rgba(255,255,255,0.86)';
-    ctx.lineWidth = minimapExpanded ? 2 : 1.2;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-}
-
-function drawScan(ctx, scan, pose, layout) {
-    if (!scan || !Array.isArray(scan.ranges) || scan.ranges.length === 0) return;
-    const hasPose = Boolean(pose);
-    const robotX = hasPose ? Number(pose.x || 0) : layout.originX + layout.worldWidth / 2;
-    const robotY = hasPose ? Number(pose.y || 0) : layout.originY + layout.worldHeight / 2;
-    const robotYaw = hasPose ? Number(pose.yaw || 0) : 0;
-    const angleMin = Number(scan.angle_min || 0);
-    const angleIncrement = Number(scan.angle_increment || 0);
-    const rangeMin = Number(scan.range_min || 0);
-    const rangeMax = Number(scan.range_max || 12);
-
-    ctx.save();
-    ctx.fillStyle = '#22d3ee';
-    ctx.shadowColor = 'rgba(34, 211, 238, 0.5)';
-    ctx.shadowBlur = minimapExpanded ? 5 : 2;
-    const radius = minimapExpanded ? 2.2 : 1.4;
-    for (let i = 0; i < scan.ranges.length; i += 1) {
-        const range = scan.ranges[i];
-        if (range === null || range === undefined) continue;
-        const distance = Number(range);
-        if (!Number.isFinite(distance) || distance < rangeMin || distance > rangeMax) continue;
-        const angle = robotYaw + angleMin + angleIncrement * i;
-        const x = robotX + Math.cos(angle) * distance;
-        const y = robotY + Math.sin(angle) * distance;
-        const point = worldToCanvas(x, y, layout);
-        if (point.x < layout.x - 2 || point.x > layout.x + layout.width + 2) continue;
-        if (point.y < layout.y - 2 || point.y > layout.y + layout.height + 2) continue;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-    }
-    ctx.restore();
-}
-
-function drawScanPulse(ctx, pose, layout) {
-    if (!lidarState.lastScanPulseAtMs) return false;
-
-    const elapsed = performance.now() - lidarState.lastScanPulseAtMs;
-    if (elapsed < 0 || elapsed > SCAN_PULSE_DURATION_MS) return false;
-
-    const progress = elapsed / SCAN_PULSE_DURATION_MS;
-    const robotX = pose ? Number(pose.x || 0) : layout.originX + layout.worldWidth / 2;
-    const robotY = pose ? Number(pose.y || 0) : layout.originY + layout.worldHeight / 2;
-    const center = worldToCanvas(robotX, robotY, layout);
-    const baseRadius = minimapExpanded ? 12 : 6;
-    const spread = minimapExpanded ? 80 : 28;
-    const radius = baseRadius + spread * progress;
-    const alpha = Math.max(0, 0.78 * (1 - progress));
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(34, 211, 238, ${alpha})`;
-    ctx.lineWidth = minimapExpanded ? 3 : 1.8;
-    ctx.shadowColor = `rgba(34, 211, 238, ${alpha})`;
-    ctx.shadowBlur = minimapExpanded ? 16 : 8;
-    ctx.stroke();
-    ctx.restore();
-    return true;
-}
-
-function drawEmptyLidar(ctx, canvas) {
-    ctx.fillStyle = '#101827';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.14)';
-    ctx.lineWidth = 1;
-    const step = minimapExpanded ? 32 : 16;
-    for (let x = 0; x < canvas.width; x += step) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-    }
-    for (let y = 0; y < canvas.height; y += step) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-    }
-}
-
 function updateLidarLabels() {
-    const statusEl = document.getElementById('lidar-map-status');
     const metaEl = document.getElementById('lidar-map-meta');
-    const badgeEl = document.getElementById('lidar-live-badge');
     const overlayEl = document.getElementById('lidar-stale-overlay');
     const overlayTitleEl = document.getElementById('lidar-stale-title');
     const overlayDetailEl = document.getElementById('lidar-stale-detail');
-    if (!statusEl || !metaEl) return;
+    if (!metaEl) return;
 
     const liveState = getLidarLiveState();
-    const hasData = Boolean(lidarState.map || lidarState.scan || lidarState.pose);
     const ageText = formatAgeSeconds(liveState.age);
     const map = lidarState.map;
     const pose = lidarState.pose;
     const scanHz = getScanReceiveHz();
     const scanText = scanHz ? `RX ${scanHz.toFixed(1)}Hz` : 'RX --';
-
-    statusEl.classList.toggle('has-data', hasData);
-    statusEl.classList.toggle('stale', liveState.level !== 'live');
-    statusEl.textContent = hasData ? liveState.label : 'MAP AREA';
-
-    if (badgeEl) {
-        badgeEl.classList.remove('live', 'stale', 'offline');
-        badgeEl.classList.add(liveState.level);
-        badgeEl.textContent = liveState.level === 'live' ? `LiDAR ${liveState.label}` : liveState.label;
-    }
 
     if (overlayEl) {
         overlayEl.classList.toggle('visible', liveState.level !== 'live');
@@ -476,55 +479,12 @@ function updateLidarLabels() {
     } else if (lidarState.scan) {
         metaEl.textContent = `${liveState.label} / ${scanText} / AGE ${ageText}`;
     } else {
-        metaEl.textContent = 'LiDAR OFFLINE';
+        metaEl.textContent = `${liveState.label} / ${scanText} / AGE ${ageText}`;
     }
-}
-
-function renderLidarMap() {
-    const canvas = document.getElementById('lidar-map-canvas');
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const nextWidth = Math.max(1, Math.floor(rect.width * dpr));
-    const nextHeight = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
-        canvas.width = nextWidth;
-        canvas.height = nextHeight;
-    }
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const map = lidarState.map;
-    const pose = lidarState.pose;
-    const scan = lidarState.scan;
-    const layout = getCanvasLayout(canvas, map);
-
-    drawEmptyLidar(ctx, canvas);
-    if (map) {
-        const image = buildMapImage(map);
-        if (image) {
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(image, layout.x, layout.y, layout.width, layout.height);
-        }
-        ctx.strokeStyle = 'rgba(34, 211, 238, 0.32)';
-        ctx.lineWidth = Math.max(1, dpr);
-        ctx.strokeRect(layout.x, layout.y, layout.width, layout.height);
-    }
-    drawScan(ctx, scan, pose, layout);
-    const pulseActive = drawScanPulse(ctx, pose, layout);
-    drawRobot(ctx, pose, layout);
-    updateLidarLabels();
-    if (pulseActive) requestLidarRender();
 }
 
 function requestLidarRender() {
-    if (lidarState.renderPending) return;
-    lidarState.renderPending = true;
-    requestAnimationFrame(() => {
-        lidarState.renderPending = false;
-        renderLidarMap();
-    });
+    updateLidarLabels();
 }
 
 function defaultNavigationMapName() {
@@ -538,26 +498,28 @@ function defaultNavigationMapName() {
     return `patrol_area_${yyyy}${mm}${dd}_${hh}${mi}${ss}`;
 }
 
-function saveCurrentNavigationMap() {
-    const button = document.getElementById('lidarMapSaveBtn');
+function saveCurrentNavigationMap(button = null) {
     if (!lidarState.map) {
         alert('저장할 LiDAR map이 아직 없습니다. mapping 데이터 수신 후 다시 시도하세요.');
-        return;
+        return Promise.resolve(null);
     }
+
     const mapName = prompt('저장할 map 이름을 입력하세요.', defaultNavigationMapName());
-    if (mapName === null) return;
+    if (mapName === null) return Promise.resolve(null);
+
     const trimmedName = mapName.trim();
     if (!trimmedName) {
         alert('map 이름이 비어 있습니다.');
-        return;
+        return Promise.resolve(null);
     }
 
+    const previousText = button?.textContent || '';
     if (button) {
         button.disabled = true;
-        button.textContent = '...';
+        button.textContent = '저장 중...';
     }
 
-    fetch('/api/navigation/maps/save', {
+    return fetch('/api/navigation/maps/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ map_name: trimmedName }),
@@ -566,120 +528,671 @@ function saveCurrentNavigationMap() {
         .then(({ ok, data }) => {
             if (!ok) {
                 alert(`map 저장 실패: ${data.error || 'unknown error'}`);
-                return;
+                return null;
             }
             const savedName = data.map?.map_name || trimmedName;
             alert(`map 저장 완료: ${savedName}`);
+            return savedName;
         })
         .catch(error => {
             console.error('map 저장 오류:', error);
             alert('서버 통신 오류로 map을 저장하지 못했습니다.');
+            return null;
         })
         .finally(() => {
             if (button) {
                 button.disabled = false;
-                button.textContent = 'SAVE';
+                button.textContent = previousText || '현재 지도 저장';
             }
         });
 }
 
-function fetchNavigationStatus() {
-    fetchOptionalJson('/api/navigation/status').then(data => {
-        if (data) lidarState.status = data;
-        requestLidarRender();
-    });
+let navigationSnapshotTimer = null;
+let navigationSnapshotInFlight = false;
+let navigationSnapshotRefreshQueued = false;
+let navigationMapRevision = null;
+let navigationMapDisplaySuppressed = false;
+let navigationMapSuppressedRevision = null;
+let navigationVisualizationSocket = null;
+let navigationVisualizationSocketOpen = false;
+let navigationVisualizationReconnectTimer = null;
+let navigationVisualizationReconnectDelayMs = 500;
+let navigationGlobalPathStaleTimer = null;
+let navigationGlobalPathRunKey = null;
+const NAVIGATION_VISUALIZATION_RECONNECT_MAX_MS = 5000;
+
+function navigationSnapshotDelayMs() {
+    return document.hidden
+        ? NAVIGATION_SNAPSHOT_HIDDEN_MS
+        : NAVIGATION_SNAPSHOT_VISIBLE_MS;
 }
 
-function fetchNavigationMap() {
-    fetchOptionalJson('/api/navigation/map').then(data => {
-        if (data?.ok && data.map) lidarState.map = data.map;
-        if (data?.status) lidarState.status = data.status;
-        requestLidarRender();
-    });
+function navigationSnapshotUrl() {
+    if (navigationMapRevision === null || navigationMapRevision === undefined) {
+        return '/api/navigation/snapshot';
+    }
+    return `/api/navigation/snapshot?map_revision=${encodeURIComponent(navigationMapRevision)}`;
 }
 
-function fetchNavigationPoseAndScan() {
-    Promise.all([
-        fetchOptionalJson('/api/navigation/pose'),
-        fetchOptionalJson('/api/navigation/scan'),
-    ]).then(([poseData, scanData]) => {
-        if (poseData?.ok && poseData.pose) lidarState.pose = poseData.pose;
-        if (poseData?.status) lidarState.status = poseData.status;
-        if (scanData?.ok && scanData.scan) {
-            lidarState.scan = scanData.scan;
-            noteScanUpdate(scanData.scan);
+function navigationVisualizationWsUrl() {
+    const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${window.location.host}/ws/navigation/visualization`;
+}
+
+function clearNavigationScan() {
+    lidarState.scan = null;
+    lidarState.lastScanKey = null;
+    lidarState.lastScanSeenAtMs = 0;
+    lidarState.scanIntervalsMs = [];
+}
+
+function cancelNavigationGlobalPathStaleTimer() {
+    if (navigationGlobalPathStaleTimer !== null) {
+        window.clearTimeout(navigationGlobalPathStaleTimer);
+        navigationGlobalPathStaleTimer = null;
+    }
+}
+
+function scheduleNavigationGlobalPathStale(receivedAtSec = null) {
+    cancelNavigationGlobalPathStaleTimer();
+
+    // Standalone ComputePathToPose debugging:
+    // retain the latest path until another path or reset arrives.
+    if (navigationGlobalPathRunKey === null) {
+        return;
+    }
+
+    let delayMs = GLOBAL_PATH_STALE_MS;
+    const received = Number(receivedAtSec);
+
+    if (Number.isFinite(received) && received > 0) {
+        delayMs = Math.max(
+            0,
+            GLOBAL_PATH_STALE_MS - Math.max(0, Date.now() - received * 1000),
+        );
+    }
+
+    if (delayMs <= 0) {
+        lidarState.globalPath = [];
+        lidarState.globalPathStatus = 'stale';
+        return;
+    }
+
+    navigationGlobalPathStaleTimer = window.setTimeout(() => {
+        navigationGlobalPathStaleTimer = null;
+
+        if (
+            lidarState.globalPathStatus !== 'fresh'
+            && lidarState.globalPathStatus !== 'pending'
+        ) return;
+
+        lidarState.globalPath = [];
+        lidarState.globalPathStatus = 'stale';
+        emitNavigationVisualizationState(false);
+    }, delayMs);
+}
+function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
+    lidarState.globalPath = Array.isArray(path) ? path : [];
+    if (lidarState.globalPath.length >= 2) {
+        lidarState.globalPathStatus = 'fresh';
+        scheduleNavigationGlobalPathStale(receivedAtSec);
+    } else {
+        cancelNavigationGlobalPathStaleTimer();
+        lidarState.globalPathStatus = 'stale';
+    }
+    if (emit) emitNavigationVisualizationState(false);
+}
+
+function beginNavigationGlobalPathPending() {
+    cancelNavigationGlobalPathStaleTimer();
+    lidarState.globalPath = [];
+    lidarState.globalPathStatus = 'pending';
+    scheduleNavigationGlobalPathStale();
+    emitNavigationVisualizationState(false);
+}
+
+function resetNavigationGlobalPath() {
+    cancelNavigationGlobalPathStaleTimer();
+    lidarState.globalPath = [];
+    lidarState.globalPathStatus = 'none';
+}
+
+function navigationControlGoalKey(control) {
+    const goal = control?.active_goal;
+    if (!goal) return null;
+    return [
+        Number(goal.x) || 0,
+        Number(goal.y) || 0,
+        Number(goal.yaw) || 0,
+    ].join(':');
+}
+
+function emitNavigationVisualizationState(mapChanged = false) {
+    const visualizationState = {
+        status: lidarState.status,
+        map: lidarState.map,
+        pose: lidarState.pose,
+        scan: lidarState.scan,
+        globalPath: lidarState.globalPath,
+        globalPathStatus: lidarState.globalPathStatus,
+        costmap: lidarState.costmap,
+        mapRevision: navigationMapRevision,
+        mapChanged: Boolean(mapChanged),
+    };
+    window.dabomNavigationVisualizationState = visualizationState;
+    document.dispatchEvent(new CustomEvent(
+        'dabom:navigation-visualization-state',
+        { detail: visualizationState },
+    ));
+}
+
+function applyNavigationMapPayload(map, revision, mapChanged = true) {
+    const incomingMapRevision = revision ?? null;
+    if (
+        navigationMapDisplaySuppressed
+        && incomingMapRevision !== navigationMapSuppressedRevision
+    ) {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+    }
+
+    navigationMapRevision = incomingMapRevision;
+    if (navigationMapDisplaySuppressed) {
+        lidarState.map = null;
+    } else {
+        lidarState.map = map || null;
+    }
+    emitNavigationVisualizationState(mapChanged);
+}
+
+function applyNavigationSnapshot(data) {
+    if (!data?.ok) return;
+
+    if (data.status) {
+        lidarState.status = data.status;
+        lidarState.statusObservedAtMs = performance.now();
+    }
+    lidarState.pose = data.pose_available ? data.pose : null;
+    if (Array.isArray(data.global_path) && data.global_path.length >= 2) {
+        applyNavigationGlobalPath(
+            data.global_path,
+            data.global_path_updated_at ?? null,
+            false,
+        );
+    } else if (
+        navigationGlobalPathRunKey !== null
+        && lidarState.globalPathStatus !== 'pending'
+    ) {
+        resetNavigationGlobalPath();
+    }
+    lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
+    if (data.scan_available && data.scan) {
+        lidarState.scan = data.scan;
+        noteScanUpdate(data.scan);
+    } else {
+        clearNavigationScan();
+    }
+
+    const incomingMapRevision = data.map_revision ?? null;
+    if (
+        navigationMapDisplaySuppressed
+        && incomingMapRevision !== navigationMapSuppressedRevision
+    ) {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+    }
+
+    navigationMapRevision = incomingMapRevision;
+    if (navigationMapDisplaySuppressed) {
+        lidarState.map = null;
+    } else if (!data.map_available) {
+        lidarState.map = null;
+    } else if (data.map_changed && data.map) {
+        lidarState.map = data.map;
+    }
+
+    emitNavigationVisualizationState(Boolean(data.map_changed));
+}
+
+function applyNavigationStreamMessage(message) {
+    if (!message || typeof message !== 'object') return;
+
+    if (message.type === 'snapshot') {
+        applyNavigationSnapshot(message.snapshot);
+        return;
+    }
+
+    if (message.type === 'scan') {
+        if (message.status) {
+            lidarState.status = message.status;
+            lidarState.statusObservedAtMs = performance.now();
         }
-        if (scanData?.status) lidarState.status = scanData.status;
+        if (message.scan) {
+            lidarState.scan = message.scan;
+            noteScanUpdate(message.scan);
+        } else {
+            clearNavigationScan();
+        }
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'pose') {
+        lidarState.pose = message.pose || null;
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'global_path') {
+        applyNavigationGlobalPath(
+            message.path,
+            message.received_at ?? null,
+        );
+        return;
+    }
+
+    if (message.type === 'costmap') {
+        lidarState.costmap = message.costmap && typeof message.costmap === 'object'
+            ? message.costmap
+            : null;
+        emitNavigationVisualizationState(false);
+        return;
+    }
+
+    if (message.type === 'map') {
+        applyNavigationMapPayload(
+            message.map || null,
+            message.map_revision ?? null,
+            true,
+        );
+        return;
+    }
+
+    if (message.type === 'reset') {
+        navigationMapRevision = null;
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+        lidarState.map = null;
+        lidarState.pose = null;
+        resetNavigationGlobalPath();
+        navigationGlobalPathRunKey = null;
+        lidarState.costmap = null;
+        emitNavigationVisualizationState(true);
+    }
+}
+
+document.addEventListener('dabom:navigation-control-state', event => {
+    const control = event.detail || {};
+    const navState = String(control.navigation_state || '').toUpperCase();
+    const active = ['NAVIGATING', 'RESUMING'].includes(navState) && control.active_goal;
+    if (active) {
+        const nextRunKey = navigationControlGoalKey(control);
+        if (nextRunKey !== navigationGlobalPathRunKey) {
+            navigationGlobalPathRunKey = nextRunKey;
+            beginNavigationGlobalPathPending();
+        }
+        return;
+    }
+
+    if (navigationGlobalPathRunKey !== null) {
+        navigationGlobalPathRunKey = null;
+        resetNavigationGlobalPath();
+        emitNavigationVisualizationState(false);
+    }
+});
+
+function scheduleNavigationSnapshot(delayMs = navigationSnapshotDelayMs()) {
+    if (navigationVisualizationSocketOpen) return;
+    if (navigationSnapshotTimer !== null) window.clearTimeout(navigationSnapshotTimer);
+    navigationSnapshotTimer = window.setTimeout(fetchNavigationSnapshot, delayMs);
+}
+
+async function fetchNavigationSnapshot() {
+    if (navigationSnapshotInFlight) return;
+    navigationSnapshotTimer = null;
+    navigationSnapshotInFlight = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(
+        () => controller.abort(),
+        NAVIGATION_SNAPSHOT_TIMEOUT_MS,
+    );
+    try {
+        const data = await fetchOptionalJson(
+            navigationSnapshotUrl(),
+            { signal: controller.signal },
+        );
+        applyNavigationSnapshot(data);
         requestLidarRender();
+    } finally {
+        window.clearTimeout(timeoutId);
+        navigationSnapshotInFlight = false;
+        const refreshImmediately = navigationSnapshotRefreshQueued;
+        navigationSnapshotRefreshQueued = false;
+        if (!navigationVisualizationSocketOpen) {
+            scheduleNavigationSnapshot(
+                refreshImmediately ? 0 : navigationSnapshotDelayMs(),
+            );
+        }
+    }
+}
+
+function clearNavigationVisualizationReconnectTimer() {
+    if (navigationVisualizationReconnectTimer !== null) {
+        window.clearTimeout(navigationVisualizationReconnectTimer);
+        navigationVisualizationReconnectTimer = null;
+    }
+}
+
+function scheduleNavigationVisualizationReconnect() {
+    clearNavigationVisualizationReconnectTimer();
+    const delay = navigationVisualizationReconnectDelayMs;
+    navigationVisualizationReconnectDelayMs = Math.min(
+        NAVIGATION_VISUALIZATION_RECONNECT_MAX_MS,
+        navigationVisualizationReconnectDelayMs * 2,
+    );
+    navigationVisualizationReconnectTimer = window.setTimeout(
+        connectNavigationVisualizationStream,
+        delay,
+    );
+}
+
+function connectNavigationVisualizationStream() {
+    if (
+        navigationVisualizationSocket
+        && (
+            navigationVisualizationSocket.readyState === WebSocket.OPEN
+            || navigationVisualizationSocket.readyState === WebSocket.CONNECTING
+        )
+    ) return;
+
+    const socket = new WebSocket(navigationVisualizationWsUrl());
+    navigationVisualizationSocket = socket;
+
+    socket.addEventListener('open', () => {
+        if (navigationVisualizationSocket !== socket) return;
+        navigationVisualizationSocketOpen = true;
+        navigationVisualizationReconnectDelayMs = 500;
+        clearNavigationVisualizationReconnectTimer();
+        if (navigationSnapshotTimer !== null) {
+            window.clearTimeout(navigationSnapshotTimer);
+            navigationSnapshotTimer = null;
+        }
+    });
+
+    socket.addEventListener('message', event => {
+        if (navigationVisualizationSocket !== socket) return;
+        try {
+            applyNavigationStreamMessage(JSON.parse(event.data));
+            requestLidarRender();
+        } catch (error) {
+            console.warn('Navigation visualization WebSocket payload error:', error);
+        }
+    });
+
+    socket.addEventListener('close', () => {
+        if (navigationVisualizationSocket !== socket) return;
+        navigationVisualizationSocketOpen = false;
+        navigationVisualizationSocket = null;
+        scheduleNavigationSnapshot(0);
+        scheduleNavigationVisualizationReconnect();
+    });
+
+    socket.addEventListener('error', () => {
+        if (navigationVisualizationSocket === socket) socket.close();
     });
 }
 
-setInterval(fetchNavigationStatus, 1000);
-setInterval(fetchNavigationMap, 1500);
-setInterval(fetchNavigationPoseAndScan, 500);
-window.addEventListener('resize', requestLidarRender);
+document.addEventListener('visibilitychange', () => {
+    if (navigationVisualizationSocketOpen) return;
+    if (navigationSnapshotTimer !== null) window.clearTimeout(navigationSnapshotTimer);
+    navigationSnapshotTimer = null;
+    if (navigationSnapshotInFlight) {
+        navigationSnapshotRefreshQueued = !document.hidden;
+    } else {
+        scheduleNavigationSnapshot(document.hidden ? navigationSnapshotDelayMs() : 0);
+    }
+});
+fetchNavigationSnapshot();
+connectNavigationVisualizationStream();
 requestLidarRender();
 
 // ===================================================
 // 전체화면
 // ===================================================
-function toggleFullscreen(elementId) {
-    const elem = document.getElementById(elementId);
-    if (!document.fullscreenElement) {
-        if (elem.requestFullscreen) elem.requestFullscreen();
-        else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
-        else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
-    } else {
-        if (document.exitFullscreen) document.exitFullscreen();
+function currentFullscreenElement() {
+    return document.fullscreenElement
+        || document.webkitFullscreenElement
+        || document.msFullscreenElement
+        || null;
+}
+
+async function requestElementFullscreen(element) {
+    if (!element) return false;
+
+    if (element.requestFullscreen) {
+        try {
+            await element.requestFullscreen({ navigationUI: 'hide' });
+        } catch (error) {
+            if (error?.name === 'TypeError') {
+                await element.requestFullscreen();
+            } else {
+                throw error;
+            }
+        }
+        return true;
     }
+
+    if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen();
+        return true;
+    }
+
+    if (element.msRequestFullscreen) {
+        element.msRequestFullscreen();
+        return true;
+    }
+
+    return false;
+}
+
+async function exitDocumentFullscreen() {
+    if (document.exitFullscreen) {
+        await document.exitFullscreen();
+        return true;
+    }
+    if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+        return true;
+    }
+    if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+        return true;
+    }
+    return false;
+}
+
+async function toggleFullscreen(elementId) {
+    const element = document.getElementById(elementId);
+    if (!element) return false;
+
+    if (currentFullscreenElement() === element) {
+        return exitDocumentFullscreen();
+    }
+    return requestElementFullscreen(element);
 }
 
 // ===================================================
 // 미니맵 확대 토글 (카메라 화면 크기만큼 확장)
 // ===================================================
 let minimapExpanded = false;
-function toggleMinimapExpand() {
-    const minimap = document.getElementById('minimap-overlay');
-    const videoWrapper = document.getElementById('video-wrapper');
-    const btn = document.getElementById('minimapExpandBtn');
 
-    if (!minimapExpanded) {
-        // 카메라 화면 크기 가져오기
-        const wRect = videoWrapper.getBoundingClientRect();
-        minimap.style.width = wRect.width + 'px';
-        minimap.style.height = wRect.height + 'px';
-        minimap.style.bottom = '0';
-        minimap.style.right = '0';
-        minimap.style.borderRadius = '6px';
-        minimap.style.zIndex = '50';
-        btn.textContent = '⊡';
-        btn.title = '미니맵 축소';
-        minimap.classList.add('expanded');
-        minimapExpanded = true;
-        requestLidarRender();
-    } else {
-        minimap.style.width = '';
-        minimap.style.height = '';
-        minimap.style.bottom = '';
-        minimap.style.right = '';
-        minimap.style.zIndex = '';
-        btn.textContent = '⛶';
-        btn.title = '미니맵 확대';
-        minimap.classList.remove('expanded');
-        minimapExpanded = false;
-        requestLidarRender();
+function setMinimapExpanded(expanded) {
+    const minimap = document.getElementById('minimap-overlay');
+    const btn = document.getElementById('minimapExpandBtn');
+    if (!minimap || !btn) return;
+
+    minimapExpanded = Boolean(expanded);
+    minimap.classList.toggle('expanded', minimapExpanded);
+    btn.textContent = minimapExpanded ? '⊡' : '⛶';
+    btn.title = minimapExpanded ? '미니맵 축소' : '미니맵 확대';
+    window.dabomLidar3D?.setExpandedState?.(minimapExpanded);
+    requestLidarRender();
+}
+
+async function toggleMinimapExpand() {
+    const minimap = document.getElementById('minimap-overlay');
+    const cameraView = document.getElementById('video-wrapper');
+    const collapsingFromLidarFullscreen = (
+        minimapExpanded
+        && minimap
+        && currentFullscreenElement() === minimap
+    );
+
+    if (!collapsingFromLidarFullscreen) {
+        setMinimapExpanded(!minimapExpanded);
+        return true;
+    }
+
+    setMinimapExpanded(false);
+
+    try {
+        await exitDocumentFullscreen();
+        if (!cameraView) return true;
+
+        const entered = await requestElementFullscreen(cameraView);
+        if (!entered) {
+            throw new Error('이 브라우저는 Element Fullscreen API를 지원하지 않습니다.');
+        }
+        return true;
+    } catch (error) {
+        console.error('3D Viewer 축소 후 카메라 전체화면 전환 실패:', error);
+        return false;
     }
 }
+
+async function toggleLidarViewerFullscreen(event = null) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
+    const minimap = document.getElementById('minimap-overlay');
+    if (!minimap) return false;
+
+    try {
+        if (currentFullscreenElement() === minimap) {
+            return await exitDocumentFullscreen();
+        }
+
+        if (!minimapExpanded) setMinimapExpanded(true);
+        const entered = await requestElementFullscreen(minimap);
+        if (!entered) throw new Error('이 브라우저는 Element Fullscreen API를 지원하지 않습니다.');
+        return true;
+    } catch (error) {
+        console.error('3D Viewer 전체화면 전환 실패:', error);
+        const button = document.getElementById('lidarViewerFullscreenBtn');
+        if (button) button.title = `전체화면 전환 실패: ${error.message || error}`;
+        return false;
+    }
+}
+
+const lidarFullscreenBtn = document.getElementById('lidarViewerFullscreenBtn');
+lidarFullscreenBtn?.addEventListener('pointerdown', event => event.stopPropagation());
+lidarFullscreenBtn?.addEventListener('click', toggleLidarViewerFullscreen);
+
+function syncLidarViewerFullscreenState() {
+    const minimap = document.getElementById('minimap-overlay');
+    const button = document.getElementById('lidarViewerFullscreenBtn');
+    const active = currentFullscreenElement() === minimap;
+
+    button?.classList.toggle('is-fullscreen', active);
+    if (button) {
+        const label = active ? '3D Viewer 전체화면 해제' : '3D Viewer 전체화면';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+    }
+
+    if (active && !minimapExpanded) setMinimapExpanded(true);
+    requestLidarRender();
+}
+
+document.addEventListener('fullscreenchange', syncLidarViewerFullscreenState);
+document.addEventListener('webkitfullscreenchange', syncLidarViewerFullscreenState);
+
+window.navigationMapView = {
+    clearMapDisplay() {
+        navigationMapDisplaySuppressed = true;
+        navigationMapSuppressedRevision = navigationMapRevision;
+        lidarState.map = null;
+
+        const visualizationState = {
+            status: lidarState.status,
+            map: null,
+            pose: lidarState.pose,
+            scan: lidarState.scan,
+            globalPath: lidarState.globalPath,
+            globalPathStatus: lidarState.globalPathStatus,
+            costmap: lidarState.costmap,
+            mapRevision: navigationMapRevision,
+            mapChanged: true,
+        };
+        window.dabomNavigationVisualizationState = visualizationState;
+        document.dispatchEvent(new CustomEvent(
+            'dabom:navigation-visualization-state',
+            { detail: visualizationState },
+        ));
+        requestLidarRender();
+        return true;
+    },
+    restoreMapDisplay() {
+        navigationMapDisplaySuppressed = false;
+        navigationMapSuppressedRevision = null;
+        navigationMapRevision = null;
+        if (navigationSnapshotTimer !== null) {
+            window.clearTimeout(navigationSnapshotTimer);
+            navigationSnapshotTimer = null;
+        }
+        if (navigationSnapshotInFlight) {
+            navigationSnapshotRefreshQueued = true;
+        } else {
+            fetchNavigationSnapshot();
+        }
+        return true;
+    },
+    screenToGround(event) {
+        return window.dabomLidar3D?.screenToGround?.(event) || null;
+    },
+    snapshot() {
+        return {
+            map: lidarState.map,
+            pose: lidarState.pose,
+            expanded: minimapExpanded,
+            interactionMode: window.dabomLidar3D?.interactionMode?.() || 'view',
+        };
+    },
+    interactionMode() {
+        return window.dabomLidar3D?.interactionMode?.() || 'view';
+    },
+    setInteractionMode(mode) {
+        window.dabomLidar3D?.setInteractionMode?.(mode);
+    },
+    requestRender() {
+        requestLidarRender();
+    },
+};
 
 // ===================================================
 // 알림 지우기
 // ===================================================
 function clearAlerts() {
-    if (confirm("정말 모든 알림 내역을 삭제하시겠습니까?")) {
+    if (confirm('현재 표시된 알림을 지우시겠습니까?')) {
+        const clearedAt = Date.now();
+        document.dispatchEvent(new CustomEvent(
+            'dabom:alerts-cleared',
+            { detail: { clearedAt } },
+        ));
         document.getElementById('alertBox').innerHTML = `
             <div class="alert-entry alert-info">
                 <span class="alert-time">${getCurrentTime()}</span>
-                <span class="alert-message">알림 내역이 삭제되었습니다. 대기 중...</span>
+                <span class="alert-message">현재 표시 알림을 지웠습니다. 새 알림 대기 중...</span>
             </div>`;
     }
 }
@@ -694,277 +1207,66 @@ function clearAlerts() {
 // setInterval(fetchAlerts, 3000);
 
 // ===================================================
-// 모달 상태 (실제 데이터만, 더미 없음)
-// ===================================================
-const modalState = {
-    statusModal:  { allRows: [], filtered: [], timer: null },
-    patrolModal:  { allRows: [], filtered: [], timer: null },
-    bookmarkModal:{ allRows: [], filtered: [], timer: null },
-};
-
-// ===================================================
-// 필터 적용 (초 단위까지 지원)
-// ===================================================
-function applyFilter(type) {
-    const st = modalState[type];
-    const startDate = document.getElementById(`${type}-start-date`)?.value;
-    const endDate   = document.getElementById(`${type}-end-date`)?.value;
-    const startTime = document.getElementById(`${type}-start-time`)?.value;
-    const endTime   = document.getElementById(`${type}-end-time`)?.value;
-
-    const startDT = startDate && startTime ? new Date(`${startDate}T${startTime}`) : null;
-    const endDT   = endDate   && endTime   ? new Date(`${endDate}T${endTime}`)     : null;
-
-    if (startDT && endDT && startDT > endDT) {
-        alert("종료 일시는 시작 일시보다 빠를 수 없습니다. 다시 확인해 주세요.");
-        return;
-    }
-
-    st.filtered = st.allRows.filter(row => {
-        const rowDT = new Date(`${row.date}T${row.time}`);
-        if (startDT && rowDT < startDT) return false;
-        if (endDT   && rowDT > endDT)   return false;
-        return true;
-    });
-    renderTable(type);
-}
-
-function resetFilter(type) {
-    const today = todayStr();
-    document.getElementById(`${type}-start-date`).value = today;
-    document.getElementById(`${type}-end-date`).value   = today;
-    document.getElementById(`${type}-start-time`).value = startOfDayTimeStr();
-    document.getElementById(`${type}-end-time`).value   = nowTimeStr();
-    modalState[type].filtered = [...modalState[type].allRows];
-    renderTable(type);
-}
-
-// ===================================================
-// 테이블 렌더링
-// ===================================================
-function renderTable(type) {
-    const tbody = document.getElementById(`${type}-tbody`);
-    const countEl = document.getElementById(`${type}-count`);
-    if (!tbody) return;
-
-    const rows = modalState[type].filtered;
-    if (countEl) countEl.innerHTML = `총 <span>${rows.length}</span> 건`;
-
-    if (rows.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="20"><div class="table-empty">조건에 맞는 데이터가 없습니다</div></td></tr>`;
-        return;
-    }
-
-    tbody.innerHTML = rows.slice().reverse().map((row, idx) => {
-        const realIdx = modalState[type].filtered.length - 1 - idx;
-        if (type === 'statusModal') {
-            const cpuClass  = row.cpu_usage > 80 ? 'danger' : row.cpu_usage > 60 ? 'warn' : 'accent';
-            const tempClass = row.cpu_temp  > 80 ? 'danger' : row.cpu_temp  > 65 ? 'warn' : '';
-            const batClass  = row.battery   < 20 ? 'danger' : row.battery   < 40 ? 'warn' : 'success';
-            const pingClass = row.ping > 150 ? 'danger' : row.ping > 100 ? 'warn' : '';
-            return `<tr>
-                <td class="muted">${row.date}</td>
-                <td class="muted">${row.time}</td>
-                <td class="${cpuClass}">${row.cpu_usage}%</td>
-                <td class="${tempClass}">${row.cpu_temp}°C</td>
-                <td class="${row.ram_usage>80?'warn':''}">${row.ram_usage}%</td>
-                <td class="${batClass}">${row.battery}%</td>
-                <td class="${pingClass}">${row.ping}ms</td>
-                <td class="muted">${row.location}</td>
-            </tr>`;
-        } else if (type === 'patrolModal') {
-            const stateClass = row.state==='이상 감지'?'danger':row.state==='장애물 우회'?'warn':row.state==='정상 완료'?'success':'accent';
-            const repClass   = row.reported==='예'?'danger':'muted';
-            return `<tr>
-                <td class="muted">${row.date}</td>
-                <td class="muted">${row.time}</td>
-                <td><span class="status-badge status-${stateClass==='danger'?'danger':stateClass==='warn'?'warning':stateClass==='success'?'normal':'patrol'}">${row.state}</span></td>
-                <td class="muted">${row.location}</td>
-                <td>${row.content}</td>
-                <td class="${repClass}">${row.reported}</td>
-            </tr>`;
-        } else {
-            // bookmarkModal
-            const stClass = row.state==='이상 감지'?'danger':row.state==='경고'?'warning':'normal';
-            return `<tr>
-                <td class="muted">${row.date}</td>
-                <td class="muted">${row.time}</td>
-                <td>${row.location}</td>
-                <td>${row.snapshot || '-'}</td>
-                <td><span class="status-badge status-${stClass}">${row.state}</span></td>
-                <td>
-                    <button class="del-btn" onclick="deleteBookmark(${realIdx})">삭제</button>
-                </td>
-            </tr>`;
-        }
-    }).join('');
-}
-
-// ===================================================
-// 북마크 삭제
-// ===================================================
-function deleteBookmark(idx) {
-    if (confirm('이 기록을 삭제하시겠습니까?')) {
-        modalState['bookmarkModal'].allRows.splice(idx, 1);
-        applyFilter('bookmarkModal');
-    }
-}
-
-// ===================================================
-// 모달 HTML 생성 (시간 필드 초 단위까지 step="1")
-// ===================================================
-function buildModalHTML(type) {
-    const today = todayStr();
-    const now   = nowTimeStr();
-
-    const filterBar = `
-    <div class="modal-filter-bar">
-        <label>시작</label>
-        <input type="date" id="${type}-start-date" value="${today}">
-        <input type="time" id="${type}-start-time" value="00:00:00" step="1">
-        <span class="filter-sep">~</span>
-        <label>종료</label>
-        <input type="date" id="${type}-end-date" value="${today}">
-        <input type="time" id="${type}-end-time" value="${now}" step="1">
-        <button class="filter-btn" onclick="applyFilter('${type}')">조회</button>
-        <button class="filter-btn secondary" onclick="resetFilter('${type}')">초기화</button>
-        <span class="filter-count" id="${type}-count">총 <span>0</span> 건</span>
-    </div>`;
-
-    let tableHead = '';
-    if (type === 'statusModal') {
-        tableHead = `<tr>
-            <th>날짜</th><th>시각</th><th>CPU Usage</th><th>CPU Temp</th>
-            <th>RAM Usage</th><th>Battery</th><th>Ping</th><th>위치 (X,Y,Z)</th>
-        </tr>`;
-    } else if (type === 'patrolModal') {
-        tableHead = `<tr>
-            <th>날짜</th><th>시각</th><th>상태</th><th>위치 (X,Y,Z)</th>
-            <th>내용</th><th>신고여부</th>
-        </tr>`;
-    } else {
-        tableHead = `<tr>
-            <th>날짜</th><th>시각</th><th>위치</th><th>스냅샷</th><th>저장 당시 상태</th><th>삭제</th>
-        </tr>`;
-    }
-
-    return `
-    ${filterBar}
-    <div class="modal-table-wrapper">
-        <table class="data-table">
-            <thead>${tableHead}</thead>
-            <tbody id="${type}-tbody"></tbody>
-        </table>
-    </div>`;
-}
-
-// ===================================================
-// 모달 열기/닫기
-// ===================================================
-function openModal(type) {
-    const modal  = document.getElementById('commonModal');
-    const title  = document.getElementById('modalTitle');
-    const body   = document.getElementById('modalBody');
-
-    const titles = {
-        statusModal:   '기기 상태 로그',
-        patrolModal:   '순찰 기록',
-        bookmarkModal: '북마크 조회',
-        galleryModal:  '위험 감지 갤러리'
-    };
-
-    title.innerText = titles[type] || type;
-
-    if (type === 'galleryModal') {
-        body.innerHTML = `
-            <div style="display:flex; align-items:center; justify-content:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:12px; letter-spacing:1px; flex-direction:column; gap:8px;">
-                <span style="font-size:11px; opacity:0.4;">[ 갤러리 비어있음 ]</span>
-                <span>위험 감지 시 캡쳐된 이미지가 여기에 표시됩니다.</span>
-            </div>`;
-        modal.style.display = 'flex';
-        return;
-    }
-
-    modalState[type].filtered = [...modalState[type].allRows];
-    body.innerHTML = buildModalHTML(type);
-    modal.style.display = 'flex';
-    renderTable(type);
-
-    // 기기상태 로그는 서버에서 실시간으로 받아오는 구조 (현재는 /get_status 폴링)
-    // 순찰 기록, 북마크는 버튼 누를 때만 추가됨 → 자동 추가 타이머 없음
-}
-
-function closeModal() {
-    document.getElementById('commonModal').style.display = 'none';
-    Object.values(modalState).forEach(st => {
-        if (st.timer) { clearInterval(st.timer); st.timer = null; }
-    });
-}
-
-window.onclick = function(event) {
-    const modal = document.getElementById('commonModal');
-    if (event.target == modal) closeModal();
-};
-
-// ===================================================
-// 현재 화면 북마크 기록 (요구사항 8)
-// ===================================================
-function recordBookmark() {
-    const now = new Date();
-    const date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-    const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-
-    const newRow = {
-        date,
-        time,
-        location: '현재 위치',   // 실제 위치 데이터 연동 시 교체
-        snapshot: '화면 기록됨',
-        state: '정상'             // 실제 감지 상태 연동 시 교체
-    };
-
-    modalState['bookmarkModal'].allRows.push(newRow);
-
-    // 짧은 피드백
-    const btn = document.querySelector('.bookmark-record-btn');
-    if (btn) {
-        const orig = btn.textContent;
-        btn.textContent = '✅ 기록 완료!';
-        btn.style.color = 'var(--success-color)';
-        btn.style.borderColor = 'var(--success-color)';
-        setTimeout(() => {
-            btn.textContent = orig;
-            btn.style.color = '';
-            btn.style.borderColor = '';
-        }, 1500);
-    }
-}
-
-// ===================================================
 // 텔레그램 신고
 // ===================================================
-function reportDanger(isAuto = false) {
+let reportPending = false;
+
+async function reportDanger(isAuto = false) {
+    if (reportPending) return false;
     let confirmReport = true;
     if (!isAuto) confirmReport = confirm("신고? - Telegram");
-
-    if (confirmReport) {
-        fetch('/send_telegram', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
-            .then(r => r.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    if (!isAuto) alert("🚨 긴급 알림이 전송되었습니다.");
-                    console.log("텔레그램 알림 전송 완료");
-                } else {
-                    if (!isAuto) alert("알림 전송에 실패했습니다.");
-                }
-            })
-            .catch(err => {
-                console.error("Error:", err);
-                if (!isAuto) alert("서버 통신 오류로 알림을 보내지 못했습니다.");
-            });
+    if (!confirmReport) return false;
+    const button = document.querySelector('.action-report');
+    reportPending = true;
+    if (button) button.disabled = true;
+    window.DabomActionFeedback?.setReportState('sending');
+    const feedbackStartedAt = Date.now();
+    try {
+        const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'same-origin' });
+        const csrf = await csrfResponse.json().catch(() => ({}));
+        if (!csrfResponse.ok || !csrf.csrf_token) throw new Error('보안 토큰을 확인하지 못했습니다.');
+        const response = await fetch('/send_telegram', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrf.csrf_token,
+            },
+            body: JSON.stringify({}),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.status !== 'success') {
+            throw new Error(data.detail || data.error || '알림 전송에 실패했습니다.');
+        }
+        // Keep the message-send animation visible for 500ms even if the API returns early.
+        if (window.DabomActionFeedback) {
+            const remaining = 500 - (Date.now() - feedbackStartedAt);
+            if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+        }
+        // API acknowledgement, not a simulated click, is the only success condition.
+        window.DabomActionFeedback?.setReportState('success');
+        return true;
+    } catch (error) {
+        console.error('신고 요청 실패:', error);
+        window.DabomActionFeedback?.setReportState('error', error.message);
+        if (!isAuto) alert(error.message || '서버 통신 오류로 알림을 보내지 못했습니다.');
+        return false;
+    } finally {
+        reportPending = false;
+        if (button) button.disabled = false;
     }
 }
 
 function warnTrespasser() {
+    if (window.navigationControl?.warning) {
+        window.navigationControl.warning();
+        return;
+    }
+    // The fallback must not send a robot command before the Pi state is known.
+    if (window.dabomNavigationControlState?.connected !== true) {
+        alert('Pi 연결을 확인할 수 없어 경고 명령을 전송하지 않았습니다.');
+        return;
+    }
     sendRobotCommand({ type: 'speak', text: '경고합니다. 즉시 물러나십시오.' })
         .then(ok => {
             if (ok) alert("⚠️ 경고 방송 명령을 전송했습니다.");
@@ -977,9 +1279,33 @@ function warnTrespasser() {
 // ===================================================
 let currentPatrolMode = null;
 let modeChangePending = false;
+let currentRobotConnected = null;
+
+
+function applyServerPatrolMode(mode) {
+    const normalized = String(mode || '').trim().toLowerCase();
+    currentPatrolMode = (
+        currentRobotConnected !== false
+        && (normalized === 'auto' || normalized === 'manual')
+    ) ? normalized : null;
+    setPatrolModeUi(currentPatrolMode);
+}
+
+
+function setDashboardRobotConnection(connected) {
+    currentRobotConnected = typeof connected === 'boolean' ? connected : null;
+    if (connected === false) {
+        stopAllLocalInputs(false);
+        applyServerPatrolMode(null);
+    }
+}
+
+
+window.applyServerPatrolMode = applyServerPatrolMode;
+window.setDashboardRobotConnection = setDashboardRobotConnection;
 
 const ROBOT_ID = 'pi-01';
-const MANUAL_SPEED = 0.35;
+const MANUAL_SPEED = 0.3; // Normalized PWM: 30% output, not m/s.
 const COMMAND_REPEAT_MS = 120;
 
 const DRIVE_KEYS = [
@@ -987,10 +1313,6 @@ const DRIVE_KEYS = [
     'ArrowDown',
     'ArrowLeft',
     'ArrowRight',
-    'w',
-    'a',
-    's',
-    'd',
 ];
 
 let pointerMoveInterval = null;
@@ -998,68 +1320,103 @@ let activePointerButton = null;
 
 const pressedKeys = new Set();
 let keyMoveInterval = null;
+let robotCommandCsrfPromise = null;
+let lastRobotCommandErrorAt = 0;
+
+
+function robotCommandErrorMessage(data, status) {
+    const code = String(data?.error_code || '').toUpperCase();
+    if (['PI_OFFLINE', 'COMMAND_DELIVERY_FAILED', 'PI_COMMAND_FAILED'].includes(code) || status === 409) {
+        return 'Pi가 연결되지 않아 명령을 전달하지 못했습니다.';
+    }
+    return data?.detail || data?.error || `로봇 명령 요청에 실패했습니다. (HTTP ${status})`;
+}
+
+
+function showRobotCommandFailure(data, status) {
+    const feedback = document.getElementById('navigation-control-feedback');
+    const message = robotCommandErrorMessage(data, status);
+    if (feedback) {
+        feedback.textContent = message;
+        feedback.classList.add('error');
+    }
+    const now = Date.now();
+    if (now - lastRobotCommandErrorAt >= 2000) {
+        console.warn(message, data);
+        lastRobotCommandErrorAt = now;
+    }
+}
 
 
 function directionToCommand(direction) {
     const map = {
         '↑': 'forward',
         '↓': 'backward',
-        '←': 'left',
-        '→': 'right',
+        '←': 'rotate_left',
+        '→': 'rotate_right',
         '↖': 'forward_left',
         '↗': 'forward_right',
         '↙': 'backward_left',
         '↘': 'backward_right',
-        '제자리 회전(반시계)': 'rotate_left',
-        '제자리 회전(시계)': 'rotate_right',
     };
 
     return map[direction] || direction;
 }
 
 
-function sendRobotCommand(
+function robotCommandCsrfToken() {
+    if (!robotCommandCsrfPromise) {
+        robotCommandCsrfPromise = fetch(
+            '/api/auth/csrf',
+            { credentials: 'same-origin' },
+        )
+            .then(async response => {
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.csrf_token) {
+                    throw new Error('robot command CSRF token unavailable');
+                }
+                return data.csrf_token;
+            })
+            .catch(error => {
+                robotCommandCsrfPromise = null;
+                throw error;
+            });
+    }
+    return robotCommandCsrfPromise;
+}
+
+
+async function sendRobotCommand(
     payload,
     keepalive = false,
 ) {
-    return fetch(
-        `/api/robots/${ROBOT_ID}/command`,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
+    try {
+        const csrfToken = await robotCommandCsrfToken();
+        const response = await fetch(
+            `/api/robots/${ROBOT_ID}/command`,
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken,
+                },
+                body: JSON.stringify(payload),
+                keepalive,
             },
-            body: JSON.stringify(payload),
-            keepalive,
-        },
-    )
-        .then(async response => {
-            const data = await response
-                .json()
-                .catch(() => ({}));
+        );
+        const data = await response.json().catch(() => ({}));
+        const ok = response.ok && data.ok;
 
-            const ok = (
-                response.ok
-                && data.ok
-            );
+        if (!ok) {
+            showRobotCommandFailure(data, response.status);
+        }
 
-            if (!ok) {
-                console.warn(
-                    '로봇 명령 전송 실패:',
-                    data,
-                );
-            }
-
-            return ok;
-        })
-        .catch(error => {
-            console.error(
-                '로봇 명령 통신 오류:',
-                error,
-            );
-
-            return false;
-        });
+        return ok;
+    } catch (error) {
+        console.error('로봇 명령 통신 오류:', error);
+        return false;
+    }
 }
 
 
@@ -1080,6 +1437,8 @@ function setPatrolModeUi(mode) {
         'label-manual',
     );
 
+    switchUi.classList.toggle('unknown', mode !== 'auto' && mode !== 'manual');
+
     if (mode === 'auto') {
         switchUi.classList.remove('manual');
         dPadArea.classList.add('disabled');
@@ -1090,7 +1449,7 @@ function setPatrolModeUi(mode) {
         labelManual.classList.add('inactive');
         labelManual.classList.remove('active');
 
-    } else {
+    } else if (mode === 'manual') {
         switchUi.classList.add('manual');
         dPadArea.classList.remove('disabled');
 
@@ -1099,6 +1458,15 @@ function setPatrolModeUi(mode) {
 
         labelManual.classList.add('active');
         labelManual.classList.remove('inactive');
+    } else {
+        switchUi.classList.remove('manual');
+        dPadArea.classList.add('disabled');
+
+        labelAuto.classList.add('inactive');
+        labelAuto.classList.remove('active');
+
+        labelManual.classList.add('inactive');
+        labelManual.classList.remove('active');
     }
 }
 
@@ -1140,14 +1508,17 @@ async function togglePatrolMode() {
         return;
     }
 
+    const requestDriveMode = window.navigationControl?.requestDriveMode;
+    if (!requestDriveMode) {
+        alert('Navigation Control 상태를 확인하지 못했습니다.');
+        return;
+    }
+
     stopAllLocalInputs(false);
     modeChangePending = true;
 
     try {
-        const ok = await sendRobotCommand({
-            type: 'mode',
-            mode: targetMode,
-        });
+        const ok = await requestDriveMode(targetMode.toUpperCase());
 
         if (!ok) {
             alert(
@@ -1158,17 +1529,6 @@ async function togglePatrolMode() {
             return;
         }
 
-        /*
-         * 여기서 currentPatrolMode와 UI를
-         * 직접 변경하지 않는다.
-         *
-         * Pi가 실제 모드를 서버에 보고하면
-         * fetchRobotStatus()가 화면에 반영한다.
-         */
-        setTimeout(
-            fetchRobotStatus,
-            300,
-        );
     } finally {
         modeChangePending = false;
     }
@@ -1213,6 +1573,10 @@ function emergencyStopRobot(
 ) {
     stopAllLocalInputs(false);
 
+    if (window.navigationControl?.emergencyStop) {
+        return window.navigationControl.emergencyStop(reason, keepalive);
+    }
+
     return sendRobotCommand(
         {
             type: 'emergency_stop',
@@ -1227,6 +1591,13 @@ function startButtonMove(
     direction,
     event,
 ) {
+    if (
+        event.isPrimary === false
+        || event.button !== 0
+    ) {
+        return;
+    }
+
     if (currentPatrolMode !== 'manual') {
         return;
     }
@@ -1262,6 +1633,27 @@ function startButtonMove(
 }
 
 
+document.querySelectorAll(
+    '.d-pad .d-btn[data-drive-direction]',
+).forEach(button => {
+    button.addEventListener(
+        'pointerdown',
+        event => startButtonMove(
+            button.dataset.driveDirection,
+            event,
+        ),
+    );
+
+    button.addEventListener(
+        'lostpointercapture',
+        () => stopPointerMove(
+            true,
+            'button_release',
+        ),
+    );
+});
+
+
 function stopPointerMove(
     sendStop = true,
     reason = 'button_release',
@@ -1295,41 +1687,15 @@ function stopPointerMove(
 
 
 function normalizeDriveKey(key) {
-    if (
-        [
-            'ArrowUp',
-            'ArrowDown',
-            'ArrowLeft',
-            'ArrowRight',
-        ].includes(key)
-    ) {
-        return key;
-    }
-
-    return String(key).toLowerCase();
+    return DRIVE_KEYS.includes(key) ? key : '';
 }
 
 
 function getDirectionFromKeys() {
-    const up = (
-        pressedKeys.has('ArrowUp')
-        || pressedKeys.has('w')
-    );
-
-    const down = (
-        pressedKeys.has('ArrowDown')
-        || pressedKeys.has('s')
-    );
-
-    const left = (
-        pressedKeys.has('ArrowLeft')
-        || pressedKeys.has('a')
-    );
-
-    const right = (
-        pressedKeys.has('ArrowRight')
-        || pressedKeys.has('d')
-    );
+    const up = pressedKeys.has('ArrowUp');
+    const down = pressedKeys.has('ArrowDown');
+    const left = pressedKeys.has('ArrowLeft');
+    const right = pressedKeys.has('ArrowRight');
 
     if (up && left) {
         return { direction: '↖' };
@@ -1382,30 +1748,56 @@ function highlightKeyboardButton(direction) {
 }
 
 
-function startKeyMove() {
-    if (keyMoveInterval !== null) {
+function isKeyboardDrivingBlocked(target = document.activeElement) {
+    const element = target instanceof Element ? target : null;
+    if (
+        element?.matches('input, textarea, select')
+        || element?.isContentEditable
+        || element?.closest('[contenteditable]:not([contenteditable="false"])')
+    ) return true;
+    const modal = document.getElementById('commonModal');
+    if (
+        modal
+        && (
+            modal.dataset.modalView
+            || modal.style.display === 'flex'
+            || modal.classList.contains('open')
+        )
+    ) return true;
+    return document.getElementById('sidebar')?.classList.contains('open') === true;
+}
+
+
+function sendCurrentKeyDirection() {
+    if (currentPatrolMode !== 'manual') {
         return;
     }
 
-    const sendCurrentKeyDirection = () => {
-        if (currentPatrolMode !== 'manual') {
-            return;
-        }
+    if (isKeyboardDrivingBlocked()) {
+        stopKeyMove(true, 'input_blocked');
+        return;
+    }
 
-        const result = getDirectionFromKeys();
+    const result = getDirectionFromKeys();
 
-        if (!result) {
-            return;
-        }
+    if (!result) {
+        return;
+    }
 
-        moveRobot(result.direction);
+    moveRobot(result.direction);
 
-        highlightKeyboardButton(
-            result.direction,
-        );
-    };
+    highlightKeyboardButton(
+        result.direction,
+    );
+}
 
+
+function startKeyMove() {
     sendCurrentKeyDirection();
+
+    if (keyMoveInterval !== null) {
+        return;
+    }
 
     keyMoveInterval = setInterval(
         sendCurrentKeyDirection,
@@ -1462,9 +1854,17 @@ document.addEventListener(
             return;
         }
 
-        event.preventDefault();
+        if (isKeyboardDrivingBlocked(event.target)) {
+            return;
+        }
 
         if (currentPatrolMode !== 'manual') {
+            return;
+        }
+
+        event.preventDefault();
+
+        if (pressedKeys.has(key)) {
             return;
         }
 
@@ -1485,6 +1885,10 @@ document.addEventListener(
             return;
         }
 
+        if (!pressedKeys.has(key)) {
+            return;
+        }
+
         pressedKeys.delete(key);
 
         if (!getDirectionFromKeys()) {
@@ -1492,6 +1896,8 @@ document.addEventListener(
                 true,
                 'key_release',
             );
+        } else {
+            sendCurrentKeyDirection();
         }
     },
 );
@@ -1530,6 +1936,14 @@ window.addEventListener(
 document.addEventListener(
     'visibilitychange',
     () => {
+        if (!isDashboardDocumentVisible()) {
+            pauseTelemetryStatusPolling();
+            pauseCameraStatusPolling();
+        } else {
+            refreshTelemetryStatusPolling();
+            refreshCameraStatusPolling();
+        }
+
         if (
             document.hidden
             && currentPatrolMode === 'manual'
@@ -1548,31 +1962,82 @@ document.addEventListener(
 function openSidebar() {
     document.getElementById('sidebar').classList.add('open');
     document.getElementById('sidebarOverlay').classList.add('open');
+    document.dispatchEvent(new CustomEvent(
+        'dabom:sidebar-visibility',
+        { detail: { open: true } },
+    ));
 }
 function closeSidebar() {
     document.getElementById('sidebar').classList.remove('open');
     document.getElementById('sidebarOverlay').classList.remove('open');
+    document.dispatchEvent(new CustomEvent(
+        'dabom:sidebar-visibility',
+        { detail: { open: false } },
+    ));
 }
 
 // ===================================================
 // 다크 모드 (요구사항 7)
 // ===================================================
-let darkMode = false;
+let darkMode = document.body.classList.contains('dark-mode');
+function syncDarkModeSwitch() {
+    document.getElementById('darkToggle')?.classList.toggle('active', darkMode);
+    document.getElementById('darkToggle')?.setAttribute('aria-checked', String(darkMode));
+}
 function toggleDarkMode() {
     darkMode = !darkMode;
     document.body.classList.toggle('dark-mode', darkMode);
-    document.getElementById('darkToggle').classList.toggle('active', darkMode);
-    localStorage.setItem('darkMode', darkMode ? '1' : '0');
+    syncDarkModeSwitch();
+    try { localStorage.setItem('darkMode', darkMode ? '1' : '0'); }
+    catch (_) { /* Keep the selected theme even when persistence is blocked. */ }
 }
 
 // 저장된 다크모드 설정 복원
 window.addEventListener('DOMContentLoaded', () => {
-    const saved = localStorage.getItem('darkMode');
-    if (saved === '1') toggleDarkMode();
+    initializeDashboardComponentFoundation();
+
+    // The saved theme has already been painted. Do not toggle it a second time.
+    darkMode = document.body.classList.contains('dark-mode');
+    syncDarkModeSwitch();
 
     // Pi가 보고한 실제 모드로 초기 UI 동기화
-    fetchRobotStatus();
+    refreshTelemetryStatusPolling();
 });
+
+function initializeDashboardComponentFoundation() {
+    const components = window.DabomDashboardComponents;
+    if (!components) return;
+
+    components.mounts = components.mounts || {};
+    components.mounts.recordsToolbar = document.getElementById('records-toolbar-mount');
+    components.mounts.dashboardModeControls = document.getElementById('dashboard-mode-controls-mount');
+    components.mounts.dpadCenterAction = document.getElementById('dpad-center-action-mount');
+    components.mounts.currentSituation = document.getElementById('current-situation-mount');
+    components.mounts.modelPipelineToggle = document.getElementById('model-pipeline-toggle-mount');
+
+    components.modal?.mount({
+        root: '#commonModal',
+        title: '#modalTitle',
+        body: '#modalBody',
+    });
+    components.records?.mount(components.mounts.recordsToolbar);
+    components.controls?.mountDriveMode(components.mounts.dashboardModeControls);
+    components.controls?.mountModelPipelineToggle?.(
+        components.mounts.modelPipelineToggle,
+        { request: setModelPipelineEnabled },
+    );
+    components.controls?.mountNavigationMode(document.getElementById('navigation-viewer-mode-controls-mount'));
+    components.controls?.mountViewerStatus?.({
+        messageElement: document.getElementById('lidar-control-message'),
+        gpsElement: document.getElementById('lidar-gps-meta'),
+        durationMs: 3000,
+    });
+    components.navigationMaps?.mount({
+        trigger: document.getElementById('lidarMapSelectBtn'),
+    });
+    components.gallery?.mountImageDetail();
+    components.currentSituation?.mount(components.mounts.currentSituation);
+}
 
 // ===================================================
 // Session logout

@@ -2,7 +2,7 @@
 #
 # 실행 구조:
 #   localization.launch.py
-#     - SLLIDAR
+#     - existing /scan from lidar_websocket_bridge
 #     - map_server
 #     - AMCL
 #     - odom -> base_link TF
@@ -20,6 +20,11 @@
 # navigation_mode:
 #   localization_nav2
 #
+# odometry 설정:
+#   최종 runtime에서는 RC카 encoder -> EncoderRosBridge -> /wheel_ticks
+#   -> server/wheel_odometry.py -> /odom + dynamic odom->base_link TF만 사용한다.
+#   static/fake odometry fallback은 사용하지 않는다.
+#
 # 안전 설정:
 #   Nav2 최종 속도 명령은 실제 /cmd_vel이 아니라
 #   /cmd_vel_nav_dry_run으로 출력한다.
@@ -27,9 +32,13 @@
 # 따라서 현재 파일만 실행해서는 Pico W, MDD10A, 모터에
 # 어떤 명령도 전달되지 않는다.
 
+import yaml
+
+from patrol_navigation.env_config import env_float
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    OpaqueFunction,
     IncludeLaunchDescription,
     TimerAction,
 )
@@ -37,7 +46,6 @@ from launch.launch_description_sources import (
     PythonLaunchDescriptionSource,
 )
 from launch.substitutions import (
-    EnvironmentVariable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
@@ -49,8 +57,23 @@ from launch_ros.substitutions import (
 from launch.conditions import IfCondition
 
 def generate_launch_description():
+    # Full-PWM wheel-speed limit shared by controller, smoother, bridge and Pi.
+    max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
+    wheel_track_m = env_float("WHEEL_TRACK_M", minimum=0.01)
+    # Differential-drive in-place rotation at left=-max, right=+max.
+    max_angular_rps = (2.0 * max_wheel_mps) / wheel_track_m
+    # Physical motor breakaway floor. Apply only after a non-zero wheel command;
+    # never use this as DWB min_vel_x, otherwise in-place rotation is impossible.
+    min_auto_drive_pwm = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0)
     pkg_share = FindPackageShare(
         "patrol_navigation"
+    )
+    navigate_to_pose_bt = PathJoinSubstitution(
+        [
+            pkg_share,
+            "behavior_trees",
+            "navigate_to_pose_dynamic_replanning.xml",
+        ]
     )
 
     # ---------------------------------------------------------
@@ -74,28 +97,17 @@ def generate_launch_description():
         "navigation_mode"
     )
 
-    serial_port = LaunchConfiguration(
-        "serial_port"
-    )
-    serial_baudrate = LaunchConfiguration(
-        "serial_baudrate"
-    )
-
-    start_lidar = LaunchConfiguration(
-        "start_lidar"
-    )
     start_bridge = LaunchConfiguration(
         "start_bridge"
     )
-    start_fake_odom = LaunchConfiguration(
-        "start_fake_odom"
-    )
-    DeclareLaunchArgument(
-        "start_nav2_command_bridge",
-        default_value="true",
-    ),
     start_nav2_command_bridge = LaunchConfiguration(
         "start_nav2_command_bridge"
+    )
+    nav2_twist_timeout_sec = LaunchConfiguration(
+        "nav2_twist_timeout_sec"
+    )
+    nav2_request_timeout_sec = LaunchConfiguration(
+        "nav2_request_timeout_sec"
     )
 
     # ---------------------------------------------------------
@@ -125,16 +137,7 @@ def generate_launch_description():
                     navigation_mode
                 ),
 
-                "serial_port": serial_port,
-                "serial_baudrate": (
-                    serial_baudrate
-                ),
-
-                "start_lidar": start_lidar,
                 "start_bridge": start_bridge,
-                "start_fake_odom": (
-                    start_fake_odom
-                ),
 
                 "use_sim_time": "false",
             }.items(),
@@ -158,7 +161,15 @@ def generate_launch_description():
         name="controller_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "FollowPath.min_vel_x": 0.0,
+                "FollowPath.min_speed_xy": 0.0,
+                "FollowPath.max_vel_x": max_wheel_mps,
+                "FollowPath.max_speed_xy": max_wheel_mps,
+                "FollowPath.max_vel_theta": max_angular_rps,
+                "FollowPath.rotate_to_heading_angular_vel": max_angular_rps,
+            },
         ],
         remappings=(
             common_remappings
@@ -210,7 +221,8 @@ def generate_launch_description():
         name="behavior_server",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {"max_rotational_vel": max_angular_rps}
         ],
         remappings=(
             common_remappings
@@ -232,7 +244,10 @@ def generate_launch_description():
         name="bt_navigator",
         output="screen",
         parameters=[
-            nav2_params
+            nav2_params,
+            {
+                "default_nav_to_pose_bt_xml": navigate_to_pose_bt,
+            },
         ],
         remappings=common_remappings,
     )
@@ -261,28 +276,42 @@ def generate_launch_description():
     #   /cmd_vel_nav_dry_run
     #
     # 실제 /cmd_vel에는 publish하지 않는다.
-    velocity_smoother = Node(
-        package="nav2_velocity_smoother",
-        executable="velocity_smoother",
-        name="velocity_smoother",
-        output="screen",
-        parameters=[
-            nav2_params
-        ],
-        remappings=(
-            common_remappings
-            + [
-                (
-                    "cmd_vel",
-                    "cmd_vel_nav",
-                ),
-                (
-                    "cmd_vel_smoothed",
-                    "/cmd_vel_nav_dry_run",
-                ),
-            ]
-        ),
-    )
+    def launch_velocity_smoother(context):
+        # Resolve custom params_file before overriding ONLY longitudinal limits.
+        with open(nav2_params.perform(context), encoding="utf-8") as stream:
+            config = yaml.safe_load(stream)
+        parameters = config["velocity_smoother"]["ros__parameters"]
+        max_velocity = list(parameters["max_velocity"])
+        min_velocity = list(parameters["min_velocity"])
+        max_velocity[0] = max_wheel_mps
+        min_velocity[0] = -max_wheel_mps
+        max_velocity[2] = max_angular_rps
+        min_velocity[2] = -max_angular_rps
+        return [Node(
+            package="nav2_velocity_smoother",
+            executable="velocity_smoother",
+            name="velocity_smoother",
+            output="screen",
+            parameters=[
+                nav2_params,
+                {"max_velocity": max_velocity, "min_velocity": min_velocity},
+            ],
+            remappings=(
+                common_remappings
+                + [
+                    (
+                        "cmd_vel",
+                        "cmd_vel_nav",
+                    ),
+                    (
+                        "cmd_vel_smoothed",
+                        "/cmd_vel_nav_dry_run",
+                    ),
+                ]
+            ),
+        )]
+
+    velocity_smoother = OpaqueFunction(function=launch_velocity_smoother)
     # ---------------------------------------------------------
     # Nav2 command bridge
     # ---------------------------------------------------------
@@ -303,14 +332,15 @@ def generate_launch_description():
                 "cmd_vel_topic": (
                     "/cmd_vel_nav_dry_run"
                 ),
-                "wheel_track_m": 0.201,
-                "max_wheel_mps": 0.50,
-                "twist_timeout_sec": 0.50,
+                "wheel_track_m": wheel_track_m,
+                "max_wheel_mps": max_wheel_mps,
+                "min_auto_drive_pwm": min_auto_drive_pwm,
+                "twist_timeout_sec": nav2_twist_timeout_sec,
                 "server_base_url": (
                     server_base_url
                 ),
                 "robot_id": robot_id,
-                "request_timeout_sec": 0.25,
+                "request_timeout_sec": nav2_request_timeout_sec,
             }
         ],
     )
@@ -363,18 +393,9 @@ def generate_launch_description():
             # -------------------------------------------------
             DeclareLaunchArgument(
                 "map",
-                default_value=(
-                    PathJoinSubstitution(
-                        [
-                            EnvironmentVariable(
-                                "HOME"
-                            ),
-                            "dabom_capstone",
-                            "navigation",
-                            "maps",
-                            "slam_test_01.yaml",
-                        ]
-                    )
+                description=(
+                    "Saved map YAML selected for the real RC car. "
+                    "No bundled test-map default is used."
                 ),
             ),
 
@@ -422,31 +443,23 @@ def generate_launch_description():
             ),
 
             # -------------------------------------------------
-            # LiDAR
-            # -------------------------------------------------
-            DeclareLaunchArgument(
-                "serial_port",
-                default_value="/dev/ttyUSB0",
-            ),
-            DeclareLaunchArgument(
-                "serial_baudrate",
-                default_value="115200",
-            ),
-
-            # -------------------------------------------------
             # 실행 여부
             # -------------------------------------------------
-            DeclareLaunchArgument(
-                "start_lidar",
-                default_value="true",
-            ),
             DeclareLaunchArgument(
                 "start_bridge",
                 default_value="true",
             ),
             DeclareLaunchArgument(
-                "start_fake_odom",
+                "start_nav2_command_bridge",
                 default_value="true",
+            ),
+            DeclareLaunchArgument(
+                "nav2_twist_timeout_sec",
+                default_value="0.50",
+            ),
+            DeclareLaunchArgument(
+                "nav2_request_timeout_sec",
+                default_value="0.25",
             ),
 
             # -------------------------------------------------

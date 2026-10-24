@@ -8,6 +8,11 @@ from collections import deque
 from typing import Optional
 
 try:
+    from raspberry.env_config import env_float
+except ModuleNotFoundError:  # Direct robot_command_client.py execution.
+    from env_config import env_float
+
+try:
     import serial
 except ImportError:
     serial = None
@@ -29,6 +34,7 @@ ALLOWED_DIRECTIONS = frozenset(
 )
 
 _REASON_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
+MIN_AUTO_DRIVE_PWM = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0)
 
 
 class MotorControllerError(RuntimeError):
@@ -46,11 +52,14 @@ class MotorController:
       STOP,<reason>
       ENC_RESET
       ENC_STREAM,0|1
+      LED,0|1
+      BEEP,<duration_ms>
 
     Pico → Pi:
       OK,...
       ERR,...
       EVENT,FAILSAFE_STOP
+      EVENT,LED_FAILSAFE_OFF
       EVENT,ENC,<LF>,<RF>,<LR>,<RR>,<pico_ms>
     """
 
@@ -60,7 +69,7 @@ class MotorController:
         baudrate: int = 115200,
         command_timeout_sec: float = 0.45,
         serial_timeout_sec: float = 0.25,
-        max_wheel_mps: float = 0.50,
+        max_wheel_mps: Optional[float] = None,
     ) -> None:
         self.serial_port = serial_port
         self.baudrate = int(baudrate)
@@ -72,13 +81,20 @@ class MotorController:
             0.1,
             float(serial_timeout_sec),
         )
-        self.max_wheel_mps = max(
-            0.01,
-            float(max_wheel_mps),
-        )
+        # Full-PWM wheel speed calibration, shared with server and Nav2.
+        self.max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
+        if max_wheel_mps is not None and (
+            not math.isfinite(float(max_wheel_mps))
+            or not math.isclose(float(max_wheel_mps), self.max_wheel_mps)
+        ):
+            raise MotorControllerError(
+                "max_wheel_mps must match MAX_WHEEL_MPS; update the shared calibration"
+            )
 
         self.last_command_at = 0.0
         self.current_motion = "stop"
+        self.led_enabled = False
+        self.volume_percent: Optional[int] = None
 
         self._serial: Optional[object] = None
 
@@ -193,9 +209,17 @@ class MotorController:
             print("[motor] Pico failsafe stop")
             return
 
+        if line == "EVENT,LED_FAILSAFE_OFF":
+            with self._state_lock:
+                self.led_enabled = False
+            print("[motor] Pico warning LED failsafe off")
+            return
+
         if line.startswith("READY,"):
             with self._state_lock:
                 self.current_motion = "stop"
+                self.led_enabled = False
+                self.volume_percent = None
 
             self._pico_reboot_event.set()
             print(f"[motor] Pico reboot detected: {line}")
@@ -269,6 +293,7 @@ class MotorController:
             self._serial = None
             self._reader_running = False
             self._reader_thread = None
+            self.volume_percent = None
 
         if serial_device is not None:
             try:
@@ -396,7 +421,11 @@ class MotorController:
 
             self._exchange_locked("PING")
             self._exchange_locked("STOP,pi_connected")
+            self._exchange_locked("LED,0")
+            with self._state_lock:
+                self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
+            self._read_volume_locked()
 
             print(
                 f"[motor] Pico W connected: "
@@ -426,7 +455,11 @@ class MotorController:
         with self._command_lock:
             self._ensure_connected_locked()
             self._exchange_locked("STOP,pico_reboot_recovery")
+            self._exchange_locked("LED,0")
+            with self._state_lock:
+                self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
+            self._read_volume_locked()
 
         self._pico_reboot_event.clear()
         print("[motor] encoder stream recovered after Pico reboot")
@@ -455,10 +488,61 @@ class MotorController:
                     "updated_monotonic": None,
                 }
 
+    def set_led(self, enabled: bool) -> None:
+        if not isinstance(enabled, bool):
+            raise MotorControllerError("LED state must be boolean")
+        with self._command_lock:
+            self._ensure_connected_locked()
+            self._exchange_locked(f"LED,{1 if enabled else 0}")
+            with self._state_lock:
+                self.led_enabled = enabled
+
+    def _read_volume_locked(self) -> int:
+        response = self._exchange_locked("VOLUME_GET")
+        if not response.startswith("OK,VOLUME,"):
+            raise MotorControllerError(f"Unexpected volume response: {response}")
+        try:
+            volume = int(response.split(",")[2])
+        except (IndexError, ValueError) as exc:
+            raise MotorControllerError(f"Invalid volume response: {response}") from exc
+        if not 0 <= volume <= 100 or response != f"OK,VOLUME,{volume}":
+            raise MotorControllerError(f"Invalid volume response: {response}")
+        with self._state_lock:
+            self.volume_percent = volume
+        return volume
+
+    def get_volume(self) -> int:
+        with self._command_lock:
+            self._ensure_connected_locked()
+            return self._read_volume_locked()
+
+    def set_volume(self, percent: int) -> int:
+        if type(percent) is not int or not 0 <= percent <= 100:
+            raise MotorControllerError("volume percent must be an integer between 0 and 100")
+        with self._command_lock:
+            self._ensure_connected_locked()
+            response = self._exchange_locked(f"VOLUME,{percent}")
+            if response != f"OK,VOLUME,{percent}":
+                raise MotorControllerError(f"Volume not confirmed by Pico W: {response}")
+            with self._state_lock:
+                self.volume_percent = percent
+            return percent
+
+    def beep(self, duration_ms: int = 350) -> None:
+        if isinstance(duration_ms, bool) or not isinstance(duration_ms, int):
+            raise MotorControllerError("beep duration must be an integer")
+        if duration_ms < 50 or duration_ms > 2000:
+            raise MotorControllerError(
+                "beep duration must be between 50 and 2000 ms"
+            )
+        with self._command_lock:
+            self._ensure_connected_locked()
+            self._exchange_locked(f"BEEP,{duration_ms}")
+
     def move(
         self,
         direction: str,
-        speed: float = 0.35,
+        speed: float = 1.0,
     ) -> None:
         direction = str(direction).strip().lower()
 
@@ -473,6 +557,9 @@ class MotorController:
             raise MotorControllerError(
                 f"잘못된 속도 값: {speed}"
             ) from exc
+
+        if not math.isfinite(normalized_speed):
+            raise MotorControllerError(f"잘못된 속도 값: {speed}")
 
         normalized_speed = max(
             0.0,
@@ -536,6 +623,20 @@ class MotorController:
         if peak > 1.0:
             left_normalized /= peak
             right_normalized /= peak
+
+        # Nav2의 작은 속도 명령이 실제 DC 모터의 정지 마찰보다
+        # 낮은 PWM으로 변환되지 않도록 자동 주행에만 최소 출력을 둔다.
+        # 좌우 바퀴를 개별 clamp하지 않고 같은 비율로 확대해
+        # differential steering 비율을 보존한다.
+        peak = max(
+            abs(left_normalized),
+            abs(right_normalized),
+        )
+
+        if 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+            pwm_scale = MIN_AUTO_DRIVE_PWM / peak
+            left_normalized *= pwm_scale
+            right_normalized *= pwm_scale
 
         with self._command_lock:
             self._ensure_connected_locked()
@@ -610,6 +711,15 @@ class MotorController:
                     self._exchange_locked(
                         "STOP,controller_close"
                     )
+                except Exception:
+                    pass
+
+                try:
+                    self._exchange_locked(
+                        "LED,0"
+                    )
+                    with self._state_lock:
+                        self.led_enabled = False
                 except Exception:
                     pass
 

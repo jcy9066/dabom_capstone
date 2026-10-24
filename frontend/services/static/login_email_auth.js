@@ -32,87 +32,56 @@
     return data;
   }
 
-  function render() {
-    document.body.className = 'login-page';
-    document.body.innerHTML = `
-      <main class="login-shell"><section class="login-panel">
-        <div class="login-brand"><span class="login-brand-kicker">AI Patrol Control</span><h1>AI 자율순찰 로봇 관제 센터</h1></div>
-        <form class="login-form" id="emailLoginForm" novalidate>
-          <label class="auth-field" for="loginEmail"><span>이메일 (로그인 ID)</span><input id="loginEmail" type="email" autocomplete="username" maxlength="100" required></label>
-          <label class="auth-field" for="loginPassword"><span>비밀번호</span><input id="loginPassword" type="password" autocomplete="current-password" maxlength="20" required></label>
-          <p class="auth-login-message" id="loginMessage" role="status"></p>
-          <div class="auth-actions"><button class="auth-btn secondary" type="button" id="openSignup">회원가입</button><button class="auth-btn primary" id="loginSubmit">로그인</button></div>
-        </form>
-      </section></main>
-      <div class="signup-modal" id="signupModal" aria-hidden="true"><div class="signup-modal-backdrop" data-close></div>
-        <section class="signup-dialog" role="dialog" aria-modal="true"><div class="signup-header"><h2>회원가입</h2><button class="signup-close" type="button" id="closeSignup" aria-label="닫기">&times;</button></div>
-          <p class="auth-dialog-subtitle">이메일 전체가 로그인 ID입니다. 별도의 ID는 입력하지 않습니다.</p>
-          <form class="signup-form" id="emailSignupForm" novalidate>
-            <div class="auth-inline-action"><label class="auth-field" for="signupEmail"><span>이메일</span><input id="signupEmail" type="email" autocomplete="email" maxlength="100" required></label><button class="email-send-btn" type="button" id="sendCode">인증번호 발송</button></div>
-            <div class="auth-verify-row" id="verificationRow" hidden><div class="auth-inline-action"><label class="auth-field" for="verificationCode"><span>인증번호</span><input id="verificationCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label><button class="email-send-btn" type="button" id="verifyCode">인증 확인</button></div></div>
-            <p class="auth-signup-message" id="signupMessage" role="status"></p>
-            <fieldset class="auth-protected-fields" id="signupFields" disabled>
-              <div class="auth-verified-email" id="verifiedEmail" hidden></div>
-              <label class="auth-field" for="signupPassword"><span>비밀번호</span><input id="signupPassword" type="password" autocomplete="new-password" maxlength="20" required><small class="auth-field-hint">6~20자 영문, 숫자, ! @ # $ 사용 가능</small></label>
-              <label class="auth-field" for="passwordConfirm"><span>비밀번호 2차 확인</span><input id="passwordConfirm" type="password" autocomplete="new-password" maxlength="20" required><small class="auth-field-hint" id="passwordHint"></small></label>
-              <label class="auth-field" for="signupName"><span>이름</span><input id="signupName" autocomplete="name" maxlength="20" required></label>
-              <label class="auth-field" for="signupPhone"><span>전화번호</span><input id="signupPhone" type="tel" autocomplete="tel" maxlength="20" placeholder="010-1234-5678" required></label>
-              <label class="auth-field" for="employeeNumber"><span>사번</span><input id="employeeNumber" inputmode="numeric" maxlength="10" required><small class="auth-field-hint" id="employeeHint"></small></label>
-              <button class="auth-btn primary signup-submit" id="signupSubmit">가입하기</button>
-            </fieldset>
-          </form>
-        </section>
-      </div>`;
-  }
-
   function init() {
-    render();
     const loginMessage = byId('loginMessage');
     const signupMessage = byId('signupMessage');
     const email = byId('signupEmail');
     const password = byId('signupPassword');
-    const confirm = byId('passwordConfirm');
+    const confirm = byId('signupPasswordConfirm');
     const employee = byId('employeeNumber');
     const employeeHint = byId('employeeHint');
     const submit = byId('signupSubmit');
-    const protectedFields = byId('signupFields');
+    const protectedFields = byId('protectedFields');
 
     const canSubmit = () => state.verified && state.email === email.value.trim().toLowerCase() && passwordOk(password.value) && password.value === confirm.value && byId('signupName').value.trim() && phoneOk(byId('signupPhone').value.trim()) && employeeOk(employee.value.trim()) && state.employeeAvailable;
     const sync = () => { submit.disabled = !canSubmit(); };
     const reset = () => {
       state.verified = false; state.email = ''; state.employeeAvailable = false;
-      byId('verificationRow').hidden = true; protectedFields.disabled = true;
-      byId('verifiedEmail').hidden = true; byId('verificationCode').value = '';
+      byId('verifyRow').hidden = true; protectedFields.disabled = false;
+      byId('verifiedEmailLabel').hidden = true; byId('verificationCode').value = '';
       text(employeeHint); sync();
     };
 
-    byId('openSignup').onclick = () => { byId('signupModal').classList.add('open'); byId('signupModal').setAttribute('aria-hidden', 'false'); email.focus(); };
+    byId('openSignupBtn').onclick = () => { byId('signupModal').classList.add('open'); byId('signupModal').setAttribute('aria-hidden', 'false'); email.focus(); };
     const close = () => { byId('signupModal').classList.remove('open'); byId('signupModal').setAttribute('aria-hidden', 'true'); };
-    byId('closeSignup').onclick = close;
-    byId('signupModal').onclick = event => { if (event.target.matches('[data-close]')) close(); };
+    byId('closeSignupBtn').onclick = close;
+    byId('signupModal').onclick = event => { if (event.target.matches('[data-close-signup]')) close(); };
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && byId('signupModal').classList.contains('open')) close();
+    });
     email.oninput = reset;
 
-    byId('sendCode').onclick = async () => {
+    byId('sendEmailBtn').onclick = async () => {
       const value = email.value.trim().toLowerCase();
       if (!emailOk(value)) return text(signupMessage, '올바른 이메일 주소를 입력해 주세요.', 'error');
-      const button = byId('sendCode'); button.disabled = true;
+      const button = byId('sendEmailBtn'); button.disabled = true;
       try {
         const result = await post('/api/auth/email/send', { email: value });
-        byId('verificationRow').hidden = false;
+        byId('verifyRow').hidden = false;
         text(signupMessage, `인증번호를 발송했습니다. ${Math.ceil(result.expires_in_sec / 60)}분 안에 입력해 주세요.`, 'success');
         byId('verificationCode').focus();
       } catch (error) { text(signupMessage, error.message, 'error'); }
       finally { button.disabled = false; }
     };
 
-    byId('verifyCode').onclick = async () => {
+    byId('verifyEmailBtn').onclick = async () => {
       const value = email.value.trim().toLowerCase();
       const code = byId('verificationCode').value.trim();
       if (!/^\d{6}$/.test(code)) return text(signupMessage, '6자리 인증번호를 입력해 주세요.', 'error');
       try {
         await post('/api/auth/email/verify', { email: value, code });
         state.verified = true; state.email = value; protectedFields.disabled = false;
-        byId('verifiedEmail').hidden = false; byId('verifiedEmail').textContent = `인증된 로그인 ID: ${value}`;
+        byId('verifiedEmailLabel').hidden = false; byId('verifiedEmailLabel').textContent = `인증된 로그인 ID: ${value}`;
         text(signupMessage, '이메일 인증이 완료되었습니다. 비밀번호와 가입 정보를 입력해 주세요.', 'success');
         password.focus(); sync();
       } catch (error) { text(signupMessage, error.message, 'error'); }
@@ -137,20 +106,20 @@
       sync();
     });
 
-    byId('emailSignupForm').onsubmit = async event => {
+    byId('signupForm').onsubmit = async event => {
       event.preventDefault();
       if (!canSubmit()) return text(signupMessage, '필수 정보를 올바르게 입력해 주세요.', 'error');
       submit.disabled = true;
       try {
         await post('/api/auth/register', { email: state.email, password: password.value, password_confirm: confirm.value, name: byId('signupName').value.trim(), phone_number: byId('signupPhone').value.trim(), employee_number: employee.value.trim() });
         text(signupMessage, '회원가입이 완료되었습니다. 이메일과 비밀번호로 로그인해 주세요.', 'success');
-        setTimeout(() => { close(); byId('loginEmail').focus(); }, 800);
+        setTimeout(() => { close(); byId('loginId').focus(); }, 800);
       } catch (error) { text(signupMessage, error.message, 'error'); sync(); }
     };
 
-    byId('emailLoginForm').onsubmit = async event => {
+    byId('loginForm').onsubmit = async event => {
       event.preventDefault();
-      const loginEmail = byId('loginEmail').value.trim().toLowerCase();
+      const loginEmail = byId('loginId').value.trim().toLowerCase();
       const loginPassword = byId('loginPassword').value;
       if (!emailOk(loginEmail) || !loginPassword) return text(loginMessage, '이메일과 비밀번호를 입력해 주세요.', 'error');
       byId('loginSubmit').disabled = true;

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import re
 import secrets
 import threading
@@ -21,6 +20,7 @@ except ModuleNotFoundError:
 
 from server.database import Database, DatabaseConfigurationError
 from server.email_service import EmailDeliveryError, EmailService
+from server.env_config import EnvConfigurationError, env_int, env_text
 
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -66,24 +66,24 @@ class AuthSettings:
 
     @classmethod
     def from_environment(cls) -> "AuthSettings":
-        def env_int(name: str, default: int, minimum: int = 1) -> int:
-            try:
-                return max(minimum, int(os.getenv(name, str(default))))
-            except ValueError as exc:
-                raise AuthError(f"{name} 설정값이 올바르지 않습니다.", 503) from exc
-
-        secret = os.getenv("EMAIL_VERIFICATION_SECRET") or os.getenv("SESSION_SECRET_KEY")
-        if not secret:
-            raise AuthError("이메일 인증 보안 키가 설정되지 않았습니다.", 503)
-        return cls(
-            verification_ttl_sec=env_int("EMAIL_VERIFICATION_TTL_SEC", 600),
-            resend_cooldown_sec=env_int("EMAIL_VERIFICATION_RESEND_COOLDOWN_SEC", 60),
-            max_verification_attempts=env_int("EMAIL_VERIFICATION_MAX_ATTEMPTS", 5),
-            max_verification_sends_per_hour=env_int("EMAIL_VERIFICATION_MAX_SENDS", 5),
-            login_limit=env_int("LOGIN_MAX_FAILURES", 10),
-            login_window_sec=env_int("LOGIN_LOCKOUT_SEC", 600),
-            verification_secret=secret,
-        )
+        try:
+            return cls(
+                verification_ttl_sec=env_int("EMAIL_VERIFICATION_TTL_SEC", minimum=1),
+                resend_cooldown_sec=env_int(
+                    "EMAIL_VERIFICATION_RESEND_COOLDOWN_SEC", minimum=1
+                ),
+                max_verification_attempts=env_int(
+                    "EMAIL_VERIFICATION_MAX_ATTEMPTS", minimum=1
+                ),
+                max_verification_sends_per_hour=env_int(
+                    "EMAIL_VERIFICATION_MAX_SENDS", minimum=1
+                ),
+                login_limit=env_int("LOGIN_MAX_FAILURES", minimum=1),
+                login_window_sec=env_int("LOGIN_LOCKOUT_SEC", minimum=1),
+                verification_secret=env_text("EMAIL_VERIFICATION_SECRET"),
+            )
+        except EnvConfigurationError as exc:
+            raise AuthError("인증 환경 설정값이 올바르지 않습니다.", 503) from exc
 
 
 class AuthService:

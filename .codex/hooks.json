@@ -1,0 +1,30 @@
+{
+  "description": "dabom_capstone project-local Codex hooks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|Edit|Write|mcp__.*github.*|mcp__.*playwright.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_policy.py\"",
+            "commandWindows": "python \".codex\\hooks\\pre_tool_policy.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/validate_on_stop.py\"",
+            "commandWindows": "python -X utf8 \".codex\\hooks\\validate_on_stop.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

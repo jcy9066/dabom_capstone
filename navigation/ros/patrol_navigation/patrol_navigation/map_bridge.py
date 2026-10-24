@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import requests
 import rclpy
+from patrol_navigation.env_config import env_text
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.time import Time
@@ -159,6 +160,7 @@ class MapBridge(Node):
                 "server_base_url"
             ).value
         ).rstrip("/")
+        self.control_token = env_text("ROBOT_CONTROL_TOKEN")
 
         navigation_mode = str(
             self.get_parameter(
@@ -305,6 +307,10 @@ class MapBridge(Node):
 
     def on_map(self, msg):
         self.latest_map = msg
+        # RViz2 Map display처럼 /map callback이 도착한 순간 dashboard로
+        # 전달한다. 별도 timer polling으로 지연시키지 않는다.
+        if self.send_map:
+            self.publish_map(msg)
 
     def on_scan(self, msg):
         self.latest_scan = msg
@@ -323,6 +329,7 @@ class MapBridge(Node):
             response = requests.post(
                 url,
                 json=payload,
+                headers={"X-Robot-Control-Token": self.control_token},
                 timeout=self.request_timeout_sec,
             )
 
@@ -362,8 +369,8 @@ class MapBridge(Node):
             ),
         }
 
-    def publish_map(self):
-        msg = self.latest_map
+    def publish_map(self, msg=None):
+        msg = msg or self.latest_map
 
         if msg is None:
             return

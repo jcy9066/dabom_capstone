@@ -1,6 +1,7 @@
 import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -10,15 +11,16 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import cv2
 import numpy as np
 import requests
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import ClientDisconnect
@@ -34,7 +36,10 @@ if str(PERCEPTION_DIR) not in sys.path:
 
 from perception.device import resolve_cuda_device
 from perception.frame_processor import FrameProcessor
+from perception.models.action_policy import is_observation_issue
 from perception.pipeline_factory import PIPELINE_OPTIONS, create_pipeline
+from perception.utils.event_taxonomy import vision_alert_type, vision_event_type
+from perception.utils.telegram_notifier import TelegramNotifier
 try:
     from server.lidar_ros_bridge import LidarRosBridge
     from server.encoder_ros_bridge import EncoderRosBridge
@@ -46,22 +51,39 @@ except ModuleNotFoundError as bridge_import_error:
         bridge_import_error,
     )
 from server.auth_service import AuthError, AuthService
+from server.database import (
+    Database,
+    DatabaseConfigurationError,
+    DatabaseOperationError,
+)
+from server.env_config import env_bool, env_float, env_int, env_text
+from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
+from server.media_service import (
+    FrozenFrameCache,
+    FrozenFrameTokenError,
+    PrivateImageStore,
+    UnsafeMediaPathError,
+)
+from server.navigation_control_api import NavigationControlApi
 from server.navigation_map_api import NavigationMapApi
+from server.location_security import LocationSecurityService
+from server.location_security_api import LocationSecurityApi
+from server.location_security_notifications import build_location_transition_message
+from server.privacy import PrivacyProcessingError, PrivacyProcessor
+from server.navigation_process_control import NavigationProcessControl
+from server.live_mapping_grid import LiveMappingGrid
+from server.gpu_telemetry import GpuUtilizationSampler
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 app = FastAPI(title="AI Patrol Robot Integrated Server")
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY") or secrets.token_urlsafe(32)
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+SESSION_SECRET_KEY = env_text("SESSION_SECRET_KEY")
+COOKIE_SECURE = env_bool("COOKIE_SECURE")
 EMAIL_CHALLENGE_COOKIE = "dabom_email_challenge"
 EMAIL_VERIFIED_COOKIE = "dabom_verified_email"
 EMAIL_COOKIE_PATH = "/api/auth"
-if not os.getenv("SESSION_SECRET_KEY"):
-    logging.getLogger(__name__).warning(
-        "SESSION_SECRET_KEY is missing; sessions will reset after server restart."
-    )
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET_KEY,
@@ -72,7 +94,9 @@ app.add_middleware(
 )
 
 STATIC_DIR = ROOT_DIR / "frontend" / "services" / "static"
+COMPONENTS_DIR = ROOT_DIR / "frontend" / "components"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/components", StaticFiles(directory=COMPONENTS_DIR), name="components")
 templates = Jinja2Templates(directory=ROOT_DIR / "frontend" / "templates")
 
 _auth_service = None
@@ -300,7 +324,28 @@ async def logout_user(request: Request):
     return {"ok": True, "redirect_url": "/login"}
 
 
-SERVER_ROBOT_ID = os.getenv("ROBOT_ID", "pi-01")
+SERVER_ROBOT_ID = env_text("ROBOT_ID")
+ROBOT_CONTROL_TOKEN = env_text("ROBOT_CONTROL_TOKEN")
+
+
+def robot_ingest_failure(request: Request):
+    supplied_token = request.headers.get("X-Robot-Control-Token", "")
+    if ROBOT_CONTROL_TOKEN and secrets.compare_digest(supplied_token, ROBOT_CONTROL_TOKEN):
+        return None
+    return JSONResponse(
+        {"ok": False, "error": "robot authentication required"},
+        status_code=401,
+    )
+
+
+def robot_id_failure(payload):
+    robot_id = str(payload.get("robot_id", SERVER_ROBOT_ID)).strip()
+    if robot_id == SERVER_ROBOT_ID:
+        return None
+    return JSONResponse(
+        {"ok": False, "error": "robot_id is not authorized"},
+        status_code=403,
+    )
 
 
 @app.get("/api/auth/csrf")
@@ -308,42 +353,45 @@ async def get_auth_csrf_token(request: Request):
     return {"ok": True, "csrf_token": issue_csrf_token(request)}
 
 
-SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-SERVER_PORT = int(os.getenv("SERVER_PORT", "21063"))
-PIPELINE = os.getenv("PIPELINE", "1")
-MODEL_REQUIRED = os.getenv("MODEL_REQUIRED", "false").lower() == "true"
-SAVE_RECEIVED_FRAMES = os.getenv("SAVE_RECEIVED_FRAMES", "false").lower() == "true"
-STREAM_WIDTH = int(os.getenv("STREAM_WIDTH", "640"))
-STREAM_HEIGHT = int(os.getenv("STREAM_HEIGHT", "480"))
-STREAM_FPS = int(os.getenv("STREAM_FPS", "15"))
-STREAM_JPEG_QUALITY = int(os.getenv("STREAM_JPEG_QUALITY", "75"))
-PREVIEW_MAX_FPS = max(1.0, float(os.getenv("PREVIEW_MAX_FPS", str(STREAM_FPS))))
-INFERENCE_ENABLED = os.getenv("INFERENCE_ENABLED", "true").lower() == "true"
-VISUALIZATION_ENABLED = os.getenv("VISUALIZATION_ENABLED", "true").lower() == "true"
+SERVER_HOST = env_text("SERVER_HOST")
+SERVER_PORT = env_int("SERVER_PORT", minimum=1, maximum=65535)
+PIPELINE = env_text("PIPELINE")
+MODEL_REQUIRED = env_bool("MODEL_REQUIRED")
+SAVE_RECEIVED_FRAMES = env_bool("SAVE_RECEIVED_FRAMES", default=False)
+SYSTEM_STATUS_INTERVAL_SEC = env_float("SYSTEM_STATUS_INTERVAL_SEC", minimum=0.1)
+EVENT_SAVE_COOLDOWN_SEC = env_float("EVENT_SAVE_COOLDOWN_SEC", minimum=0.0)
+STREAM_WIDTH = env_int("STREAM_WIDTH", minimum=1)
+STREAM_HEIGHT = env_int("STREAM_HEIGHT", minimum=1)
+STREAM_FPS = env_float("STREAM_FPS", minimum=0.1)
+STREAM_JPEG_QUALITY = env_int("STREAM_JPEG_QUALITY", minimum=1, maximum=100)
+PREVIEW_MAX_FPS = env_float("PREVIEW_MAX_FPS", minimum=1.0)
+INFERENCE_ENABLED = env_bool("INFERENCE_ENABLED")
+VISUALIZATION_ENABLED = env_bool("VISUALIZATION_ENABLED")
 MODEL_ACTIVE = INFERENCE_ENABLED or VISUALIZATION_ENABLED
-STREAM_INFER_EVERY_N = max(1, int(os.getenv("STREAM_INFER_EVERY_N", "1")))
-INFERENCE_MAX_FPS = max(0.1, float(os.getenv("INFERENCE_MAX_FPS", str(STREAM_FPS))))
-ADAPTIVE_BATCHING_ENABLED = os.getenv("ADAPTIVE_BATCHING_ENABLED", "true").lower() == "true"
-ADAPTIVE_BATCH_MAX_WAIT_MS = max(0.0, float(os.getenv("ADAPTIVE_BATCH_MAX_WAIT_MS", "8")))
-ACTION_DISPLAY_TTL_SEC = max(0.1, float(os.getenv("ACTION_DISPLAY_TTL_SEC", "1.0")))
-TRIGGER_SUSPICIOUS_VISUAL_ENABLED = os.getenv("TRIGGER_SUSPICIOUS_VISUAL_ENABLED", "true").lower() == "true"
-INFERENCE_MAX_RESULT_AGE_SEC = float(os.getenv("INFERENCE_MAX_RESULT_AGE_SEC", "3.0"))
-INFERENCE_DROP_OLDER_THAN_SEC = float(os.getenv("INFERENCE_DROP_OLDER_THAN_SEC", "2.0"))
-CUDA_DEVICE_INDEX = os.getenv("CUDA_DEVICE_INDEX", "0").strip()
-DEVICE = os.getenv("DEVICE", f"cuda:{CUDA_DEVICE_INDEX}").strip().lower()
-GPU_REQUIRED_FOR_INFERENCE = os.getenv("GPU_REQUIRED_FOR_INFERENCE", "true").lower() == "true"
-ENV_RELOAD_CHECK_INTERVAL_SEC = max(0.1, float(os.getenv("ENV_RELOAD_CHECK_INTERVAL_SEC", "1.0")))
-CAMERA_TIMEOUT_SEC = float(os.getenv("CAMERA_TIMEOUT_SEC", "3.0"))
-ROBOT_STATUS_TIMEOUT_SEC = float(os.getenv("ROBOT_STATUS_TIMEOUT_SEC", "5.0"))
+STREAM_INFER_EVERY_N = env_int("STREAM_INFER_EVERY_N", minimum=1)
+INFERENCE_MAX_FPS = env_float("INFERENCE_MAX_FPS", minimum=0.1)
+ADAPTIVE_BATCHING_ENABLED = env_bool("ADAPTIVE_BATCHING_ENABLED")
+ADAPTIVE_BATCH_MAX_WAIT_MS = env_float("ADAPTIVE_BATCH_MAX_WAIT_MS", minimum=0.0)
+ACTION_DISPLAY_TTL_SEC = env_float("ACTION_DISPLAY_TTL_SEC", minimum=0.1)
+TRIGGER_SUSPICIOUS_VISUAL_ENABLED = env_bool("TRIGGER_SUSPICIOUS_VISUAL_ENABLED")
+INFERENCE_MAX_RESULT_AGE_SEC = env_float("INFERENCE_MAX_RESULT_AGE_SEC", minimum=0.0)
+INFERENCE_DROP_OLDER_THAN_SEC = env_float("INFERENCE_DROP_OLDER_THAN_SEC", minimum=0.0)
+CUDA_DEVICE_INDEX = env_text("CUDA_DEVICE_INDEX")
+DEVICE = env_text("DEVICE").lower()
+GPU_REQUIRED_FOR_INFERENCE = env_bool("GPU_REQUIRED_FOR_INFERENCE")
+ENV_RELOAD_CHECK_INTERVAL_SEC = env_float("ENV_RELOAD_CHECK_INTERVAL_SEC", minimum=0.1)
+CAMERA_TIMEOUT_SEC = env_float("CAMERA_TIMEOUT_SEC", minimum=0.1)
+ROBOT_STATUS_TIMEOUT_SEC = env_float("ROBOT_STATUS_TIMEOUT_SEC", minimum=0.1)
 SAVE_DIR = ROOT_DIR / "received_frames"
-SAVE_DIR.mkdir(exist_ok=True)
 NAVIGATION_MAP_DIR = ROOT_DIR / "navigation" / "maps"
 NAVIGATION_MAP_DIR.mkdir(parents=True, exist_ok=True)
+LOCATION_SECURITY_STATE_PATH = ROOT_DIR / "data" / "runtime" / "gps_locations.json"
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = env_text("TELEGRAM_TOKEN", allow_empty=True)
+TELEGRAM_CHAT_ID = env_text("TELEGRAM_CHAT_ID", allow_empty=True)
 
 state_lock = threading.Lock()
+gpu_utilization_sampler = GpuUtilizationSampler()
 frame_condition = threading.Condition(state_lock)
 server_started_at = time.time()
 current_frame = None
@@ -353,18 +401,28 @@ latest_result = {
     "ok": True,
     "robot_id": SERVER_ROBOT_ID,
     "detections": [],
+    "pair_actions": [],
     "danger": False,
+    "scene": None,
     "pipeline": None,
     "model_error": None,
 }
 robot_status = {
     "robot_id": SERVER_ROBOT_ID,
-    "cpu_usage": "0.0",
-    "cpu_temp": "0.0",
-    "battery": "100",
-    "ram_usage": "0.0",
+    "cpu_usage": None,
+    "cpu_temp": None,
+    "ram_usage": None,
     "internet": "unknown",
-    "mode": "auto",
+    "mode": "manual",
+    "led_enabled": None,
+    "max_wheel_mps": None,
+    "gps_fix": None,
+    "gps_lat": None,
+    "gps_lng": None,
+    "gps_alt": None,
+    "gps_satellites": None,
+    "gps_hdop": None,
+    "gps_updated_at": None,
     "updated_at": None,
 }
 encoder_state = {
@@ -379,7 +437,7 @@ encoder_state = {
     "updated_at": None,
 }
 
-NAVIGATION_TIMEOUT_SEC = float(os.getenv("NAVIGATION_TIMEOUT_SEC", "3.0"))
+NAVIGATION_TIMEOUT_SEC = env_float("NAVIGATION_TIMEOUT_SEC", minimum=0.0)
 VALID_NAVIGATION_MODES = frozenset(
     {"scan_only", "mapping", "localization", "localization_nav2"}
 )
@@ -390,17 +448,17 @@ NAVIGATION_MODE_LABELS = {
     "localization_nav2": "Localization + Nav2",
 }
 NAV_DRY_RUN_CONFIG = DryRunPlannerConfig(
-    enabled=os.getenv("NAV_DRY_RUN_ENABLED", "true").lower() == "true",
-    stop_distance_m=float(os.getenv("NAV_STOP_DISTANCE_M", "0.45")),
-    slow_distance_m=float(os.getenv("NAV_SLOW_DISTANCE_M", "0.90")),
-    normal_linear_mps=float(os.getenv("NAV_NORMAL_LINEAR_MPS", "0.25")),
-    slow_linear_mps=float(os.getenv("NAV_SLOW_LINEAR_MPS", "0.10")),
-    turn_angular_rps=float(os.getenv("NAV_TURN_ANGULAR_RPS", "0.65")),
-    scan_timeout_sec=float(os.getenv("NAV_SCAN_TIMEOUT_SEC", "1.0")),
+    enabled=env_bool("NAV_DRY_RUN_ENABLED"),
+    stop_distance_m=env_float("NAV_STOP_DISTANCE_M", minimum=0.0),
+    slow_distance_m=env_float("NAV_SLOW_DISTANCE_M", minimum=0.0),
+    normal_linear_mps=env_float("NAV_NORMAL_LINEAR_MPS", minimum=0.0),
+    slow_linear_mps=env_float("NAV_SLOW_LINEAR_MPS", minimum=0.0),
+    turn_angular_rps=env_float("NAV_TURN_ANGULAR_RPS", minimum=0.0),
+    scan_timeout_sec=env_float("NAV_SCAN_TIMEOUT_SEC", minimum=0.0),
 )
-# This server has no actuator implementation. Keep the safety state false even
-# if an external environment file accidentally requests otherwise.
-MOTOR_OUTPUT_ENABLED = False
+# Missing or empty remains fail-safe false; invalid values fail startup.
+MOTOR_OUTPUT_ENABLED = env_bool("MOTOR_OUTPUT_ENABLED", default=False)
+MAX_WHEEL_MPS = env_float("MAX_WHEEL_MPS", minimum=0.01)
 navigation_state = {
     "robot_id": SERVER_ROBOT_ID,
     "mode": None,
@@ -408,11 +466,24 @@ navigation_state = {
     "map": None,
     "pose": None,
     "scan": None,
+    "global_path": [],
+    "global_path_updated_at": None,
+    "costmap": None,
     "decision": None,
     "map_updated_at": None,
+    "map_revision": None,
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+
+live_mapping_grid = LiveMappingGrid(
+    resolution=0.05,
+    refresh_sec=1.0,
+    max_clear_range_m=8.0,
+    sensor_x=env_float("LIDAR_X"),
+    sensor_y=env_float("LIDAR_Y"),
+    sensor_yaw=env_float("LIDAR_YAW"),
+)
 frame_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 decode_stats = {"last_time": time.time(), "count": 0, "fps": 0}
 publish_stats = {"last_time": time.time(), "count": 0, "fps": 0, "last_publish_at": None}
@@ -452,7 +523,117 @@ stream_stats = {
 status_frame_cache = {"key": None, "frame": None}
 frame_processor = None
 model_error = None
+model_generation = 0
 model_reload_lock = threading.Lock()
+database = Database()
+automatic_notifier = TelegramNotifier()
+event_log_worker = None
+system_status_writer = None
+interaction_incident_state = {
+    "next_id": 1,
+    "incidents": {},
+}
+privacy_processor = None
+privacy_processor_lock = threading.Lock()
+frozen_frame_cache = FrozenFrameCache()
+private_image_store = None
+private_image_store_lock = threading.Lock()
+
+
+def robot_status_snapshot():
+    with state_lock:
+        return dict(robot_status)
+
+
+def start_persistence_workers():
+    global event_log_worker, system_status_writer
+    if event_log_worker is None:
+        event_log_worker = EventLogWorker(
+            database,
+            automatic_notifier,
+            cooldown_sec=EVENT_SAVE_COOLDOWN_SEC,
+            image_store=get_private_image_store(),
+        )
+    if system_status_writer is None:
+        system_status_writer = SystemStatusWriter(
+            database,
+            robot_status_snapshot,
+            interval_sec=SYSTEM_STATUS_INTERVAL_SEC,
+        )
+    event_log_worker.start()
+    system_status_writer.start()
+
+
+def stop_persistence_workers():
+    global event_log_worker, system_status_writer
+    if system_status_writer is not None:
+        system_status_writer.stop()
+        system_status_writer = None
+    if event_log_worker is not None:
+        event_log_worker.stop()
+        event_log_worker = None
+
+
+def submit_automatic_event(
+    event_source,
+    event_type,
+    confidence=None,
+    message=None,
+    robot_id=SERVER_ROBOT_ID,
+    frame=None,
+    cooldown_key=None,
+):
+    worker = event_log_worker
+    if worker is None:
+        return False
+    event_frame = frame
+    if event_source == "VISION_AI" and event_frame is None:
+        with state_lock:
+            encoded_frame = bytes(current_frame) if current_frame is not None else None
+        if encoded_frame is not None:
+            try:
+                event_frame = decode_camera_frame(encoded_frame)
+            except ValueError:
+                event_frame = None
+    return worker.submit(
+        robot_id=robot_id,
+        event_source=event_source,
+        event_type=event_type,
+        confidence=confidence,
+        message=message,
+        location=robot_status_snapshot(),
+        frame=event_frame,
+        cooldown_key=cooldown_key,
+    )
+
+
+def get_privacy_processor():
+    global privacy_processor
+    with privacy_processor_lock:
+        if privacy_processor is None:
+            privacy_processor = PrivacyProcessor()
+        return privacy_processor
+
+
+def get_private_image_store():
+    global private_image_store
+    with private_image_store_lock:
+        if private_image_store is None:
+            private_image_store = PrivateImageStore(
+                project_root=ROOT_DIR,
+                processor=get_privacy_processor(),
+            )
+        return private_image_store
+
+
+def decode_camera_frame(encoded_frame):
+    encoded = np.frombuffer(encoded_frame, dtype=np.uint8)
+    frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    if frame is None or frame.size == 0:
+        raise ValueError("Current camera frame could not be decoded.")
+    return frame
+
+
 env_reload_state = {
     "mtime_ns": None,
     "signature": None,
@@ -461,6 +642,10 @@ env_reload_state = {
     "last_error": None,
 }
 processing_lock = threading.Lock()
+# Protect only X3D stream-generation reset vs. decoded-frame append.
+# Do not use processing_lock here: model inference can be much slower than
+# decode, and blocking decode would distort the rolling temporal window.
+scene_buffer_generation_lock = threading.Lock()
 inference_condition = threading.Condition()
 inference_slot = {
     "frame": None,
@@ -476,30 +661,119 @@ class RobotConnectionManager:
     def __init__(self):
         self.active = {}
         self.lock = asyncio.Lock()
+        self.pending_acks = {}
+        self.ack_timeout_sec = env_float(
+            "ROBOT_COMMAND_ACK_TIMEOUT_SEC",
+            minimum=0.1,
+        )
 
     async def connect(self, robot_id, websocket):
         await websocket.accept()
         async with self.lock:
             old = self.active.get(robot_id)
-            if old is not None:
-                try:
-                    await old.close()
-                except Exception:
-                    pass
             self.active[robot_id] = websocket
+            pending = []
+            for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
+                if pending_robot_id == robot_id:
+                    pending.append(future)
+                    self.pending_acks.pop(command_id, None)
+        for future in pending:
+            if not future.done():
+                future.set_result({"ok": False, "error": "robot connection replaced"})
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                pass
+
+    async def is_current(self, robot_id, websocket):
+        async with self.lock:
+            return self.active.get(robot_id) is websocket
 
     async def disconnect(self, robot_id, websocket):
+        disconnected = False
         async with self.lock:
             if self.active.get(robot_id) is websocket:
                 self.active.pop(robot_id, None)
+                disconnected = True
+                pending = []
+                for command_id, (pending_robot_id, pending_socket, future) in list(self.pending_acks.items()):
+                    if pending_robot_id == robot_id and pending_socket is websocket:
+                        pending.append(future)
+                        self.pending_acks.pop(command_id, None)
+            else:
+                pending = []
+        for future in pending:
+            if not future.done():
+                future.set_result({"ok": False, "error": "robot disconnected"})
+        return disconnected
 
     async def send_command(self, robot_id, command):
         async with self.lock:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        await websocket.send_json(command)
+        async with self.lock:
+            if self.active.get(robot_id) is not websocket:
+                return False
+            await websocket.send_json(command)
         return True
+
+    async def send_command_wait_ack(self, robot_id, command):
+        command = dict(command)
+        command_id = str(command.get("command_id") or uuid4())
+        command["command_id"] = command_id
+        command.setdefault("issued_at", time.time())
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        async with self.lock:
+            websocket = self.active.get(robot_id)
+            if websocket is None:
+                return False
+            if command_id in self.pending_acks:
+                return False
+            self.pending_acks[command_id] = (robot_id, websocket, future)
+        try:
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+                await websocket.send_json(command)
+            ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            if command.get("type") == "resume_safety_check":
+                return ack if isinstance(ack, dict) else False
+            if command.get("type") == "resume_navigation":
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("emergency_stop") is False
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and ack.get("safety_epoch") == command.get("safety_epoch")
+                )
+            return isinstance(ack, dict) and ack.get("ok") is True
+        except Exception:
+            return False
+        finally:
+            async with self.lock:
+                self.pending_acks.pop(command_id, None)
+
+    async def receive_ack(self, robot_id, websocket, message):
+        command_id = str(message.get("command_id") or "")
+        if not command_id:
+            return False
+        async with self.lock:
+            pending = self.pending_acks.get(command_id)
+            if (
+                self.active.get(robot_id) is not websocket
+                or pending is None
+                or pending[0] != robot_id
+                or pending[1] is not websocket
+            ):
+                return False
+            future = pending[2]
+            if future.done():
+                return False
+            future.set_result(dict(message))
+            return True
 
     async def is_connected(self, robot_id):
         async with self.lock:
@@ -507,6 +781,54 @@ class RobotConnectionManager:
 
 
 connections = RobotConnectionManager()
+
+
+class NavigationVisualizationHub:
+    """Push latest navigation visualization events to dashboard clients."""
+
+    def __init__(self, max_queue_size=32):
+        self.max_queue_size = max(1, int(max_queue_size))
+        self._loop = None
+        self._queues = {}
+
+    def bind_loop(self, loop):
+        self._loop = loop
+
+    async def register(self, websocket):
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        await websocket.accept()
+        queue = asyncio.Queue(maxsize=self.max_queue_size)
+        self._queues[id(websocket)] = queue
+        return queue
+
+    def unregister(self, websocket):
+        self._queues.pop(id(websocket), None)
+
+    def publish(self, event):
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        payload = dict(event)
+        try:
+            loop.call_soon_threadsafe(self._enqueue, payload)
+        except RuntimeError:
+            pass
+
+    def _enqueue(self, payload):
+        for queue in tuple(self._queues.values()):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass
+
+
+navigation_visualization_hub = NavigationVisualizationHub()
 
 # Load the dashboard-only routes without importing frontend.__init__.
 _system_control_spec = spec_from_file_location(
@@ -517,7 +839,11 @@ if _system_control_spec is None or _system_control_spec.loader is None:
     raise RuntimeError("Unable to load system control routes.")
 _system_control_module = module_from_spec(_system_control_spec)
 _system_control_spec.loader.exec_module(_system_control_module)
-_system_control_module.attach_system_control_routes(app)
+navigation_process_control = NavigationProcessControl(ROOT_DIR)
+_system_control_module.attach_system_control_routes(
+    app,
+    navigation_process_control=navigation_process_control,
+)
 
 navigation_map_api = NavigationMapApi(
     app=app,
@@ -525,6 +851,111 @@ navigation_map_api = NavigationMapApi(
     map_dir=NAVIGATION_MAP_DIR,
     csrf_failure=csrf_failure,
 )
+
+
+def handle_location_security_transition(result):
+    message = build_location_transition_message(result)
+    if not message:
+        return
+    automatic_notifier.send_alert_async(message)
+
+
+location_security_service = LocationSecurityService(LOCATION_SECURITY_STATE_PATH)
+location_security_api = LocationSecurityApi(
+    app=app,
+    service=location_security_service,
+    csrf_failure=csrf_failure,
+    transition_listener=handle_location_security_transition,
+)
+
+
+def current_navigation_map_snapshot():
+    with state_lock:
+        current = navigation_state.get("map")
+        return dict(current) if isinstance(current, dict) else None
+
+
+def current_navigation_pose_snapshot():
+    with state_lock:
+        current = navigation_state.get("pose")
+        return dict(current) if isinstance(current, dict) else None
+
+
+def clear_navigation_visualization_state():
+    live_mapping_grid.reset()
+    with state_lock:
+        navigation_state["map"] = None
+        navigation_state["pose"] = None
+        navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
+        navigation_state["costmap"] = None
+        navigation_state["decision"] = None
+        navigation_state["map_updated_at"] = None
+        navigation_state["pose_updated_at"] = None
+        navigation_state["map_revision"] = None
+    navigation_visualization_hub.publish({"type": "reset"})
+
+
+def publish_live_mapping_map(map_payload, received_at):
+    map_revision = build_navigation_map_revision(map_payload)
+    stored_map = received_payload(map_payload, received_at)
+    with state_lock:
+        navigation_state["map"] = stored_map
+        navigation_state["map_updated_at"] = received_at
+        navigation_state["map_revision"] = map_revision
+    navigation_visualization_hub.publish(
+        {
+            "type": "map",
+            "map": stored_map,
+            "map_revision": map_revision,
+        }
+    )
+    return stored_map
+
+
+navigation_control_api = NavigationControlApi(
+    app=app,
+    map_api=navigation_map_api,
+    process_control=navigation_process_control,
+    csrf_failure=csrf_failure,
+    robot_id=SERVER_ROBOT_ID,
+    get_live_map=current_navigation_map_snapshot,
+    get_live_pose=current_navigation_pose_snapshot,
+    save_map=lambda payload, name: save_navigation_map_files(
+        payload,
+        name,
+        current_navigation_map_location_metadata(),
+    ),
+    send_robot_command=connections.send_command_wait_ack,
+    clear_visualization=clear_navigation_visualization_state,
+    motor_output_enabled=MOTOR_OUTPUT_ENABLED,
+)
+
+def publish_navigation_ros_visualization(event):
+    if not isinstance(event, dict):
+        return
+    payload = dict(event)
+    event_type = str(payload.get("type") or "")
+    if event_type == "global_path":
+        path = payload.get("path")
+        normalized = [dict(point) for point in path] if isinstance(path, list) else []
+        received_at = payload.get("received_at")
+        try:
+            received_at = float(received_at)
+        except (TypeError, ValueError):
+            received_at = time.time()
+        with state_lock:
+            navigation_state["global_path"] = normalized
+            navigation_state["global_path_updated_at"] = received_at
+        navigation_control_api.note_replanned_path(normalized)
+    elif event_type == "costmap":
+        costmap = payload.get("costmap")
+        with state_lock:
+            navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
+    navigation_visualization_hub.publish(payload)
+
+
+navigation_map_api.set_visualization_listener(publish_navigation_ros_visualization)
 
 lidar_ros_bridge = None
 encoder_ros_bridge = None
@@ -568,6 +999,18 @@ RUNTIME_MODEL_ENV_KEYS = (
     "INFERENCE_MAX_FPS",
     "ADAPTIVE_BATCHING_ENABLED",
     "ADAPTIVE_BATCH_MAX_WAIT_MS",
+    "ACTION_SUSPICIOUS_THRESHOLD",
+    "ACTION_DANGER_THRESHOLD",
+    "ACTION_TEMPORAL_WINDOW",
+    "ACTION_SUSPICIOUS_MIN_HITS",
+    "ACTION_DANGER_MIN_HITS",
+    "ACTION_NORMAL_CLEAR_HITS",
+    "ACTION_TRACK_STATE_TTL_SEC",
+    "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+    "ACTION_INTERACTION_MAX_PAIRS",
+    "ACTION_MIN_HISTORY_FRAMES",
+    "ACTION_POSE_GAP_RESET_SEC",
+    "ACTION_INTERACTION_INFER_EVERY_N",
     "ACTION_DISPLAY_TTL_SEC",
     "TRIGGER_SUSPICIOUS_VISUAL_ENABLED",
     "INFERENCE_MAX_RESULT_AGE_SEC",
@@ -575,67 +1018,125 @@ RUNTIME_MODEL_ENV_KEYS = (
 )
 
 
-def env_value(values, name, default):
-    value = values.get(name)
-    if value is None:
-        value = os.getenv(name, default)
-    return str(value)
-
-
-def env_bool(values, name, default):
-    return env_value(values, name, default).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
 def read_runtime_model_config():
-    values = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
-    cuda_device_index = env_value(values, "CUDA_DEVICE_INDEX", "0").strip() or "0"
-    default_device = f"cuda:{cuda_device_index}"
-    device = env_value(values, "DEVICE", default_device).strip().lower() or default_device
-    inference_enabled = env_bool(values, "INFERENCE_ENABLED", "true")
-    visualization_enabled = env_bool(values, "VISUALIZATION_ENABLED", "true")
+    cuda_device_index = env_text("CUDA_DEVICE_INDEX")
+    device = env_text("DEVICE").lower()
+    inference_enabled = env_bool("INFERENCE_ENABLED")
+    visualization_enabled = env_bool("VISUALIZATION_ENABLED")
+    pipeline = env_text("PIPELINE")
+    stream_infer_every_n = env_int("STREAM_INFER_EVERY_N", minimum=1)
+    inference_max_fps = env_float("INFERENCE_MAX_FPS", minimum=0.1)
+    effective_request_fps = min(
+        inference_max_fps,
+        STREAM_FPS / stream_infer_every_n,
+    )
+    if (
+        pipeline == "8"
+        and (inference_enabled or visualization_enabled)
+        and effective_request_fps < 1.0
+    ):
+        raise ValueError(
+            "Pipeline 8 requires an effective inference request rate >= 1 Hz "
+            f"(current={effective_request_fps:.3f} Hz)"
+        )
+
+    # Pipeline 8 does not use the legacy ST-GCN action-policy controls.
+    # Validate them only for pipelines that actually consume those settings.
+    if pipeline != "8":
+        suspicious_threshold = env_float(
+            "ACTION_SUSPICIOUS_THRESHOLD",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        danger_threshold = env_float(
+            "ACTION_DANGER_THRESHOLD",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        temporal_window = env_int("ACTION_TEMPORAL_WINDOW", minimum=1)
+        suspicious_min_hits = env_int(
+            "ACTION_SUSPICIOUS_MIN_HITS",
+            minimum=1,
+        )
+        danger_min_hits = env_int("ACTION_DANGER_MIN_HITS", minimum=1)
+        env_int("ACTION_NORMAL_CLEAR_HITS", minimum=1)
+
+        if danger_threshold < suspicious_threshold:
+            raise ValueError(
+                "ACTION_DANGER_THRESHOLD must be >= ACTION_SUSPICIOUS_THRESHOLD"
+            )
+        if suspicious_min_hits > temporal_window:
+            raise ValueError(
+                "ACTION_SUSPICIOUS_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+            )
+        if danger_min_hits > temporal_window:
+            raise ValueError(
+                "ACTION_DANGER_MIN_HITS must be <= ACTION_TEMPORAL_WINDOW"
+            )
+
+        env_float("ACTION_TRACK_STATE_TTL_SEC", minimum=0.1)
+
+        if os.getenv("ACTION_INTERACTION_PAIR_DISTANCE_RATIO", "").strip():
+            env_float(
+                "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+                minimum=0.1,
+                maximum=5.0,
+            )
+
+        if os.getenv("ACTION_INTERACTION_MAX_PAIRS", "").strip():
+            env_int(
+                "ACTION_INTERACTION_MAX_PAIRS",
+                minimum=1,
+                maximum=16,
+            )
+
+        if os.getenv("ACTION_MIN_HISTORY_FRAMES", "").strip():
+            env_int(
+                "ACTION_MIN_HISTORY_FRAMES",
+                minimum=2,
+                maximum=100,
+            )
+
+        if os.getenv("ACTION_POSE_GAP_RESET_SEC", "").strip():
+            env_float(
+                "ACTION_POSE_GAP_RESET_SEC",
+                minimum=0.1,
+                maximum=30.0,
+            )
+
+        if os.getenv("ACTION_INTERACTION_INFER_EVERY_N", "").strip():
+            env_int(
+                "ACTION_INTERACTION_INFER_EVERY_N",
+                minimum=1,
+                maximum=30,
+            )
     return {
-        "pipeline": env_value(values, "PIPELINE", "1").strip() or "1",
-        "model_required": env_bool(values, "MODEL_REQUIRED", "false"),
+        "pipeline": pipeline,
+        "model_required": env_bool("MODEL_REQUIRED"),
         "inference_enabled": inference_enabled,
         "visualization_enabled": visualization_enabled,
         "model_active": inference_enabled or visualization_enabled,
-        "stream_infer_every_n": max(
-            1, int(env_value(values, "STREAM_INFER_EVERY_N", "1"))
+        "stream_infer_every_n": stream_infer_every_n,
+        "inference_max_fps": inference_max_fps,
+        "adaptive_batching_enabled": env_bool("ADAPTIVE_BATCHING_ENABLED"),
+        "adaptive_batch_max_wait_ms": env_float(
+            "ADAPTIVE_BATCH_MAX_WAIT_MS", minimum=0.0
         ),
-        "inference_max_fps": max(
-            0.1,
-            float(env_value(values, "INFERENCE_MAX_FPS", str(STREAM_FPS))),
-        ),
-        "adaptive_batching_enabled": env_bool(
-            values, "ADAPTIVE_BATCHING_ENABLED", "true"
-        ),
-        "adaptive_batch_max_wait_ms": max(
-            0.0,
-            float(env_value(values, "ADAPTIVE_BATCH_MAX_WAIT_MS", "8")),
-        ),
-        "action_display_ttl_sec": max(
-            0.1,
-            float(env_value(values, "ACTION_DISPLAY_TTL_SEC", "1.0")),
+        "action_display_ttl_sec": env_float(
+            "ACTION_DISPLAY_TTL_SEC", minimum=0.1
         ),
         "trigger_suspicious_visual_enabled": env_bool(
-            values, "TRIGGER_SUSPICIOUS_VISUAL_ENABLED", "true"
+            "TRIGGER_SUSPICIOUS_VISUAL_ENABLED"
         ),
-        "inference_max_result_age_sec": float(
-            env_value(values, "INFERENCE_MAX_RESULT_AGE_SEC", "3.0")
+        "inference_max_result_age_sec": env_float(
+            "INFERENCE_MAX_RESULT_AGE_SEC", minimum=0.0
         ),
-        "inference_drop_older_than_sec": float(
-            env_value(values, "INFERENCE_DROP_OLDER_THAN_SEC", "2.0")
+        "inference_drop_older_than_sec": env_float(
+            "INFERENCE_DROP_OLDER_THAN_SEC", minimum=0.0
         ),
         "cuda_device_index": cuda_device_index,
         "device": device,
-        "gpu_required_for_inference": env_bool(
-            values, "GPU_REQUIRED_FOR_INFERENCE", "true"
-        ),
+        "gpu_required_for_inference": env_bool("GPU_REQUIRED_FOR_INFERENCE"),
     }
 
 
@@ -669,14 +1170,39 @@ def apply_runtime_model_config(config):
 
 
 def runtime_model_signature(config):
-    return config["pipeline"], config["model_active"], config["device"]
+    action_env_signature = ()
+    if config["pipeline"] != "8":
+        action_env_signature = tuple(
+            (key, os.getenv(key))
+            for key in (
+                "ACTION_SUSPICIOUS_THRESHOLD",
+                "ACTION_DANGER_THRESHOLD",
+                "ACTION_TEMPORAL_WINDOW",
+                "ACTION_SUSPICIOUS_MIN_HITS",
+                "ACTION_DANGER_MIN_HITS",
+                "ACTION_NORMAL_CLEAR_HITS",
+                "ACTION_TRACK_STATE_TTL_SEC",
+                "ACTION_INTERACTION_PAIR_DISTANCE_RATIO",
+                "ACTION_INTERACTION_MAX_PAIRS",
+                "ACTION_MIN_HISTORY_FRAMES",
+                "ACTION_POSE_GAP_RESET_SEC",
+                "ACTION_INTERACTION_INFER_EVERY_N",
+            )
+        )
+    return (
+        config["pipeline"],
+        config["model_active"],
+        config["device"],
+        action_env_signature,
+    )
 
 
 def detach_frame_processor():
-    global frame_processor
+    global frame_processor, model_generation
     with processing_lock:
         processor = frame_processor
         frame_processor = None
+        model_generation += 1
     return processor
 
 
@@ -821,6 +1347,60 @@ def ensure_runtime_model_config(force=False, reason="env"):
             env_reload_state["last_error"] = None
 
 
+def set_model_pipeline_enabled(enabled):
+    """Toggle the single in-process model pipeline without touching privacy processing."""
+    enabled = bool(enabled)
+
+    with model_reload_lock:
+        if enabled and MODEL_ACTIVE and frame_processor is not None:
+            return True
+        if not enabled and not MODEL_ACTIVE and frame_processor is None:
+            return True
+
+        config = read_runtime_model_config()
+        config["inference_enabled"] = enabled
+        config["visualization_enabled"] = enabled
+        config["model_active"] = enabled
+
+        if not enabled:
+            with inference_condition:
+                inference_slot.update(
+                    {
+                        "frame": None,
+                        "robot_id": None,
+                        "frame_seq": None,
+                        "captured_at": None,
+                        "stream_id": None,
+                    }
+                )
+
+        apply_runtime_model_config(config)
+        env_reload_state["signature"] = runtime_model_signature(config)
+        success = reload_model_pipeline(
+            config,
+            reason="dashboard_toggle",
+            initial=False,
+        )
+
+        if enabled and not success:
+            config["inference_enabled"] = False
+            config["visualization_enabled"] = False
+            config["model_active"] = False
+            apply_runtime_model_config(config)
+            env_reload_state["signature"] = runtime_model_signature(config)
+
+        env_reload_state["last_error"] = None if success else model_error
+
+        if not enabled and success:
+            with state_lock:
+                latest_result["detections"] = []
+                latest_result["pair_actions"] = []
+                latest_result["danger"] = False
+                latest_result["scene"] = None
+
+        return success
+
+
 def encode_jpeg(frame):
     ok, buffer = cv2.imencode(
         ".jpg",
@@ -845,7 +1425,9 @@ def build_empty_result(robot_id):
         "ok": True,
         "robot_id": robot_id,
         "detections": [],
+        "pair_actions": [],
         "danger": False,
+        "scene": None,
         "pipeline": latest_result.get("pipeline"),
         "model_error": model_error,
     }
@@ -900,6 +1482,418 @@ def draw_overlay_label(frame, text, origin, color):
 
 PERSON_BASE_COLOR = (120, 220, 120)
 PERSON_BASE_OPACITY = 0.30
+INTERACTION_DANGER_COLOR = (36, 48, 255)
+INTERACTION_SUSPICIOUS_COLOR = (0, 170, 255)
+
+
+def draw_corner_brackets(frame, box, color, thickness=2):
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = clamp_box(box, width, height)
+    box_w = max(1, x2 - x1)
+    box_h = max(1, y2 - y1)
+    arm = max(10, min(28, int(min(box_w, box_h) * 0.16)))
+    segments = (
+        ((x1, y1 + arm), (x1, y1), (x1 + arm, y1)),
+        ((x2 - arm, y1), (x2, y1), (x2, y1 + arm)),
+        ((x1, y2 - arm), (x1, y2), (x1 + arm, y2)),
+        ((x2 - arm, y2), (x2, y2), (x2, y2 - arm)),
+    )
+    for start, corner, end in segments:
+        cv2.line(frame, start, corner, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, corner, end, (18, 18, 18), thickness + 3, cv2.LINE_AA)
+        cv2.line(frame, start, corner, color, thickness, cv2.LINE_AA)
+        cv2.line(frame, corner, end, color, thickness, cv2.LINE_AA)
+
+
+def _union_box(first_box, second_box):
+    return (
+        min(float(first_box[0]), float(second_box[0])),
+        min(float(first_box[1]), float(second_box[1])),
+        max(float(first_box[2]), float(second_box[2])),
+        max(float(first_box[3]), float(second_box[3])),
+    )
+
+
+def _box_iou(first_box, second_box):
+    x1 = max(first_box[0], second_box[0])
+    y1 = max(first_box[1], second_box[1])
+    x2 = min(first_box[2], second_box[2])
+    y2 = min(first_box[3], second_box[3])
+    intersection = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if intersection <= 0.0:
+        return 0.0
+    first_area = max(0.0, first_box[2] - first_box[0]) * max(
+        0.0,
+        first_box[3] - first_box[1],
+    )
+    second_area = max(0.0, second_box[2] - second_box[0]) * max(
+        0.0,
+        second_box[3] - second_box[1],
+    )
+    union = first_area + second_area - intersection
+    return 0.0 if union <= 0.0 else intersection / union
+
+
+def _box_center_distance(first_box, second_box):
+    first_center = (
+        (first_box[0] + first_box[2]) / 2.0,
+        (first_box[1] + first_box[3]) / 2.0,
+    )
+    second_center = (
+        (second_box[0] + second_box[2]) / 2.0,
+        (second_box[1] + second_box[3]) / 2.0,
+    )
+    return float(
+        np.linalg.norm(
+            np.asarray(first_center, dtype=float)
+            - np.asarray(second_center, dtype=float)
+        )
+    )
+
+
+def reset_interaction_incidents():
+    # Keep next_id monotonic so an EventLogWorker cooldown key from the
+    # previous stream generation cannot suppress a new incident.
+    interaction_incident_state["incidents"].clear()
+
+
+def interaction_incident_key(
+    pair_key,
+    first,
+    second,
+    label,
+    *,
+    frame_token=None,
+    now=None,
+):
+    now = time.monotonic() if now is None else float(now)
+    ttl_sec = max(1.0, float(EVENT_SAVE_COOLDOWN_SEC))
+    incidents = interaction_incident_state["incidents"]
+    for incident_id, incident in list(incidents.items()):
+        if now - incident["last_seen"] > ttl_sec:
+            incidents.pop(incident_id, None)
+
+    current_box = _union_box(first["box"], second["box"])
+    current_width = max(1.0, current_box[2] - current_box[0])
+    current_height = max(1.0, current_box[3] - current_box[1])
+    current_scale = max(current_width, current_height)
+    normalized_label = (
+        vision_event_type(label)
+        or str(label or "").strip().upper()
+        or "INTERACTION"
+    )
+    assigned_ids = {
+        incident_id
+        for incident_id, incident in incidents.items()
+        if frame_token is not None and incident.get("frame_token") == frame_token
+    }
+
+    best_id = None
+    best_affinity = float("-inf")
+    for incident_id, incident in incidents.items():
+        if incident_id in assigned_ids or incident["label"] != normalized_label:
+            continue
+        previous_box = incident["box"]
+        iou = _box_iou(current_box, previous_box)
+        distance = _box_center_distance(current_box, previous_box)
+        previous_scale = max(
+            1.0,
+            previous_box[2] - previous_box[0],
+            previous_box[3] - previous_box[1],
+        )
+        match_distance = max(40.0, 0.45 * max(current_scale, previous_scale))
+        if iou < 0.20 and distance > match_distance:
+            continue
+        affinity = iou - distance / max(match_distance, 1.0)
+        if affinity > best_affinity:
+            best_affinity = affinity
+            best_id = incident_id
+
+    if best_id is None:
+        best_id = interaction_incident_state["next_id"]
+        interaction_incident_state["next_id"] += 1
+
+    incidents[best_id] = {
+        "label": normalized_label,
+        "box": current_box,
+        "last_seen": now,
+        "frame_token": frame_token,
+        "pair_key": tuple(pair_key),
+    }
+    return f"interaction:{best_id}"
+
+
+def draw_interaction_badge(frame, text, center, color, score=None):
+    if not text:
+        return
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.58
+    thickness = 2
+    padding_x = 10
+    padding_y = 7
+    accent_w = 4
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+    width = text_w + padding_x * 2 + accent_w
+    progress_h = 3 if score is not None else 0
+    height = text_h + baseline + padding_y * 2 + progress_h
+
+    frame_h, frame_w = frame.shape[:2]
+    x = int(center[0] - width / 2)
+    y = int(center[1] - height / 2)
+    x = max(4, min(frame_w - width - 4, x))
+    y = max(4, min(frame_h - height - 4, y))
+
+    overlay = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (x, y),
+        (x + width, y + height),
+        (18, 18, 20),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.84, frame, 0.16, 0, frame)
+    cv2.rectangle(frame, (x, y), (x + accent_w, y + height), color, -1)
+    cv2.rectangle(frame, (x, y), (x + width, y + height), (45, 45, 50), 1)
+    cv2.putText(
+        frame,
+        text,
+        (x + accent_w + padding_x, y + padding_y + text_h),
+        font,
+        scale,
+        (245, 245, 245),
+        thickness,
+        cv2.LINE_AA,
+    )
+    if score is not None:
+        progress = max(0.0, min(1.0, float(score)))
+        bar_x1 = x + accent_w
+        bar_x2 = x + width
+        bar_y1 = y + height - progress_h
+        cv2.rectangle(
+            frame,
+            (bar_x1, bar_y1),
+            (bar_x2, y + height),
+            (55, 55, 60),
+            -1,
+        )
+        filled_x = bar_x1 + int((bar_x2 - bar_x1) * progress)
+        if filled_x > bar_x1:
+            cv2.rectangle(
+                frame,
+                (bar_x1, bar_y1),
+                (filled_x, y + height),
+                color,
+                -1,
+            )
+
+
+def _normalize_pair_actions(pair_actions):
+    if not pair_actions:
+        return {}
+    if isinstance(pair_actions, dict):
+        normalized = {}
+        for pair_key, source in pair_actions.items():
+            try:
+                key = tuple(sorted(int(value) for value in pair_key))
+            except (TypeError, ValueError):
+                continue
+            if len(key) == 2 and isinstance(source, dict):
+                normalized[key] = dict(source)
+        return normalized
+
+    normalized = {}
+    for item in pair_actions:
+        if not isinstance(item, dict):
+            continue
+        pair_ids = item.get("pair_ids") or item.get("interaction_pair_ids") or []
+        try:
+            key = tuple(sorted(int(value) for value in pair_ids))
+        except (TypeError, ValueError):
+            continue
+        if len(key) != 2:
+            continue
+        source = dict(item)
+        source.pop("pair_ids", None)
+        normalized[key] = source
+    return normalized
+
+
+def serialize_pair_actions(pair_actions):
+    return [
+        {"pair_ids": list(pair_key), **dict(source)}
+        for pair_key, source in sorted(_normalize_pair_actions(pair_actions).items())
+    ]
+
+
+def resolve_pair_actions_for_display(pair_actions, display_buffer, now=None):
+    now = time.time() if now is None else float(now)
+    normalized = _normalize_pair_actions(pair_actions)
+    resolved = {}
+
+    for pair_key, source in normalized.items():
+        source = dict(source)
+        if source.get("observation_stale"):
+            cached = display_buffer.get(pair_key)
+            if cached is None:
+                continue
+            if now - float(cached.get("updated_at", 0.0)) > ACTION_DISPLAY_TTL_SEC:
+                display_buffer.pop(pair_key, None)
+                continue
+            resolved_source = {
+                key: value
+                for key, value in cached.items()
+                if key != "updated_at"
+            }
+            resolved_source["observation_stale"] = True
+            resolved[pair_key] = resolved_source
+            continue
+
+        cached = dict(source)
+        cached["updated_at"] = now
+        display_buffer[pair_key] = cached
+        resolved[pair_key] = source
+
+    for pair_key in list(display_buffer):
+        if pair_key not in normalized:
+            display_buffer.pop(pair_key, None)
+
+    return resolved
+
+
+def _pair_weight(source):
+    score = max(0.0, min(1.0, float(source.get("score") or 0.0)))
+    danger = bool(source.get("danger") or source.get("is_danger"))
+    stale = bool(source.get("observation_stale"))
+    # Fresh evidence must outrank stale cached evidence when pairs compete.
+    # A danger also outranks any bounded combination of suspicious pairs.
+    if danger:
+        base = 100.0 if not stale else 10.0
+    else:
+        base = 1.0 if not stale else 0.1
+    return base + score
+
+
+def _maximum_weight_pair_matching(candidates):
+    ordered = sorted(candidates, key=lambda item: item[0])
+    cache = {}
+
+    def search(index, used_ids):
+        key = (index, tuple(sorted(used_ids)))
+        if key in cache:
+            return cache[key]
+        if index >= len(ordered):
+            return 0.0, ()
+
+        best_weight, best_items = search(index + 1, used_ids)
+        pair_key, _first, _second, source = ordered[index]
+        if pair_key[0] not in used_ids and pair_key[1] not in used_ids:
+            include_weight, include_items = search(
+                index + 1,
+                used_ids | {pair_key[0], pair_key[1]},
+            )
+            include_weight += _pair_weight(source)
+            include_items = (ordered[index],) + include_items
+            if (
+                include_weight > best_weight
+                or (
+                    include_weight == best_weight
+                    and tuple(item[0] for item in include_items)
+                    < tuple(item[0] for item in best_items)
+                )
+            ):
+                best_weight, best_items = include_weight, include_items
+
+        cache[key] = (best_weight, best_items)
+        return cache[key]
+
+    return list(search(0, set())[1])
+
+
+def interaction_pair_overlays(detections, pair_actions=None):
+    by_id = {
+        int(detection["id"]): detection
+        for detection in detections
+        if detection.get("box") is not None
+    }
+    explicit_pairs = _normalize_pair_actions(pair_actions)
+    candidate_by_pair = {}
+
+    if explicit_pairs:
+        for pair_key, source in explicit_pairs.items():
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            candidate_by_pair[pair_key] = (pair_key, first, second, source)
+    else:
+        # Backward-compatible fallback for older stored results.
+        for detection in detections:
+            pair_ids = detection.get("interaction_pair_ids") or []
+            if detection.get("action_source") != "pair" or len(pair_ids) != 2:
+                continue
+            try:
+                pair_key = tuple(sorted(int(value) for value in pair_ids))
+            except (TypeError, ValueError):
+                continue
+            first = by_id.get(pair_key[0])
+            second = by_id.get(pair_key[1])
+            if first is None or second is None:
+                continue
+            previous = candidate_by_pair.get(pair_key)
+            if previous is None or _pair_weight(detection) > _pair_weight(previous[3]):
+                candidate_by_pair[pair_key] = (pair_key, first, second, detection)
+
+    return _maximum_weight_pair_matching(list(candidate_by_pair.values()))
+
+
+def draw_interaction_overlays(frame, detections, pair_actions=None):
+    frame_h, frame_w = frame.shape[:2]
+    for _pair_key, first, second, source in interaction_pair_overlays(
+        detections,
+        pair_actions,
+    ):
+        danger = bool(source.get("danger") or source.get("is_danger"))
+        color = INTERACTION_DANGER_COLOR if danger else INTERACTION_SUSPICIOUS_COLOR
+
+        first_box = clamp_box(first["box"], frame_w, frame_h)
+        second_box = clamp_box(second["box"], frame_w, frame_h)
+        draw_corner_brackets(frame, first_box, color)
+        draw_corner_brackets(frame, second_box, color)
+
+        first_center = (
+            int((first_box[0] + first_box[2]) / 2),
+            int((first_box[1] + first_box[3]) / 2),
+        )
+        second_center = (
+            int((second_box[0] + second_box[2]) / 2),
+            int((second_box[1] + second_box[3]) / 2),
+        )
+        cv2.line(frame, first_center, second_center, (18, 18, 18), 6, cv2.LINE_AA)
+        cv2.line(frame, first_center, second_center, color, 2, cv2.LINE_AA)
+        for center in (first_center, second_center):
+            cv2.circle(frame, center, 6, (18, 18, 18), -1, cv2.LINE_AA)
+            cv2.circle(frame, center, 3, color, -1, cv2.LINE_AA)
+
+        # Redraw both participant skeletons in the interaction color so the
+        # pair remains visually coherent even when one participant also has a
+        # stronger person-level action.
+        draw_skeleton_points(frame, first.get("skeleton"), color)
+        draw_skeleton_points(frame, second.get("skeleton"), color)
+
+        label = source.get("label") or "INTERACTION"
+        score = source.get("score")
+        score_text = f"  |  {float(score) * 100:.0f}%" if score is not None else ""
+        badge_center = (
+            int((first_center[0] + second_center[0]) / 2),
+            max(18, int((first_center[1] + second_center[1]) / 2) - 26),
+        )
+        draw_interaction_badge(
+            frame,
+            f"{label}{score_text}",
+            badge_center,
+            color,
+            score=score,
+        )
 
 
 def draw_translucent_box(frame, pt1, pt2, color, opacity=PERSON_BASE_OPACITY):
@@ -942,8 +1936,8 @@ def draw_skeleton_points(frame, skeleton, color):
     points = [(int(x), int(y)) for x, y in skeleton]
     height, width = frame.shape[:2]
     for x, y in points:
-        if 0 <= x < width and 0 <= y < height:
-            cv2.circle(frame, (x, y), 2, color, -1)
+        if (x, y) != (0, 0) and 0 <= x < width and 0 <= y < height:
+            cv2.circle(frame, (x, y), 3, color, -1, cv2.LINE_AA)
 
     links = getattr(
         getattr(frame_processor, "action_analyzer", None),
@@ -963,7 +1957,7 @@ def draw_skeleton_points(frame, skeleton, color):
             and 0 <= x2 < width
             and 0 <= y2 < height
         ):
-            cv2.line(frame, (x1, y1), (x2, y2), color, 1)
+            cv2.line(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
 def draw_detection_overlay(frame, detection):
@@ -989,10 +1983,18 @@ def draw_detection_overlay(frame, detection):
             else PERSON_BASE_COLOR
         )
     )
-    label = detection.get("label") or ("" if is_person else "WEAPON")
+    label = (
+        detection.get("label")
+        or detection.get("track_label")
+        or ("" if is_person else "WEAPON")
+    )
     score = detection.get("score")
-    if score is not None and detection.get("label"):
-        label = f"{label} {float(score) * 100:.0f}%"
+    if detection.get("action_source") == "pair":
+        # Pair action is rendered once as a shared interaction badge.
+        label = ""
+    elif score is not None and detection.get("label"):
+        suffix = "?" if detection.get("action_source") == "single_fallback" else ""
+        label = f"{label}{suffix} {float(score) * 100:.0f}%"
 
     # Bounding box visualization disabled. Keep this block for easy rollback.
     # if is_person and not has_action_label and not is_danger:
@@ -1003,19 +2005,50 @@ def draw_detection_overlay(frame, detection):
     draw_overlay_label(frame, label, (x1, y1 - 8), color)
 
 
+def draw_scene_overlay(frame, scene):
+    processor = frame_processor
+    analyzer = getattr(processor, "action_analyzer", None)
+    renderer = getattr(analyzer, "draw_scene_overlay", None)
+    if callable(renderer):
+        renderer(frame, scene)
+
+
 def render_latest_overlay(frame, now=None):
+    now = now or time.time()
     if not inference_result_is_fresh(now):
         return frame
     with state_lock:
         result = dict(latest_result)
     detections = result.get("detections") or []
-    if not detections:
+    pair_actions = result.get("pair_actions") or []
+    scene = result.get("scene")
+    if not detections and not scene:
         return frame
 
+    processed_at = result.get("processed_at")
+    result_age_sec = (
+        float("inf")
+        if processed_at is None
+        else max(0.0, now - float(processed_at))
+    )
+    pose_overlay_fresh = result_age_sec <= min(
+        INFERENCE_MAX_RESULT_AGE_SEC,
+        1.25,
+    )
+
     display_frame = frame.copy()
-    for detection in detections:
-        if detection.get("box"):
-            draw_detection_overlay(display_frame, detection)
+    if pose_overlay_fresh:
+        for detection in detections:
+            if detection.get("box"):
+                draw_detection_overlay(display_frame, detection)
+        draw_interaction_overlays(
+            display_frame,
+            detections,
+            pair_actions,
+        )
+
+    if scene:
+        draw_scene_overlay(display_frame, scene)
     return display_frame
 
 
@@ -1025,12 +2058,40 @@ def build_preview_frame(frame, infer, now=None):
     return frame
 
 
+def observe_scene_frame(frame, timestamp=None, stream_id=None):
+    # Serialize only generation validation + scene-buffer append against
+    # reconnect reset. X3D's own buffer lock handles concurrent sampling.
+    with scene_buffer_generation_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    return False
+
+        processor = frame_processor
+        analyzer = getattr(processor, "action_analyzer", None)
+        if not getattr(analyzer, "scene_level_classifier", False):
+            return False
+        observer = getattr(analyzer, "observe_frame", None)
+        if not callable(observer):
+            return False
+        observer(frame, timestamp=timestamp)
+        return True
+
+
 def collect_action_results(frame, tracked_boxes):
     persons = [obj for obj in tracked_boxes if obj.get("cls", 0) == 0]
+    analyzer = frame_processor.action_analyzer
+
+    expire_tracking_state = getattr(analyzer, "expire_tracking_state", None)
+    if callable(expire_tracking_state):
+        expire_tracking_state()
+
     if not persons:
+        latest_pairs = getattr(analyzer, "latest_pair_actions", None)
+        if isinstance(latest_pairs, dict):
+            latest_pairs.clear()
         return {}
 
-    analyzer = frame_processor.action_analyzer
     if hasattr(analyzer, "process_many"):
         return analyzer.process_many(frame, persons)
 
@@ -1062,8 +2123,12 @@ def process_frame_for_dashboard(frame):
             "frame": frame,
             "detections": [],
             "danger": False,
+            "scene": None,
             "timings": {},
         }
+
+    analyzer = frame_processor.action_analyzer
+    scene_level = bool(getattr(analyzer, "scene_level_classifier", False))
 
     detector_started = time.time()
     tracked_boxes = frame_processor.detector.track(frame)
@@ -1074,16 +2139,56 @@ def process_frame_for_dashboard(frame):
     trigger_ms = (time.time() - trigger_started) * 1000
 
     action_started = time.time()
-    action_results = collect_action_results(frame, tracked_boxes)
-    skeletons_by_id = {
-        oid: result[0]
-        for oid, result in action_results.items()
-        if result and result[0] is not None
-    }
-    violence_results = frame_processor.violence_heuristic.update(
-        tracked_boxes,
-        skeletons_by_id,
-    )
+    scene_result = None
+    pair_actions = {}
+
+    if scene_level:
+        action_results = {
+            obj["id"]: (obj.get("keypoints"), None)
+            for obj in tracked_boxes
+            if obj.get("cls", 0) == 0
+        }
+        scene_result = analyzer.classify_scene()
+        restrict_to_target_actions = True
+        violence_results = {}
+    else:
+        action_results = collect_action_results(frame, tracked_boxes)
+
+        raw_pair_actions = dict(
+            getattr(
+                frame_processor.action_analyzer,
+                "latest_pair_actions",
+                {},
+            )
+            or {}
+        )
+        pair_actions = resolve_pair_actions_for_display(
+            raw_pair_actions,
+            frame_processor.pair_action_display_buffer,
+        )
+
+        skeletons_by_id = {
+            oid: result[0]
+            for oid, result in action_results.items()
+            if result and result[0] is not None
+        }
+
+        restrict_to_target_actions = bool(
+            getattr(
+                analyzer,
+                "restrict_to_target_actions",
+                False,
+            )
+        )
+
+        violence_results = (
+            {}
+            if restrict_to_target_actions
+            else frame_processor.violence_heuristic.update(
+                tracked_boxes,
+                skeletons_by_id,
+            )
+        )
     action_ms = (time.time() - action_started) * 1000
 
     render_started = time.time()
@@ -1092,14 +2197,24 @@ def process_frame_for_dashboard(frame):
     danger = False
     height, width = display_frame.shape[:2]
 
+    active_track_ids = {obj["id"] for obj in tracked_boxes}
+    cleanup_now = time.time()
+    if not scene_level:
+        for buffered_id, buffered_action in list(
+            frame_processor.action_display_buffer.items()
+        ):
+            if (
+                buffered_id not in active_track_ids
+                and cleanup_now - buffered_action.get("updated_at", 0.0)
+                > ACTION_DISPLAY_TTL_SEC
+            ):
+                frame_processor.action_display_buffer.pop(buffered_id, None)
+
     for obj in tracked_boxes:
         oid = obj["id"]
         cls_id = obj.get("cls", 0)
         state = obj_states.get(oid, 0)
-        x1, y1, x2, y2 = clamp_box(obj["box"], width, height)
         color = PERSON_BASE_COLOR if cls_id == 0 else (0, 0, 255)
-        label = "" if cls_id == 0 else "WEAPON"
-        skeleton = None
 
         detection = {
             "id": oid,
@@ -1107,12 +2222,20 @@ def process_frame_for_dashboard(frame):
             "box": [float(v) for v in obj["box"]],
             "state": state,
             "label": "",
+            "track_label": f"ID {oid}" if (scene_level and cls_id == 0) else "",
             "score": None,
             "danger": False,
             "has_skeleton": False,
             "skeleton": None,
             "confidence_level": None,
+            "interaction": False,
+            "interaction_pair_ids": None,
+            "interaction_role": None,
+            "action_source": None,
+            "observation_stale": False,
             "visual_state": "normal",
+            "inference_status": None,
+            "inference_error": None,
         }
 
         if cls_id == 0:
@@ -1120,77 +2243,193 @@ def process_frame_for_dashboard(frame):
             detection["has_skeleton"] = skeleton is not None
             detection["skeleton"] = skeleton_to_list(skeleton)
 
-            now = time.time()
-            heuristic_action = violence_results.get(oid)
-            selected_action = select_action_result(action, heuristic_action)
-            if selected_action:
-                selected_action = dict(selected_action)
-                selected_action["updated_at"] = now
-                frame_processor.action_display_buffer[oid] = selected_action
-
-            current_action = frame_processor.action_display_buffer.get(oid)
-            if (
-                current_action
-                and now - current_action.get("updated_at", 0.0)
-                > ACTION_DISPLAY_TTL_SEC
-            ):
-                frame_processor.action_display_buffer.pop(oid, None)
-                current_action = None
-
-            if current_action:
-                detection["label"] = current_action["label"]
-                detection["score"] = float(current_action["score"])
-                detection["danger"] = bool(current_action["is_danger"])
-                detection["confidence_level"] = current_action.get(
-                    "confidence_level"
+            if scene_level:
+                detection["inference_status"] = "pose_visualization"
+            else:
+                now = time.time()
+                observation_issue = is_observation_issue(action)
+                observation_stale = bool(
+                    isinstance(action, dict) and action.get("observation_stale")
                 )
-                if current_action["is_danger"]:
-                    danger = True
-                    color = (0, 0, 255)
-                    detection["visual_state"] = "danger"
-                    label = (
-                        f"!!! {current_action['label']} !!! "
-                        f"{current_action['score'] * 100:.0f}%"
-                    )
-                    frame_processor.notifier.send_alert_async(
-                        f"위험 행동 감지: {current_action['label']}",
-                        frame.copy(),
-                    )
+                if observation_issue:
+                    detection["inference_status"] = action.get("observation_status")
+                    detection["inference_error"] = action.get("error")
+                elif observation_stale:
+                    detection["inference_status"] = "stale"
                 else:
-                    color = (0, 165, 255)
-                    detection["visual_state"] = "suspicious"
-                    label = (
-                        f"[{current_action['label']}] "
-                        f"{current_action['score'] * 100:.0f}%"
+                    detection["inference_status"] = "ok"
+
+                heuristic_action = (
+                    None
+                    if restrict_to_target_actions
+                    else violence_results.get(oid)
+                )
+                selected_action = (
+                    None
+                    if observation_issue
+                    else select_action_result(action, heuristic_action)
+                )
+                if selected_action and not selected_action.get("observation_stale"):
+                    selected_action = dict(selected_action)
+                    selected_action["updated_at"] = now
+                    frame_processor.action_display_buffer[oid] = selected_action
+                elif selected_action and selected_action.get("observation_stale"):
+                    pass
+                elif (
+                    not observation_issue
+                    and getattr(analyzer, "manages_action_hysteresis", False)
+                ):
+                    frame_processor.action_display_buffer.pop(oid, None)
+
+                current_action = frame_processor.action_display_buffer.get(oid)
+                if (
+                    current_action
+                    and now - current_action.get("updated_at", 0.0)
+                    > ACTION_DISPLAY_TTL_SEC
+                ):
+                    frame_processor.action_display_buffer.pop(oid, None)
+                    current_action = None
+
+                if current_action:
+                    detection["label"] = current_action["label"]
+                    detection["score"] = float(current_action["score"])
+                    detection["danger"] = bool(current_action["is_danger"])
+                    detection["confidence_level"] = current_action.get(
+                        "confidence_level"
                     )
-            elif TRIGGER_SUSPICIOUS_VISUAL_ENABLED and state == 1:
-                color = (0, 165, 255)
-                detection["confidence_level"] = "trigger_suspicious"
-                detection["visual_state"] = "suspicious"
+                    detection["interaction"] = bool(
+                        current_action.get("interaction")
+                    )
+                    detection["interaction_pair_ids"] = current_action.get(
+                        "interaction_pair_ids"
+                    )
+                    detection["interaction_role"] = current_action.get(
+                        "interaction_role"
+                    )
+                    detection["action_source"] = current_action.get("source")
+                    detection["observation_stale"] = bool(
+                        current_action.get("observation_stale")
+                    )
+                    if current_action["is_danger"]:
+                        danger = True
+                        detection["visual_state"] = "danger"
+                        action_label = current_action["label"]
+                        if (
+                            not observation_issue
+                            and current_action.get("source") != "pair"
+                        ):
+                            event_type = vision_event_type(action_label)
+                            if event_type:
+                                submit_automatic_event(
+                                    "VISION_AI",
+                                    event_type,
+                                    confidence=detection["score"],
+                                    message=f"위험 행동 감지: {action_label}",
+                                    frame=frame,
+                                )
+                            else:
+                                automatic_notifier.send_event_alert_async(
+                                    f"위험 행동 감지: {action_label}",
+                                    robot_id=SERVER_ROBOT_ID,
+                                    event_type=vision_alert_type(action_label),
+                                )
+                    else:
+                        detection["visual_state"] = "suspicious"
+                elif (
+                    not restrict_to_target_actions
+                    and TRIGGER_SUSPICIOUS_VISUAL_ENABLED
+                    and state == 1
+                ):
+                    detection["confidence_level"] = "trigger_suspicious"
+                    detection["visual_state"] = "suspicious"
         else:
             danger = True
             detection["label"] = "WEAPON"
             detection["danger"] = True
 
-        # Bounding box visualization disabled. Keep this block for easy rollback.
-        # if cls_id == 0 and not detection["label"] and not detection["danger"]:
-        #     draw_translucent_box(display_frame, (x1, y1), (x2, y2), color)
-        # else:
-        #     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-        if skeleton is not None:
-            frame_processor.action_analyzer.draw_skeleton(
-                display_frame,
-                skeleton,
-                color,
-            )
-        draw_overlay_label(display_frame, label, (x1, y1 - 8), color)
         detections.append(detection)
 
+    for detection in detections:
+        if detection.get("box"):
+            draw_detection_overlay(display_frame, detection)
+
+    if not scene_level:
+        resolved_pair_overlays = interaction_pair_overlays(
+            detections,
+            pair_actions,
+        )
+
+        incident_frame_token = time.monotonic_ns()
+
+        for pair_key, first, second, source in resolved_pair_overlays:
+            if (
+                not source.get("is_danger")
+                or source.get("observation_stale")
+            ):
+                continue
+
+            danger = True
+            action_label = source.get("label")
+            event_type = vision_event_type(action_label)
+
+            if event_type:
+                submit_automatic_event(
+                    "VISION_AI",
+                    event_type,
+                    confidence=source.get("score"),
+                    message=f"위험 상호작용 감지: {action_label}",
+                    frame=frame,
+                    cooldown_key=interaction_incident_key(
+                        pair_key,
+                        first,
+                        second,
+                        action_label,
+                        frame_token=incident_frame_token,
+                    ),
+                )
+
+        draw_interaction_overlays(
+            display_frame,
+            detections,
+            pair_actions,
+        )
+
+    if scene_level and scene_result is not None:
+        scene_danger = bool(scene_result.get("danger"))
+        danger = danger or scene_danger
+
+        draw_scene_overlay(
+            display_frame,
+            scene_result,
+        )
+
+        if (
+            scene_result.get("status") == "ok"
+            and scene_result.get("fresh")
+            and bool(scene_result.get("raw_danger"))
+        ):
+            event_type = vision_event_type("VIOLENCE")
+
+            if event_type:
+                submit_automatic_event(
+                    "VISION_AI",
+                    event_type,
+                    confidence=float(
+                        scene_result.get("score") or 0.0
+                    ),
+                    message=(
+                        "폭행 상황 감지: VIOLENCE "
+                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%"
+                    ),
+                    frame=frame,
+                )
     render_ms = (time.time() - render_started) * 1000
     return {
         "frame": display_frame,
         "detections": detections,
+        "pair_actions": serialize_pair_actions(pair_actions),
         "danger": danger,
+        "scene": scene_result,
         "timings": {
             "detector_ms": round(detector_ms, 1),
             "trigger_ms": round(trigger_ms, 1),
@@ -1203,12 +2442,18 @@ def process_frame_for_dashboard(frame):
         },
     }
 
-
-def publish_preview_frame(frame, robot_id=SERVER_ROBOT_ID, original_bytes=None):
+def publish_preview_frame(
+    frame,
+    robot_id=SERVER_ROBOT_ID,
+    original_bytes=None,
+    stream_id=None,
+):
     global current_frame, current_frame_seq
 
     frame_bytes = encode_jpeg(frame)
     with frame_condition:
+        if stream_id is not None and stream_id != active_stream_id:
+            return None
         now = time.time()
         current_frame = frame_bytes
         current_frame_seq += 1
@@ -1224,7 +2469,13 @@ def publish_preview_frame(frame, robot_id=SERVER_ROBOT_ID, original_bytes=None):
         frame_seq = current_frame_seq
 
     if SAVE_RECEIVED_FRAMES and original_bytes is not None:
-        (SAVE_DIR / "latest.jpg").write_bytes(original_bytes)
+        try:
+            get_privacy_processor().save_image(SAVE_DIR / "latest.jpg", frame)
+        except PrivacyProcessingError as exc:
+            logging.getLogger(__name__).error(
+                "Received frame was not saved because privacy processing failed: %s",
+                exc,
+            )
 
     return frame_seq
 
@@ -1274,6 +2525,171 @@ def update_latest_result(result, frame_seq=None, input_captured_at=None, elapsed
         inference_stats["last_input_seq"] = frame_seq
         update_rate_counter(inference_rate_stats, now)
         stream_stats["frames_inferred"] = stream_stats.get("frames_inferred", 0) + 1
+
+
+def process_stream_frame_if_current(frame, stream_id):
+    """Process only if the frame still belongs to the active stream/model generation."""
+    with processing_lock:
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return None
+
+        if frame_processor is None or not MODEL_ACTIVE:
+            return None
+
+        processed = process_frame_for_dashboard(frame)
+        processed["_model_generation"] = model_generation
+        return processed
+
+
+def publish_processed_inference_if_current(
+    processed,
+    *,
+    robot_id,
+    stream_id,
+    processed_model_generation,
+    captured_at,
+    adaptive_wait_ms,
+    started_at,
+):
+    """Publish an inference result only while its stream/model generation is current."""
+    with processing_lock:
+        if (
+            processed_model_generation != model_generation
+            or frame_processor is None
+            or not MODEL_ACTIVE
+        ):
+            inference_stats["dropped"] += 1
+            return False
+
+        if stream_id is not None:
+            with state_lock:
+                if stream_id != active_stream_id:
+                    inference_stats["dropped"] += 1
+                    return False
+
+        display_frame_seq = publish_preview_frame(
+            processed["frame"],
+            robot_id=robot_id,
+            stream_id=stream_id,
+        )
+        result = build_empty_result(robot_id)
+        result["detections"] = processed["detections"]
+        result["pair_actions"] = processed.get("pair_actions", [])
+        result["danger"] = processed["danger"]
+        result["scene"] = processed.get("scene")
+        result["timings"] = dict(processed.get("timings") or {})
+        result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
+        elapsed_ms = (time.time() - started_at) * 1000
+        update_latest_result(
+            result,
+            frame_seq=display_frame_seq,
+            input_captured_at=captured_at,
+            elapsed_ms=elapsed_ms,
+        )
+        return True
+
+
+def activate_stream_generation(robot_id, infer):
+    """Atomically reset tracking state and publish a new stream generation."""
+    global active_stream_id
+
+    with processing_lock:
+        # Invalidate the previous generation and clear the scene buffer while
+        # holding the same narrow lock used by decoded-frame appends. This
+        # prevents a stale frame from entering after reset without blocking
+        # decode on RTMO/X3D inference.
+        with scene_buffer_generation_lock:
+            with state_lock:
+                active_stream_id += 1
+                stream_id = active_stream_id
+                now = time.time()
+
+            processor = frame_processor
+            if processor is not None:
+                reset_tracking_state = getattr(
+                    processor.action_analyzer,
+                    "reset_tracking_state",
+                    None,
+                )
+                if callable(reset_tracking_state):
+                    reset_tracking_state()
+
+        if processor is not None:
+            reset_detector_tracking = getattr(
+                processor.detector,
+                "reset_tracking_state",
+                None,
+            )
+            if callable(reset_detector_tracking):
+                reset_detector_tracking()
+            processor.action_display_buffer.clear()
+            processor.pair_action_display_buffer.clear()
+            processor.violence_heuristic.reset()
+        reset_interaction_incidents()
+
+        with inference_condition:
+            inference_slot.update(
+                {
+                    "frame": None,
+                    "robot_id": None,
+                    "frame_seq": None,
+                    "captured_at": None,
+                    "stream_id": None,
+                }
+            )
+
+        with state_lock:
+            latest_result["detections"] = []
+            latest_result["pair_actions"] = []
+            latest_result["danger"] = False
+            frame_stats.update({"last_time": now, "count": 0, "fps": 0})
+            decode_stats.update({"last_time": now, "count": 0, "fps": 0})
+            publish_stats.update(
+                {
+                    "last_time": now,
+                    "count": 0,
+                    "fps": 0,
+                    "last_publish_at": None,
+                }
+            )
+            inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
+            inference_stats.update(
+                {
+                    "requested": 0,
+                    "completed": 0,
+                    "dropped": 0,
+                    "last_ms": None,
+                    "last_result_at": None,
+                    "last_input_seq": None,
+                    "last_started_at": None,
+                    "device": DEVICE,
+                }
+            )
+            stream_stats.update(
+                {
+                    "connected": True,
+                    "robot_id": robot_id,
+                    "connected_at": now,
+                    "disconnected_at": None,
+                    "bytes_received": 0,
+                    "frames_received": 0,
+                    "last_byte_at": None,
+                    "frames_decoded": 0,
+                    "frames_inferred": 0,
+                    "last_frame_at": None,
+                    "last_error": None,
+                    "ffmpeg_returncode": None,
+                    "ffmpeg_stderr_tail": [],
+                    "infer": infer,
+                    "inference_available": frame_processor is not None,
+                    "stream_id": stream_id,
+                }
+            )
+
+    return stream_id
 
 
 def inference_worker():
@@ -1329,41 +2745,41 @@ def inference_worker():
             inference_stats["dropped"] += 1
             continue
 
-        if frame_processor is None:
-            continue
-
         started = time.time()
         try:
-            with processing_lock:
-                processed = process_frame_for_dashboard(frame)
-            if stream_id is not None:
-                with state_lock:
-                    is_stale_stream = stream_id != active_stream_id
-                if is_stale_stream:
-                    inference_stats["dropped"] += 1
-                    continue
+            processed = process_stream_frame_if_current(frame, stream_id)
+            if processed is None:
+                continue
 
-            display_frame_seq = publish_preview_frame(
-                processed["frame"],
+            processed_model_generation = processed.pop(
+                "_model_generation",
+                None,
+            )
+            if not publish_processed_inference_if_current(
+                processed,
                 robot_id=robot_id,
-            )
-            result = build_empty_result(robot_id)
-            result["detections"] = processed["detections"]
-            result["danger"] = processed["danger"]
-            result["timings"] = dict(processed.get("timings") or {})
-            result["timings"]["adaptive_wait_ms"] = round(adaptive_wait_ms, 1)
-            elapsed_ms = (time.time() - started) * 1000
-            update_latest_result(
-                result,
-                frame_seq=display_frame_seq,
-                input_captured_at=captured_at,
-                elapsed_ms=elapsed_ms,
-            )
+                stream_id=stream_id,
+                processed_model_generation=processed_model_generation,
+                captured_at=captured_at,
+                adaptive_wait_ms=adaptive_wait_ms,
+                started_at=started,
+            ):
+                continue
         except Exception as exc:
             with state_lock:
-                stream_stats["last_error"] = str(exc)
-                latest_result["model_error"] = str(exc)
+                current_generation = (
+                    stream_id is None or stream_id == active_stream_id
+                )
+                if current_generation:
+                    stream_stats["last_error"] = str(exc)
+                    latest_result["model_error"] = str(exc)
             print(f"[inference] worker error: {exc}")
+            if current_generation:
+                submit_automatic_event(
+                    "SYSTEM_MONITOR",
+                    "SYSTEM_ERROR",
+                    message="AI inference worker error detected.",
+                )
 
 
 def start_inference_worker():
@@ -1381,58 +2797,54 @@ def start_inference_worker():
 async def startup():
     global lidar_ros_bridge, encoder_ros_bridge
 
+    navigation_visualization_hub.bind_loop(asyncio.get_running_loop())
+    start_persistence_workers()
     ensure_runtime_model_config(force=True, reason="startup")
 
-    lidar_enabled = (
-        os.getenv("LIDAR_ENABLE", "true").strip().lower()
-        in ("1", "true", "yes", "on")
-    )
+    lidar_enabled = env_bool("LIDAR_ENABLE")
 
     if lidar_enabled and LidarRosBridge is not None and lidar_ros_bridge is None:
         lidar_ros_bridge = LidarRosBridge(
-            ros_topic=os.getenv("LIDAR_ROS_TOPIC", "/scan"),
-            base_frame=os.getenv("LIDAR_BASE_FRAME", "base_link"),
-            lidar_frame=os.getenv("LIDAR_FRAME", "laser"),
-            lidar_x=float(os.getenv("LIDAR_X", "0.0")),
-            lidar_y=float(os.getenv("LIDAR_Y", "0.0")),
-            lidar_z=float(os.getenv("LIDAR_Z", "0.12")),
-            lidar_yaw=float(os.getenv("LIDAR_YAW", "0.0")),
-            dashboard_max_points=int(
-                os.getenv("LIDAR_DASHBOARD_MAX_POINTS", "360")
+            ros_topic=env_text("LIDAR_ROS_TOPIC"),
+            base_frame=env_text("LIDAR_BASE_FRAME"),
+            lidar_frame=env_text("LIDAR_FRAME"),
+            lidar_x=env_float("LIDAR_X"),
+            lidar_y=env_float("LIDAR_Y"),
+            lidar_z=env_float("LIDAR_Z"),
+            lidar_yaw=env_float("LIDAR_YAW"),
+            dashboard_max_points=env_int(
+                "LIDAR_DASHBOARD_MAX_POINTS", minimum=1
             ),
-            use_source_timestamp=(
-                os.getenv("LIDAR_USE_SOURCE_TIMESTAMP", "true").strip().lower()
-                in ("1", "true", "yes", "on")
-            ),
+            use_source_timestamp=env_bool("LIDAR_USE_SOURCE_TIMESTAMP"),
         )
         lidar_ros_bridge.start()
 
-    encoder_enabled = (
-        os.getenv("ENCODER_ROS_ENABLE", "true").strip().lower()
-        in ("1", "true", "yes", "on")
-    )
+    encoder_enabled = env_bool("ENCODER_ROS_ENABLE")
 
     if (
         encoder_enabled
         and EncoderRosBridge is not None
         and encoder_ros_bridge is None
     ):
-        encoder_ros_bridge = EncoderRosBridge(
-            ros_topic=os.getenv("ENCODER_ROS_TOPIC", "/wheel_ticks")
-        )
+        encoder_ros_bridge = EncoderRosBridge(ros_topic=env_text("ENCODER_ROS_TOPIC"))
         encoder_ros_bridge.start()
 
     if not navigation_map_api.start():
         logging.getLogger(__name__).warning(
             "Navigation ROS control is unavailable; map loading will remain disabled."
         )
+    await navigation_control_api.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
-
+    try :
+        await navigation_control_api.close()
+    finally :
+        await asyncio.to_thread(stop_persistence_workers)
     navigation_map_api.close()
+    await asyncio.to_thread(navigation_process_control.stop)
 
     if encoder_ros_bridge is not None:
         encoder_ros_bridge.close()
@@ -1443,27 +2855,776 @@ async def shutdown_lidar_bridge():
         lidar_ros_bridge = None
 
 
-@app.get("/")
-async def index():
-    return RedirectResponse(url="/login", status_code=302)
+def authenticated_user(request):
+    user = request.session.get("user")
+    if not isinstance(user, dict) or not user.get("user_id"):
+        return None, JSONResponse(
+            {"ok": False, "detail": "Authentication required."},
+            status_code=401,
+        )
+    return user, None
 
 
-@app.get("/login")
-async def login(request: Request):
-    return templates.TemplateResponse(request, "login.html")
+def frozen_frame_owner(request, user):
+    session_id = request.session.get("csrf_token") or issue_csrf_token(request)
+    return int(user["user_id"]), str(session_id)
 
 
-@app.get("/main")
-async def main(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+def encode_private_preview(frame):
+    private_frame = get_privacy_processor().process(frame)
+    ok, encoded = cv2.imencode(".jpg", private_frame)
+    if not ok:
+        raise PrivacyProcessingError("Private preview encoding failed.")
+    return encoded.tobytes()
+
+
+def resolve_available_media(image_path, category):
+    if not image_path:
+        return None
+    image_store = get_private_image_store()
+    try:
+        target = image_store.resolve(image_path)
+        target.relative_to((image_store.gallery_root / category).resolve())
+        return target if target.is_file() else None
+    except (UnsafeMediaPathError, ValueError, OSError):
+        return None
+
+
+def public_log_rows(rows, method_name):
+    public_rows = []
+    for row in rows:
+        public = dict(row)
+        image_path = public.pop("image_path", None)
+        public.pop("video_path", None)
+        public.pop("lidar_z", None)
+        if method_name == "list_events":
+            event_id = public.get("event_id")
+            has_image = resolve_available_media(image_path, "events") is not None
+            public["has_image"] = has_image
+            public["image_url"] = (
+                f"/api/media/events/{event_id}" if has_image and event_id is not None else None
+            )
+        elif method_name == "list_actions":
+            action_id = public.get("action_id")
+            has_image = resolve_available_media(image_path, "actions") is not None
+            public["has_image"] = has_image
+            public["image_url"] = (
+                f"/api/media/actions/{action_id}"
+                if has_image and action_id is not None
+                else None
+            )
+        public_rows.append(public)
+    return public_rows
+
+
+def gallery_dto(row):
+    source = str(row.get("source") or "").strip().lower()
+    if source not in {"event", "action"}:
+        return None
+    source_type = source.upper()
+    source_id = row.get("record_id")
+    if source == "event":
+        source_id = row.get("event_id", source_id)
+        image_url = f"/api/media/events/{source_id}"
+        category = "events"
+    else:
+        source_id = row.get("action_id", source_id)
+        image_url = f"/api/media/actions/{source_id}"
+        category = "actions"
+    if source_id is None or resolve_available_media(row.get("image_path"), category) is None:
+        return None
+    public = {
+        key: value
+        for key, value in dict(row).items()
+        if key not in {"image_path", "record_id"}
+    }
+    public.update(
+        {
+            "source": source,
+            "source_type": source_type,
+            "source_id": source_id,
+            "has_image": True,
+            "image_url": image_url,
+            "created_at": row.get("recorded_at"),
+        }
+    )
+    return public
+
+
+LOG_PAGE_SIZE = 50
+LOG_SORT_FIELDS = {
+    "list_system_status": {
+        "recorded_at",
+        "cpu_usage",
+        "cpu_temperature",
+        "ram_usage",
+        "ping",
+        "speed",
+    },
+    "list_events": {
+        "detected_at",
+        "event_type",
+        "confidence",
+        "is_resolved",
+        "is_reported",
+        "is_alerted",
+        "is_false_alarm",
+    },
+    "list_actions": {"created_at", "user_name", "action_type", "event_id"},
+}
+LOG_DEFAULT_SORT_FIELDS = {
+    "list_system_status": "recorded_at",
+    "list_events": "detected_at",
+    "list_actions": "created_at",
+}
+
+
+def parse_log_filters(request, method_name=None):
+    def parse_time(name):
+        raw = request.query_params.get(name)
+        if not raw:
+            return None
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    if method_name is None:
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+            start_at = parse_time("start_at")
+            end_at = parse_time("end_at")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid time range or limit.") from exc
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500.")
+        if start_at is not None and end_at is not None and start_at > end_at:
+            raise ValueError("start_at must not be after end_at.")
+        return {"start_at": start_at, "end_at": end_at, "limit": limit}
+
+    def parse_bool(name):
+        raw = request.query_params.get(name)
+        if raw is None or raw == "":
+            return None
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true"}:
+            return True
+        if normalized in {"0", "false"}:
+            return False
+        raise ValueError(f"{name} must be true or false.")
+
+    def parse_confidence(name):
+        raw = request.query_params.get(name)
+        if raw is None or raw == "":
+            return None
+        value = float(raw)
+        if not 0 <= value <= 1:
+            raise ValueError(f"{name} must be between 0 and 1.")
+        return value
+
+    try:
+        page = int(request.query_params.get("page", "1"))
+        page_size = int(request.query_params.get("page_size", str(LOG_PAGE_SIZE)))
+        start_at = parse_time("start_at")
+        end_at = parse_time("end_at")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid time range or pagination.") from exc
+    if page < 1:
+        raise ValueError("page must be at least 1.")
+    if page_size != LOG_PAGE_SIZE:
+        raise ValueError(f"page_size must be {LOG_PAGE_SIZE}.")
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise ValueError("start_at must not be after end_at.")
+
+    sort_by = (
+        request.query_params.get("sort_by")
+        or LOG_DEFAULT_SORT_FIELDS[method_name]
+    ).strip().lower()
+    sort_direction = request.query_params.get("sort_direction", "desc").strip().lower()
+    if sort_by not in LOG_SORT_FIELDS[method_name]:
+        raise ValueError(f"Unsupported sort field: {sort_by}.")
+    if sort_direction not in {"asc", "desc"}:
+        raise ValueError("sort_direction must be asc or desc.")
+
+    filters = {
+        "start_at": start_at,
+        "end_at": end_at,
+        "page": page,
+        "page_size": page_size,
+        "sort_by": sort_by,
+        "sort_direction": sort_direction,
+    }
+    if method_name == "list_events":
+        event_type = request.query_params.get("event_type")
+        if event_type:
+            event_type = event_type.strip().upper()
+            if event_type not in EVENT_TYPES:
+                raise ValueError("Unsupported event_type.")
+        try:
+            confidence_min = parse_confidence("confidence_min")
+            confidence_max = parse_confidence("confidence_max")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(str(exc) or "Invalid confidence range.") from exc
+        if (
+            confidence_min is not None
+            and confidence_max is not None
+            and confidence_min > confidence_max
+        ):
+            raise ValueError("confidence_min must not exceed confidence_max.")
+        filters.update(
+            {
+                "event_type": event_type,
+                "confidence_min": confidence_min,
+                "confidence_max": confidence_max,
+                "is_resolved": parse_bool("is_resolved"),
+                "is_reported": parse_bool("is_reported"),
+                "is_alerted": parse_bool("is_alerted"),
+                "is_false_alarm": parse_bool("is_false_alarm"),
+            }
+        )
+    elif method_name == "list_actions":
+        action_type = request.query_params.get("action_type")
+        if action_type:
+            action_type = action_type.strip().upper()
+            if action_type not in ACTION_TYPES:
+                raise ValueError("Unsupported action_type.")
+        user_name = request.query_params.get("user_name")
+        filters.update(
+            {
+                "user_name": user_name.strip() if user_name and user_name.strip() else None,
+                "action_type": action_type,
+            }
+        )
+    return filters
+
+
+async def read_persisted_logs(request, method_name):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    try:
+        filters = parse_log_filters(request, method_name)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+    try:
+        method = getattr(database, method_name)
+        result = await asyncio.to_thread(method, **filters)
+        if isinstance(result, dict):
+            items = await asyncio.to_thread(
+                public_log_rows, result.get("items", []), method_name
+            )
+            return {
+                "items": items,
+                "page": int(result.get("page", filters["page"])),
+                "page_size": int(result.get("page_size", LOG_PAGE_SIZE)),
+                "total": int(result.get("total", len(items))),
+                "total_pages": int(result.get("total_pages", 0)),
+            }
+        items = await asyncio.to_thread(public_log_rows, result, method_name)
+        return {
+            "items": items,
+            "page": filters["page"],
+            "page_size": LOG_PAGE_SIZE,
+            "total": len(items),
+            "total_pages": 1 if items else 0,
+        }
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+
+
+def parse_log_delete_selection(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+
+    def parse_ids(name):
+        values = payload.get(name, [])
+        if not isinstance(values, list):
+            raise ValueError(f"{name} must be an array.")
+        if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in values):
+            raise ValueError(f"{name} must contain positive integers.")
+        if len(values) != len(set(values)):
+            raise ValueError(f"{name} must not contain duplicate IDs.")
+        return values
+
+    selection = {
+        "event_ids": parse_ids("event_ids"),
+        "action_ids": parse_ids("action_ids"),
+    }
+    if not selection["event_ids"] and not selection["action_ids"]:
+        raise ValueError("At least one event_id or action_id is required.")
+    return selection
+
+
+async def process_log_soft_delete(request, *, preview):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+    try:
+        selection = parse_log_delete_selection(payload)
+        method = (
+            database.preview_log_soft_delete
+            if preview
+            else database.soft_delete_logs
+        )
+        counts = await asyncio.to_thread(method, **selection)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    return {"ok": True, "selection": selection, "counts": counts}
+
+
+@app.get("/api/logs/system-status")
+async def read_system_status_logs(request: Request):
+    return await read_persisted_logs(request, "list_system_status")
+
+
+@app.get("/api/logs/events")
+async def read_event_logs(request: Request):
+    return await read_persisted_logs(request, "list_events")
+
+
+@app.get("/api/logs/actions")
+async def read_action_logs(request: Request):
+    return await read_persisted_logs(request, "list_actions")
+
+
+@app.post("/api/logs/delete/preview")
+async def preview_log_soft_delete(request: Request):
+    return await process_log_soft_delete(request, preview=True)
+
+
+@app.post("/api/logs/delete")
+async def delete_logs(request: Request):
+    return await process_log_soft_delete(request, preview=False)
+
+
+@app.post("/api/logs/current-situation/preview")
+async def preview_current_situation(request: Request):
+    user, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    with state_lock:
+        if current_frame is None:
+            return JSONResponse(
+                {"ok": False, "detail": "Current camera frame is unavailable."},
+                status_code=503,
+            )
+        encoded_frame = bytes(current_frame)
+        frame_sequence = current_frame_seq
+    try:
+        frame = await asyncio.to_thread(decode_camera_frame, encoded_frame)
+        preview_jpeg = await asyncio.to_thread(encode_private_preview, frame)
+        user_id, session_id = frozen_frame_owner(request, user)
+        frame_token = frozen_frame_cache.store(
+            frame,
+            user_id=user_id,
+            session_id=session_id,
+            frame_sequence=frame_sequence,
+        )
+    except (ValueError, PrivacyProcessingError):
+        return JSONResponse(
+            {"ok": False, "detail": "Current camera preview is unavailable."},
+            status_code=503,
+        )
+    return Response(
+        content=preview_jpeg,
+        media_type="image/jpeg",
+        headers={"X-Frame-Token": frame_token},
+    )
+
+
+@app.post("/api/logs/current-situation")
+async def create_current_situation(request: Request):
+    user, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+    include_image = payload.get("include_image", False)
+    if not isinstance(include_image, bool):
+        return JSONResponse(
+            {"ok": False, "detail": "include_image must be a boolean."},
+            status_code=400,
+        )
+    description = payload.get("description_content")
+    description = None if description is None else str(description).strip()
+    if description and len(description) > 2000:
+        return JSONResponse(
+            {"ok": False, "detail": "description_content is too long."},
+            status_code=400,
+        )
+    if not description and not include_image:
+        return JSONResponse(
+            {"ok": False, "detail": "Text or an image is required."},
+            status_code=400,
+        )
+
+    frame_token = payload.get("frame_token")
+    frozen = None
+    user_id, session_id = frozen_frame_owner(request, user)
+    if include_image:
+        if not isinstance(frame_token, str) or not frame_token.strip():
+            return JSONResponse(
+                {"ok": False, "detail": "frame_token is required."},
+                status_code=400,
+            )
+        frame_token = frame_token.strip()
+        try:
+            frozen = frozen_frame_cache.get(
+                frame_token,
+                user_id=user_id,
+                session_id=session_id,
+            )
+        except FrozenFrameTokenError as exc:
+            return JSONResponse(
+                {"ok": False, "detail": str(exc)},
+                status_code=400,
+            )
+
+    image_path = None
+    image_store = None
+    if frozen is not None:
+        try:
+            image_store = get_private_image_store()
+            image_path = await asyncio.to_thread(
+                image_store.save_image,
+                "actions",
+                frozen.frame,
+            )
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "detail": "Private image could not be saved."},
+                status_code=500,
+            )
+    try:
+        action_id = await asyncio.to_thread(
+            database.insert_action,
+            user_id=user_id,
+            event_id=None,
+            action_type="NOTE",
+            description=description or None,
+            image_path=image_path,
+        )
+    except Exception as exc:
+        if image_path is not None:
+            try:
+                await asyncio.to_thread(image_store.delete, image_path)
+            except Exception as cleanup_exc:
+                logging.getLogger(__name__).warning(
+                    "Current situation image cleanup failed: %s", cleanup_exc
+                )
+        status_code = (
+            503
+            if isinstance(exc, (DatabaseConfigurationError, DatabaseOperationError))
+            else 500
+        )
+        return JSONResponse(
+            {"ok": False, "detail": "Current situation could not be saved."},
+            status_code=status_code,
+        )
+    if frame_token is not None:
+        frozen_frame_cache.invalidate(
+            frame_token,
+            user_id=user_id,
+            session_id=session_id,
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "action_id": action_id,
+            "image_url": (
+                f"/api/media/actions/{action_id}" if image_path is not None else None
+            ),
+        },
+        status_code=201,
+    )
+
+
+@app.get("/api/gallery")
+async def read_gallery(request: Request):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    source = request.query_params.get("source", "all").strip().lower()
+    if source not in {"all", "event", "action"}:
+        return JSONResponse(
+            {"ok": False, "detail": "source must be one of: all, event, action"},
+            status_code=400,
+        )
+    try:
+        filters = parse_log_filters(request)
+        rows = await asyncio.to_thread(database.list_gallery, source=source, **filters)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "detail": str(exc)}, status_code=400)
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    gallery_rows = await asyncio.to_thread(
+        lambda: [dto for row in rows if (dto := gallery_dto(row)) is not None]
+    )
+    return gallery_rows
+
+
+@app.delete("/api/gallery/{source}/{record_id}")
+async def delete_gallery_image(request: Request, source: str, record_id: int):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    source = source.strip().lower()
+    if source not in {"event", "action"}:
+        return JSONResponse(
+            {"ok": False, "detail": "source must be one of: event, action"},
+            status_code=400,
+        )
+    if record_id <= 0:
+        return JSONResponse(
+            {"ok": False, "detail": "record_id must be a positive integer."},
+            status_code=400,
+        )
+    database_method = (
+        database.soft_delete_event_image
+        if source == "event"
+        else database.soft_delete_action_image
+    )
+    try:
+        deleted = await asyncio.to_thread(database_method, record_id)
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    if not deleted:
+        return JSONResponse({"ok": False, "detail": "Image not found."}, status_code=404)
+    return {"ok": True, "source": source, "record_id": record_id}
+
+
+async def authenticated_media(request, record_id, *, category, database_method):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    try:
+        image_path = await asyncio.to_thread(database_method, record_id)
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    if not image_path:
+        return JSONResponse({"ok": False, "detail": "Image not found."}, status_code=404)
+    target = resolve_available_media(image_path, category)
+    if target is None:
+        return JSONResponse({"ok": False, "detail": "Image not found."}, status_code=404)
+    return FileResponse(target, media_type="image/jpeg")
+
+
+@app.get("/api/media/events/{event_id}")
+async def read_event_image(request: Request, event_id: int):
+    return await authenticated_media(
+        request,
+        event_id,
+        category="events",
+        database_method=database.get_event_image_path,
+    )
+
+
+@app.get("/api/media/actions/{action_id}")
+async def read_action_image(request: Request, action_id: int):
+    return await authenticated_media(
+        request,
+        action_id,
+        category="actions",
+        database_method=database.get_action_image_path,
+    )
+
+
+@app.patch("/api/logs/events/{event_id}/false-alarm")
+async def update_event_false_alarm(request: Request, event_id: int):
+    _, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    if event_id <= 0:
+        return JSONResponse(
+            {"ok": False, "detail": "event_id must be a positive integer."},
+            status_code=400,
+        )
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+    is_false_alarm = payload.get("is_false_alarm")
+    if not isinstance(is_false_alarm, bool):
+        return JSONResponse(
+            {"ok": False, "detail": "is_false_alarm must be a boolean."},
+            status_code=400,
+        )
+    try:
+        updated = await asyncio.to_thread(
+            database.set_event_false_alarm,
+            event_id,
+            is_false_alarm,
+        )
+        if not updated:
+            exists = await asyncio.to_thread(database.event_exists, event_id)
+            if not exists:
+                return JSONResponse(
+                    {"ok": False, "detail": "Event not found."},
+                    status_code=404,
+                )
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    return {
+        "ok": True,
+        "event_id": event_id,
+        "is_false_alarm": is_false_alarm,
+    }
+
+
+@app.post("/api/logs/actions")
+async def create_action_log(request: Request):
+    user, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+    action_type = str(payload.get("action_type") or "").strip().upper()
+    if action_type not in ACTION_TYPES:
+        return JSONResponse(
+            {"ok": False, "detail": "Unsupported action_type."},
+            status_code=400,
+        )
+    event_id = payload.get("event_id")
+    try:
+        event_id = None if event_id in (None, "") else int(event_id)
+        if event_id is not None and event_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse(
+            {"ok": False, "detail": "event_id must be a positive integer or null."},
+            status_code=400,
+        )
+    description = payload.get("description", payload.get("description_content"))
+    description = None if description is None else str(description).strip()
+    if description and len(description) > 2000:
+        return JSONResponse(
+            {"ok": False, "detail": "description is too long."},
+            status_code=400,
+        )
+    try:
+        action_id = await asyncio.to_thread(
+            database.insert_action,
+            user_id=int(user["user_id"]),
+            event_id=event_id,
+            action_type=action_type,
+            description=description or None,
+        )
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"ok": False, "detail": "Database is unavailable."},
+            status_code=503,
+        )
+    return JSONResponse({"ok": True, "action_id": action_id}, status_code=201)
 
 
 @app.post("/send_telegram")
-async def send_telegram():
+async def send_telegram(request: Request):
+    user, auth_error = authenticated_user(request)
+    if auth_error:
+        return auth_error
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return JSONResponse(
             {"status": "error", "error": "telegram env missing"},
             status_code=500,
+        )
+
+    try:
+        raw_body = await request.body()
+        payload = json.loads(raw_body) if raw_body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse(
+            {"status": "error", "error": "invalid JSON body"},
+            status_code=400,
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            {"status": "error", "error": "JSON object required"},
+            status_code=400,
+        )
+    try:
+        raw_event_id = payload.get("event_id")
+        event_id = None if raw_event_id in (None, "") else int(raw_event_id)
+        if event_id is not None and event_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse(
+            {"status": "error", "error": "invalid event_id"},
+            status_code=400,
+        )
+
+    if event_id is not None:
+        try:
+            event_exists = await asyncio.to_thread(database.event_exists, event_id)
+        except (DatabaseConfigurationError, DatabaseOperationError):
+            return JSONResponse(
+                {"status": "error", "error": "database unavailable"},
+                status_code=503,
+            )
+        if not event_exists:
+            return JSONResponse(
+                {"status": "error", "error": "event not found"},
+                status_code=404,
+            )
+
+    try:
+        action_id = await asyncio.to_thread(
+            database.insert_action,
+            user_id=int(user["user_id"]),
+            event_id=event_id,
+            action_type="REPORT",
+            description="Manual Telegram danger report requested.",
+        )
+    except (DatabaseConfigurationError, DatabaseOperationError):
+        return JSONResponse(
+            {"status": "error", "error": "database unavailable"},
+            status_code=503,
         )
 
     message = "[긴급] 순찰 로봇 위험 감지! 관제 센터에서 신고가 접수되었습니다."
@@ -1474,45 +3635,167 @@ async def send_telegram():
             json={"chat_id": TELEGRAM_CHAT_ID, "text": message},
             timeout=5,
         )
-        if response.status_code == 200:
-            return {"status": "success"}
-        return JSONResponse({"status": "error"}, status_code=500)
+        if response.status_code != 200:
+            return JSONResponse({"status": "error"}, status_code=502)
+        persistence_warning = None
+        if event_id is not None:
+            try:
+                marked = await asyncio.to_thread(database.mark_event_reported, event_id)
+            except (DatabaseConfigurationError, DatabaseOperationError):
+                marked = False
+                persistence_warning = "Telegram sent, but the event update failed."
+            if not marked:
+                persistence_warning = persistence_warning or (
+                    "Telegram sent, but the event was not updated."
+                )
+        result = {"status": "success", "action_id": action_id}
+        if persistence_warning:
+            result["persistence_warning"] = persistence_warning
+        return result
     except Exception as exc:
         print(f"텔레그램 전송 오류: {exc}")
-        return JSONResponse({"status": "error"}, status_code=500)
+        return JSONResponse({"status": "error"}, status_code=502)
 
 
 @app.post("/status")
 @app.post("/update_status")
 async def update_status(request: Request):
     global robot_status
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
     data = await request.json()
-    if not data:
+    if not isinstance(data, dict) or not data:
         return JSONResponse(
             {"ok": False, "error": "empty status"},
             status_code=400,
         )
+    denied = robot_id_failure(data)
+    if denied:
+        return denied
 
     with state_lock:
+        def status_value(name, current=None):
+            value = data.get(name, current)
+            return None if value is None else value
+
         robot_status.update(
             {
                 "robot_id": data.get("robot_id", robot_status["robot_id"]),
-                "cpu_usage": str(data.get("cpu_usage", robot_status["cpu_usage"])),
-                "cpu_temp": str(data.get("cpu_temp", robot_status["cpu_temp"])),
-                "battery": str(data.get("battery", robot_status["battery"])),
-                "ram_usage": str(data.get("ram_usage", robot_status["ram_usage"])),
-                "internet": str(data.get("internet", robot_status["internet"])),
-                "mode": str(data.get("mode", robot_status.get("mode", "auto"))),
+                "cpu_usage": status_value("cpu_usage", robot_status["cpu_usage"]),
+                "cpu_temp": status_value("cpu_temp", robot_status["cpu_temp"]),
+                "ram_usage": status_value("ram_usage", robot_status["ram_usage"]),
+                "internet": status_value("internet", robot_status["internet"]),
+                "mode": status_value("mode", robot_status.get("mode", "manual")),
+                "led_enabled": status_value("led_enabled", robot_status.get("led_enabled")),
+                "max_wheel_mps": status_value("max_wheel_mps"),
+                "ping": status_value("ping", robot_status.get("ping")),
+                "speed": status_value("speed", robot_status.get("speed")),
+                "gps_fix": status_value("gps_fix", robot_status.get("gps_fix")),
+                "gps_lat": status_value("gps_lat", robot_status.get("gps_lat")),
+                "gps_lng": status_value("gps_lng", robot_status.get("gps_lng")),
+                "gps_alt": status_value("gps_alt", robot_status.get("gps_alt")),
+                "gps_satellites": status_value("gps_satellites", robot_status.get("gps_satellites")),
+                "gps_hdop": status_value("gps_hdop", robot_status.get("gps_hdop")),
+                "gps_updated_at": status_value("gps_updated_at", robot_status.get("gps_updated_at")),
+                "lidar_x": status_value("lidar_x", robot_status.get("lidar_x")),
+                "lidar_y": status_value("lidar_y", robot_status.get("lidar_y")),
+                "lidar_z": status_value("lidar_z", robot_status.get("lidar_z")),
                 "updated_at": time.time(),
             }
         )
+    location_security_api.note_robot_status(data)
+    navigation_control_api.note_pi_status(data)
     return {"ok": True}
 
 
 @app.get("/get_status")
 async def get_status():
     with state_lock:
-        return dict(robot_status)
+        status = dict(robot_status)
+    # GPU Server telemetry is sampled independently from the Pi status.
+    status["gpu_usage_percent"] = gpu_utilization_sampler.snapshot(CUDA_DEVICE_INDEX)
+    live_gps = location_security_service.snapshot().get("gps") or {}
+    status.update(
+        {
+            "gps_fix": live_gps.get("fix") is True,
+            "gps_lat": live_gps.get("lat"),
+            "gps_lng": live_gps.get("lng"),
+            "gps_alt": live_gps.get("alt"),
+            "gps_satellites": live_gps.get("satellites"),
+            "gps_hdop": live_gps.get("hdop"),
+            "gps_updated_at": live_gps.get("updated_at"),
+        }
+    )
+    return status
+
+
+def robot_speed_calibration_error(robot_id: str):
+    with state_lock:
+        status_robot_id = str(
+            robot_status.get("robot_id") or ""
+        ).strip()
+        raw_robot_max = robot_status.get(
+            "max_wheel_mps"
+        )
+        status_updated_at = robot_status.get(
+            "updated_at"
+        )
+
+    if (
+        status_robot_id != robot_id
+        or raw_robot_max is None
+        or status_updated_at is None
+    ):
+        return (
+            "Pi MAX_WHEEL_MPS is unavailable; "
+            "wait for matching robot status"
+        )
+
+    try:
+        status_age = max(
+            0.0,
+            time.time() - float(status_updated_at),
+        )
+    except (TypeError, ValueError):
+        return "Pi robot status timestamp is invalid"
+
+    if (
+        not np.isfinite(status_age)
+        or status_age > ROBOT_STATUS_TIMEOUT_SEC
+    ):
+        return (
+            "Pi robot status is stale; "
+            "wait for a fresh status update"
+        )
+
+    if isinstance(raw_robot_max, bool):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    try:
+        robot_max = float(raw_robot_max)
+    except (TypeError, ValueError):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if (
+        not np.isfinite(robot_max)
+        or robot_max <= 0.0
+    ):
+        return "Pi MAX_WHEEL_MPS is invalid"
+
+    if not np.isclose(
+        robot_max,
+        MAX_WHEEL_MPS,
+        rtol=1e-9,
+        atol=1e-12,
+    ):
+        return (
+            "MAX_WHEEL_MPS mismatch: "
+            f"server={MAX_WHEEL_MPS:.6f} m/s, "
+            f"Pi={robot_max:.6f} m/s"
+        )
+
+    return None
 
 
 def parse_navigation_mode(payload):
@@ -1542,16 +3825,7 @@ def store_navigation_mode(mode, received_at):
 def build_navigation_status(now=None):
     now = now or time.time()
     decision = build_navigation_decision(now)
-    last_times = [
-        value
-        for value in (
-            navigation_state.get("map_updated_at"),
-            navigation_state.get("pose_updated_at"),
-            navigation_state.get("scan_updated_at"),
-        )
-        if value is not None
-    ]
-    last_update_at = max(last_times) if last_times else None
+    last_update_at = navigation_state.get("scan_updated_at")
     last_update_age_sec = (
         None
         if last_update_at is None
@@ -1612,6 +3886,29 @@ def received_payload(data, received_at):
     payload = dict(data)
     payload["received_at"] = received_at
     return payload
+
+
+def build_navigation_map_revision(data):
+    """Hash only map fields that affect dashboard rendering or coordinates."""
+    revision_payload = {
+        key: data.get(key)
+        for key in (
+            "frame_id",
+            "resolution",
+            "width",
+            "height",
+            "origin",
+            "data_encoding",
+            "data",
+        )
+    }
+    encoded = json.dumps(
+        revision_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def sanitize_map_name(name=None):
@@ -1687,7 +3984,7 @@ def occupancy_to_pgm_bytes(width, height, cells):
     return header + bytes(pixels)
 
 
-def save_navigation_map_files(map_payload, requested_name=None):
+def save_navigation_map_files(map_payload, requested_name=None, location_metadata=None):
     width, height, cells = decode_map_cells(map_payload)
     base_name = unique_map_name(sanitize_map_name(requested_name))
     saved_at = time.time()
@@ -1747,11 +4044,29 @@ def save_navigation_map_files(map_payload, requested_name=None):
             "raw": str(raw_path.relative_to(ROOT_DIR)),
         },
     }
+    if isinstance(location_metadata, dict) and location_metadata:
+        meta["location"] = dict(location_metadata)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return meta
+
+
+def current_navigation_map_location_metadata():
+    snapshot = location_security_service.snapshot()
+    gps = snapshot.get("gps")
+    if not isinstance(gps, dict) or gps.get("fix") is not True:
+        return None
+    location = {"gps": {
+        "lat": gps.get("lat"), "lng": gps.get("lng"), "alt": gps.get("alt"),
+        "satellites": gps.get("satellites"), "hdop": gps.get("hdop"),
+        "captured_at": gps.get("updated_at"),
+    }}
+    if gps.get("matched_location_id"):
+        location["location_id"] = gps.get("matched_location_id")
+        location["name"] = gps.get("matched_location_name")
+    return location
 
 
 def list_saved_navigation_maps():
@@ -1769,6 +4084,9 @@ def list_saved_navigation_maps():
 
 @app.post("/navigation/map")
 async def update_navigation_map(request: Request):
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
     try:
         data = await request.json()
         if not isinstance(data, dict) or not data:
@@ -1779,21 +4097,70 @@ async def update_navigation_map(request: Request):
             {"ok": False, "error": str(exc)},
             status_code=400,
         )
+    denied = robot_id_failure(data)
+    if denied:
+        return denied
 
     received_at = time.time()
+
+    if navigation_mode == "mapping":
+        # Mirror RViz2 Map behavior: every slam_toolbox /map refresh becomes the
+        # persistent base OccupancyGrid. Then re-apply the newest LiDAR sample so
+        # dynamic walls clear/appear on the same one-second cadence. The composed
+        # grid is both what the Viewer renders and what "현재 지도 저장" persists.
+        with state_lock:
+            navigation_state["robot_id"] = data.get(
+                "robot_id",
+                navigation_state["robot_id"],
+            )
+            store_navigation_mode(navigation_mode, received_at)
+
+        live_mapping_grid.update_base_map(data)
+        live_map_payload = live_mapping_grid.maybe_update(
+            robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+            monotonic_now=time.monotonic(),
+            wall_time=received_at,
+            force=True,
+        )
+        if live_map_payload is None:
+            live_map_payload = live_mapping_grid.snapshot(
+                robot_id=data.get("robot_id", SERVER_ROBOT_ID),
+                wall_time=received_at,
+            )
+        if live_map_payload is not None:
+            publish_live_mapping_map(live_map_payload, received_at)
+        return {
+            "ok": True,
+            "source": "slam_toolbox+live_scan",
+            "used_for_live_map": live_map_payload is not None,
+        }
+
+    map_revision = build_navigation_map_revision(data)
+    stored_map = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["map"] = received_payload(data, received_at)
+        navigation_state["map"] = stored_map
         navigation_state["map_updated_at"] = received_at
+        navigation_state["map_revision"] = map_revision
+    navigation_visualization_hub.publish(
+        {
+            "type": "map",
+            "map": stored_map,
+            "map_revision": map_revision,
+        }
+    )
     return {"ok": True}
 
 
 @app.post("/navigation/pose")
 async def update_navigation_pose(request: Request):
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
     try:
         data = await request.json()
         if not isinstance(data, dict) or not data:
@@ -1804,21 +4171,37 @@ async def update_navigation_pose(request: Request):
             {"ok": False, "error": str(exc)},
             status_code=400,
         )
+    denied = robot_id_failure(data)
+    if denied:
+        return denied
 
     received_at = time.time()
+    stored_pose = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["pose"] = received_payload(data, received_at)
+        navigation_state["pose"] = stored_pose
         navigation_state["pose_updated_at"] = received_at
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_pose(data)
+    navigation_control_api.note_navigation_sample("pose", received_at, data)
+    navigation_visualization_hub.publish(
+        {
+            "type": "pose",
+            "pose": stored_pose,
+        }
+    )
     return {"ok": True}
 
 
 @app.post("/navigation/scan")
 async def update_navigation_scan(request: Request):
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
     try:
         raw_data = await request.json()
         navigation_mode = parse_navigation_mode(raw_data)
@@ -1828,17 +4211,32 @@ async def update_navigation_scan(request: Request):
             {"ok": False, "error": str(exc)},
             status_code=400,
         )
+    denied = robot_id_failure(raw_data)
+    if denied:
+        return denied
 
     received_at = time.time()
+    stored_scan = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
             "robot_id",
             navigation_state["robot_id"],
         )
         store_navigation_mode(navigation_mode, received_at)
-        navigation_state["scan"] = received_payload(data, received_at)
+        navigation_state["scan"] = stored_scan
         navigation_state["scan_updated_at"] = received_at
         build_navigation_decision(received_at)
+        status = build_navigation_status(received_at)
+    if navigation_mode == "mapping":
+        live_mapping_grid.update_scan(data)
+    navigation_control_api.note_navigation_sample("scan", received_at)
+    navigation_visualization_hub.publish(
+        {
+            "type": "scan",
+            "scan": stored_scan,
+            "status": status,
+        }
+    )
     return {"ok": True}
 
 
@@ -1846,6 +4244,76 @@ async def update_navigation_scan(request: Request):
 async def get_navigation_status():
     with state_lock:
         return build_navigation_status()
+
+
+def build_navigation_snapshot_payload(map_revision=None):
+    """Build the current dashboard state used for HTTP recovery and WS startup."""
+    with state_lock:
+        status = build_navigation_status()
+        current_map = navigation_state.get("map")
+        current_revision = navigation_state.get("map_revision")
+        pose = navigation_state.get("pose")
+        scan = navigation_state.get("scan")
+        global_path = navigation_state.get("global_path") or []
+        global_path_updated_at = navigation_state.get("global_path_updated_at")
+        costmap = navigation_state.get("costmap")
+
+        if current_map is None:
+            map_changed = map_revision is not None
+        elif current_revision is None:
+            # A legacy/injected map without a revision must never be treated as cached.
+            map_changed = True
+        else:
+            map_changed = map_revision != current_revision
+
+        snapshot = {
+            "ok": True,
+            "status": status,
+            "map_available": current_map is not None,
+            "map_changed": map_changed,
+            "map_revision": current_revision,
+            "pose_available": pose is not None,
+            "pose": pose,
+            "scan_available": scan is not None,
+            "scan": scan,
+            "global_path": [dict(point) for point in global_path],
+            "global_path_updated_at": global_path_updated_at,
+            "costmap": dict(costmap) if isinstance(costmap, dict) else None,
+        }
+        if map_changed:
+            snapshot["map"] = current_map
+        return snapshot
+
+
+@app.get("/api/navigation/snapshot")
+async def get_navigation_snapshot(map_revision: str | None = None):
+    """HTTP recovery snapshot; live visualization uses the WebSocket stream."""
+    return build_navigation_snapshot_payload(map_revision)
+
+
+@app.websocket("/ws/navigation/visualization")
+async def navigation_visualization_websocket(websocket: WebSocket):
+    session = websocket.scope.get("session")
+    user = session.get("user") if isinstance(session, dict) else None
+    if not isinstance(user, dict) or not user.get("user_id"):
+        await websocket.close(code=1008, reason="authentication required")
+        return
+
+    queue = await navigation_visualization_hub.register(websocket)
+    try:
+        await websocket.send_json(
+            {
+                "type": "snapshot",
+                "snapshot": build_navigation_snapshot_payload(),
+            }
+        )
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass
+    finally:
+        navigation_visualization_hub.unregister(websocket)
 
 
 @app.get("/api/navigation/decision")
@@ -1860,15 +4328,19 @@ async def get_navigation_map():
         status = build_navigation_status()
         current_map = navigation_state.get("map")
     if current_map is None:
-        return JSONResponse(
-            {
-                "ok": False,
-                "status": status,
-                "error": "map unavailable",
-            },
-            status_code=404,
-        )
-    return {"ok": True, "status": status, "map": current_map}
+        return {
+            "ok": True,
+            "available": False,
+            "status": status,
+            "map": None,
+            "error": "map unavailable",
+        }
+    return {
+        "ok": True,
+        "available": True,
+        "status": status,
+        "map": current_map,
+    }
 
 
 @app.post("/api/navigation/maps/save")
@@ -1896,6 +4368,7 @@ async def save_current_navigation_map(request: Request):
         meta = save_navigation_map_files(
             dict(current_map),
             requested_name=requested_name,
+            location_metadata=current_navigation_map_location_metadata(),
         )
     except Exception as exc:
         return JSONResponse(
@@ -1916,15 +4389,19 @@ async def get_navigation_pose():
         status = build_navigation_status()
         pose = navigation_state.get("pose")
     if pose is None:
-        return JSONResponse(
-            {
-                "ok": False,
-                "status": status,
-                "error": "pose unavailable",
-            },
-            status_code=404,
-        )
-    return {"ok": True, "status": status, "pose": pose}
+        return {
+            "ok": True,
+            "available": False,
+            "status": status,
+            "pose": None,
+            "error": "pose unavailable",
+        }
+    return {
+        "ok": True,
+        "available": True,
+        "status": status,
+        "pose": pose,
+    }
 
 
 @app.get("/api/navigation/scan")
@@ -1933,15 +4410,19 @@ async def get_navigation_scan():
         status = build_navigation_status()
         scan = navigation_state.get("scan")
     if scan is None:
-        return JSONResponse(
-            {
-                "ok": False,
-                "status": status,
-                "error": "scan unavailable",
-            },
-            status_code=404,
-        )
-    return {"ok": True, "status": status, "scan": scan}
+        return {
+            "ok": True,
+            "available": False,
+            "status": status,
+            "scan": None,
+            "error": "scan unavailable",
+        }
+    return {
+        "ok": True,
+        "available": True,
+        "status": status,
+        "scan": scan,
+    }
 
 
 @app.get("/api/robots/{robot_id}")
@@ -1989,15 +4470,67 @@ def process_and_publish_frame(
     result_frame = frame
     result = build_empty_result(robot_id)
 
-    if infer and frame_processor is not None:
-        started = time.time()
+    if infer:
         with processing_lock:
-            processed = process_frame_for_dashboard(frame)
-        result_frame = processed["frame"]
-        result["detections"] = processed["detections"]
-        result["danger"] = processed["danger"]
-        result["timings"] = dict(processed.get("timings") or {})
-        result["inference_ms"] = round((time.time() - started) * 1000, 1)
+            if MODEL_ACTIVE and frame_processor is not None:
+                observe_scene_frame(
+                    frame,
+                    time.time(),
+                )
+
+                started = time.time()
+                processed = process_frame_for_dashboard(frame)
+
+                result_frame = processed["frame"]
+                result["detections"] = processed["detections"]
+                result["pair_actions"] = processed.get(
+                    "pair_actions",
+                    [],
+                )
+                result["danger"] = processed["danger"]
+                result["scene"] = processed.get("scene")
+                result["timings"] = dict(
+                    processed.get("timings") or {}
+                )
+                result["inference_ms"] = round(
+                    (time.time() - started) * 1000,
+                    1,
+                )
+
+                frame_seq = publish_preview_frame(
+                    result_frame,
+                    robot_id=robot_id,
+                    original_bytes=original_bytes,
+                )
+
+                result["source_frame_seq"] = frame_seq
+                result["processed_at"] = time.time()
+
+                with state_lock:
+                    latest_result = result
+                    inference_stats["completed"] += 1
+                    inference_stats["last_ms"] = result.get(
+                        "inference_ms"
+                    )
+                    inference_stats["last_result_at"] = result[
+                        "processed_at"
+                    ]
+                    inference_stats["last_input_seq"] = frame_seq
+
+                    update_rate_counter(
+                        inference_rate_stats,
+                        result["processed_at"],
+                    )
+
+                    stream_stats["frames_inferred"] = (
+                        stream_stats.get(
+                            "frames_inferred",
+                            0,
+                        )
+                        + 1
+                    )
+
+                return result
 
     frame_seq = publish_preview_frame(
         result_frame,
@@ -2008,18 +4541,7 @@ def process_and_publish_frame(
     result["processed_at"] = time.time()
     with state_lock:
         latest_result = result
-        if infer and frame_processor is not None:
-            inference_stats["completed"] += 1
-            inference_stats["last_ms"] = result.get("inference_ms")
-            inference_stats["last_result_at"] = result["processed_at"]
-            inference_stats["last_input_seq"] = frame_seq
-            update_rate_counter(inference_rate_stats, result["processed_at"])
-            stream_stats["frames_inferred"] = (
-                stream_stats.get("frames_inferred", 0) + 1
-            )
-
     return result
-
 
 def build_camera_status(now=None):
     now = now or time.time()
@@ -2168,12 +4690,7 @@ def build_status_frame(message):
 @app.post("/frame")
 async def receive_frame(request: Request, file: UploadFile | None = File(None)):
     ensure_runtime_model_config(reason="frame")
-    infer_param = request.query_params.get("infer")
-    infer = (
-        MODEL_ACTIVE
-        if infer_param is None
-        else infer_param.lower() in ("1", "true", "yes", "on")
-    )
+    infer = MODEL_ACTIVE
     if file is not None:
         data = await file.read()
     else:
@@ -2213,16 +4730,21 @@ def read_exact(stream, size):
     return b"".join(chunks)
 
 
-def h264_decode_loop(proc, robot_id, infer_override, stream_id):
+def h264_decode_loop(proc, robot_id, stream_id):
     frame_size = STREAM_WIDTH * STREAM_HEIGHT * 3
     frame_index = 0
     last_preview_at = 0.0
     min_preview_interval = 1.0 / PREVIEW_MAX_FPS
     try:
         while True:
-            ensure_runtime_model_config(reason="stream")
-            infer = MODEL_ACTIVE if infer_override is None else infer_override
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
+            ensure_runtime_model_config(reason="stream")
+            infer = MODEL_ACTIVE
+            with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["infer"] = infer
                 stream_stats["inference_available"] = frame_processor is not None
             raw_frame = read_exact(proc.stdout, frame_size)
@@ -2233,13 +4755,24 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
             )
             frame_index += 1
             now = time.time()
+            if infer:
+                # Keep decode independent from model inference. The observer
+                # uses a dedicated generation lock only around buffer append.
+                observe_scene_frame(
+                    frame,
+                    now,
+                    stream_id=stream_id,
+                )
             frame_seq = None
             if now - last_preview_at >= min_preview_interval:
                 preview_frame = build_preview_frame(frame, infer, now)
                 frame_seq = publish_preview_frame(
                     preview_frame,
                     robot_id=robot_id,
+                    stream_id=stream_id,
                 )
+                if frame_seq is None:
+                    break
                 last_preview_at = now
             should_infer = (
                 infer
@@ -2258,6 +4791,8 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
                     stream_id=stream_id,
                 )
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["frames_decoded"] += 1
                 update_rate_counter(decode_stats, time.time())
                 stream_stats["last_frame_at"] = time.time()
@@ -2265,11 +4800,12 @@ def h264_decode_loop(proc, robot_id, infer_override, stream_id):
     except Exception as exc:
         message = str(exc)
         with state_lock:
-            stream_stats["last_error"] = message
+            if stream_id == active_stream_id:
+                stream_stats["last_error"] = message
         print(f"[stream/h264] decode loop error: {message}")
 
 
-def ffmpeg_stderr_loop(proc):
+def ffmpeg_stderr_loop(proc, stream_id):
     if proc.stderr is None:
         return
     try:
@@ -2278,6 +4814,8 @@ def ffmpeg_stderr_loop(proc):
             if not line:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    return
                 stream_stats["ffmpeg_stderr_tail"].append(line)
                 stream_stats["ffmpeg_stderr_tail"] = stream_stats[
                     "ffmpeg_stderr_tail"
@@ -2290,17 +4828,10 @@ def ffmpeg_stderr_loop(proc):
 
 @app.api_route("/stream/h264", methods=["POST", "PUT"])
 async def receive_h264_stream(request: Request):
-    global active_stream_id
 
     ensure_runtime_model_config(reason="stream_connect")
     robot_id = request.query_params.get("robot_id", SERVER_ROBOT_ID)
-    infer_param = request.query_params.get("infer")
-    infer_override = (
-        None
-        if infer_param is None
-        else infer_param.lower() in ("1", "true", "yes", "on")
-    )
-    infer = MODEL_ACTIVE if infer_override is None else infer_override
+    infer = MODEL_ACTIVE
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -2341,71 +4872,15 @@ async def receive_h264_stream(request: Request):
             status_code=500,
         )
 
-    with inference_condition:
-        inference_slot.update(
-            {
-                "frame": None,
-                "robot_id": None,
-                "frame_seq": None,
-                "captured_at": None,
-                "stream_id": None,
-            }
-        )
-    with state_lock:
-        active_stream_id += 1
-        stream_id = active_stream_id
-        now = time.time()
-        frame_stats.update({"last_time": now, "count": 0, "fps": 0})
-        decode_stats.update({"last_time": now, "count": 0, "fps": 0})
-        publish_stats.update(
-            {
-                "last_time": now,
-                "count": 0,
-                "fps": 0,
-                "last_publish_at": None,
-            }
-        )
-        inference_rate_stats.update({"last_time": now, "count": 0, "fps": 0})
-        inference_stats.update(
-            {
-                "requested": 0,
-                "completed": 0,
-                "dropped": 0,
-                "last_ms": None,
-                "last_result_at": None,
-                "last_input_seq": None,
-                "last_started_at": None,
-                "device": DEVICE,
-            }
-        )
-        stream_stats.update(
-            {
-                "connected": True,
-                "robot_id": robot_id,
-                "connected_at": now,
-                "disconnected_at": None,
-                "bytes_received": 0,
-                "frames_received": 0,
-                "last_byte_at": None,
-                "frames_decoded": 0,
-                "frames_inferred": 0,
-                "last_frame_at": None,
-                "last_error": None,
-                "ffmpeg_returncode": None,
-                "ffmpeg_stderr_tail": [],
-                "infer": infer,
-                "inference_available": frame_processor is not None,
-                "stream_id": stream_id,
-            }
-        )
+    stream_id = activate_stream_generation(robot_id, infer)
     reader = threading.Thread(
         target=h264_decode_loop,
-        args=(proc, robot_id, infer_override, stream_id),
+        args=(proc, robot_id, stream_id),
         daemon=True,
     )
     stderr_reader = threading.Thread(
         target=ffmpeg_stderr_loop,
-        args=(proc,),
+        args=(proc, stream_id),
         daemon=True,
     )
     reader.start()
@@ -2417,6 +4892,8 @@ async def receive_h264_stream(request: Request):
             if not chunk:
                 continue
             with state_lock:
+                if stream_id != active_stream_id:
+                    break
                 stream_stats["bytes_received"] += len(chunk)
                 stream_stats["last_byte_at"] = time.time()
                 stream_stats["ffmpeg_returncode"] = proc.poll()
@@ -2424,21 +4901,24 @@ async def receive_h264_stream(request: Request):
                 break
             if proc.poll() is not None:
                 with state_lock:
-                    stream_stats["ffmpeg_returncode"] = proc.returncode
+                    if stream_id == active_stream_id:
+                        stream_stats["ffmpeg_returncode"] = proc.returncode
                 break
             try:
                 await asyncio.to_thread(proc.stdin.write, chunk)
                 await asyncio.to_thread(proc.stdin.flush)
             except BrokenPipeError:
                 with state_lock:
-                    stream_stats["last_error"] = "ffmpeg stdin broken pipe"
-                    stream_stats["ffmpeg_returncode"] = proc.poll()
+                    if stream_id == active_stream_id:
+                        stream_stats["last_error"] = "ffmpeg stdin broken pipe"
+                        stream_stats["ffmpeg_returncode"] = proc.poll()
                 break
     except ClientDisconnect:
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
     finally:
         if proc.stdin is not None:
             try:
@@ -2452,9 +4932,10 @@ async def receive_h264_stream(request: Request):
         reader.join(timeout=2.0)
         stderr_reader.join(timeout=1.0)
         with state_lock:
-            stream_stats["connected"] = False
-            stream_stats["disconnected_at"] = time.time()
-            stream_stats["ffmpeg_returncode"] = proc.poll()
+            if stream_id == active_stream_id:
+                stream_stats["connected"] = False
+                stream_stats["disconnected_at"] = time.time()
+                stream_stats["ffmpeg_returncode"] = proc.poll()
 
     print(f"[stream/h264] disconnected robot_id={robot_id}")
     return {"ok": True, "robot_id": robot_id}
@@ -2538,6 +5019,8 @@ async def get_stream_status():
         status["visualization_enabled"] = VISUALIZATION_ENABLED
         status["model_active"] = MODEL_ACTIVE
         status["inference_available"] = frame_processor is not None
+        status["model_error"] = model_error
+        status["pipeline"] = latest_result.get("pipeline")
         status["stream_infer_every_n"] = STREAM_INFER_EVERY_N
         status["inference_max_fps"] = INFERENCE_MAX_FPS
         status["adaptive_batching_enabled"] = ADAPTIVE_BATCHING_ENABLED
@@ -2594,8 +5077,61 @@ async def get_stream_status():
         return status
 
 
+@app.post("/api/model-pipeline")
+async def set_model_pipeline_state(request: Request):
+    if not request.session.get("user"):
+        return JSONResponse(
+            {"ok": False, "detail": "Authentication required."},
+            status_code=401,
+        )
+
+    csrf_error = csrf_failure(request)
+    if csrf_error:
+        return csrf_error
+
+    payload, payload_error = await auth_payload(request)
+    if payload_error:
+        return payload_error
+
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "detail": "enabled must be a boolean."},
+            status_code=400,
+        )
+
+    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
+
+    if not success:
+        return JSONResponse(
+            {
+                "ok": False,
+                "enabled": actual_enabled,
+                "model_error": model_error,
+                "detail": model_error or "Model pipeline state change failed.",
+            },
+            status_code=500,
+        )
+
+    return {
+        "ok": True,
+        "enabled": actual_enabled,
+        "pipeline": latest_result.get("pipeline"),
+        "model_error": model_error,
+    }
+
+
 @app.websocket("/ws/sensors/{robot_id}/lidar")
 async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
+    supplied_token = websocket.headers.get("X-Robot-Control-Token", "")
+    if not ROBOT_CONTROL_TOKEN or not secrets.compare_digest(
+        supplied_token,
+        ROBOT_CONTROL_TOKEN,
+    ):
+        await websocket.close(code=1008, reason="robot authentication required")
+        return
+
     if lidar_ros_bridge is None:
         await websocket.close(code=1011)
         return
@@ -2646,13 +5182,61 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 continue
 
             received_at = time.time()
+
+            # The Pi LiDAR WebSocket is the highest-rate scan source. Tag each
+            # dashboard scan with the server's active navigation session so the
+            # 3D viewer can accept live points during Mapping instead of
+            # discarding these untagged scans as stale Driving data.
+            control_navigation_mode = str(
+                navigation_control_api.state_response().get(
+                    "navigation_mode"
+                )
+                or ""
+            ).strip().upper()
+            sensor_navigation_mode = {
+                "MAPPING": "mapping",
+                "DRIVING": "localization_nav2",
+            }.get(control_navigation_mode)
+            if sensor_navigation_mode is not None:
+                dashboard_scan = dict(dashboard_scan)
+                dashboard_scan["navigation_mode"] = sensor_navigation_mode
+
+            live_map_payload = None
+            if sensor_navigation_mode == "mapping":
+                live_mapping_grid.update_scan(message)
+                live_map_payload = live_mapping_grid.maybe_update(
+                    robot_id=robot_id,
+                    monotonic_now=time.monotonic(),
+                    wall_time=received_at,
+                )
+
+            stored_scan = received_payload(
+                dashboard_scan,
+                received_at,
+            )
             with state_lock:
                 navigation_state["robot_id"] = robot_id
-                navigation_state["scan"] = received_payload(
-                    dashboard_scan,
+                if sensor_navigation_mode is not None:
+                    store_navigation_mode(
+                        sensor_navigation_mode,
+                        received_at,
+                    )
+                navigation_state["scan"] = stored_scan
+                navigation_state["scan_updated_at"] = received_at
+                status = build_navigation_status(received_at)
+
+            navigation_visualization_hub.publish(
+                {
+                    "type": "scan",
+                    "scan": stored_scan,
+                    "status": status,
+                }
+            )
+            if live_map_payload is not None:
+                publish_live_mapping_map(
+                    live_map_payload,
                     received_at,
                 )
-                navigation_state["scan_updated_at"] = received_at
 
             stats = lidar_ros_bridge.stats()
             if stats["received"] % 100 == 0:
@@ -2681,25 +5265,52 @@ async def get_lidar_bridge_status():
             "error": "LiDAR ROS bridge is not running",
         }
 
+    stats = lidar_ros_bridge.stats()
+    last_received_at = stats.get("last_received_at")
+    age_sec = (
+        None
+        if last_received_at is None
+        else max(0.0, time.time() - float(last_received_at))
+    )
     return {
         "ok": True,
         "enabled": True,
-        "stats": lidar_ros_bridge.stats(),
+        "fresh": age_sec is not None and age_sec <= 3.0,
+        "age_sec": age_sec,
+        "stats": stats,
     }
 
 
 @app.websocket("/ws/robot/{robot_id}")
 async def robot_websocket(websocket: WebSocket, robot_id: str):
+    supplied_token = websocket.headers.get("X-Robot-Control-Token", "")
+    if not ROBOT_CONTROL_TOKEN or not secrets.compare_digest(supplied_token, ROBOT_CONTROL_TOKEN):
+        await websocket.close(code=1008, reason="robot authentication required")
+        return
     await connections.connect(robot_id, websocket)
+    if robot_id == SERVER_ROBOT_ID:
+        navigation_control_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
         while True:
             message = await websocket.receive_json()
+            if not await connections.is_current(robot_id, websocket):
+                break
             if message.get("type") == "status":
+                status_data = message.get("data", {})
+                if not isinstance(status_data, dict):
+                    continue
+                status_data = {
+                    key: value
+                    for key, value in status_data.items()
+                    if key not in {"battery", "battery_level"}
+                }
                 with state_lock:
-                    robot_status.update(message.get("data", {}))
+                    robot_status.update(status_data)
                     robot_status["robot_id"] = robot_id
                     robot_status["updated_at"] = time.time()
+                if robot_id == SERVER_ROBOT_ID:
+                    navigation_control_api.note_pi_status(status_data)
             elif message.get("type") == "encoder":
                 data = message.get("data")
 
@@ -2723,6 +5334,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
                 with state_lock:
                     encoder_state.update(received_encoder)
+                if robot_id == SERVER_ROBOT_ID:
+                    navigation_control_api.note_encoder(received_encoder)
 
                 if encoder_ros_bridge is not None:
                     try:
@@ -2732,10 +5345,15 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
+                if robot_id == SERVER_ROBOT_ID:
+                    navigation_control_api.note_pi_status(message)
+                await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
     finally:
-        await connections.disconnect(robot_id, websocket)
+        disconnected = await connections.disconnect(robot_id, websocket)
+        if robot_id == SERVER_ROBOT_ID and disconnected:
+            navigation_control_api.note_pi_connection(False)
 
 
 @app.get("/api/encoder/bridge")
@@ -2760,6 +5378,15 @@ async def send_robot_command(
     robot_id: str,
     request: Request,
 ):
+    robot_auth_error = robot_ingest_failure(request)
+    if robot_auth_error:
+        _, user_auth_error = authenticated_user(request)
+        if user_auth_error:
+            return user_auth_error
+        csrf_error = csrf_failure(request)
+        if csrf_error:
+            return csrf_error
+
     try:
         payload = await request.json()
     except (
@@ -2785,7 +5412,7 @@ async def send_robot_command(
 
     command_type = str(
         payload.get("type", "move")
-    ).strip()
+    ).strip().lower()
 
     if not command_type:
         return JSONResponse(
@@ -2794,6 +5421,12 @@ async def send_robot_command(
                 "error": "command type is required",
             },
             status_code=400,
+        )
+
+    if command_type.lower() in {"resume_safety_check", "resume_navigation"}:
+        return JSONResponse(
+            {"ok": False, "error": "Use the navigation Resume endpoint."},
+            status_code=409,
         )
 
     command = {
@@ -2817,6 +5450,36 @@ async def send_robot_command(
             "stop",
         }
     )
+
+    target_mode = str(
+        command.get("mode", "")
+    ).strip().lower()
+    calibration_required = (
+        command_type == "mode"
+        and target_mode == "auto"
+    ) or (
+        command_type == "auto_drive"
+        and MOTOR_OUTPUT_ENABLED
+        and not nav2_dry_run
+    )
+
+    if calibration_required:
+        calibration_error = (
+            robot_speed_calibration_error(robot_id)
+        )
+        if calibration_error:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "accepted": False,
+                    "delivered": False,
+                    "blocked": True,
+                    "robot_id": robot_id,
+                    "command": command,
+                    "error": calibration_error,
+                },
+                status_code=409,
+            )
 
     if command_type == "auto_drive":
         try:
@@ -2869,11 +5532,9 @@ async def send_robot_command(
                 status_code=400,
             )
 
-        max_wheel_mps = 0.50
-
         if (
-            abs(left_mps) > max_wheel_mps
-            or abs(right_mps) > max_wheel_mps
+            abs(left_mps) > MAX_WHEEL_MPS
+            or abs(right_mps) > MAX_WHEEL_MPS
         ):
             return JSONResponse(
                 {
@@ -2883,7 +5544,7 @@ async def send_robot_command(
                     "command": command,
                     "error": (
                         "wheel speed exceeds "
-                        f"{max_wheel_mps:.2f} m/s"
+                        f"{MAX_WHEEL_MPS:.2f} m/s"
                     ),
                 },
                 status_code=400,
@@ -2927,10 +5588,24 @@ async def send_robot_command(
             status_code=200,
         )
 
-    delivered = await connections.send_command(
-        robot_id,
-        command,
-    )
+    controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
+    motion_context = None
+    if controlled_motion:
+        motion_context = navigation_control_api.motion_safety_context()
+        if motion_context is None:
+            return JSONResponse(
+                {"ok": False, "delivered": False,
+                 "error": "Motion safety context unavailable."},
+                status_code=409,
+            )
+        command["safety_session"] = motion_context["safety_session"]
+        command["safety_epoch"] = motion_context["safety_epoch"]
+    if controlled_motion and navigation_control_api.motion_requires_ack():
+        delivered = await connections.send_command_wait_ack(robot_id, command)
+    else:
+        delivered = await connections.send_command(robot_id, command)
+    if delivered and controlled_motion:
+        delivered = navigation_control_api.note_authorized_motion(motion_context)
 
     status_code = (
         200 if delivered else 409

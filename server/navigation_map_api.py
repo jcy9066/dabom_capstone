@@ -30,6 +30,8 @@ class NavigationMapApi:
         self._load_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._operation_state = "idle"
+        self._active_listener: Callable[[dict[str, Any]], None] | None = None
+        self._control_loader: Callable[..., Any] | None = None
         self._logger = logging.getLogger(__name__)
         self._attach_routes()
 
@@ -38,6 +40,41 @@ class NavigationMapApi:
 
     def close(self) -> None:
         self._ros.close()
+
+    @property
+    def ros_control(self) -> NavigationRosControl:
+        return self._ros
+
+    def resolve_map(self, map_name: Any):
+        return self._registry.get_map(map_name)
+
+    def set_active_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        self._active_listener = listener
+
+    def set_control_loader(self, loader: Callable[..., Any]) -> None:
+        self._control_loader = loader
+
+    def set_visualization_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        self._ros.set_visualization_listener(listener)
+
+    async def activate_map(self, payload: dict[str, Any], user: str = "navigation_control") -> dict[str, Any]:
+        """Load a saved map through the same serialized path used by the dashboard."""
+        if not self._load_lock.acquire(blocking=False):
+            raise NavigationMapError(
+                "MAP_LOAD_IN_PROGRESS",
+                "Another map load request is already in progress.",
+                409,
+            )
+        try:
+            return await asyncio.to_thread(self._activate_map_locked, payload, user)
+        finally:
+            self._load_lock.release()
+            with self._state_lock:
+                if self._operation_state != "active":
+                    self._operation_state = "idle"
 
     async def list_maps(self, request: Request):
         denied = self._login_failure(request)
@@ -98,24 +135,21 @@ class NavigationMapApi:
             return self._error("INVALID_REQUEST", "Map load request must be JSON.")
         if not isinstance(payload, dict):
             return self._error("INVALID_REQUEST", "Map load request must be an object.")
-        if not self._load_lock.acquire(blocking=False):
+        if self._control_loader is None:
             return self._error(
-                "MAP_LOAD_IN_PROGRESS",
-                "Another map load request is already in progress.",
+                "NAVIGATION_CONTROL_REQUIRED",
+                "Saved maps must be loaded through the DRIVING mode transition.",
                 409,
             )
         try:
-            return await asyncio.to_thread(self._load_map_locked, request, payload)
+            user = request.session.get("user") or {}
+            identity = str(user.get("user_id") or user.get("email") or "unknown")
+            return await self._control_loader(payload, user=identity)
         except (NavigationMapError, NavigationRosError) as exc:
             return self._error(exc.error_code, str(exc), exc.status_code)
         except Exception:
             self._logger.exception("navigation map load failed")
             return self._error("UNDEFINED_FAILURE", "The selected map could not be loaded.", 500)
-        finally:
-            self._load_lock.release()
-            with self._state_lock:
-                if self._operation_state != "active":
-                    self._operation_state = "idle"
 
     async def rename_map(self, request: Request):
         denied = self._login_failure(request)
@@ -156,14 +190,13 @@ class NavigationMapApi:
         )
         return {"ok": True, "map": renamed_map.public_dict(self._registry.root_dir)}
 
-    def _load_map_locked(self, request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    def _activate_map_locked(self, payload: dict[str, Any], user: str) -> dict[str, Any]:
         selected_map = self._registry.get_map(payload.get("map_name"))
         initial_pose = self._registry.validate_initial_pose(selected_map, payload.get("initial_pose"))
         self._registry.mark_selected(selected_map)
-        user = request.session.get("user") or {}
         self._logger.info(
             "navigation map load requested user=%s map=%s yaml=%s",
-            user.get("user_id", user.get("email", "unknown")),
+            user,
             selected_map.map_name,
             selected_map.yaml_path,
         )
@@ -175,6 +208,8 @@ class NavigationMapApi:
         )
         self._set_operation_state("verifying")
         active = self._registry.mark_active(selected_map, initial_pose, result["verification"])
+        if self._active_listener is not None:
+            self._active_listener(dict(active))
         with self._state_lock:
             self._operation_state = "active"
         return {

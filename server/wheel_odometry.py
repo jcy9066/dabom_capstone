@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import os
 import threading
 import time
 
@@ -14,6 +13,11 @@ from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Int64MultiArray
 from tf2_ros import TransformBroadcaster
+
+try:
+    from server.env_config import env_float, env_text
+except ModuleNotFoundError:  # Direct script execution from server/.
+    from env_config import env_float, env_text
 
 
 def normalize_angle(angle: float) -> float:
@@ -96,9 +100,11 @@ class WheelOdometryNode(Node):
         self.last_encoder_time_sec = None
         self.has_encoder_data = False
 
-        # 정지 상태에서도 /odom과 TF를 계속 발행한다.
+        # Fresh encoder input is required before publishing /odom and TF.
         self.publish_rate_hz = 20.0
-        self.velocity_timeout_sec = 0.25
+        self.velocity_timeout_sec = env_float(
+            "ODOMETRY_ENCODER_TIMEOUT_SEC", minimum=0.05
+        )
 
         self.received = 0
         self.published = 0
@@ -238,11 +244,10 @@ class WheelOdometryNode(Node):
         )
 
         if encoder_is_stale:
-            linear_velocity = 0.0
-            angular_velocity = 0.0
-        else:
-            linear_velocity = self.latest_linear_velocity
-            angular_velocity = self.latest_angular_velocity
+            return
+
+        linear_velocity = self.latest_linear_velocity
+        angular_velocity = self.latest_angular_velocity
 
         self.publish_odometry(
             now=now,
@@ -332,40 +337,13 @@ class WheelOdometryRunner:
         rclpy.init(args=None)
 
         self.node = WheelOdometryNode(
-            wheel_diameter_m=float(
-                os.getenv(
-                    "WHEEL_DIAMETER_M",
-                    "0.0675",
-                )
-            ),
-            wheel_track_m=float(
-                os.getenv(
-                    "WHEEL_TRACK_M",
-                    "0.201",
-                )
-            ),
-            ticks_per_revolution=float(
-                os.getenv(
-                    "ENCODER_TICKS_PER_REV",
-                    "14289.848",
-                )
-            ),
-            wheel_ticks_topic=os.getenv(
-                "WHEEL_TICKS_TOPIC",
-                "/wheel_ticks",
-            ),
-            odom_topic=os.getenv(
-                "ODOM_TOPIC",
-                "/odom",
-            ),
-            odom_frame=os.getenv(
-                "ODOM_FRAME",
-                "odom",
-            ),
-            base_frame=os.getenv(
-                "BASE_FRAME",
-                "base_link",
-            ),
+            wheel_diameter_m=env_float("WHEEL_DIAMETER_M", minimum=0.001),
+            wheel_track_m=env_float("WHEEL_TRACK_M", minimum=0.001),
+            ticks_per_revolution=env_float("ENCODER_TICKS_PER_REV", minimum=1.0),
+            wheel_ticks_topic=env_text("WHEEL_TICKS_TOPIC"),
+            odom_topic=env_text("ODOM_TOPIC"),
+            odom_frame=env_text("ODOM_FRAME"),
+            base_frame=env_text("BASE_FRAME"),
         )
 
         self.executor = SingleThreadedExecutor()

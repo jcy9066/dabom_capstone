@@ -1,0 +1,25 @@
+[data-dashboard-modal-view] {
+    min-width: 0;
+}
+
+[data-dashboard-modal-view][hidden] {
+    display: none;
+}
+
+#commonModal[data-modal-view] {
+    box-sizing: border-box;
+    padding: 14px;
+}
+
+#commonModal[data-modal-view] .modal-content {
+    width: min(97vw, 1540px);
+    max-width: 97vw;
+    height: min(92vh, 920px);
+    max-height: 95vh;
+    min-width: 0;
+}
+
+#commonModal[data-modal-view] .modal-body {
+    overflow-x: hidden;
+    overflow-y: auto;
+}

@@ -2,6 +2,7 @@
 output/
 weights/
 received_frames/
+/debug.log
 
 # Python cache
 __pycache__/
@@ -24,3 +25,16 @@ logs/
 raspberry/pico_w_sdk/build/
 *.bak
 *.bak_*
+
+# playwright
+.playwright-mcp/
+
+
+# ROS2 / colcon generated files
+build/
+install/
+log/
+
+# colcon environment scripts
+local_setup.bash
+setup.bash

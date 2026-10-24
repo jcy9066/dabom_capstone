@@ -2,13 +2,16 @@
 #
 # 실행 구조:
 #   map_server -> /map
-#   SLLIDAR    -> /scan
+#   lidar_websocket_bridge -> /scan
 #   AMCL       -> /amcl_pose + map->odom TF
 #   odometry   -> odom->base_link TF
 #   map_bridge -> FastAPI server
 #
-# 실제 encoder odometry를 사용하는 경우:
-#   start_fake_odom:=false
+# 최종 runtime에서는 RC카의 실제 encoder가
+# Pi -> WebSocket -> EncoderRosBridge -> /wheel_ticks로 들어오고,
+# root start_gpu_server.sh의 server/wheel_odometry.py가
+# /odom과 dynamic odom->base_link TF를 제공한다.
+# static/fake odometry fallback은 사용하지 않는다.
 #
 # navigation_mode:
 #   localization
@@ -20,15 +23,10 @@
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    IncludeLaunchDescription,
     TimerAction,
 )
 from launch.conditions import IfCondition
-from launch.launch_description_sources import (
-    PythonLaunchDescriptionSource,
-)
 from launch.substitutions import (
-    EnvironmentVariable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
@@ -45,14 +43,6 @@ from launch_ros.substitutions import (
 def generate_launch_description():
     pkg_share = FindPackageShare(
         "patrol_navigation"
-    )
-
-    lidar_launch = PathJoinSubstitution(
-        [
-            pkg_share,
-            "launch",
-            "lidar.launch.py",
-        ]
     )
 
     # ---------------------------------------------------------
@@ -82,41 +72,13 @@ def generate_launch_description():
     # ---------------------------------------------------------
     # 실행 여부
     # ---------------------------------------------------------
-    start_lidar = LaunchConfiguration(
-        "start_lidar"
-    )
     start_bridge = LaunchConfiguration(
         "start_bridge"
-    )
-    start_fake_odom = LaunchConfiguration(
-        "start_fake_odom"
     )
 
     # ---------------------------------------------------------
     # TF frame
     # ---------------------------------------------------------
-    odom_frame = LaunchConfiguration(
-        "odom_frame"
-    )
-    base_frame = LaunchConfiguration(
-        "base_frame"
-    )
-
-    # ---------------------------------------------------------
-    # LiDAR 설정
-    # ---------------------------------------------------------
-    serial_port = LaunchConfiguration(
-        "serial_port"
-    )
-    serial_baudrate = LaunchConfiguration(
-        "serial_baudrate"
-    )
-    driver_package = LaunchConfiguration(
-        "driver_package"
-    )
-    driver_executable = LaunchConfiguration(
-        "driver_executable"
-    )
 
     # ---------------------------------------------------------
     # 저장 지도 서버
@@ -287,18 +249,9 @@ def generate_launch_description():
             # -------------------------------------------------
             DeclareLaunchArgument(
                 "map",
-                default_value=(
-                    PathJoinSubstitution(
-                        [
-                            EnvironmentVariable(
-                                "HOME"
-                            ),
-                            "dabom_capstone",
-                            "navigation",
-                            "maps",
-                            "slam_test_01.yaml",
-                        ]
-                    )
+                description=(
+                    "Saved map YAML selected for the real RC car. "
+                    "No bundled test-map default is used."
                 ),
             ),
 
@@ -322,113 +275,13 @@ def generate_launch_description():
             # 실행 스위치
             # -------------------------------------------------
             DeclareLaunchArgument(
-                "start_lidar",
-                default_value="true",
-            ),
-            DeclareLaunchArgument(
                 "start_bridge",
-                default_value="true",
-            ),
-            DeclareLaunchArgument(
-                "start_fake_odom",
                 default_value="true",
             ),
 
             # -------------------------------------------------
             # TF frame
             # -------------------------------------------------
-            DeclareLaunchArgument(
-                "odom_frame",
-                default_value="odom",
-            ),
-            DeclareLaunchArgument(
-                "base_frame",
-                default_value="base_link",
-            ),
-
-            # -------------------------------------------------
-            # LiDAR 설정
-            # -------------------------------------------------
-            DeclareLaunchArgument(
-                "serial_port",
-                default_value="/dev/ttyUSB0",
-            ),
-            DeclareLaunchArgument(
-                "serial_baudrate",
-                default_value="115200",
-            ),
-            DeclareLaunchArgument(
-                "driver_package",
-                default_value="sllidar_ros2",
-            ),
-            DeclareLaunchArgument(
-                "driver_executable",
-                default_value=(
-                    "sllidar_node"
-                ),
-            ),
-
-            # -------------------------------------------------
-            # LiDAR + base_link -> laser TF
-            # -------------------------------------------------
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    lidar_launch
-                ),
-                condition=IfCondition(
-                    start_lidar
-                ),
-                launch_arguments={
-                    "serial_port": (
-                        serial_port
-                    ),
-                    "serial_baudrate": (
-                        serial_baudrate
-                    ),
-                    "driver_package": (
-                        driver_package
-                    ),
-                    "driver_executable": (
-                        driver_executable
-                    ),
-                    "base_frame": base_frame,
-                }.items(),
-            ),
-
-            # -------------------------------------------------
-            # 임시 odom -> base_link TF
-            # -------------------------------------------------
-            Node(
-                package="tf2_ros",
-                executable=(
-                    "static_transform_publisher"
-                ),
-                name=(
-                    "temporary_odom_to_base_tf"
-                ),
-                output="screen",
-                condition=IfCondition(
-                    start_fake_odom
-                ),
-                arguments=[
-                    "--x",
-                    "0",
-                    "--y",
-                    "0",
-                    "--z",
-                    "0",
-                    "--roll",
-                    "0",
-                    "--pitch",
-                    "0",
-                    "--yaw",
-                    "0",
-                    "--frame-id",
-                    odom_frame,
-                    "--child-frame-id",
-                    base_frame,
-                ],
-            ),
 
             # bridge가 map publish 전에 먼저 구독
             map_bridge_node,

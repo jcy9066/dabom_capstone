@@ -1,0 +1,96 @@
+# dabom_capstone 프로젝트 전용 Codex 설정
+
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+  "../dabom-worktrees",
+  "../dabom_capstone/.git"
+]
+network_access = false
+
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4
+default_subagent_reasoning_effort = "high"
+
+
+# ============================================================
+# Playwright Browser MCP
+# ============================================================
+
+[mcp_servers.playwright]
+command = "npx"
+args = [
+  "-y",
+  "@playwright/mcp@latest",
+  "--headless",
+  "--console-level",
+  "warning",
+  "--viewport-size",
+  "1440x900",
+  "--allowed-origins",
+  "http://127.0.0.1:21063;http://localhost:21063",
+  "--output-dir",
+  ".playwright-mcp"
+]
+
+enabled = true
+required = false
+default_tools_approval_mode = "approve"
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+
+
+# ============================================================
+# GitHub MCP
+# ============================================================
+#
+# GitHub Personal Access Token은 파일에 작성하지 않는다.
+# Codex 실행 전에 환경 변수로 전달한다.
+#
+# export GITHUB_PERSONAL_ACCESS_TOKEN="<TOKEN>"
+#
+# 주의:
+# - 로컬 git add / git commit은 GitHub MCP 기능이 아니다.
+# - 검증 완료 후 로컬 Git CLI를 통한 add / 새 commit은 프로젝트 정책상 허용한다.
+# - 새 commit message는 AGENTS.md의 한 줄 `type: Summary` 규칙을 따른다.
+# - git push는 항상 금지하며 사용자가 직접 수행한다.
+#
+# GitHub MCP 허용:
+# - 원격 파일, branch, commit, diff 조회
+# - 코드 검색
+# - Issue 및 PR 조회
+# - Issue/PR 작성 및 comment는 사용자 승인 후 실행
+# - GitHub Actions 상태 및 로그 조회
+#
+# GitHub MCP 차단:
+# - 원격 파일 생성, 수정, 삭제
+# - 원격 commit 및 branch 생성
+# - 원격 ref 변경 / push에 해당하는 작업
+# - PR merge
+# - PR branch 갱신
+# - GitHub Actions 실행
+
+
+# ============================================================
+# GitHub Remote MCP
+# ============================================================
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+
+# .codex/.env.github에서 shell 환경으로 불러오는 변수명
+bearer_token_env_var = "GITHUB_PERSONAL_ACCESS_TOKEN"
+
+# GitHub MCP는 계속 원격 저장소 read-only 용도로 사용한다.
+# 로컬 git add / git commit 허용 여부는 AGENTS.md와
+# .codex/hooks/pre_tool_policy.py에서 제어한다.
+http_headers = { "X-MCP-Toolsets" = "context,repos,git,issues,pull_requests,actions,labels", "X-MCP-Readonly" = "true" }
+
+enabled = true
+required = false
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 30
+tool_timeout_sec = 120

@@ -41,6 +41,7 @@
 /* 추가 출력 장치 */
 #define SPEAKER_PIN 16
 #define MOSFET_PIN 20
+#define WARNING_LED_PIN MOSFET_PIN
 
 /*
  * 전진 시 tick이 감소하는 바퀴는 해당 값을 -1로 변경한다.
@@ -56,7 +57,25 @@
 #define PWM_WRAP 999U
 
 #define COMMAND_TIMEOUT_MS 350U
+#define BEEP_FREQUENCY_HZ 440.0f
+#define BEEP_PWM_WRAP 4095U
+#define BEEP_DEFAULT_VOLUME_PERCENT 20U
+#define BEEP_MIN_DURATION_MS 50U
+#define BEEP_MAX_DURATION_MS 2000U
 #define CURVE_INNER_RATIO 0.35f
+
+/*
+ * MDD10A / motor protection.
+ *
+ * MOTOR_MAX_PWM is a firmware safety ceiling, not a current limiter.
+ * Start conservatively and raise only after current/thermal validation.
+ */
+#define MOTOR_MAX_PWM 0.30f
+#define MOTOR_RAMP_STEP 0.05f
+#define MOTOR_RAMP_INTERVAL_MS 20U
+#define MOTOR_REVERSE_DEADTIME_MS 120U
+#define MOTOR_ZERO_EPSILON 0.0001f
+
 #define RX_BUFFER_SIZE 128U
 
 /*
@@ -72,6 +91,19 @@ typedef struct {
     uint slice;
     uint channel;
     bool forward_dir_level;
+
+    /*
+     * current_speed is the PWM magnitude/direction actually being applied.
+     * target_speed is the latest requested signed PWM.
+     */
+    float current_speed;
+    float target_speed;
+
+    bool direction_forward;
+    bool reverse_waiting;
+
+    uint64_t reverse_deadline_ms;
+    uint64_t last_ramp_ms;
 } motor_channel_t;
 
 
@@ -97,6 +129,12 @@ static volatile uint8_t right_rear_encoder_state = 0;
 
 static bool encoder_stream_enabled = false;
 static uint64_t last_encoder_report_ms = 0;
+static bool warning_led_enabled = false;
+static uint speaker_pwm_slice = 0;
+static uint speaker_pwm_channel = 0;
+static bool speaker_beep_active = false;
+static uint8_t speaker_volume_percent = BEEP_DEFAULT_VOLUME_PERCENT;
+static uint64_t speaker_beep_until_ms = 0;
 
 
 /*
@@ -137,6 +175,55 @@ static void uart_send_line(const char *message) {
 
 static void uart_reply(const char *message) {
     uart_send_line(message);
+}
+
+
+static void set_warning_led(bool enabled) {
+    gpio_put(WARNING_LED_PIN, enabled ? 1 : 0);
+    warning_led_enabled = enabled;
+}
+
+
+static void speaker_stop_beep(void) {
+    pwm_set_chan_level(speaker_pwm_slice, speaker_pwm_channel, 0);
+    speaker_beep_active = false;
+    speaker_beep_until_ms = 0;
+}
+
+
+static void speaker_init(void) {
+    gpio_set_function(SPEAKER_PIN, GPIO_FUNC_PWM);
+    speaker_pwm_slice = pwm_gpio_to_slice_num(SPEAKER_PIN);
+    speaker_pwm_channel = pwm_gpio_to_channel(SPEAKER_PIN);
+
+    const float divider =
+        (float)clock_get_hz(clk_sys) /
+        (BEEP_FREQUENCY_HZ * ((float)BEEP_PWM_WRAP + 1.0f));
+
+    pwm_set_clkdiv(speaker_pwm_slice, divider);
+    pwm_set_wrap(speaker_pwm_slice, BEEP_PWM_WRAP);
+    pwm_set_chan_level(speaker_pwm_slice, speaker_pwm_channel, 0);
+    pwm_set_enabled(speaker_pwm_slice, true);
+    speaker_stop_beep();
+}
+
+
+static void speaker_start_beep(uint32_t duration_ms) {
+    pwm_set_chan_level(
+        speaker_pwm_slice,
+        speaker_pwm_channel,
+        ((uint32_t)BEEP_PWM_WRAP * speaker_volume_percent) / 200U
+    );
+    speaker_beep_active = true;
+    speaker_beep_until_ms =
+        to_ms_since_boot(get_absolute_time()) + (uint64_t)duration_ms;
+}
+
+
+static void speaker_tick(uint64_t now_ms) {
+    if (speaker_beep_active && now_ms >= speaker_beep_until_ms) {
+        speaker_stop_beep();
+    }
 }
 
 
@@ -426,22 +513,63 @@ static void motor_channel_init(
         motor->channel,
         0
     );
+
+    motor->current_speed = 0.0f;
+    motor->target_speed = 0.0f;
+
+    motor->direction_forward = true;
+    motor->reverse_waiting = false;
+
+    motor->reverse_deadline_ms = 0;
+    motor->last_ramp_ms = 0;
 }
 
 
-static void motor_set_signed_speed(
-    motor_channel_t *motor,
-    float signed_speed
+static float abs_float(float value) {
+    return value >= 0.0f ? value : -value;
+}
+
+
+static int speed_sign(float value) {
+    if (value > MOTOR_ZERO_EPSILON) {
+        return 1;
+    }
+
+    if (value < -MOTOR_ZERO_EPSILON) {
+        return -1;
+    }
+
+    return 0;
+}
+
+
+static float ramp_toward(
+    float current,
+    float target
 ) {
-    signed_speed = clamp_float(
-        signed_speed,
-        -1.0f,
-        1.0f
-    );
+    if (current < target) {
+        current += MOTOR_RAMP_STEP;
 
-    const bool forward =
-        signed_speed >= 0.0f;
+        if (current > target) {
+            current = target;
+        }
 
+    } else if (current > target) {
+        current -= MOTOR_RAMP_STEP;
+
+        if (current < target) {
+            current = target;
+        }
+    }
+
+    return current;
+}
+
+
+static void motor_write_direction(
+    motor_channel_t *motor,
+    bool forward
+) {
     gpio_put(
         motor->dir_pin,
         forward
@@ -449,11 +577,19 @@ static void motor_set_signed_speed(
             : !motor->forward_dir_level
     );
 
-    float magnitude = signed_speed;
+    motor->direction_forward = forward;
+}
 
-    if (magnitude < 0.0f) {
-        magnitude = -magnitude;
-    }
+
+static void motor_write_pwm(
+    motor_channel_t *motor,
+    float magnitude
+) {
+    magnitude = clamp_float(
+        magnitude,
+        0.0f,
+        MOTOR_MAX_PWM
+    );
 
     const uint16_t level = (uint16_t)(
         magnitude * (float)PWM_WRAP
@@ -467,17 +603,234 @@ static void motor_set_signed_speed(
 }
 
 
-static void stop_motors(void) {
-    pwm_set_chan_level(
-        left_motor.slice,
-        left_motor.channel,
-        0
+static void motor_force_stop(
+    motor_channel_t *motor
+) {
+    motor->target_speed = 0.0f;
+    motor->current_speed = 0.0f;
+
+    motor->reverse_waiting = false;
+    motor->reverse_deadline_ms = 0;
+
+    motor_write_pwm(
+        motor,
+        0.0f
+    );
+}
+
+
+static void motor_request_signed_speed(
+    motor_channel_t *motor,
+    float signed_speed
+) {
+    /*
+     * Even if the host requests +/-1.0,
+     * the Pico firmware enforces its own safety ceiling.
+     */
+    signed_speed = clamp_float(
+        signed_speed,
+        -MOTOR_MAX_PWM,
+        MOTOR_MAX_PWM
     );
 
-    pwm_set_chan_level(
-        right_motor.slice,
-        right_motor.channel,
-        0
+    motor->target_speed = signed_speed;
+}
+
+
+static void motor_tick(
+    motor_channel_t *motor,
+    uint64_t now_ms
+) {
+    if (
+        now_ms - motor->last_ramp_ms <
+        MOTOR_RAMP_INTERVAL_MS
+    ) {
+        return;
+    }
+
+    motor->last_ramp_ms = now_ms;
+
+    const float target = motor->target_speed;
+    const float current = motor->current_speed;
+
+    const int target_sign = speed_sign(target);
+    const int current_sign = speed_sign(current);
+
+    /*
+     * Reverse dead-time:
+     * PWM must stay at zero until the deadline.
+     */
+    if (motor->reverse_waiting) {
+        motor_write_pwm(
+            motor,
+            0.0f
+        );
+
+        motor->current_speed = 0.0f;
+
+        if (now_ms < motor->reverse_deadline_ms) {
+            return;
+        }
+
+        /*
+         * The requested direction may have changed
+         * while we were waiting. Use the latest target.
+         */
+        const int latest_target_sign =
+            speed_sign(
+                motor->target_speed
+            );
+
+        if (latest_target_sign != 0) {
+            motor_write_direction(
+                motor,
+                latest_target_sign > 0
+            );
+        }
+
+        motor->reverse_waiting = false;
+        return;
+    }
+
+    /*
+     * Active forward/reverse transition:
+     *
+     * Keep the old DIR level and ramp PWM all the way
+     * to zero before allowing the direction pin to change.
+     */
+    if (
+        current_sign != 0 &&
+        target_sign != 0 &&
+        current_sign != target_sign
+    ) {
+        float magnitude =
+            abs_float(current);
+
+        magnitude = ramp_toward(
+            magnitude,
+            0.0f
+        );
+
+        motor_write_pwm(
+            motor,
+            magnitude
+        );
+
+        if (
+            magnitude <=
+            MOTOR_ZERO_EPSILON
+        ) {
+            motor->current_speed = 0.0f;
+
+            motor_write_pwm(
+                motor,
+                0.0f
+            );
+
+            motor->reverse_waiting = true;
+
+            motor->reverse_deadline_ms =
+                now_ms +
+                MOTOR_REVERSE_DEADTIME_MS;
+
+        } else {
+            motor->current_speed =
+                current_sign > 0
+                    ? magnitude
+                    : -magnitude;
+        }
+
+        return;
+    }
+
+    /*
+     * Starting from zero in the opposite direction:
+     * keep PWM at zero, wait, then change DIR.
+     */
+    if (
+        current_sign == 0 &&
+        target_sign != 0
+    ) {
+        const bool desired_forward =
+            target_sign > 0;
+
+        if (
+            motor->direction_forward !=
+            desired_forward
+        ) {
+            motor_write_pwm(
+                motor,
+                0.0f
+            );
+
+            motor->reverse_waiting = true;
+
+            motor->reverse_deadline_ms =
+                now_ms +
+                MOTOR_REVERSE_DEADTIME_MS;
+
+            return;
+        }
+    }
+
+    /*
+     * Normal acceleration/deceleration in the
+     * currently selected direction.
+     */
+    const float current_magnitude =
+        abs_float(current);
+
+    const float target_magnitude =
+        abs_float(target);
+
+    const float next_magnitude =
+        ramp_toward(
+            current_magnitude,
+            target_magnitude
+        );
+
+    if (
+        next_magnitude <=
+        MOTOR_ZERO_EPSILON
+    ) {
+        motor->current_speed = 0.0f;
+
+        motor_write_pwm(
+            motor,
+            0.0f
+        );
+
+        return;
+    }
+
+    const int output_sign =
+        target_sign != 0
+            ? target_sign
+            : current_sign;
+
+    motor->current_speed =
+        output_sign > 0
+            ? next_magnitude
+            : -next_magnitude;
+
+    motor_write_pwm(
+        motor,
+        next_magnitude
+    );
+}
+
+
+static void stop_motors(void) {
+    /*
+     * STOP / failsafe is intentionally immediate.
+     * Do not ramp an emergency stop.
+     */
+    motor_force_stop(
+        &left_motor
+    );
+
+    motor_force_stop(
+        &right_motor
     );
 
     is_moving = false;
@@ -579,12 +932,12 @@ static void move_motors(
         return;
     }
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &left_motor,
         left_speed
     );
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &right_motor,
         right_speed
     );
@@ -606,15 +959,28 @@ static void drive_motors(
     float right_speed
 ) {
     /*
+     * Explicit zero command is an immediate stop.
+     * This also resets any pending reverse transition.
+     */
+    if (
+        abs_float(left_speed) <= MOTOR_ZERO_EPSILON &&
+        abs_float(right_speed) <= MOTOR_ZERO_EPSILON
+    ) {
+        stop_motors();
+        uart_reply("OK,DRIVE");
+        return;
+    }
+
+    /*
      * DRIVE 입력은 -1.0 ~ 1.0 범위의 정규화된 PWM 명령이다.
      * 범위 검증은 command parser에서 먼저 수행한다.
      */
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &left_motor,
         left_speed
     );
 
-    motor_set_signed_speed(
+    motor_request_signed_speed(
         &right_motor,
         right_speed
     );
@@ -682,6 +1048,11 @@ static void handle_command(char *line) {
         return;
     }
 
+    if (strcmp(command, "FW_INFO") == 0) {
+        uart_reply("OK,FW,MOTOR_SAFE_V1");
+        return;
+    }
+
     if (strcmp(command, "STOP") == 0) {
         stop_motors();
         uart_reply("OK,STOP");
@@ -734,6 +1105,107 @@ static void handle_command(char *line) {
                 : "OK,ENC_STREAM,0"
         );
 
+        return;
+    }
+
+    if (strcmp(command, "VOLUME_GET") == 0) {
+        if (strtok_r(NULL, ",", &save_pointer) != NULL) {
+            uart_reply("ERR,VOLUME_GET takes no arguments");
+            return;
+        }
+        char response[24];
+        snprintf(response, sizeof(response), "OK,VOLUME,%u", speaker_volume_percent);
+        uart_reply(response);
+        return;
+    }
+
+    if (strcmp(command, "VOLUME") == 0) {
+        char *percent_text = strtok_r(NULL, ",", &save_pointer);
+        char *extra_argument = strtok_r(NULL, ",", &save_pointer);
+        if (percent_text == NULL || extra_argument != NULL ||
+            *percent_text == '\0') {
+            uart_reply("ERR,VOLUME requires percent");
+            return;
+        }
+        for (const char *digit = percent_text; *digit != '\0'; ++digit) {
+            if (*digit < '0' || *digit > '9') {
+                uart_reply("ERR,VOLUME must be 0..100");
+                return;
+            }
+        }
+        const unsigned long percent = strtoul(percent_text, NULL, 10);
+        if (percent > 100U) {
+            uart_reply("ERR,VOLUME must be 0..100");
+            return;
+        }
+        speaker_volume_percent = (uint8_t)percent;
+        // Running tones finish at their original level; new beep phases use
+        // the new setting. Warning LED timing is unaffected by mute.
+        char response[24];
+        snprintf(response, sizeof(response), "OK,VOLUME,%u", speaker_volume_percent);
+        uart_reply(response);
+        return;
+    }
+
+    if (strcmp(command, "BEEP") == 0) {
+        char *duration_text = strtok_r(NULL, ",", &save_pointer);
+        char *extra_argument = strtok_r(NULL, ",", &save_pointer);
+
+        if (duration_text == NULL || extra_argument != NULL) {
+            speaker_stop_beep();
+            uart_reply("ERR,BEEP requires duration_ms");
+            return;
+        }
+
+        char *end_pointer = NULL;
+        const unsigned long duration_ms = strtoul(
+            duration_text,
+            &end_pointer,
+            10
+        );
+
+        if (
+            end_pointer == duration_text ||
+            *end_pointer != '\0' ||
+            duration_ms < BEEP_MIN_DURATION_MS ||
+            duration_ms > BEEP_MAX_DURATION_MS
+        ) {
+            speaker_stop_beep();
+            uart_reply("ERR,BEEP duration out of range");
+            return;
+        }
+
+        speaker_start_beep((uint32_t)duration_ms);
+
+        char response[32];
+        snprintf(response, sizeof(response), "OK,BEEP,%lu", duration_ms);
+        uart_reply(response);
+        return;
+    }
+
+    if (strcmp(command, "LED") == 0) {
+        char *enabled_text = strtok_r(
+            NULL,
+            ",",
+            &save_pointer
+        );
+        char *extra_argument = strtok_r(
+            NULL,
+            ",",
+            &save_pointer
+        );
+        bool enabled = false;
+        if (
+            enabled_text == NULL ||
+            extra_argument != NULL ||
+            !parse_enabled_value(enabled_text, &enabled)
+        ) {
+            set_warning_led(false);
+            uart_reply("ERR,LED requires 0 or 1");
+            return;
+        }
+        set_warning_led(enabled);
+        uart_reply(enabled ? "OK,LED,1" : "OK,LED,0");
         return;
     }
 
@@ -832,9 +1304,16 @@ static void handle_command(char *line) {
             &save_pointer
         );
 
+        char *extra_argument = strtok_r(
+            NULL,
+            ",",
+            &save_pointer
+        );
+
         if (
             direction == NULL ||
-            speed_text == NULL
+            speed_text == NULL ||
+            extra_argument != NULL
         ) {
             stop_motors();
 
@@ -854,7 +1333,8 @@ static void handle_command(char *line) {
 
         if (
             end_pointer == speed_text ||
-            *end_pointer != '\0'
+            *end_pointer != '\0' ||
+            !isfinite(speed)
         ) {
             stop_motors();
             uart_reply("ERR,invalid speed");
@@ -930,6 +1410,10 @@ int main(void) {
 
     encoder_init();
     encoder_reset();
+    speaker_init();
+    gpio_init(WARNING_LED_PIN);
+    gpio_set_dir(WARNING_LED_PIN, GPIO_OUT);
+    set_warning_led(false);
     stop_motors();
 
     sleep_ms(100);
@@ -981,6 +1465,7 @@ int main(void) {
             } else {
                 receive_length = 0;
                 stop_motors();
+                set_warning_led(false);
 
                 uart_reply(
                     "ERR,receive buffer overflow"
@@ -993,6 +1478,23 @@ int main(void) {
                 get_absolute_time()
             );
 
+        /*
+         * Non-blocking motor protection state machines.
+         * UART, encoder, failsafe, LED and speaker handling
+         * continue to run while the PWM ramps.
+         */
+        motor_tick(
+            &left_motor,
+            now_ms
+        );
+
+        motor_tick(
+            &right_motor,
+            now_ms
+        );
+
+        speaker_tick(now_ms);
+
         if (is_moving) {
             if (
                 now_ms - last_move_ms >
@@ -1000,9 +1502,7 @@ int main(void) {
             ) {
                 stop_motors();
 
-                uart_reply(
-                    "EVENT,FAILSAFE_STOP"
-                );
+                uart_reply("EVENT,FAILSAFE_STOP");
             }
         }
 

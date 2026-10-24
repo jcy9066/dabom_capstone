@@ -53,6 +53,10 @@ class EncoderRosBridge:
       data[1] = right_front
       data[2] = left_rear
       data[3] = right_rear
+
+    FastAPI 프로세스의 rclpy context는 LiDAR, encoder, navigation이
+    공유할 수 있으므로 개별 bridge close()에서 전역 rclpy.shutdown()을
+    호출하지 않는다. 각 bridge는 자신이 만든 executor/node만 정리한다.
     """
 
     def __init__(
@@ -66,8 +70,6 @@ class EncoderRosBridge:
         self.node = None
         self.executor = None
         self.thread = None
-
-        self.owns_rclpy = False
         self.started = False
 
         self.stats_lock = threading.Lock()
@@ -88,7 +90,6 @@ class EncoderRosBridge:
 
         if not rclpy.ok():
             rclpy.init(args=None)
-            self.owns_rclpy = True
 
         self.node = EncoderPublisherNode(self)
 
@@ -130,12 +131,11 @@ class EncoderRosBridge:
             except Exception:
                 pass
 
-        if self.owns_rclpy and rclpy.ok():
-            try:
-                rclpy.shutdown()
-            except Exception:
-                pass
-
+        # Do not call rclpy.shutdown() here. The global context can be shared
+        # by LiDAR and navigation nodes in the same FastAPI process.
+        self.node = None
+        self.executor = None
+        self.thread = None
         self.started = False
 
     def mark_published(self) -> None:

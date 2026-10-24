@@ -1,178 +1,270 @@
-@RTK.md
+# AGENTS.md
 
-# AGENT.md
+`dabom_capstone`에서 Codex가 따라야 하는 프로젝트 공통 규칙이다.
 
-이 문서는 `~/capstone` 프로젝트를 이어서 작업하는 에이전트/개발자를 위한 작업 안내서입니다. 프로젝트 핵심 명세는 `PROJECT.md`를 기준으로 삼고, 현재 코드와 모델 관련 구현은 실험 및 진행 중 상태로 취급합니다.
+## 1. 기준 구조
 
-## 프로젝트 핵심
+- Server: `server/app.py`
+- Frontend: `frontend/templates/`, `frontend/services/static/`
+- ROS 2: `navigation/ros/patrol_navigation/`
+- Raspberry Pi target: **Raspberry Pi 3 Model B (1GB), Ubuntu Server 22.04 arm64**
+- GPU runtime launcher: `start_gpu_server.sh`
+- Raspberry Pi runtime launcher: `start_pi_stack.sh`
+- Raspberry Pi client: `raspberry/robot_command_client.py`
+- Motor control: `raspberry/controllers/motor_controller.py`
+- Pico W: `raspberry/pico_w_sdk/main.c`
+- Tests: `tests/`
 
-- 프로젝트명: 자율주행 AI 방범 로봇
-- 목표: Raspberry Pi 4 기반 모바일 로봇이 특정 구역을 자율 순찰하고, 카메라/비전 AI로 침입, 흉기, 폭력 또는 이상 행동을 탐지해 관제 대시보드와 알림으로 전달하는 시스템
-- 주요 하드웨어 가정: Raspberry Pi 4, RC카 프레임, 2D LiDAR, 비전 카메라
-- 주요 소프트웨어 가정: ROS, Python, PyTorch 계열 모델, Flask 웹 대시보드
-- 계획된 핵심 기능:
-  - LiDAR 기반 SLAM 및 장애물 회피
-  - ROS 내비게이션 스택 기반 순찰
-  - YOLO 계열 객체 탐지 및 추적
-  - Pose Estimation 기반 이상 행동 분류
-  - 실시간 웹 관제, 영상 스트리밍, 위험 알림
+Pi와 Server의 역할은 다음 기준을 유지한다.
 
-## 현재 저장소 상태 요약
+```text
+Raspberry Pi 3B
+- camera/LiDAR/encoder 수집
+- Pico W UART motor/LED control
+- H.264/WebSocket/HTTP 전송
 
-현재 저장소에는 관제 웹 서버, 로컬 카메라 업로드 테스트, 비디오 파일 기반 행동 분석 파이프라인, 텔레그램 알림, RTSP 수신기, 여러 모델 조합 실험 코드가 있다. ROS/SLAM/실제 모터 제어와 완전한 하드웨어 연동은 명세상 목표이며, 저장소 코드에서는 아직 완성된 형태로 확인되지 않는다.
-
-대시보드와 모델 파이프라인은 서로 별도 축으로 개발되어 있다. `frontend/app.py`는 Flask 관제 서버와 MJPEG 스트리밍을 담당하고, `perception/main.py`는 테스트 영상 또는 RTSP 소스를 입력받아 탐지/추적/행동 인식 결과 영상을 저장하는 실험 파이프라인이다. 향후 SLAM 및 자율주행 코드는 `navigation/`에 배치한다.
-
-## 주요 파일과 역할
-
-- `PROJECT.md`: 프로젝트 명세의 기준 문서. 목표, 하드웨어, 소프트웨어 스택, 핵심 기능, 데이터 흐름을 설명한다.
-- `ERD.png`: 관리자, 상태, 이벤트, 조치 로그 중심의 데이터베이스 설계 초안이다.
-- `Activity_Diagram.png`: Raspberry Pi, GPU/AI 분석, 웹 관제 영역의 시스템 활동 흐름도다.
-- `README.md`: 간단 실행 예시. 테스트 영상 모드와 RTSP 모드 명령이 적혀 있다.
-- `frontend/app.py`: Flask 기반 관제 서버. `/`, `/video_feed`, `/upload`, `/get_status`, `/update_status`, `/send_telegram` 라우트를 제공한다.
-- `frontend/templates/index.html`, `frontend/static/script.js`, `frontend/static/style.css`: 관제 대시보드 UI. 실시간 영상, 상태 바, 알림 패널, 북마크/갤러리 모달, 자동/수동 순찰 토글, D-Pad, 다크 모드가 구현되어 있다.
-- `perception/local_cam.py`: 노트북 기본 웹캠을 읽어 `frontend/app.py`의 `/upload`로 JPEG 프레임을 전송하는 로컬 테스트 클라이언트다.
-- `perception/main.py`: 행동 분석 파이프라인 선택 CLI. 9개 모델 조합 중 하나를 선택해 입력 영상을 분석하고 `output/<pipeline>/result_<source>`로 저장한다.
-- `perception/core/trigger.py`: CascadingTrigger. 객체 추적 결과에서 흉기, 거리, 속도, 박스 비율, 사람 간 밀집도 조건으로 의심 상태를 선별한다.
-- `perception/stream/rtsp_receiver.py`: OpenCV/FFmpeg 기반 RTSP 프레임 수신기. 작은 큐를 사용해 오래된 프레임을 버리고 최신 프레임 위주로 처리한다.
-- `perception/utils/telegram_notifier.py`: 텔레그램 메시지/사진 알림을 백그라운드 스레드로 전송한다.
-- `perception/config/settings.py`: `.env`에서 텔레그램, RTSP, 임계값 관련 환경 변수를 로드한다.
-- `perception/config/config.yaml`: RTSP URL, 모델 가중치 경로, 임계값, 알림 웹훅 설정 예시를 담고 있다.
-- `perception/models/`: 탐지, 추적, 자세 추정, 행동 분류 실험 코드가 있다.
-- `navigation/`: 향후 SLAM, ROS 내비게이션, 경로 계획, 모터 제어 연동 코드를 둘 디렉토리다.
-- `weights/`: YOLO, DINO, RTMPose, ViTPose, ST-GCN, ST-GCN++, PoseConv3D 계열 가중치/설정 파일이 있다. 대용량 바이너리이므로 문서나 커밋에 내용을 복사하지 않는다.
-- `data/test_videos/`: 테스트용 영상/오디오 파일이 있다.
-- `output/`: 분석 결과 영상 산출물이다.
-
-## 모델 및 분석 파이프라인
-
-`perception/main.py`는 다음 조합을 선택할 수 있도록 되어 있다.
-
-1. YOLO11n + ByteTrack + RTMPose + ST-GCN
-2. YOLO11x + ByteTrack + RTMPose + ST-GCN
-3. DINO + Bot-SORT + ViTPose(H) + ST-GCN++
-4. YOLO11x + Bot-SORT + RTMPose + ST-GCN++
-5. YOLO11x-Pose + Bot-SORT + ST-GCN++
-6. YOLO26m + Bot-SORT + RTMPose + ST-GCN++
-7. YOLO26m + Bot-SORT + RTMPose + PoseConv3D
-8. YOLO26m-Pose + Bot-SORT + ST-GCN++
-9. YOLO26m-Pose + Bot-SORT + PoseConv3D
-
-탐지 대상 클래스는 주로 사람과 일부 흉기/위험 물체로 제한되어 있다. YOLO 계열 구현은 Ultralytics `model.track()`을 사용하고, DINO 구현은 MMDetection과 Ultralytics Bot-SORT를 조합한다. 행동 인식 계열 구현은 MMPose/MMACTION 기반으로 자세 시퀀스를 만들고, 프레임 수가 부족할 때 마지막 자세를 반복해 동적 패딩한 뒤 매 프레임 분류를 시도한다.
-
-주의: 모델 관련 코드는 진행 중이며, 성능/정확도/실시간성/하드웨어 적합성이 확정된 것으로 보지 않는다. 특히 CUDA 장치(`cuda:0`)를 기본값으로 쓰는 코드가 많으므로 Raspberry Pi 또는 CPU 환경에서 그대로 실행되지 않을 수 있다.
-
-## 웹 대시보드 상태
-
-`frontend/app.py`는 서버가 받은 최신 프레임을 `current_frame`에 저장하고 `/video_feed`에서 MJPEG 형태로 스트리밍한다. `/update_status`는 외부 장치가 보내는 CPU, 온도, 배터리, RAM, 네트워크 상태를 받아 `robot_status`에 반영하고, 프론트엔드는 `/get_status`를 1초마다 폴링한다.
-
-프론트엔드는 다음 기능을 포함한다.
-
-- 실시간 카메라 영역 및 전체화면
-- 카메라 상단 날짜/시간 오버레이
-- 미니맵 자리 표시 및 확대 토글
-- 실시간 경고/알림 패널
-- 기기 상태 로그, 순찰 기록, 북마크, 갤러리 모달
-- 현재 화면 북마크 기록
-- 신고 버튼을 통한 `/send_telegram` 호출
-- 자동/수동 순찰 모드 토글
-- 수동 모드 D-Pad 및 키보드 방향키/WASD 입력 처리
-- 사이드바와 다크 모드
-
-다만 순찰 기록, 실제 위치, 실제 로봇 이동 명령, 경고 방송, 감지 결과 push/polling, 갤러리 저장은 아직 프론트엔드 자리 표시 또는 주석 수준의 미연동 영역으로 보인다.
-
-## 다이어그램 기준
-
-- `Activity_Diagram.png`는 Raspberry Pi, GPU/AI 분석, 웹 관제 흐름을 나누어 설명한다. 구현 시 Raspberry Pi 쪽은 순찰 모드 판별, 자율/수동 주행, 센서 수집, 네트워크 연결/오프라인 큐 전송을 담당하는 흐름으로 본다.
-- GPU/AI 분석 쪽은 영상 수신, 객체 탐지, 침입/의심 객체 판정, pose estimation 기반 행동 분석, 경고/위험 이벤트 분류, TTS/신고/관리자 통신, 이벤트 전후 영상 저장, 순찰 로그 저장 흐름을 기준으로 한다.
-- 웹 관제 쪽은 실시간 영상 수신/송출, 주행 모드 설정, 수동 주행 방향키 조작 및 모터 제어 명령 전송 흐름을 기준으로 한다.
-- `ERD.png`는 `users`, `system_status`, `event_log`, `action_log`를 핵심 테이블로 둔다. 실제 DB 구현 시 이벤트, 상태 로그, 관리자 조치 기록은 이 구조를 우선 참고한다.
-- `event_log`는 AI/시스템 이벤트의 원천 기록이며, `action_log`는 관리자가 어떤 이벤트에 대해 경고, 수동 이동, 신고, 통신, 메모를 수행했는지 남기는 기록으로 본다.
-
-## 실행 예시
-
-Flask 관제 서버:
-
-```bash
-python frontend/app.py
+GPU Server
+- FastAPI/Web/DB
+- AI perception
+- SLAM/Localization/Nav2
+- ROS bridge/odometry
 ```
 
-노트북 웹캠 프레임 업로드 테스트:
+Pi 3B UART 기준은 `/dev/serial0`, 115200 8N1, GPIO14/15이며,
+PL011(`ttyAMA0`)을 primary UART로 사용하는 현재 하드웨어 구성을 기준으로 한다.
+Pi 3B 내장 Wi-Fi는 2.4GHz를 사용한다.
 
-```bash
-python perception/local_cam.py
+문서와 코드가 충돌하면 현재 실행 경로와 실제 참조 관계를 우선한다.
+과거 Flask/MicroPython/backup 구현은 현재 기준으로 간주하지 않는다.
+
+## 2. 구현 Workflow
+
+코드 또는 설정 변경 시 Primary/Main Agent는 다음 순서를 지킨다.
+
+1. 요청 범위를 확정한다.
+2. `implement-feature`를 적용한다.
+3. 수정 전에 `code_explorer`에게 현재 범위의 실행 경로와 영향 파일만 조사시킨다.
+4. 조사 결과를 바탕으로 작업 DAG, dependency, 공통 contract, 파일 ownership을 확정한다.
+5. 서로 독립적인 구현 작업만 별도 feature branch + linked Git worktree로 분리한다.
+6. 명시적으로 허용된 implementation worker를 각자의 assigned worktree에서 병렬 실행한다.
+7. 각 worker는 자신의 ownership 범위만 구현 → 검증 → 새 commit한다.
+8. worker 결과가 모두 PASS이면 Primary/Main Agent는 commit hash와 통합 순서를 보고하고 멈춘다.
+9. branch 간 merge/cherry-pick/rebase는 사용자가 직접 수행한다.
+10. 사용자가 integration 완료를 알리면 통합 단계 구현과 검증을 계속한다.
+11. 모든 구현 완료 후 필요한 reviewer를 병렬 실행한다.
+12. 최종적으로 `review-change`와 `test_reviewer`를 수행한다.
+13. 변경/검증/commit/미검증 항목만 간결하게 보고한다.
+
+Validation routing:
+
+- `server/` → `validate-server`
+- `frontend/` → `validate-dashboard`
+- `server/app.py` → `validate-server` + `validate-dashboard`
+- `navigation/` → `validate-navigation`
+- `raspberry/` 또는 `start_pi_stack.sh` → `validate-raspberry`
+- `start_gpu_server.sh` → `validate-server` + `validate-navigation`
+- source/config 변경 → `review-change`
+
+Runtime launcher 관련 변경은 최소한 다음을 확인한다.
+
+```text
+bash -n start_gpu_server.sh start_pi_stack.sh
+python .agents/skills/validate-raspberry/scripts/validate_uart_protocol.py
 ```
 
-테스트 영상 분석:
+실제 Pi 3B가 없는 개발 환경에서는 정적 검증과 mock/test 결과까지만 인정한다.
+실제 UART, Camera, LiDAR, Pico 응답은 Pi 3B 실기기에서 실행한 결과와 구분해서 보고한다.
 
-```bash
-python perception/main.py --source data/test_videos/scene3_assault.mp4
+## 3. Orchestration / Worktree 규칙
+
+- `main`과 `dev`는 protected branch다.
+- `main`/`dev`는 조회와 새 branch/worktree의 start point로만 사용할 수 있다.
+- 어떤 Agent도 `main` 또는 `dev`에서 `git add`나 `git commit`을 실행하지 않는다.
+- 구현은 반드시 protected branch가 아닌 **linked Git worktree**에서 수행한다.
+- Primary/Main Agent는 새 branch와 새 linked worktree를 생성할 수 있다.
+- Codex가 자동으로 수행할 수 있는 worktree 변경은 `git worktree add -b ...`뿐이다.
+- branch 생성은 허용하지만 branch 삭제/rename/force-update는 금지한다.
+- worktree 삭제/move/prune/repair/lock/unlock은 사용자가 직접 수행한다.
+- worker마다 branch, worktree, ownership을 명시한다.
+- worker는 자신에게 할당되지 않은 worktree에서 source/config를 수정하지 않는다.
+- worker가 ownership 충돌이나 contract mismatch를 발견하면 임의로 범위를 넓히지 말고 `BLOCKED`로 부모에게 반환한다.
+- 여러 worker의 commit 통합은 사용자가 직접 수행한다.
+- integration 전에는 서로 다른 worktree의 수정 내용을 복사하거나 덮어쓰지 않는다.
+- `.env`, secret, runtime image, DB dump를 worktree 사이에 자동 복사하지 않는다.
+
+Orchestration state 예시:
+
+```text
+T0 CONTRACT    PASS
+T1 DB          RUNNING
+T2 MEDIA       RUNNING
+T3 UI          RUNNING
+T4 INTEGRATION BLOCKED
+T5 REVIEW      BLOCKED
 ```
 
-RTSP 입력 사용 계획:
+실패한 node만 reopen하며 전체 작업을 불필요하게 다시 수행하지 않는다.
 
-```bash
-python perception/main.py --source rtsp
+## 4. 범위 및 안전
+
+- 요청하지 않은 기능, refactor, rename, 문서를 임의로 추가하지 않는다.
+- 기존 구현을 검색한 뒤 수정하고 중복 구현을 만들지 않는다.
+- 파일 제거 전 실제 참조를 확인한다.
+- 실제 하드웨어가 없으면 static/mock/build 결과와 실환경 결과를 구분한다.
+- 사용자의 명시적 요청 없이 실제 motor, GPIO, serial movement, firmware flash,
+  `/cmd_vel`, Telegram 전송, 경고 방송, 지도/사용자/운영 DB 삭제를 실행하지 않는다.
+- `start_pi_stack.sh`는 실제 UART, Camera, LiDAR, Pico W와 상호작용하고 기존 동일 역할 프로세스를 종료하므로
+  사용자의 명시적 요청 없이 개발 PC나 임의 환경에서 자동 실행하지 않는다.
+- `start_gpu_server.sh`는 기존 FastAPI/odometry/navigation runtime 프로세스를 종료할 수 있으므로
+  현재 GPU runtime을 재시작해도 되는 상황에서만 실행한다.
+- 운영 DB DDL/DML은 사용자가 현재 작업에서 명시적으로 승인한 범위만 수행한다.
+- 승인된 migration을 적용하기 전 현재 schema를 확인하고, 적용 후 다시 schema를 검증한다.
+- `DROP DATABASE`, `DROP TABLE`, `TRUNCATE`, 대량 `DELETE`는 명시적 별도 승인 없이는 금지한다.
+- `.env`, password, token, secret, model weight, build/log/runtime 산출물을 commit하지 않는다.
+
+## 5. Token / Context 절약 규칙
+
+항상 필요한 정보만 읽고 반환한다.
+
+- 전체 repository/file/log dump보다 `rg`, 경로 제한 검색, 부분 읽기를 우선한다.
+- 동일 파일과 동일 검증 결과를 불필요하게 다시 읽거나 반복하지 않는다.
+- 기본 Git 확인은 `status --short`, `diff --stat`, 필요한 파일의 targeted diff를 우선한다.
+- 테스트는 관련 test부터 `-q`로 실행하고, 전체 suite는 최종 회귀 확인이 필요할 때만 실행한다.
+- 성공 로그 전체를 반환하지 않는다. 실패한 명령은 오류 핵심과 필요한 주변 문맥만 반환한다.
+- Sub-Agent 결과는 최대 15줄로 제한한다.
+- Sub-Agent는 원본 log, 전체 diff, 전체 source를 부모에게 복사하지 않는다.
+- 결과는 `PASS/WARN/FAIL/BLOCKED`, 근거 파일/symbol, blocking issue, skipped 항목만 전달한다.
+- 이미 같은 diff와 범위를 검토한 Sub-Agent 결과가 있으면 재사용한다.
+
+## 6. RTK 사용
+
+RTK(Rust Token Killer)가 PATH에 있으면 shell 출력이 큰 지원 명령에 우선 사용한다.
+
+권장:
+
+```text
+rtk git status
+rtk git log -n 10
+rtk git diff
+PYTHONPATH="$PWD" rtk pytest -q
+rtk grep "pattern" path
+rtk find "pattern" path
+rtk read path
 ```
 
-주의: 현재 `perception/main.py`의 `LocalVideoReader`는 파일 경로 존재 여부를 먼저 확인하므로, `--source rtsp`는 README에 적혀 있지만 그대로는 추가 연결 코드가 필요할 수 있다.
+규칙:
 
-## Task & Workflow
+- RTK는 shell 출력 압축용이며 Git 권한 정책을 변경하지 않는다.
+- `rtk git add`와 `rtk git commit`은 아래 Git 정책 범위에서만 허용한다.
+- `rtk git push/pull/fetch/merge/...`도 동일하게 금지한다.
+- Windows + Git Bash에서 Python test는 project root import 보장을 위해 `PYTHONPATH="$PWD"`를 붙인다.
+- RTK pytest가 실패하면 동일 범위에서 `PYTHONPATH="$PWD" python -m pytest -q`로 한 번만 fallback한다.
+- RTK가 없거나 해당 명령을 지원하지 않거나 한 번 실패하면 raw compact command로 한 번만 fallback한다.
+- pathspec 등 RTK filter가 잘못 해석되는 명령은 raw targeted command를 사용한다.
+- Codex가 `rtk init`, 설치, 업데이트를 자동 실행하지 않는다.
+- 절감 확인이 필요할 때만 `rtk gain` 또는 `rtk gain --history`를 실행한다.
 
-사용자가 기능 구현 또는 버그 수정을 요청하면 아래 4단계를 반드시 순차적으로 실행한다. 문서화 단계를 건너뛰고 코드만 단독으로 수정하는 것은 금지한다.
+## 7. Sub-Agent
 
-1. 작업 계획서 작성 (Planning)
-   - 코드를 수정하기 전, 요구사항을 분석하고 기술적 접근 방식을 정리한다.
-   - 계획서는 루트 디렉토리 아래 `docs/` 경로에 저장한다.
-   - 파일명 형식: `docs/YYYYMMDD_[Front|Back|FULL]_작업명_plan.md`
+Read-only reviewer:
 
-2. 코드 구현 (Execution)
-   - 1단계의 계획을 바탕으로 `capstone`의 코드를 작성하거나 수정한다.
+- `code_explorer`: 수정 전 실행 경로/영향 범위 조사
+- `dashboard_reviewer`: Playwright browser 검증
+- `ros_reviewer`: ROS/SLAM/AMCL/Nav2/TF 검토
+- `hardware_reviewer`: Pi 3B/Pico/UART/failsafe/runtime 설정 검토
+- `test_reviewer`: 최종 diff/regression/test gap 검토
 
-3. 작업 결과 보고서 작성 (Documentation)
-   - 코딩이 완료되면 수정/생성된 파일 목록과 핵심 변경 사항을 요약한다.
-   - 결과 보고서는 루트 디렉토리 아래 `docs/` 경로에 저장한다.
-   - 파일명 형식: `docs/YYYYMMDD_[Front|Back|FULL]_작업명_result.md`
+Implementation worker:
 
-4. 버전 관리 및 원격 저장소 동기화 (Git & Memento Sync)
-   - 3단계 완료 후 코드 푸시가 필요하면 지정 스크립트를 사용한다.
-   - 사용 명령: `./scripts/push_with_memento.sh "<커밋 메시지>"`
-   - 내장 `git push` 단독 사용은 금지한다.
+- `db_worker`: DB schema/migration/database access layer 구현
+- `media_worker`: privacy image persistence/event cooldown 연동 구현
+- `dashboard_worker`: dashboard HTML/CSS/JS UI 구현
 
-필수 제약:
+규칙:
 
-- 파일명에는 당일 날짜와 작업 범위 태그(`[Front]`, `[Back]`, `[FULL]` 중 택 1)를 반드시 포함한다.
-- 계획서와 결과 보고서 작성 없이 코드만 수정하는 것을 엄격히 금지한다.
+- Reviewer Sub-Agent는 계속 read-only다.
+- Codex runtime에서 Sub-Agent는 부모 session의 effective sandbox를 상속할 수 있으므로,
+  `code_explorer`와 reviewer를 실제 read-only로 강제해야 하는 단계는 부모 Codex 자체를
+  `--sandbox read-only`로 시작한다.
+- `db_worker`, `media_worker`, `dashboard_worker` 구현 단계는
+  `workspace-write` 부모 session에서만 실행한다.
+- 동일한 parent session에서 read-only reviewer와 writable implementation worker를
+  혼합 실행하지 않는다.
+- Implementation worker만 `workspace-write`를 사용한다.
+- Implementation worker는 부모가 지정한 linked worktree와 ownership 범위에서만 수정한다.
+- worker 시작 시 현재 branch와 linked worktree 여부를 확인한다.
+- 현재 branch가 `main`/`dev`이거나 assigned worktree가 아니면 수정하지 않고 `BLOCKED`를 반환한다.
+- worker는 다른 worker를 생성하지 않는다.
+- worker는 다른 worker의 ownership 파일을 수정하지 않는다.
+- worker는 자신의 관련 test와 validator가 PASS한 경우에만 task-scoped `git add`와 새 commit을 수행한다.
+- 현재 thread가 reviewer이면 같은 reviewer를 다시 생성하지 않는다.
 
-## 환경 변수와 비밀값
+## 8. Git 정책
 
-`.env`는 `.gitignore`에 포함되어 있으며 비밀값을 커밋하지 않는다. 확인된 키 이름은 다음과 같다.
+허용되는 상태 변경:
 
-- `TELEGRAM_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `SPATIAL_THRESHOLD_IOU`
-- `SPATIAL_THRESHOLD_DIST`
-- `TEMPORAL_THRESHOLD_FRAMES`
-- `RTSP_URL`
+- 새 branch 생성
+- `git worktree add -b <branch> <path> [<start-point>]`
+- `git switch --no-guess <existing-branch>`
+- linked feature worktree에서의 `git add`
+- linked feature worktree에서의 새 `git commit`
 
-`app.py`와 `utils/telegram_notifier.py` 모두 텔레그램 환경 변수를 사용한다. 알림 기능을 다룰 때는 토큰/채팅 ID를 로그, 문서, 커밋 메시지에 노출하지 않는다.
+조건:
 
-## 작업 시 주의사항
+- `main`과 `dev`에서는 `git add`와 `git commit`이 항상 금지된다.
+- `git add`와 `git commit`은 protected branch가 아닌 linked worktree에서만 허용한다.
+- 현재 작업에 속하는 파일만 stage한다.
+- validation과 `review-change`가 PASS인 작업만 commit한다.
+- `git commit --amend`는 금지한다.
+- commit message는 한 줄 `type: Summary`, 50자 이하, 끝에 `.` 없음.
+- 허용 type:
+  `feat`, `fix`, `docs`, `style`, `design`, `test`, `refactor`, `build`,
+  `ci`, `perf`, `chore`, `rename`, `remove`
 
-- `PROJECT.md`를 우선 기준으로 삼되, 코드/모델 구현은 아직 실험 중임을 전제로 설명하거나 수정한다.
-- `weights/`, `data/test_videos/`, `output/`, `__pycache__/`, `.git/` 내부 파일은 대용량/생성물/메타데이터로 취급하고 불필요하게 편집하지 않는다.
-- 모델 파일을 수정할 때는 9개 파이프라인의 import 경로와 반환 객체 형태를 맞춘다. `perception/main.py`는 탐지 결과가 `id`, `box`, `cls`, `center`를 가진 dict 리스트라고 가정한다.
-- YOLO-Pose 계열은 `keypoints`, `keypoints_scores`를 추가로 넘기며, 해당 행동 인식기는 MMPose를 생략한다.
-- `CascadingTrigger`는 행동 인식을 모든 객체에 수행하지 않고 의심 상태 객체만 넘기기 위한 1차 필터다. 임계값 변경은 오탐/미탐에 직접 영향을 준다.
-- Flask 서버의 전역 상태(`current_frame`, `robot_status`)는 단순 테스트 구조다. 동시성, 인증, 저장소, 실제 장치 제어가 필요해지면 별도 설계가 필요하다.
-- 프론트엔드에는 실제 데이터 연동 전 자리 표시 값이 있다. 새 기능을 추가할 때 더미 데이터를 실제 데이터처럼 문서화하지 않는다.
-- 텔레그램 전송은 네트워크 의존 기능이므로 테스트 실패 시 토큰, 채팅 ID, 네트워크, API 응답을 분리해서 확인한다.
+예:
 
-## 우선 연결하면 좋은 미완성 지점
+```text
+feat: Add dashboard state synchronization
+fix: Resolve dashboard asset versioning
+```
 
-- `perception/main.py --source rtsp`가 실제로 `perception/stream/rtsp_receiver.py`를 사용하도록 연결
-- 분석 파이프라인 결과를 Flask 대시보드의 영상/알림/갤러리/로그로 전달
-- `/move` 같은 로봇 수동 제어 API와 실제 모터 제어 코드 연결
-- ROS/SLAM 위치 정보를 미니맵과 상태 로그에 연결
-- 감지 이벤트 저장 구조 설계: 시간, 위치, 객체, 행동, 점수, 스냅샷, 신고 여부
-- Raspberry Pi 환경에서 실행 가능한 경량 모델/CPU 또는 가속기 전략 정리
+계속 금지:
+
+- `push`, `pull`, `fetch`, `merge`, `rebase`, `cherry-pick`, `revert`
+- `reset`, `restore`, `checkout`, `stash`, `tag`, `clean`
+- `am`, `apply`, `bisect`, `clone`, `init`, `mv`, `rm`
+- branch 삭제/rename/force-update
+- `git worktree remove`, `move`, `prune`, `repair`, `lock`, `unlock`
+- 기존 history rewrite
+
+읽기 전용 Git 명령은 허용한다.
+
+## 9. GitHub MCP
+
+GitHub MCP는 repository 조회를 기본 read-only로 사용한다.
+
+허용:
+
+- branch/file/tree/code/commit/diff/PR/Issue/Actions 조회
+- 사용자 승인 후 Issue/PR/comment/review/label/assignee 협업 작업
+
+금지:
+
+- 원격 file 생성/수정/삭제
+- 원격 commit/ref/branch 생성 또는 변경
+- PR merge, tag/release, workflow/repository 설정 변경
+
+로컬 branch/worktree 생성과 `git add`/새 `git commit`은 GitHub MCP가 아니라 로컬 Git CLI 정책을 따른다.
+
+## 10. 결과 보고
+
+최종 보고는 가능하면 20줄 이내로 유지하고 다음만 포함한다.
+
+- task/worktree/branch 상태
+- 변경 파일/핵심 변경
+- 실행한 Skill/Sub-Agent
+- PASS/FAIL/WARN/SKIP/BLOCKED
+- 생성 commit hash/message
+- 사용자 integration이 필요한 commit 순서
+- 실제 환경에서 남은 검증
+- 범위 밖에서 발견한 blocking issue

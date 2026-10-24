@@ -13,7 +13,6 @@ status_frame_cache = {
 robot_status = {
     "cpu_usage": "0.0",
     "cpu_temp": "0.0",
-    "battery": "100",
     "ram_usage": "0.0",
     "internet": "원활",
     "updated_at": None,

@@ -1,172 +1,228 @@
 # Autonomous Patrol Bot
 
-Raspberry Pi 4 기반 이동 로봇과 GPU 서버를 연결한 자율주행 AI 방범 로봇 프로젝트다.
+Raspberry Pi 기반 이동 로봇과 GPU 서버를 연결한 자율주행 AI 방범 로봇 프로젝트입니다.
 
-Raspberry Pi는 카메라·LiDAR·바퀴 엔코더 수집과 Pico W 모터 제어를 담당한다. GPU 서버는 FastAPI 관제 서버, 영상 AI 분석, ROS 2 Mapping·Localization·Nav2, 지도 관리와 웹 대시보드를 담당한다.
+- **Raspberry Pi**: 카메라, LiDAR, Pico W UART, 바퀴 엔코더, 센서/영상 전송
+- **GPU Server**: FastAPI, 웹 대시보드, AI perception, wheel odometry, ROS 2 Mapping/Localization/Nav2
+- **ROS 2**: Humble
+- **Target Pi**: Raspberry Pi 3 Model B, Ubuntu Server 22.04 arm64
 
-> ROS 2: Humble / Server Port: `21063` / Robot ID: `pi-01`
+## Runtime entry points
 
-## 프로젝트 실행 방법
+최종 runtime shell script는 프로젝트 root의 두 파일만 사용합니다.
 
-### 1\. 공통 준비
-
-```bash
-git clone https://github.com/jcy9066/dabom\_capstone.git
-cd dabom\_capstone
+```text
+dabom_capstone/
+├─ start_gpu_server.sh
+└─ start_pi_stack.sh
 ```
 
-환경 변수 파일을 생성한다.
+기존의 개별 Camera/LiDAR/Robot/Pi3B setup/validation shell script는 사용하지 않습니다.
+
+두 스크립트는 실행 시 동일 역할의 기존 프로세스를 먼저 정리하고 새 stack을 시작합니다. 실행 순서는 상관없으며 상대 장치가 아직 켜지지 않았으면 `WAITING` 상태로 재연결을 기다립니다.
+
+## 1. 공통 준비
 
 ```bash
+git clone https://github.com/jcy9066/dabom_capstone.git
+cd dabom_capstone
 cp .env.example .env
 ```
-실행 스크립트 권한을 부여한다.
+
+`.env`의 실제 운영 값을 설정해야 합니다.
+
+### Raspberry Pi prerequisites
+
+Pi에는 다음 환경이 미리 준비되어 있어야 합니다.
+
+- Ubuntu Server 22.04 arm64
+- ROS 2 Humble
+- `rpicam-vid`
+- RPLIDAR ROS driver
+- Python dependencies from `raspberry/requirements.txt`
+- Pico W UART device
+- LiDAR serial device
+- `dialout`/camera device 접근 권한
+- `patrol_navigation` ROS package build
 
 ```bash
-chmod +x server/scripts/start\_gpu\_server.sh
-chmod +x raspberry/scripts/start\_camera\_stream.sh
-chmod +x raspberry/scripts/start\_robot\_command\_client.sh
-chmod +x raspberry/scripts/start\_lidar\_sender.sh
+python3 -m pip install -r raspberry/requirements.txt
+
+source /opt/ros/humble/setup.bash
+cd navigation/ros
+colcon build --symlink-install --packages-select patrol_navigation
+cd ../..
 ```
 
-\---
+기본 Pico UART 구성은 다음과 같습니다.
 
-### 2\. GPU Server 실행
+```text
+Pi GPIO14 / TXD (physical pin 8)  -> Pico W RX
+Pi GPIO15 / RXD (physical pin 10) <- Pico W TX
+Pi GND                            <-> Pico W GND
 
-#### 최초 1회: Python 및 ROS package 준비
+MOTOR_SERIAL_PORT=/dev/serial0
+MOTOR_SERIAL_BAUDRATE=115200
+```
+
+Pico와 LiDAR는 같은 serial device를 사용할 수 없습니다.
+
+### GPU Server prerequisites
 
 ```bash
-cd \~/dabom\_capstone
 python3 -m pip install -r requirements.txt
 
 source /opt/ros/humble/setup.bash
 cd navigation/ros
-colcon build --symlink-install --packages-select patrol\_navigation
+colcon build --symlink-install --packages-select patrol_navigation
 cd ../..
 ```
 
-#### 서버 실행
+## 2. GPU Server 실행
+
+프로젝트 root에서 실행합니다.
 
 ```bash
-cd \~/dabom\_capstone
-bash server/scripts/start\_gpu\_server.sh
+cd ~/dabom_capstone
+bash start_gpu_server.sh
 ```
 
-이 스크립트는 다음 항목을 함께 실행한다.
+이 스크립트는 다음을 수행합니다.
 
-* FastAPI 통합 서버
-* Encoder ROS bridge
-* `/wheel\_ticks` 기반 wheel odometry
-* `/odom` topic
-* `odom -> base\_link` TF
+1. `.env`, ROS 2, Python package, ROS build 상태 확인
+2. 중복 실행 방지용 restart lock 획득
+3. 기존 동일 역할 프로세스 종료
+   - 기존 GPU launcher
+   - `uvicorn server.app:app`
+   - `server/wheel_odometry.py`
+   - 남아 있는 Mapping/Localization/Nav2 launch
+4. FastAPI 시작
+5. 실제 HTTP `/get_status` 응답 확인
+6. wheel odometry 시작
+7. 실제 `/odom` publisher 확인
+8. Pi 연결 상태 출력
 
-AI 모델 없이 서버와 대시보드만 실행하려면:
+정상 예:
+
+```text
+[gpu-stack] READY: GPU local stack is running
+[gpu-stack] WAITING: Raspberry Pi stack may be started before or after this script
+```
+
+Pi가 이미 연결되어 있으면 `CONNECTED`가 출력됩니다.
+
+## 3. Raspberry Pi 실행
+
+프로젝트 root에서 실행합니다.
 
 ```bash
-cd \~/dabom\_capstone
-
-INFERENCE\_ENABLED=false VISUALIZATION\_ENABLED=false MODEL\_REQUIRED=false bash server/scripts/start\_gpu\_server.sh
+cd ~/dabom_capstone
+bash start_pi_stack.sh
 ```
 
-대시보드 접속:
+이 스크립트는 다음을 수행합니다.
+
+1. `.env`, ROS 2, Python package, Camera/LiDAR/UART device 확인
+2. Pico와 LiDAR serial port 충돌 검사
+3. 중복 실행 방지용 restart lock 획득
+4. 기존 동일 역할 프로세스 종료
+   - 기존 Pi launcher
+   - `robot_command_client.py`
+   - `lidar_scan_sender.py`
+   - LiDAR ROS launch
+   - `rpicam-vid`
+   - Camera upload process
+5. 기존 `dabom-command.service`가 실행 중이면 정지
+6. Pico UART `PING -> OK,PONG` 확인
+7. Camera hardware 탐지 확인
+8. LiDAR driver 시작 후 실제 `LaserScan` 1회 수신 확인
+9. LiDAR WebSocket sender 시작
+10. Robot command client 시작
+11. H.264 Camera stream 시작
+12. GPU 연결 상태 출력
+
+Robot client 종료 시에는 Pico에 안전 정지 명령을 보낼 수 있도록 graceful shutdown을 우선합니다.
+
+정상 예:
 
 ```text
-http://<GPU\_SERVER\_IP>:21063
+[pi-stack] Pico UART READY
+[pi-stack] Camera hardware READY
+[pi-stack] LiDAR scan READY
+[pi-stack] READY: Pi local stack is running
+[pi-stack] WAITING: GPU server may be started before or after this script
 ```
 
-\---
+GPU가 이미 실행 중이면 `CONNECTED`가 출력됩니다.
 
-### 3\. Raspberry Pi 실행
-
-Pi에서는 아래 세 스크립트를 **각각 별도 터미널**에서 실행한다.
-
-#### 터미널 1: 카메라 전송
-
-```bash
-cd \~/dabom\_capstone
-bash raspberry/scripts/start\_camera\_stream.sh
-```
-
-동작:
+## 4. 상태 의미
 
 ```text
-OV5647
-  -> rpicam-vid H.264
-  -> HTTP chunked upload
-  -> GPU Server /stream/h264
+READY      로컬 필수 장치와 프로세스가 정상
+WAITING    상대 장치가 아직 연결되지 않음
+CONNECTED  상대 장치가 현재 도달 가능
+ERROR      필수 장치/프로세스/환경 문제로 시작 실패
+WARN       실행 중 구성 요소 종료 또는 재연결 상황
 ```
 
-#### 터미널 2: 모터 명령 및 엔코더 전송
+상대 장치가 꺼져 있다는 이유만으로 로컬 stack을 실패 처리하지 않습니다.
 
-```bash
-cd \~/dabom\_capstone
-bash raspberry/scripts/start\_robot\_command\_client.sh
-```
+## 5. Mapping / Navigation
 
-동작:
+`start_gpu_server.sh`는 Mapping이나 Nav2를 자동 시작하지 않습니다.
+
+GPU runtime 시작 시 이전 실행에서 남은 navigation process는 정리하지만, 실제 Mapping 또는 Driving mode는 웹 대시보드에서 선택할 때 시작합니다.
 
 ```text
-GPU WebSocket command
-  -> Raspberry Pi
-  -> UART /dev/serial0
-  -> Pico W
-  -> MDD10A
-
-Pico W encoder
-  -> UART
-  -> Raspberry Pi WebSocket
-  -> GPU /wheel\_ticks
+GPU runtime
+├─ FastAPI
+├─ wheel odometry
+└─ navigation mode
+   ├─ Mapping      -> 필요할 때 시작
+   └─ Driving/Nav2 -> 필요할 때 시작
 ```
 
-기본 UART 설정:
+Mapping과 Driving은 동시에 실행하지 않습니다.
+
+## 6. 데이터 흐름
 
 ```text
-Port: /dev/serial0
-Baudrate: 115200
+Raspberry Pi                            GPU Server
+────────────────────                    ─────────────────────
+Pico W
+  │ encoder / control
+  ▼
+robot_command_client.py ──────────────► FastAPI / WebSocket
+                                           │
+                                           └─ /wheel_ticks
+                                                │
+                                                ▼
+                                           wheel_odometry
+                                                │
+                                                └─ /odom + TF
+
+LiDAR driver
+  │
+  └─ /scan
+       │
+       └─ lidar_scan_sender.py ───────► LiDAR WebSocket
+                                           │
+                                           └─ GPU ROS /scan
+
+OV5647 / rpicam-vid
+  │
+  └─ H.264 ───────────────────────────► /stream/h264
+                                           │
+                                           └─ Dashboard / AI inference
 ```
 
-#### 터미널 3: LiDAR 전송
-
-최초 1회 ROS package를 빌드한다.
-
-```bash
-source /opt/ros/humble/setup.bash
-cd \~/dabom\_capstone/navigation/ros
-colcon build --symlink-install --packages-select patrol\_navigation
-```
-
-LiDAR driver와 WebSocket sender를 실행한다.
-
-```bash
-cd \~/dabom\_capstone
-bash raspberry/scripts/start\_lidar\_sender.sh
-```
-
-동작:
-
-```text
-RPLIDAR A1M8
-  -> Pi ROS 2 /scan
-  -> WebSocket
-  -> GPU ROS 2 /scan
-```
-
-기본 LiDAR 설정:
-
-```text
-Port: /dev/ttyUSB0
-Baudrate: 115200
-Frame: laser
-```
-
-\---
-
-### 4\. 실행 확인
+## 7. 실행 확인
 
 GPU Server:
 
 ```bash
-curl http://127.0.0.1:21063/api/stream\_status
+curl http://127.0.0.1:21063/get_status
+curl http://127.0.0.1:21063/api/stream_status
 curl http://127.0.0.1:21063/api/lidar/bridge
 curl http://127.0.0.1:21063/api/encoder/bridge
 curl http://127.0.0.1:21063/api/navigation/status
@@ -176,217 +232,57 @@ ROS 2:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source \~/dabom\_capstone/navigation/ros/install/setup.bash
+source ~/dabom_capstone/navigation/ros/install/setup.bash
 
 ros2 topic hz /scan
-ros2 topic hz /wheel\_ticks
+ros2 topic hz /wheel_ticks
 ros2 topic hz /odom
-ros2 run tf2\_ros tf2\_echo odom base\_link
+ros2 run tf2_ros tf2_echo odom base_link
 ```
 
-정상 실행 기준:
+통합 정상 기준:
 
 ```text
-카메라: dashboard에서 실시간 영상 출력
-LiDAR: /scan 지속 발행
-엔코더: /wheel\_ticks 지속 발행
-Odometry: /odom 및 odom -> base\_link TF 발행
-Pi: /ws/robot/pi-01 연결
+Camera      Dashboard 실시간 영상 수신
+LiDAR       /scan 지속 발행
+Encoder     /wheel_ticks 지속 발행
+Odometry    /odom 및 odom -> base_link TF 발행
+Robot       /ws/robot/<ROBOT_ID> 연결
+Navigation  Mapping 또는 Driving mode 요청 시 해당 stack만 실행
 ```
 
-## 현재 진행 상황
-
-### 구현 완료
-
-* FastAPI 통합 서버와 관제 대시보드
-* H.264 카메라 수신 및 MJPEG 출력
-* 9개 AI perception pipeline 선택 구조
-* WebSocket 기반 수동 주행 명령
-* Raspberry Pi와 Pico W 간 UART protocol
-* 바퀴 엔코더 telemetry 전송
-* `/wheel\_ticks -> /odom` 변환
-* LiDAR `/scan` WebSocket bridge
-* SLAM Toolbox 기반 Mapping
-* 저장 지도 저장·조회·이름 변경
-* `map\_server`와 AMCL 기반 Localization
-* 저장 지도 선택과 `/initialpose` 설정
-* Nav2 planner/controller/behavior 구성
-* 로그인·회원가입·이메일 인증
-* MySQL 사용자 계정 연동
-* GPU ROS process 제어 UI
-
-### 부분 완료
-
-* Nav2 Twist를 좌우 바퀴 속도로 변환하는 경로
-* LiDAR 기반 dry-run 장애물 회피
-* AMCL 초기 pose와 저장 지도 load
-* wheel odometry 실측 보정
-* AI 이상 행동 탐지 pipeline
-
-### 미완성
-
-* Nav2 명령의 실제 모터 출력
-* 웹 지도 클릭 기반 목표 지점 주행
-* waypoint 반복 순찰
-* 실제 이동 중 AMCL·TF 안정성 검증
-* GPS와 BNO055 통합
-* 실제 TTS·스피커 출력
-* 이벤트·운행·신고 기록 DB 저장
-* Pi 서비스 원격 시작·중지
-* 운영용 HTTPS와 배포 자동화
-
-## 시스템 구조
+## 8. 주요 디렉터리
 
 ```text
-Raspberry Pi
-├─ OV5647 Camera
-├─ RPLIDAR A1M8
-├─ Pico W UART
-│  ├─ MDD10A motor control
-│  └─ Wheel encoder telemetry
-└─ WebSocket / HTTP
-        │
-        ▼
-GPU Server
-├─ FastAPI
-├─ Web Dashboard
-├─ AI Perception
-├─ ROS 2 Bridge
-├─ Wheel Odometry
-├─ SLAM Toolbox
-├─ AMCL
-├─ Nav2
-└─ MySQL Authentication
+dabom_capstone/
+├─ start_gpu_server.sh
+├─ start_pi_stack.sh
+├─ server/
+│  ├─ app.py
+│  └─ wheel_odometry.py
+├─ raspberry/
+│  ├─ robot_command_client.py
+│  ├─ lidar_scan_sender.py
+│  ├─ encoder_ros_publisher.py
+│  ├─ controllers/
+│  └─ pico_w_sdk/
+├─ navigation/
+│  └─ ros/patrol_navigation/
+├─ perception/
+├─ frontend/
+├─ tests/
+├─ .agents/
+└─ .codex/
 ```
 
-주요 디렉터리:
+## Development validation
 
-```text
-server/       FastAPI, 인증, ROS bridge, odometry
-raspberry/    Pi camera, LiDAR, UART, robot command client
-navigation/   SLAM, Localization, Nav2, 지도
-perception/   객체 탐지, pose, 행동 분석
-frontend/     로그인 및 관제 대시보드
-data/         DB schema와 runtime 상태
-tests/        dry-run 및 navigation API 테스트
-docs/         작업 계획과 검증 결과
-```
+변경 영역별 검증 도구는 `.agents/skills/` 아래에 있습니다.
 
-## ROS 2 실행 모드
+- `validate-server`
+- `validate-dashboard`
+- `validate-navigation`
+- `validate-raspberry`
+- `review-change`
 
-|모드|주요 구성|상태|
-|-|-|-|
-|LiDAR only|`/scan`|구현|
-|Mapping|SLAM Toolbox, `/map`|구현|
-|Localization|map\_server, AMCL|구현|
-|Localization + Nav2|planner, controller, BT|dry-run|
-|실제 자율주행|Nav2 → Pico W → Motor|차단|
-
-### Mapping
-
-```bash
-source /opt/ros/humble/setup.bash
-source \~/dabom\_capstone/navigation/ros/install/setup.bash
-
-ros2 launch patrol\_navigation mapping.launch.py   server\_base\_url:=http://127.0.0.1:21063   start\_lidar:=false   start\_fake\_odom:=false
-```
-
-`start\_lidar:=false`는 Pi에서 `start\_lidar\_sender.sh`로 전달된 GPU `/scan`을 사용할 때 적용한다.
-
-### Localization
-
-```bash
-ros2 launch patrol\_navigation localization.launch.py   map:=\~/dabom\_capstone/navigation/maps/test\_map\_20260801.yaml   server\_base\_url:=http://127.0.0.1:21063   start\_lidar:=false   start\_fake\_odom:=false
-```
-
-### Localization + Nav2
-
-```bash
-ros2 launch patrol\_navigation navigation.launch.py   map:=\~/dabom\_capstone/navigation/maps/test\_map\_20260801.yaml   server\_base\_url:=http://127.0.0.1:21063   start\_lidar:=false   start\_fake\_odom:=false
-```
-
-현재 Nav2 출력은 `/cmd\_vel\_nav\_dry\_run`으로 전달되며 실제 모터로 전송되지 않는다.
-
-## 주요 API
-
-|Path|역할|
-|-|-|
-|`/login`, `/main`|로그인과 대시보드|
-|`/stream/h264`|카메라 H.264 수신|
-|`/video\_feed`|MJPEG 영상|
-|`/ws/robot/{robot\_id}`|명령·상태·엔코더|
-|`/ws/sensors/{robot\_id}/lidar`|LiDAR 전송|
-|`/api/stream\_status`|카메라·AI·GPU 상태|
-|`/api/robots/{robot\_id}/command`|로봇 명령|
-|`/api/navigation/status`|Navigation 상태|
-|`/api/navigation/map`|최신 지도|
-|`/api/navigation/pose`|최신 위치|
-|`/api/navigation/scan`|최신 scan|
-|`/api/navigation/maps`|저장 지도 목록|
-|`/api/navigation/maps/load`|지도 load와 initial pose|
-|`/api/system-control/status`|ROS 구성 요소 상태|
-
-## AI Pipeline
-
-|번호|구성|
-|-|-|
-|1|YOLO11n + ByteTrack + RTMPose + ST-GCN|
-|2|YOLO11x + ByteTrack + RTMPose + ST-GCN|
-|3|DINO + Bot-SORT + ViTPose + ST-GCN++|
-|4|YOLO11x + Bot-SORT + RTMPose + ST-GCN++|
-|5|YOLO11x-Pose + Bot-SORT + ST-GCN++|
-|6|YOLO26m + Bot-SORT + RTMPose + ST-GCN++|
-|7|YOLO26m + Bot-SORT + RTMPose + PoseConv3D|
-|8|YOLO26m-Pose + Bot-SORT + ST-GCN++|
-|9|YOLO26m-Pose + Bot-SORT + PoseConv3D|
-
-모델 가중치는 `weights/`에 별도로 준비해야 한다. 현재 `dev` 브랜치에는 대용량 weight 파일이 포함되어 있지 않다.
-
-## 데이터베이스
-
-구현된 연결:
-
-* `users`
-* `email\_verifications`
-* bcrypt 비밀번호 저장
-* 로그인 session
-* 이메일 인증
-
-스키마만 존재하는 테이블:
-
-* `event\_log`
-* `system\_status`
-* `action\_log`
-
-기존 운영 DB에는 다음 migration을 사용한다.
-
-```text
-data/database/20260731\_add\_users\_login\_id\_and\_email\_verifications.sql
-```
-
-`init\_schema.sql`은 신규 DB 생성용이며 기존 DB를 삭제할 수 있으므로 운영 DB에 직접 실행하지 않는다.
-
-## 안전 설정 및 주의점
-
-* Nav2 `auto\_drive`는 서버에서 `blocked=true`로 차단된다.
-* `server/app.py`는 자율주행 모터 출력을 코드에서 `False`로 고정한다.
-* 수동 `move`는 Pi client가 `manual` 모드일 때만 실행한다.
-* 실제 odometry 사용 시 `start\_fake\_odom:=false`로 실행한다.
-* Mapping과 Localization을 동시에 실행하지 않는다.
-* wheel diameter, wheel track, encoder tick 값은 실장비 재보정이 필요하다.
-* `speaker\_controller.py`는 현재 stub이다.
-* AI weight와 GPU 패키지는 기본 `requirements.txt`에 완전히 포함되지 않는다.
-* 실제 모터 출력 활성화 전 emergency stop, UART disconnect, network disconnect를 다시 검증해야 한다.
-
-## 다음 작업
-
-1. Raspberry Pi UART 통신 안정화
-2. Wheel odometry 직진·회전 보정
-3. 실제 이동 중 AMCL과 TF 검증
-4. Nav2 launch 및 dry-run 최종 검증
-5. 바퀴를 띄운 상태에서 Nav2 모터 출력 시험
-6. 단일 `NavigateToPose` 실주행
-7. 웹 목표 지점과 waypoint 순찰 구현
-8. AI 이벤트와 DB·Telegram 연동
-9. Pi 실행 스크립트 systemd 서비스화
-
+하드웨어가 연결되지 않은 개발 환경에서는 shell syntax와 정적 코드 검증까지만 수행하고 실제 Camera/LiDAR/Pico 동작을 검증했다고 간주하지 않습니다.

@@ -1,9 +1,12 @@
-import os
+try:
+    from perception.env_config import env_text
+except ModuleNotFoundError:  # Direct perception script execution.
+    from env_config import env_text
 
 
 def resolve_cuda_device(device=None):
-    cuda_device_index = os.getenv("CUDA_DEVICE_INDEX", "0").strip() or "0"
-    requested = device if device is not None and str(device).strip() else os.getenv("DEVICE", f"cuda:{cuda_device_index}")
+    cuda_device_index = env_text("CUDA_DEVICE_INDEX")
+    requested = device if device is not None and str(device).strip() else env_text("DEVICE")
     resolved = str(requested).strip().lower()
 
     if resolved == "cuda":

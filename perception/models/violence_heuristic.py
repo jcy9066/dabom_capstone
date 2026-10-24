@@ -1,19 +1,11 @@
-import os
 from collections import defaultdict, deque
 
 import numpy as np
 
-
-def _env_bool(name, default):
-    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
-
-
-def _env_float(name, default):
-    return float(os.getenv(name, default))
-
-
-def _env_int(name, default):
-    return int(os.getenv(name, default))
+try:
+    from perception.env_config import env_bool, env_float, env_int
+except ModuleNotFoundError:  # Direct perception script execution.
+    from env_config import env_bool, env_float, env_int
 
 
 def _point_valid(point):
@@ -52,18 +44,18 @@ class ViolenceHeuristic:
     TARGET_JOINTS = (0, 5, 6, 11, 12)
 
     def __init__(self):
-        self.enabled = _env_bool("VIOLENCE_HEURISTIC_ENABLED", "true")
-        self.use_leg_strikes = _env_bool("VIOLENCE_HEURISTIC_USE_LEG_STRIKES", "false")
-        self.use_box_target_points = _env_bool("VIOLENCE_HEURISTIC_USE_BOX_TARGET_POINTS", "false")
-        self.history_frames = max(1, _env_int("VIOLENCE_HEURISTIC_HISTORY_FRAMES", "12"))
-        self.suspicious_frames = max(1, _env_int("VIOLENCE_HEURISTIC_SUSPICIOUS_FRAMES", "3"))
-        self.danger_frames = max(1, _env_int("VIOLENCE_HEURISTIC_DANGER_FRAMES", "4"))
-        self.motion_threshold = max(0.01, _env_float("VIOLENCE_HEURISTIC_MOTION_THRESHOLD", "0.07"))
-        self.approach_threshold = max(0.0, _env_float("VIOLENCE_HEURISTIC_APPROACH_THRESHOLD", "0.035"))
-        self.proximity_threshold = max(0.05, _env_float("VIOLENCE_HEURISTIC_PROXIMITY_THRESHOLD", "0.36"))
-        self.pair_distance_threshold = max(0.5, _env_float("VIOLENCE_HEURISTIC_PAIR_DISTANCE_THRESHOLD", "1.45"))
-        self.suspicious_score = max(0.01, _env_float("VIOLENCE_HEURISTIC_SUSPICIOUS_SCORE", "0.34"))
-        self.danger_score = max(self.suspicious_score, _env_float("VIOLENCE_HEURISTIC_DANGER_SCORE", "0.48"))
+        self.enabled = env_bool("VIOLENCE_HEURISTIC_ENABLED")
+        self.use_leg_strikes = env_bool("VIOLENCE_HEURISTIC_USE_LEG_STRIKES")
+        self.use_box_target_points = env_bool("VIOLENCE_HEURISTIC_USE_BOX_TARGET_POINTS")
+        self.history_frames = env_int("VIOLENCE_HEURISTIC_HISTORY_FRAMES", minimum=1)
+        self.suspicious_frames = env_int("VIOLENCE_HEURISTIC_SUSPICIOUS_FRAMES", minimum=1)
+        self.danger_frames = env_int("VIOLENCE_HEURISTIC_DANGER_FRAMES", minimum=1)
+        self.motion_threshold = env_float("VIOLENCE_HEURISTIC_MOTION_THRESHOLD", minimum=0.01)
+        self.approach_threshold = env_float("VIOLENCE_HEURISTIC_APPROACH_THRESHOLD", minimum=0.0)
+        self.proximity_threshold = env_float("VIOLENCE_HEURISTIC_PROXIMITY_THRESHOLD", minimum=0.05)
+        self.pair_distance_threshold = env_float("VIOLENCE_HEURISTIC_PAIR_DISTANCE_THRESHOLD", minimum=0.5)
+        self.suspicious_score = env_float("VIOLENCE_HEURISTIC_SUSPICIOUS_SCORE", minimum=0.01)
+        self.danger_score = env_float("VIOLENCE_HEURISTIC_DANGER_SCORE", minimum=self.suspicious_score)
         self.prev_states = {}
         self.score_history = defaultdict(lambda: deque(maxlen=self.history_frames))
         self.missing_counts = defaultdict(int)
