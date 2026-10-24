@@ -29,6 +29,16 @@ def test_each_loop_leg_has_obstacle_replanning_but_no_passed_goal_culling():
     assert "loop_forward_only: true" in CONFIG
     assert "allow_reversing: false" in CONFIG
     assert "yaw_goal_tolerance: 3.14" in CONFIG
+    first_pass = CONFIG.split("    loop_goal_checker:", 1)[1].split(
+        "    loop_cached_goal_checker:", 1
+    )[0]
+    assert "xy_goal_tolerance: 0.35" in first_pass
+    cached = CONFIG.split("    loop_cached_goal_checker:", 1)[1].split(
+        "    FollowPath:", 1
+    )[0]
+    assert "xy_goal_tolerance: 0.10" in cached
+    # 0.35m first arrival + 0.10m cached endpoint tolerance stays
+    # inside the server's 0.55m verified physical arrival region.
 
 
 def test_loop_uses_single_leg_then_verified_spin_not_rolling_waypoint_action():
