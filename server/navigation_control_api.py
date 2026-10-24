@@ -173,8 +173,6 @@ class NavigationControlApi:
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
-        self._replan_refresh_started_at = 0.0
-        self._replan_refresh_inflight = False
         self._estop_attempt_reason: str | None = None
         self._estop_attempts = 0
         self._estop_last_attempt_at: float | None = None
@@ -373,63 +371,6 @@ class NavigationControlApi:
                 self._last_pose_at = received_at
                 self._complete_manual_goal_locked(payload)
                 self._note_navigation_progress_locked(payload, received_at)
-
-    def note_nav2_replan_signal(self) -> None:
-        """Replan signal is anonymous; recompute for our own active Goal.
-
-        Never apply the incoming ROS /plan payload. A new, separately
-        requested ComputePath result is bound to the current Goal generation
-        and checked again before it can replace the approved path.
-        """
-        with self._lock:
-            now = time.monotonic()
-            if (self._state["navigation_mode"] != "DRIVING"
-                or self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
-                or self._pending_goal_cancel is not None
-                or self._state["emergency_stop"]
-                or self._replan_refresh_inflight
-                or now - self._replan_refresh_started_at < 1.0):
-                return
-            goal = self._state["active_goal"]
-            if not isinstance(goal, dict):
-                return
-            generation = self._goal_motion_generation
-            waypoints = [dict(item) for item in self._state["waypoints"]]
-            self._replan_refresh_inflight = True
-            self._replan_refresh_started_at = now
-            target = dict(goal)
-        threading.Thread(
-            target=self._refresh_approved_replan,
-            args=(generation, target, waypoints),
-            name="nav-goal-owned-path-refresh",
-            daemon=True,
-        ).start()
-
-    def _refresh_approved_replan(
-        self, generation: int, goal: dict[str, Any],
-        waypoints: list[dict[str, Any]],
-    ) -> None:
-        try:
-            # Current pose, map and goal come from the current Nav2 server.
-            # Never label or trust the ROS /plan message itself.
-            result = self._normalized_path(self._compute_path_for_route(goal, waypoints))
-            with self._lock:
-                if (len(result) >= 2
-                    and self._goal_motion_generation == generation
-                    and self._state["active_goal"] == goal
-                    and self._state["navigation_mode"] == "DRIVING"
-                    and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
-                    and self._pending_goal_cancel is None
-                    and not self._state["emergency_stop"]
-                    and result != self._state["planned_path"]):
-                    self._state["planned_path"] = result
-                    self._touch_locked()
-        except Exception:
-            # Failed refresh never authorizes an unknown or stale path.
-            pass
-        finally:
-            with self._lock:
-                self._replan_refresh_inflight = False
 
     def note_replanned_path(self, path: Any) -> None:
         normalized = self._normalized_path(path)

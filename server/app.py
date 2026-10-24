@@ -1048,13 +1048,9 @@ def publish_navigation_ros_visualization(event):
     payload = dict(event)
     event_type = str(payload.get("type") or "")
     if event_type == "global_path":
-        # /plan carries no Nav2 action/Goal ID. A delayed event from an
-        # earlier execution cannot become the current approved path.
-        # Path messages have no execution owner; use only their arrival
-        # to trigger a NEW, Goal-bound ComputePathToPose request. This
-        # preserves conditional replan visualization without accepting an
-        # old /plan message as the current Goal path.
-        navigation_control_api.note_nav2_replan_signal()
+        # /plan has no execution owner. Never trigger a duplicate Nav2
+        # ComputePath action for visualization or mislabel this anonymous
+        # planner output as the controller's currently executed path.
         return
     if event_type == "costmap":
         costmap = payload.get("costmap")

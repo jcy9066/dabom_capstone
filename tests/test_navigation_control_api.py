@@ -2488,43 +2488,17 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.api.motion_allowed())
         self.assertIsNotNone(self.api._pending_terminal_stop)
 
-    async def test_replan_signal_recomputes_for_current_goal_not_ros_packet(self):
+    async def test_anonymous_plan_is_not_recomputed(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
         await self.api.start_navigation()
         before = self.map_api.ros_control.plan_calls
-        self.api.note_nav2_replan_signal()
-        for _ in range(100):
-            if self.map_api.ros_control.plan_calls > before and not self.api._replan_refresh_inflight:
-                break
-            await asyncio.sleep(0.01)
-        self.assertGreater(self.map_api.ros_control.plan_calls, before)
-        self.assertIsNotNone(self.api.state_response()["active_goal"])
-
-    async def test_late_owned_replan_cannot_overwrite_replaced_goal(self):
-        await self.driving_ready()
-        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
-        await self.api.start_navigation()
-        entered = threading.Event()
-        release = threading.Event()
-        original = self.api._compute_path_for_route
-        def blocked(goal, waypoints):
-            entered.set()
-            if not release.wait(1):
-                raise RuntimeError("test timeout")
-            return original(goal, waypoints)
-        self.api._compute_path_for_route = blocked
-        self.api.note_nav2_replan_signal()
-        self.assertTrue(await asyncio.to_thread(entered.wait, 0.5))
-        with self.api._lock:
-            self.api._goal_motion_generation += 1
-            previous_path = list(self.api._state["planned_path"])
-        release.set()
-        for _ in range(100):
-            if not self.api._replan_refresh_inflight:
-                break
-            await asyncio.sleep(0.01)
-        self.assertEqual(previous_path, self.api.state_response()["planned_path"])
+        old_path = list(self.api.state_response()["planned_path"])
+        # No anonymous /plan event is permitted to schedule a new action.
+        self.assertFalse(hasattr(self.api, "note_nav2_replan_signal"))
+        await asyncio.sleep(0.02)
+        self.assertEqual(before, self.map_api.ros_control.plan_calls)
+        self.assertEqual(old_path, self.api.state_response()["planned_path"])
 
     async def test_repeated_patrol_request_never_masks_unconfirmed_stop(self):
         await self.driving_ready()

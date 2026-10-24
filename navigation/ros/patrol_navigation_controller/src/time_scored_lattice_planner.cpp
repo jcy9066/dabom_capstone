@@ -3,6 +3,7 @@
 #include "patrol_navigation_controller/alternate_goal_candidates.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -286,6 +287,52 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   if (!costmap_ || !costmap_->isCurrent()) {
     return best;
   }
+  // A nearby XY goal with a large heading difference is a differential
+  // drive pivot, not a reason to backtrack through a metre-long loop.
+  // Preserve the actual rotation center. Nav2's existing XY goal checker
+  // tolerance (0.25m) is unchanged; this candidate is only considered when
+  // requested XY differs by at most 0.05m.
+  const double start_x = start.pose.position.x;
+  const double start_y = start.pose.position.y;
+  const double start_yaw = tf2::getYaw(start.pose.orientation);
+  const double requested_turn = std::atan2(
+    std::sin(original_goal.yaw - start_yaw),
+    std::cos(original_goal.yaw - start_yaw));
+  if (std::isfinite(start_x) && std::isfinite(start_yaw) &&
+    std::isfinite(start_y) && std::isfinite(requested_turn) &&
+    std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.05 &&
+    std::abs(requested_turn) > 0.12)
+  {
+    nav_msgs::msg::Path pivot_path;
+    pivot_path.header = start.header;
+    const int steps = std::max(1, static_cast<int>(
+        std::ceil(std::abs(requested_turn) / 0.05)));
+    for (int i = 0; i <= steps; ++i) {
+      auto pose = start;
+      const double heading = start_yaw + requested_turn *
+        static_cast<double>(i) / static_cast<double>(steps);
+      pose.pose.orientation.x = 0.0;
+      pose.pose.orientation.y = 0.0;
+      pose.pose.orientation.z = std::sin(heading * 0.5);
+      pose.pose.orientation.w = std::cos(heading * 0.5);
+      pivot_path.poses.push_back(std::move(pose));
+    }
+    const auto elapsed = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - started).count();
+    if (elapsed < max_total_planning_sec_ &&
+      validAgainstCurrentCostmap(pivot_path, costmap_) &&
+      std::chrono::steady_clock::now() < deadline)
+    {
+      if (node) {
+        RCLCPP_INFO(
+          node->get_logger(), "%s selected swept-footprint-verified in-place pivot",
+          name_.c_str());
+      }
+      return pivot_path;
+    }
+    // Unsafe pivot: fall back to regular lattice planning, never command
+    // unverified turning or silently relax the footprint limits.
+  }
   const bool original_goal_clear = endpointFootprintClear(original_goal, costmap_);
 
   // When the original Goal's swept chassis footprint is already blocked,
@@ -295,6 +342,16 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     const auto elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started).count();
     if (elapsed >= max_total_planning_sec_) {
+      break;
+    }
+    // Smac child initialization takes meaningful wall time on Humble.
+    // Never spend the remaining budget configuring StableTurns if a
+    // collision-verified first path is already available. Reserve time
+    // for the second search plus the final fresh-costmap validation.
+    constexpr double kSecondCandidateReserveSec = 2.6;
+    if (index > 0 && !best.poses.empty() &&
+      max_total_planning_sec_ - elapsed < kSecondCandidateReserveSec)
+    {
       break;
     }
     // Construct and configure an isolated search per candidate. Humble's

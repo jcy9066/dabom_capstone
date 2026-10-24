@@ -260,3 +260,12 @@ def test_pure_cpp_cost_model_execution(tmp_path):
         [str(binary)], capture_output=True, text=True, timeout=15, check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
+
+def test_nearby_yaw_goal_has_swept_collision_checked_pivot():
+    code = SOURCE.read_text()
+    assert "std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.05" in code
+    assert "std::abs(requested_turn) > 0.12" in code
+    assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in code
+    assert "return pivot_path;" in code
+    assert "kSecondCandidateReserveSec" in code
+
