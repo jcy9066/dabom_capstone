@@ -53,15 +53,30 @@ class FakeRos:
             "localization_age_sec": 0.01,
         }
         self.rotation = {}
+        self.backup_distances = []
+        self.spin_radians = []
+        self.loop_reapproach_calls = []
 
     def compute_path(self, goal):
         self.plan_calls += 1
         return [{"x": 0.0, "y": 0.0}, {"x": goal["x"], "y": goal["y"]}]
 
-    def navigate_to_pose(self, goal):
+    def navigate_to_pose(self, goal, *, loop_reapproach=False):
         self.navigate_calls += 1
+        if loop_reapproach:
+            self.loop_reapproach_calls.append(dict(goal))
         self.state = "NAVIGATING"
         return {"accepted": True, "goal": goal}
+
+    def reverse_loop_recovery(self, distance_m):
+        self.backup_distances.append(distance_m)
+        self.state = "NAVIGATING"
+        return {"accepted": True, "action": "/backup"}
+
+    def spin_loop_turn(self, radians):
+        self.spin_radians.append(radians)
+        self.state = "NAVIGATING"
+        return {"accepted": True, "action": "/spin"}
 
     def compute_path_through_poses(self, poses):
         self.plan_calls += 1
@@ -648,6 +663,84 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("LOOP_CONTINUITY_LOST", current["last_error"])
         self.assertEqual([], current["loop_goals"])
         self.assertEqual(previous_calls, self.map_api.ros_control.navigate_calls)
+
+    async def test_loop_pivot_failure_requires_recent_rotation_and_fresh_pose(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        now = time.time()
+        self.map_api.ros_control.rotation = {
+            "command_age_sec": 0.1,
+            "command_angular_z": -0.4,
+            "command_linear_x": 0.0,
+        }
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": b["x"], "y": b["y"], "yaw": 0.0, "received_at": now,
+        }):
+            with self.api._lock:
+                terminal = self.api._sync_ros_navigation_terminal_locked(
+                    {"state": "FAILED", "action": "navigate_through_poses"}, now,
+                )
+        self.assertEqual("FAILED", terminal)
+        self.assertIsNotNone(self.api._loop_recovery)
+        self.assertEqual("backup_wait_stop", self.api._loop_recovery["phase"])
+        self.assertTrue(self.api._loop_reverse_used)
+        self.assertEqual(1, self.api._loop_recovery["goal_index"])
+        self.assertAlmostEqual(math.pi, self.api._loop_recovery["spin_angle"])
+
+    async def test_loop_generic_failure_never_backs_up(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        now = time.time()
+        self.map_api.ros_control.rotation = {
+            "command_age_sec": 0.1, "command_angular_z": 0.0,
+            "command_linear_x": 0.2,
+        }
+        with self.api._lock:
+            self.api._sync_ros_navigation_terminal_locked(
+                {"state": "FAILED", "action": "navigate_through_poses"}, now,
+            )
+        self.assertIsNone(self.api._loop_recovery)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
+
+    async def test_loop_backup_only_one_and_yaw_flip_retry(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        now = time.time()
+        self.api._loop_reverse_used = True
+        self.api._loop_recovery = {
+            "phase": "backup_wait_stop",
+            "epoch": self.api._loop_epoch,
+            "goal_index": 1, "goal": b,
+            "failed_pose": {"x": 1.6, "y": 0.5, "yaw": 0.0},
+            "spin_angle": math.pi,
+        }
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                await self.api._advance_loop_recovery()
+        self.assertEqual([0.35], self.map_api.ros_control.backup_distances)
+        self.assertEqual("backing", self.api._loop_recovery["phase"])
+        self.api._loop_recovery["phase"] = "spin_wait_stop"
+        self.api._state["navigation_state"] = "READY"
+        self.api._state["emergency_stop"] = False
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": 1.6, "y": 0.5, "yaw": 0.0, "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_recovery()
+        self.assertEqual([math.pi], self.map_api.ros_control.spin_radians)
+        self.assertEqual("turning", self.api._loop_recovery["phase"])
+        self.assertTrue(self.api._loop_reverse_used)
 
     async def test_operator_estop_destroys_loop_and_blocks_refill(self):
         await self.driving_ready()
