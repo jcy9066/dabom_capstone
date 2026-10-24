@@ -94,7 +94,6 @@ private:
   // a rejected path, a safety STOP, or an incomplete pivot.
   bool loop_turn_clockwise_ = true;
   bool loop_half_turn_in_progress_ = false;
-  double loop_half_turn_target_yaw_ = 0.0;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;
