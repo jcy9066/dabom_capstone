@@ -2977,6 +2977,20 @@ class NavigationControlApi:
                 }:
                     return
                 now = time.time()
+                if now - float(recovery.get("started_at", now)) > 60.0:
+                    # Abandoned or repeatedly blocked recovery may not sit
+                    # indefinitely waiting for physical motion clearance.
+                    self._clear_loop_locked()
+                    self._arm_pending_stop_locked()
+                    self._pending_terminal_stop = {
+                        "reason": "loop_recovery_timeout",
+                        "attempts": 0, "last_attempt_at": None,
+                        "processing": False,
+                    }
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "LOOP_RECOVERY_TIMEOUT"
+                    self._touch_locked()
+                    return
                 allowed = (
                     recovery["epoch"] == self._loop_epoch
                     and self._loop_started and self._loop_goals
