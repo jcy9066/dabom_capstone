@@ -2493,6 +2493,39 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.api.motion_allowed())
         self.assertIsNotNone(self.api._pending_terminal_stop)
 
+    async def test_controller_path_ingest_discards_late_and_terminal_events(self):
+        import json
+        control = NavigationRosControl()
+        control._navigation_state = "NAVIGATING"
+        control._navigate_goal_handle = object()
+        control._route_generation = 7
+        start_ns = time.monotonic_ns()
+        control._nav_run_started_ns = start_ns
+        path = [
+            {"x": 0.0, "y": 0.0, "yaw": 0.0},
+            {"x": 1.0, "y": 1.0, "yaw": 0.0},
+        ]
+
+        def event(sequence, when):
+            return SimpleNamespace(data=json.dumps({
+                "source": "segmented_rpp", "instance": "test-controller",
+                "sequence": sequence, "emitted_ns": when, "path": path,
+            }))
+
+        # A delayed message originating from before new action start is stale.
+        control._on_applied_follow_path(event(1, start_ns - 1))
+        self.assertIsNone(control.applied_follow_path())
+        control._on_applied_follow_path(event(2, start_ns + 1))
+        applied = control.applied_follow_path()
+        self.assertEqual(7, applied["route_generation"])
+        self.assertEqual(2, applied["sequence"])
+        control._on_applied_follow_path(event(1, start_ns + 2))
+        self.assertEqual(2, control.applied_follow_path()["sequence"])
+        control._on_applied_follow_path(event(3, start_ns + 20_000_000_000))
+        self.assertEqual(2, control.applied_follow_path()["sequence"])
+        control._navigation_state = "CANCELED"
+        self.assertIsNone(control.applied_follow_path())
+
     async def test_actual_follow_path_is_goal_scoped_not_a_preview(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
