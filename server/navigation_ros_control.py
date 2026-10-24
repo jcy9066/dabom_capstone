@@ -689,6 +689,12 @@ class NavigationRosControl:
                 self._route_feedback_epoch += 1
                 self._route_poses_remaining = None
                 self._navigate_action_kind = kind
+                if kind == "spin":
+                    # Recovery can only use observed commands from THIS Spin;
+                    # a prior turn's timestamp must never authorize backup.
+                    self._last_loop_pivot_at = None
+                    self._last_loop_pivot_angular = None
+                    self._last_loop_pivot_linear = None
                 self._navigate_goal_handle = handle
                 self._navigate_result_future = future
                 self._navigation_state = "NAVIGATING"
