@@ -3284,18 +3284,32 @@ class NavigationControlApi:
             or math.hypot(path[-1]["x"] - destination["x"],
                           path[-1]["y"] - destination["y"]) > 0.55):
             return []
+        # The C++ loop controller classifies a moving edge as reverse
+        # when its longitudinal projection is < -0.003m. Use the SAME
+        # criterion. Skip only very short AMCL backstep noise, never
+        # replace genuine reverse motion with an invented forward edge.
+        cleaned = [path[0]]
         travelled = 0.0
-        for a, b in zip(path, path[1:]):
-            dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+        for pose in path[1:]:
+            previous = cleaned[-1]
+            dx = pose["x"] - previous["x"]
+            dy = pose["y"] - previous["y"]
             distance = math.hypot(dx, dy)
             if distance > 0.45:
-                return []  # map-frame discontinuity
-            if dx * math.cos(a["yaw"]) + dy * math.sin(a["yaw"]) < -0.075:
-                return []  # reject physical reverse segments
+                return []
+            projection = dx * math.cos(previous["yaw"]) + dy * math.sin(previous["yaw"])
+            if distance >= 0.003 and projection < -0.003:
+                if distance <= 0.06:
+                    continue  # backwards localization noise, not a motor leg
+                return []
             travelled += distance
-        if travelled < 0.50:
+            cleaned.append(pose)
+        if len(cleaned) < 4 or travelled < 0.50:
             return []
-        return path
+        if math.hypot(cleaned[-1]["x"] - destination["x"],
+                      cleaned[-1]["y"] - destination["y"]) > 0.55:
+            return []
+        return cleaned
 
     @staticmethod
     def _remaining_loop_path(
