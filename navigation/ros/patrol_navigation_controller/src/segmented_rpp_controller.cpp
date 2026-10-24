@@ -428,7 +428,15 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     if (stage_index_ + 1 >= stages_.size()) {
       const auto terminal = inControllerFrame(
         path_.poses.back(), pose.header.frame_id);
-      if (distance(pose, terminal) <= 0.25) {
+      if (distance(pose, terminal) <= (loop_forward_only_ ? 0.55 : 0.25)) {
+        // Loop arrival is XY-only. The server authorizes a separate Spin
+        // after an encoder-confirmed STOP. Terminal yaw alignment here would
+        // add an unrequested pivot and unnecessary motor-driver loading.
+        // The ordinary SET GOAL controller keeps its original yaw behavior.
+        if (loop_forward_only_) {
+          pivot_started_ = false;
+          return stopped(pose);
+        }
         const double remaining = angles::shortest_angular_distance(
           yaw(pose), yaw(terminal));
         if (!std::isfinite(remaining)) {
