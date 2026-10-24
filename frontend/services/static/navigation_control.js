@@ -485,10 +485,10 @@
         if (loopGoals && Math.hypot(
             loopGoals[0].x - loopGoals[1].x,
             loopGoals[0].y - loopGoals[1].y,
-        ) <= 0.5) {
+        ) < 1.2) {
             state.draftGoal = null;
             publishGoalDraft();
-            setFeedback('A와 B는 0.5m보다 떨어져 있어야 합니다. B를 다시 지정해주세요.', true);
+            setFeedback('A와 B는 안전한 도착 판정을 위해 1.2m 이상 떨어져야 합니다. B를 다시 지정해주세요.', true);
             return;
         }
         setFeedback('경로를 계산하는 중입니다...');
