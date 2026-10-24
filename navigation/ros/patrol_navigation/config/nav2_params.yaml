@@ -234,7 +234,7 @@ planner_server:
     use_sim_time: false
 
     expected_planner_frequency: 0.25
-    planner_plugins: ["GridBased"]
+    planner_plugins: ["GridBased", "LoopGridBased"]
 
     GridBased:
       # Select among collision-checked 32-heading Smac lattice routes by
@@ -276,6 +276,56 @@ planner_server:
         max_planning_time: 1.8
         lattice_filepath: ""
         allow_reverse_expansion: true
+        reverse_penalty: 1.8
+        change_penalty: 0.20
+        non_straight_penalty: 1.25
+        cost_penalty: 2.0
+        rotation_penalty: 2.0
+        retrospective_penalty: 0.0
+        smooth_path: false
+
+
+    # Independent motion-table parameters. Only the loop forbids reverse.
+    LoopGridBased:
+      # Select among collision-checked 32-heading Smac lattice routes by
+      # expected execution time, not only geometric path/A* edge cost.
+      plugin: "patrol_navigation_controller::TimeScoredLatticePlanner"
+      candidate_names: ["QuickMotion", "StableTurns"]
+      max_wheel_mps: 0.212
+      max_angular_rps: 1.05
+      wheel_track_m: 0.21  # overwritten from calibrated WHEEL_TRACK_M at launch
+      max_linear_accel: 0.50
+      max_angular_accel: 1.0
+      max_linear_jerk: 2.0
+      reverse_fraction: 0.30
+      switch_stop_sec: 0.50
+      max_total_planning_time: 5.0
+
+      # Loop search excludes reverse expansion; pivot/forward remain available.
+      QuickMotion:
+        tolerance: 0.50
+        allow_unknown: true
+        max_iterations: 1000000
+        max_planning_time: 1.8
+        lattice_filepath: ""
+        allow_reverse_expansion: false
+        reverse_penalty: 1.0
+        change_penalty: 0.0
+        non_straight_penalty: 1.0
+        cost_penalty: 2.0
+        rotation_penalty: 1.0
+        retrospective_penalty: 0.0
+        smooth_path: false
+
+      # Prefer fewer direction changes/turns to expose a second candidate
+      # through the exact same live Costmap and motion primitives.
+      StableTurns:
+        tolerance: 0.50
+        allow_unknown: true
+        max_iterations: 1000000
+        max_planning_time: 1.8
+        lattice_filepath: ""
+        allow_reverse_expansion: false
         reverse_penalty: 1.8
         change_penalty: 0.20
         non_straight_penalty: 1.25
