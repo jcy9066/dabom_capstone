@@ -58,6 +58,8 @@ class NavigationControlApi:
     ACTIVE_NAV_STATES = frozenset({"NAVIGATING", "RESUMING"})
     NO_PROGRESS_NAV_STATES = frozenset({"NAVIGATING"})
     BLOCKED_TIMEOUT_SEC = 5.0
+    # Initial Smac planning is not physical motion; wait for first Nav2 Twist.
+    CONTROLLER_COMMAND_START_TIMEOUT_SEC = 15.0
     # Keep A/B disjoint even when both endpoints have 0.55m XY tolerance.
     LOOP_MIN_SPACING_M = 1.20
     LOOP_STAGE_PENDING_TIMEOUT_SEC = 8.0
@@ -149,6 +151,8 @@ class NavigationControlApi:
         self._last_pose_at: float | None = None
         self._navigation_progress_pose: tuple[float, float] | None = None
         self._navigation_progress_at: float | None = None
+        self._navigation_command_baseline: int | None = None
+        self._navigation_command_wait_started_at: float | None = None
         self._rotation_extension_sec = 0.0
         self._rotation_last_odom_sequence: int | None = None
         self._rotation_last_verified_yaw: float | None = None
@@ -2261,17 +2265,30 @@ class NavigationControlApi:
                 # Treat the ensuing bounded STOP confirmation as navigation,
                 # not as another no-progress / blockage recovery attempt.
                 waiting_for_stop = self._pending_nav_success is not None
+                blocked = False
                 if (
                     issue is None and not waiting_for_stop
                     and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
                 ):
-                    self._note_rotation_progress_locked(rotation, current)
-                blocked = (
-                    issue is None
-                    and not waiting_for_stop
-                    and self._state["navigation_state"] in self.NO_PROGRESS_NAV_STATES
-                    and self._navigation_progress_timed_out_locked(current)
-                )
+                    waiting_since = self._navigation_command_wait_started_at
+                    if waiting_since is not None:
+                        sequence = rotation.get("nonzero_command_sequence")
+                        baseline = self._navigation_command_baseline
+                        if (
+                            type(sequence) is int and type(baseline) is int
+                            and sequence > baseline
+                        ):
+                            self._navigation_command_wait_started_at = None
+                            self._navigation_command_baseline = None
+                            self._navigation_progress_at = current
+                        else:
+                            blocked = (
+                                current - waiting_since
+                                >= self.CONTROLLER_COMMAND_START_TIMEOUT_SEC
+                            )
+                    if self._navigation_command_wait_started_at is None:
+                        self._note_rotation_progress_locked(rotation, current)
+                        blocked = self._navigation_progress_timed_out_locked(current)
                 if blocked:
                     self._blocked_failure_in_progress = True
         if issue:
@@ -3733,19 +3750,32 @@ class NavigationControlApi:
         self._pending_nav_success = None
         self._navigation_progress_pose = None
         self._navigation_progress_at = None
+        self._navigation_command_baseline = None
+        self._navigation_command_wait_started_at = None
         self._rotation_extension_sec = 0.0
         self._rotation_last_odom_sequence = None
         self._rotation_last_verified_yaw = None
         self._rotation_limit_reached = False
 
+    def _nonzero_command_sequence(self) -> int | None:
+        try:
+            sequence = self._ros.rotation_status().get("nonzero_command_sequence")
+        except Exception:
+            return None
+        return sequence if type(sequence) is int and sequence >= 0 else None
+
     def _start_navigation_progress_locked(
         self,
         payload: dict[str, Any] | None,
         received_at: float,
+        nonzero_command_baseline: int | None = None,
     ) -> None:
         self._goal_motion_generation += 1
         self._reset_navigation_progress_locked()
         self._navigation_progress_at = received_at
+        if type(nonzero_command_baseline) is int:
+            self._navigation_command_baseline = nonzero_command_baseline
+            self._navigation_command_wait_started_at = received_at
         if not isinstance(payload, dict):
             return
         try:
