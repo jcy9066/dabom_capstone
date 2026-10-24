@@ -831,7 +831,7 @@ class NavigationControlApi:
             await asyncio.sleep(0.05)
 
     async def switch_patrol_mode(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Switch Pi motor authority only after independent Nav2/Pi checks."""
+        """Switch Pi AUTO/MANUAL authority without changing navigation mode."""
         target = str(payload.get("mode") or "").strip().lower()
         if target not in {"auto", "manual"}:
             raise NavigationControlError("INVALID_PATROL_MODE", "mode must be auto or manual.", 400)
@@ -842,15 +842,6 @@ class NavigationControlApi:
                 raise NavigationControlError("PI_CONNECTION_LOSS", "Fresh Pi status is required.", 503)
             if self._state["emergency_stop"] or self._pi_estop_latched is not False:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Release the safety stop first.", 409)
-            if target == "auto" and self._state["navigation_mode"] == "DRIVING" and (
-                self._pi_navigation_mode != "DRIVING"
-                or not self._state["localization_ready"]
-                or not self._state["nav2_ready"]
-                or not self._state["active_map"]
-            ):
-                raise NavigationControlError(
-                    "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
-                )
             if (self._robot_mode == target and not (
                 target == "manual"
                 and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
@@ -873,11 +864,7 @@ class NavigationControlApi:
             self._patrol_transition_error = None
             self._touch_locked()
         try:
-            if target == "auto" and expected_navigation_mode == "DRIVING":
-                self._assert_watchdogs_healthy()
-                if hasattr(self._ros, "navigation_ready") and not await asyncio.to_thread(self._ros.navigation_ready):
-                    raise NavigationControlError("NAV2_NOT_READY", "Nav2 is unavailable.", 503)
-            elif target == "manual" and expected_navigation_mode == "DRIVING":
+            if target == "manual" and expected_navigation_mode == "DRIVING":
                 paused = await self.pause_for_manual()
                 if (paused.get("stop_delivered") is not True
                     or paused.get("emergency_stop") is True
@@ -909,7 +896,6 @@ class NavigationControlApi:
                         and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                         and self._robot_mode == target and self._pi_estop_latched is False
                         and not self._state["emergency_stop"]
-                        and (target != "auto" or self._pi_navigation_mode == expected_navigation_mode)
                     )
                 if confirmed:
                     break
