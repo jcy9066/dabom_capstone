@@ -89,8 +89,6 @@ private:
   // Loop-only controller rejects any reverse-drive segment instead of
   // silently backing up when the planner cannot provide a pivot route.
   bool loop_forward_only_ = false;
-  // Arrival threshold matches the selected loop-specific goal checker.
-  double loop_terminal_xy_tolerance_ = 0.55;
   // Loop half-turn ambiguity (pi == -pi): prefer clockwise first, then
   // counterclockwise after a physically completed turn. Never toggle on
   // a rejected path, a safety STOP, or an incomplete pivot.
