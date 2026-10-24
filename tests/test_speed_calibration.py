@@ -554,6 +554,8 @@ def test_pwm_cap_preserves_steering_ratio_and_rejects_nonfinite():
 def test_jerk_filter_overshoot_is_clamped_at_uart(motor):
     motor._direction_interlock.request = Mock(return_value="allow")
     motor._jerk_limiter.step = Mock(return_value=(-.98, .76))
+    # reset is a real method on WheelJerkLimiter; explicitly spy on it.
+    motor._jerk_limiter.reset = Mock(wraps=motor._jerk_limiter.reset)
     motor.drive(-.17, .17)
     command = motor._exchange_locked.call_args.args[0]
     assert command == "DRIVE,-0.300,0.233"
