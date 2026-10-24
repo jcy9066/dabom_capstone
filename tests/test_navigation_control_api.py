@@ -1124,6 +1124,21 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             driven[:3], a, b,
         ))
 
+    def test_cached_trace_must_end_close_enough_for_replay_goal_checker(self):
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        safe = [
+            {"x": 0.3 + i * 0.1, "y": 0.5, "yaw": 0.0}
+            for i in range(11)
+        ]  # Ends 0.30m before B, within cache admission margin.
+        self.assertEqual(
+            safe, self.api._certify_physical_loop_path(safe, a, b),
+        )
+        too_short = safe[:9]  # Ends 0.50m before B.
+        self.assertEqual(
+            [], self.api._certify_physical_loop_path(too_short, a, b),
+        )
+
     async def test_second_a_to_b_reuses_physical_path_without_planner(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
