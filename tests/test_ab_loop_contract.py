@@ -9,6 +9,7 @@ CONTROL = (ROOT / "frontend/services/static/navigation_control.js").read_text(en
 VIEWER = (ROOT / "frontend/services/static/lidar_3d_viewer.js").read_text(encoding="utf-8")
 HTML = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
 CONFIG = (ROOT / "navigation/ros/patrol_navigation/config/nav2_params.yaml").read_text(encoding="utf-8")
+LOOP_CPP = (ROOT / "navigation/ros/patrol_navigation_controller/src/segmented_rpp_controller.cpp").read_text(encoding="utf-8")
 RECOVERY_TREE = ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_loop_reapproach_forward.xml"
 
 
@@ -59,6 +60,28 @@ def test_one_backup_then_same_goal_reapproach_before_next_forward_leg():
     assert 'self._loop_leg_index = 1 - int(recovery["goal_index"])' in SERVER
     assert 'self._loop_next_turn_clockwise = not self._loop_next_turn_clockwise' in SERVER
     assert 'request.target.x = -float(distance_m)' in ROS
+
+
+def test_loop_only_skips_terminal_yaw_and_preserves_regular_goal():
+    assert "if (loop_forward_only_)" in LOOP_CPP
+    assert "return stopped(pose);" in LOOP_CPP
+    assert "const double remaining = angles::shortest_angular_distance(" in LOOP_CPP
+    assert 'LoopFollowPath' in CONFIG
+    assert 'FollowPath:' in CONFIG
+
+
+def test_arrival_regions_are_separate_and_spin_requires_signed_odometry():
+    assert "LOOP_MIN_SPACING_M = 1.20" in SERVER
+    assert "self.LOOP_MIN_SPACING_M" in SERVER
+    assert "xy_limit = 0.12 if need_yaw else 0.55" in SERVER
+    assert "def _loop_signed_turn_confirmed(" in SERVER
+    assert "self._ros.spin_progress()" in SERVER
+    assert "def spin_progress(self)" in ROS
+    assert "self._spin_signed_yaw_rad += delta" in ROS
+    assert "self._spin_odom_invalid = True" in ROS
+    assert "LOOP_STAGE_PENDING_TIMEOUT_SEC = 8.0" in SERVER
+    assert "LOOP_STAGE_WAIT_TIMEOUT" in SERVER
+    assert ") < 1.2)" in CONTROL
 
 
 def test_operator_cancel_manual_mapping_estop_revoke_loop_before_next_motor_action():
