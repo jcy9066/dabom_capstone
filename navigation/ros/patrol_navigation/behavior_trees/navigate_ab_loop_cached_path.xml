@@ -4,7 +4,7 @@
     The loop-specific final goal checker uses relaxed xy/yaw tolerances.
     Rolling preemption occurs before reaching this final pose.
   * Initial path is computed once before validity checks.
-  * Valid Global Path is reused at 10Hz. If invalidity lasts >=300ms,
+  * Valid Global Path is reused at 10Hz. If changed Goals or invalidity is detected,
     at most 5 planner retries within a 5s deadline are permitted.
   * No autonomous blind Spin, BackUp or costmap-clearing recovery.
   * The existing FollowPath controller executes reverse/pivot segments.
@@ -18,22 +18,17 @@
       <PipelineSequence name="NavigateOnValidatedWaypointPath">
         <RateController hz="10.0">
           <Fallback name="ReuseOrReplanWaypointPath">
-            <Sequence name="CullAndReuseValidPath">
+            <Sequence name="ReuseValidUnchangedLoopPath">
               <RemovePassedGoals input_goals="{goals}" output_goals="{goals}" radius="0.50"/>
               <IsPathValid path="{path}" server_timeout="100"/>
+              <!-- A new rolling Nav2 Goal must extend the cached path. -->
+              <Inverter><GoalUpdated/></Inverter>
             </Sequence>
-            <ReactiveSequence name="WaitForSustainedInvalidWaypointPath">
-              <Inverter>
-                <IsPathValid path="{path}" server_timeout="100"/>
-              </Inverter>
-              <Delay delay_msec="300">
-                <Timeout msec="5000">
-                  <RetryUntilSuccessful num_attempts="5">
-                    <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
-                  </RetryUntilSuccessful>
-                </Timeout>
-              </Delay>
-            </ReactiveSequence>
+            <Timeout msec="5000">
+              <RetryUntilSuccessful num_attempts="5">
+                <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+              </RetryUntilSuccessful>
+            </Timeout>
           </Fallback>
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="loop_goal_checker"/>
