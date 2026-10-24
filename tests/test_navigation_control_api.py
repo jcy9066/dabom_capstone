@@ -367,14 +367,29 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             payload["initial_pose"]["yaw_degrees"],
         )
 
-    async def test_current_mapping_requires_live_pose(self):
+    async def test_current_mapping_falls_back_to_origin_without_live_pose(self):
         self.api._get_live_pose = lambda: None
-        with self.assertRaises(NavigationControlError) as raised:
-            await self.api.switch_mode(
-                {"mode": "DRIVING", "source": "current"},
-                user="tester",
-            )
-        self.assertEqual("INITIAL_POSE_REQUIRED", raised.exception.error_code)
+        result = await self.api.switch_mode(
+            {"mode": "DRIVING", "source": "current"}, user="tester",
+        )
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        payload, _user = self.map_api.activate_calls[-1]
+        self.assertEqual(
+            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
+            payload["initial_pose"],
+        )
+
+    async def test_current_mapping_falls_back_from_invalid_pose(self):
+        self.api._get_live_pose = lambda: {"x": float("nan"), "y": 0, "yaw": 0}
+        result = await self.api.switch_mode(
+            {"mode": "DRIVING", "source": "current"}, user="tester",
+        )
+        self.assertEqual("DRIVING", result["navigation_mode"])
+        payload, _user = self.map_api.activate_calls[-1]
+        self.assertEqual(
+            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
+            payload["initial_pose"],
+        )
 
     async def test_goal_only_plans_until_explicit_start(self):
         await self.driving_ready()
@@ -3005,6 +3020,72 @@ class NavigationRosRotationTelemetryTests(unittest.TestCase):
         self.assertEqual(1, ros.rotation_status()["odom_sequence"])
         ros._on_odom(self.odom(0.4, 9_950_000_000))
         self.assertEqual(2, ros.rotation_status()["odom_sequence"])
+
+
+class NavigationRosPlanningTimeoutTests(unittest.TestCase):
+    class Future:
+        def __init__(self, result=None, finished=True):
+            self._result, self._finished = result, finished
+
+        def done(self):
+            return self._finished
+
+        def result(self):
+            return self._result
+
+    class Handle:
+        accepted = True
+
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def get_result_async(self):
+            return NavigationRosPlanningTimeoutTests.Future(finished=False)
+
+        def cancel_goal_async(self):
+            self.cancel_calls += 1
+            return NavigationRosPlanningTimeoutTests.Future(
+                result=SimpleNamespace(goals_canceling=[1]),
+            )
+
+    class Client:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def wait_for_server(self, timeout_sec=0):
+            return True
+
+        def send_goal_async(self, request):
+            return NavigationRosPlanningTimeoutTests.Future(result=self.handle)
+
+    def test_pose_plan_timeout_cancels_original_goal(self):
+        from server import navigation_ros_control as ros_module
+        control = NavigationRosControl()
+        handle = self.Handle()
+        control._compute_path_client = self.Client(handle)
+        with patch.dict(os.environ, {"NAV_COMPUTE_PATH_TIMEOUT_SEC": "0.1"}), \
+             patch.object(control, "_require_started"), \
+             patch.object(control, "_pose_stamped", return_value=object()), \
+             patch.object(ros_module, "ComputePathToPose", SimpleNamespace(Goal=SimpleNamespace)):
+            with self.assertRaises(ros_module.NavigationRosError) as raised:
+                control.compute_path({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
+        self.assertEqual(504, raised.exception.status_code)
+        self.assertEqual(1, handle.cancel_calls)
+
+    def test_waypoint_plan_timeout_cancels_original_goal(self):
+        from server import navigation_ros_control as ros_module
+        control = NavigationRosControl()
+        handle = self.Handle()
+        control._compute_through_client = self.Client(handle)
+        with patch.dict(os.environ, {"NAV_COMPUTE_PATH_TIMEOUT_SEC": "0.1"}), \
+             patch.object(control, "_require_started"), \
+             patch.object(control, "_pose_stamped", return_value=object()), \
+             patch.object(ros_module, "ComputePathThroughPoses", SimpleNamespace(Goal=SimpleNamespace)):
+            with self.assertRaises(ros_module.NavigationRosError) as raised:
+                control.compute_path_through_poses([{"x": 1.0, "y": 1.0, "yaw": 0.0}])
+        self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
+        self.assertEqual(1, handle.cancel_calls)
 
 
 if __name__ == "__main__":
