@@ -1061,6 +1061,80 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verify({**good, "invalid": True}, math.pi))
         self.assertFalse(verify(good, -math.pi))
 
+    async def test_physical_spin_wrong_direction_blocks_next_loop_leg(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "turn"
+            self.api._loop_turn_requested = -math.pi
+            self.api._loop_leg_index = 1
+            self.api._state["active_goal"] = {
+                "x": b["x"], "y": b["y"], "yaw": -math.pi,
+            }
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_motor_output_enabled", True):
+            with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+                "x": b["x"], "y": b["y"], "yaw": math.pi,
+                "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    with patch.object(self.map_api.ros_control, "spin_progress",
+                                      create=True, return_value={
+                                          "signed_yaw_rad": math.pi,
+                                          "samples": 40,
+                                          "age_sec": 0.3,
+                                          "invalid": False,
+                                      }):
+                        await self.api._resolve_pending_nav_success()
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual([], state["loop_goals"])
+        self.assertNotEqual("drive_pending", state["loop_stage"])
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
+    async def test_physical_spin_matching_direction_unlocks_loop_leg(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_stage = "turn"
+            self.api._loop_turn_requested = -math.pi
+            self.api._loop_leg_index = 1
+            self.api._loop_completed_legs = 2
+            self.api._state["active_goal"] = {
+                "x": b["x"], "y": b["y"], "yaw": -math.pi,
+            }
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_motor_output_enabled", True):
+            with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+                "x": b["x"], "y": b["y"], "yaw": -math.pi,
+                "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    with patch.object(self.map_api.ros_control, "spin_progress",
+                                      create=True, return_value={
+                                          "signed_yaw_rad": -math.pi + 0.02,
+                                          "samples": 40,
+                                          "age_sec": 0.3,
+                                          "invalid": False,
+                                      }):
+                        await self.api._resolve_pending_nav_success()
+        state = self.api.state_response()
+        self.assertEqual("READY", state["navigation_state"])
+        self.assertEqual("drive_pending", state["loop_stage"])
+        self.assertTrue(state["loop_pending"])
+        self.assertEqual(0, state["loop_leg_index"])
+        self.assertFalse(self.api._loop_next_turn_clockwise)
+
     async def test_loop_pending_stage_timeout_fails_closed(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
