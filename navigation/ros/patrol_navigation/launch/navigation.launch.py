@@ -219,6 +219,17 @@ def generate_launch_description():
                 "GridBased.StableTurns.lattice_filepath": PathJoinSubstitution(
                     [pkg_share, "config", "lattice_diff32_stable.json"]
                 ),
+                # Loop uses dedicated motion-table files because Humble Smac
+                # caches expansion parameters by lattice filename.
+                "LoopGridBased.max_wheel_mps": max_wheel_mps,
+                "LoopGridBased.max_angular_rps": max_angular_rps,
+                "LoopGridBased.wheel_track_m": wheel_track_m,
+                "LoopGridBased.QuickMotion.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32_loop.json"]
+                ),
+                "LoopGridBased.StableTurns.lattice_filepath": PathJoinSubstitution(
+                    [pkg_share, "config", "lattice_diff32_loop_stable.json"]
+                ),
             },
         ],
         remappings=common_remappings,
