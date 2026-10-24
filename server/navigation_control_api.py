@@ -379,6 +379,9 @@ class NavigationControlApi:
                 or self._pending_goal_cancel is not None
                 or self._state["emergency_stop"]
                 or self._replan_refresh_inflight
+                # A/B loop owns its cached path independently. Anonymous
+                # /plan publications must not replan a still-valid loop leg.
+                or bool(self._loop_goals and self._loop_started)
                 or now - self._replan_refresh_started_at < 1.0):
                 return
             goal = self._state["active_goal"]
@@ -427,6 +430,10 @@ class NavigationControlApi:
         if len(normalized) < 2:
             return
         with self._lock:
+            if self._loop_goals and self._loop_started:
+                # Only the epoch-checked cached-path owner may replace the
+                # actual loop route, not anonymous Nav2 topic messages.
+                return
             if (
                 self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
                 or not self._state["active_goal"]
