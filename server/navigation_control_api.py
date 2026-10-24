@@ -3343,17 +3343,37 @@ class NavigationControlApi:
         # Revoke background loop ownership as soon as an authenticated
         # operator STOP/Manual/Mapping request arrives; do not wait behind
         # a slow planner or rolling Nav2 goal preemption.
-        if (abort_loop or (abort_loop_for_mode is not None
-            and str(payload.get("mode", "")).strip().lower() == abort_loop_for_mode)):
+        abort_requested = (abort_loop or (abort_loop_for_mode is not None
+            and str(payload.get("mode", "")).strip().lower() == abort_loop_for_mode))
+        loop_was_active = False
+        if abort_requested:
             with self._lock:
+                loop_was_active = bool(self._loop_goals)
                 self._clear_loop_locked()
         try:
             async def invoke():
                 if include_user:
                     user = request.session.get("user") or {}
                     identity = str(user.get("user_id") or user.get("email") or "unknown")
-                    return await action(payload, user=identity)
-                return await action(payload)
+                    result = await action(payload, user=identity)
+                else:
+                    result = await action(payload)
+                # Ordinary Goal pause retention is unchanged. A canceled
+                # loop must NOT become a resumable single Goal after Manual.
+                if abort_loop_for_mode == "manual" and loop_was_active:
+                    with self._lock:
+                        if (self._robot_mode == "manual"
+                            and not self._state["emergency_stop"]):
+                            self._state["active_goal"] = None
+                            self._state["waypoints"] = []
+                            self._state["planned_path"] = []
+                            self._state["navigation_state"] = (
+                                "READY" if self._state["navigation_mode"] == "DRIVING"
+                                else "IDLE"
+                            )
+                            self._touch_locked()
+                    return self.state_response()
+                return result
 
             if serialize:
                 async with self._operation_lock:
