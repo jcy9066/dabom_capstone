@@ -838,6 +838,14 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_authorized_motion_releases_post_resume_baseline(self):
         await self.api.emergency_stop("operator")
         await self.api.resume_navigation()
+        # A confirmed STOP is not AUTO permission without an active Goal.
+        self.assertTrue(self.api.motion_allowed())
+        self.assertFalse(self.api.note_authorized_motion())
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "mapping",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": self._fake_safety_epoch,
+        })
         self.assertTrue(self.api.note_authorized_motion())
         self.api.note_encoder(dict.fromkeys((
             "left_front_ticks", "right_front_ticks", "left_rear_ticks", "right_rear_ticks"
@@ -1508,6 +1516,13 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.confirm_pending_stop_for_test()
 
         self.assertTrue(self.api.motion_allowed())
+        # No new AUTO motion may be authorized after Goal cancellation.
+        self.assertFalse(self.api.note_authorized_motion())
+        # MANUAL remains separately authorized after confirmed STOP.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+        })
         self.assertTrue(self.api.note_authorized_motion())
 
     async def test_cancel_then_confirmed_stop_allows_new_goal(self):
@@ -2237,7 +2252,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         })
         prior = self.api.motion_safety_context()
         self.assertIsNotNone(prior)
-        self.api.note_pi_status({"mode": "manual", "navigation_mode": "driving"})
+        # Pi packets without an established safety identity are ignored.
+        self.api.note_pi_status({
+            "mode": "manual", "navigation_mode": "driving",
+            "emergency_stop": False,
+            "safety_session": "test-pi", "safety_epoch": 0,
+        })
         self.assertEqual("manual", self.api._robot_mode)
         self.assertNotEqual(prior, self.api.motion_safety_context())
         self.assertFalse(self.api.note_authorized_motion(prior))
