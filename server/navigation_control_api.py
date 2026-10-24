@@ -3462,6 +3462,7 @@ class NavigationControlApi:
                     and self._pi_estop_latched is False
                     and not self._state["emergency_stop"]
                     and self._pending_goal_cancel is None
+                    and self._pending_terminal_stop is None
                     and self._stop_confirmed_locked(now)
                     and self._motion_allowed_locked(now)
                     and self._watchdog_issue_locked(now) is None
