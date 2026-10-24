@@ -2676,7 +2676,9 @@ class NavigationControlApi:
                                 self._loop_completed_legs += 1
                                 self._loop_stage = "turn_pending"
                             elif self._loop_stage == "turn":
-                                self._loop_next_turn_clockwise = not self._loop_next_turn_clockwise
+                                if (self._loop_turn_requested is not None
+                                    and abs(abs(self._loop_turn_requested) - math.pi) < 0.05):
+                                    self._loop_next_turn_clockwise = not self._loop_next_turn_clockwise
                                 self._loop_leg_index = 1 - self._loop_leg_index
                                 self._loop_stage = "drive_pending"
                                 self._loop_turn_target = None
@@ -3023,6 +3025,20 @@ class NavigationControlApi:
                     # until the interlock is verified.
                     return
                 epoch = self._loop_epoch
+                if phase == "resume_wait_stop":
+                    # Recovered Spin already completed its physical STOP and
+                    # yaw confirmation. Now schedule exactly one forward leg.
+                    if abs(abs(float(recovery["spin_angle"])) - math.pi) < 0.05:
+                        self._loop_next_turn_clockwise = not self._loop_next_turn_clockwise
+                    self._loop_leg_index = 1 - int(recovery["goal_index"])
+                    self._loop_stage = "drive_pending"
+                    self._loop_pending = True
+                    self._loop_recovery = None
+                    self._loop_turn_target = None
+                    self._loop_turn_requested = None
+                    self._state["navigation_state"] = "READY"
+                    self._touch_locked()
+                    return
                 recovery["phase"] = "launching"
                 self._state["navigation_state"] = "LOOP_RECOVERY_STARTING"
                 self._touch_locked()
@@ -3075,26 +3091,9 @@ class NavigationControlApi:
                     )
                     next_phase = "turning"
                 else:
-                    # At the same original Goal, the robot now faces the next
-                    # leg after a full 180 degree Spin. Resume the standard
-                    # obstacle-aware, forward-only rolling loop.
-                    first = int(recovery["goal_index"])
-                    batch = self._loop_route_points(self._loop_goals, first)
-                    goal, waypoints = batch[-1], batch[:-1]
-                    path = self._normalized_path(
-                        await asyncio.to_thread(
-                            self._compute_path_for_route, goal, waypoints,
-                        )
+                    raise NavigationControlError(
+                        "LOOP_RECOVERY_STAGE_INVALID", "Unexpected recovery stage.", 409,
                     )
-                    if len(path) < 2:
-                        raise NavigationControlError(
-                            "LOOP_RESUME_PATH_MISSING", "Cannot resume safe loop.",
-                        )
-                    stage_goal = goal
-                    action = await asyncio.to_thread(
-                        self._ros.navigate_through_poses, batch, loop=True,
-                    )
-                    next_phase = "resumed"
                 if not isinstance(action, dict) or action.get("accepted") is not True:
                     raise NavigationControlError(
                         "LOOP_RECOVERY_REJECTED", "Nav2 rejected the recovery action.",
@@ -3130,15 +3129,7 @@ class NavigationControlApi:
                     self._stop_encoder_ticks = None
                     self._stop_confirmation_after_sequence = None
                     self._post_resume_motion_ready = False
-                    if next_phase == "resumed":
-                        self._loop_route_start_index = int(recovery["goal_index"])
-                        self._loop_route_size = len(batch)
-                        self._loop_leg_index = int(recovery["goal_index"])
-                        self._state["waypoints"] = [dict(p) for p in waypoints]
-                        self._state["planned_path"] = path
-                        self._loop_recovery = None
-                    else:
-                        recovery["phase"] = next_phase
+                    recovery["phase"] = next_phase
                     self._start_navigation_progress_locked(
                         self._safe_live_pose(), time.time(),
                     )
