@@ -717,6 +717,7 @@ class NavigationControlApi:
         self._pending_nav_success = None
         recovering_pivot = (
             terminal == "FAILED"
+            and self._loop_stage == "turn"
             and self._loop_recovery is None
             and self._arm_loop_pivot_recovery_locked(ros_nav, current)
         )
@@ -2540,6 +2541,32 @@ class NavigationControlApi:
         yaw_error = math.atan2(math.sin(pyaw - gyaw), math.cos(pyaw - gyaw))
         return math.hypot(px - gx, py - gy) <= 0.50 and abs(yaw_error) <= 0.20
 
+    @staticmethod
+    def _loop_pose_confirmed(
+        target: dict[str, float] | None,
+        pose: dict[str, Any] | None, *,
+        need_yaw: bool, now: float, after: float | None,
+    ) -> bool:
+        """Validate fresh physical arrival. XY-only for a leg, yaw for Spin."""
+        if not isinstance(target, dict) or not isinstance(pose, dict) or after is None:
+            return False
+        try:
+            x, y, yaw = (float(pose[key]) for key in ("x", "y", "yaw"))
+            timestamp = float(pose["received_at"])
+            tx, ty, tyaw = (float(target[key]) for key in ("x", "y", "yaw"))
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return False
+        if not all(math.isfinite(v) for v in (x, y, yaw, timestamp, tx, ty, tyaw)):
+            return False
+        if not 0 <= now - timestamp <= 0.5 or timestamp < after:
+            return False
+        if math.hypot(x - tx, y - ty) > 0.55:
+            return False
+        if need_yaw:
+            delta = math.atan2(math.sin(yaw - tyaw), math.cos(yaw - tyaw))
+            return abs(delta) <= 0.20
+        return True
+
     async def _resolve_pending_nav_success(self) -> None:
         """Finalize Nav2 success only after STOP delivery and stable encoders."""
         with self._lock:
@@ -2596,19 +2623,28 @@ class NavigationControlApi:
                     if self._stop_confirmed_locked(time.time()):
                         recovery = self._loop_recovery
                         recovering_backup = bool(recovery and recovery["phase"] == "backing")
-                        pose_ok = (
-                            self._loop_recovery_reverse_progress(
+                        if recovering_backup and physical_pose:
+                            pose_ok = self._loop_recovery_reverse_progress(
                                 recovery, physical_pose, now=time.time(),
                                 after=self._stop_commanded_at,
                             )
-                            if recovering_backup and physical_pose else
-                            self._original_goal_pose_confirmed(
+                        elif self._loop_goals and self._loop_started:
+                            in_spin = (
+                                self._loop_stage == "turn"
+                                or bool(recovery and recovery["phase"] == "turning")
+                            )
+                            pose_ok = self._loop_pose_confirmed(
+                                self._state["active_goal"], physical_pose,
+                                need_yaw=in_spin, now=time.time(),
+                                after=self._stop_commanded_at,
+                            )
+                        else:
+                            pose_ok = self._original_goal_pose_confirmed(
                                 self._state["active_goal"], physical_pose,
                                 now=time.time(),
                                 max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
                                 min_received_at=self._stop_commanded_at,
                             )
-                        )
                         if self._motor_output_enabled and not pose_ok:
                             self._clear_loop_locked()
                             self._state["navigation_state"] = "FAILED"
@@ -2636,16 +2672,30 @@ class NavigationControlApi:
                         elif (self._loop_goals and self._loop_started
                             and self._robot_mode == "auto"
                             and self._state["navigation_mode"] == "DRIVING"):
-                            self._loop_leg_index = 1 - self._loop_leg_index
-                            self._loop_pending = True
-                            self._state["navigation_state"] = "READY"
+                            if self._loop_stage == "drive":
+                                self._loop_completed_legs += 1
+                                self._loop_stage = "turn_pending"
+                            elif self._loop_stage == "turn":
+                                self._loop_next_turn_clockwise = not self._loop_next_turn_clockwise
+                                self._loop_leg_index = 1 - self._loop_leg_index
+                                self._loop_stage = "drive_pending"
+                                self._loop_turn_target = None
+                                self._loop_turn_requested = None
+                            else:
+                                self._clear_loop_locked()
+                                self._state["navigation_state"] = "FAILED"
+                                self._state["last_error"] = "LOOP_STAGE_INVALID"
+                            if self._loop_stage is not None:
+                                self._loop_pending = True
+                                self._state["navigation_state"] = "READY"
                         else:
                             self._clear_loop_locked()
                             self._state["navigation_state"] = "SUCCEEDED"
                         self._state["active_goal"] = None
                         self._state["waypoints"] = []
                         self._state["planned_path"] = []
-                        self._state["last_error"] = None
+                        if self._state["navigation_state"] != "FAILED":
+                            self._state["last_error"] = None
                         self._reset_navigation_progress_locked()
                         self._touch_locked()
                         return
@@ -2837,7 +2887,7 @@ class NavigationControlApi:
         if (not self._loop_started or len(self._loop_goals) != 2
             or self._loop_reverse_used or self._state["emergency_stop"]
             or self._robot_mode != "auto" or self._state["navigation_mode"] != "DRIVING"
-            or ros_nav.get("action") != "navigate_through_poses"):
+            or ros_nav.get("action") != "spin"):
             return False
         try:
             rotation = self._ros.rotation_status()
@@ -2886,7 +2936,9 @@ class NavigationControlApi:
             "goal_index": at_index,
             "goal": {"x": reached["x"], "y": reached["y"], "yaw": inbound_yaw},
             "failed_pose": {"x": px, "y": py, "yaw": yaw},
-            "spin_angle": math.pi if angular < 0 else -math.pi,
+            "spin_angle": float(self._loop_turn_requested or (
+                math.pi if angular > 0 else -math.pi
+            )),
             "started_at": current,
         }
         return True
