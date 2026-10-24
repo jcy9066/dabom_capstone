@@ -89,7 +89,7 @@ def test_clock_sync_integration_contracts():
     assert 'probe_gpu_clock(self.server_base_url, self.control_token)' in sender
     assert '"clock_sync_valid": valid_sync' in sender
     assert "offset_sec * 1_000_000_000" in sender
-    assert 'header.get("clock_sync_valid", True) is True' in bridge
+    assert 'header.get("clock_sync_valid") is True' in bridge
     assert "message.header.stamp = received_stamp" in bridge
 
 

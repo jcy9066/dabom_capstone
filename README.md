@@ -349,3 +349,10 @@ grep -nE '^(LIDAR_USE_SOURCE_TIMESTAMP|PIPELINE|STATUS_REQUEST_TIMEOUT_SEC)=' .e
 `STATUS_REQUEST_TIMEOUT_SEC` governs Pi HTTP `/status` telemetry and
 is unrelated to LiDAR clock skew. Repeated HTTP timeouts or WebSocket
 `InvalidMessage` still need an independent network/server-load check.
+
+GPU-first deployment: when the Pi is still running an older branch without
+`clock_sync_valid` in LiDAR packets, the updated GPU bridge uses receipt
+timestamps rather than trusting unsynchronized Pi timestamps. This prevents
+future-stamp warnings while preserving LiDAR delivery, but it cannot provide
+accurate sensor exposure times. After updating both ends, the authenticated
+clock probe supplies corrected source timestamps.
