@@ -2593,18 +2593,43 @@ class NavigationControlApi:
                     if self._state["emergency_stop"] or self._encoder_stop_violation:
                         return
                     if self._stop_confirmed_locked(time.time()):
-                        if self._motor_output_enabled and not self._original_goal_pose_confirmed(
-                            self._state["active_goal"], physical_pose,
-                            now=time.time(),
-                            max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
-                            min_received_at=self._stop_commanded_at,
-                        ):
+                        recovery = self._loop_recovery
+                        recovering_backup = bool(recovery and recovery["phase"] == "backing")
+                        pose_ok = (
+                            self._loop_recovery_reverse_progress(recovery, physical_pose)
+                            if recovering_backup and physical_pose else
+                            self._original_goal_pose_confirmed(
+                                self._state["active_goal"], physical_pose,
+                                now=time.time(),
+                                max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
+                                min_received_at=self._stop_commanded_at,
+                            )
+                        )
+                        if self._motor_output_enabled and not pose_ok:
+                            self._clear_loop_locked()
                             self._state["navigation_state"] = "FAILED"
-                            self._state["last_error"] = "ORIGINAL_GOAL_NOT_REACHED"
+                            self._state["last_error"] = (
+                                "LOOP_REVERSE_NOT_VERIFIED" if recovering_backup
+                                else "ORIGINAL_GOAL_NOT_REACHED"
+                            )
                             self._reset_navigation_progress_locked()
                             self._touch_locked()
                             return
-                        if (self._loop_goals and self._loop_started
+                        if recovery:
+                            follow = {
+                                "backing": "reapproach_wait_stop",
+                                "reapproaching": "spin_wait_stop",
+                                "turning": "resume_wait_stop",
+                            }
+                            next_phase = follow.get(recovery["phase"])
+                            if next_phase is None:
+                                self._clear_loop_locked()
+                                self._state["navigation_state"] = "FAILED"
+                                self._state["last_error"] = "LOOP_RECOVERY_STATE_INVALID"
+                            else:
+                                recovery["phase"] = next_phase
+                                self._state["navigation_state"] = "READY"
+                        elif (self._loop_goals and self._loop_started
                             and self._robot_mode == "auto"
                             and self._state["navigation_mode"] == "DRIVING"):
                             self._loop_leg_index = 1 - self._loop_leg_index
