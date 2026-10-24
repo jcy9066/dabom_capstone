@@ -86,6 +86,9 @@ private:
   // A nonempty old inner-RPP path must never authorize stale driving.
   bool plan_ready_ = false;
   bool pivot_started_ = false;
+  // Loop-only controller rejects any reverse-drive segment instead of
+  // silently backing up when the planner cannot provide a pivot route.
+  bool loop_forward_only_ = false;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;
