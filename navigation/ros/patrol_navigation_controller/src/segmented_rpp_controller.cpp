@@ -260,6 +260,7 @@ void SegmentedRPPController::invalidatePlan() noexcept
   stages_.clear();
   stage_index_ = 0;
   pivot_started_ = false;
+  last_pivot_angular_command_ = 0.0;
   path_.poses.clear();
 }
 
@@ -270,6 +271,7 @@ void SegmentedRPPController::advanceStage()
   // until a new, fully installed path replaces it.
   ++stage_index_;
   pivot_started_ = false;
+  last_pivot_angular_command_ = 0.0;
   try {
     activateStage();
   } catch (...) {
@@ -341,8 +343,11 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
   {
     throw std::runtime_error("Non-differential or non-finite Nav2 motion command");
   }
-  if (std::abs(linear) < 1e-10 && std::abs(angular) < 1e-10) {
-    return command;  // A physical STOP never requires costmap clearance.
+  // The projection treats displacement below 1e-10m/rad per 0.5s
+  // as zero. Normalize sub-microscopic commands to an exact STOP before
+  // projection, avoiding an empty horizon/Goal abort on an epsilon mismatch.
+  if (std::abs(linear) < 1e-9 && std::abs(angular) < 1e-9) {
+    return stopped(pose);  // A physical STOP never requires costmap clearance.
   }
   if (!costmap_ || !costmap_->isCurrent() || !collision_) {
     throw std::runtime_error("Local costmap stale during Nav2 motion");
@@ -353,7 +358,10 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
   const auto initial = MotionPose{position.x, position.y, yaw(local_pose)};
   const auto projected = localMotionHorizon(initial, linear, angular);
   if (projected.size() < 2) {
-    throw std::runtime_error("Cannot certify Nav2 motion horizon");
+    std::ostringstream reason;
+    reason << "Cannot certify Nav2 motion horizon: linear=" << linear
+           << " angular=" << angular << " yaw=" << initial.yaw;
+    throw std::runtime_error(reason.str());
   }
   auto * map = costmap_->getCostmap();
   if (!map) {
@@ -478,6 +486,8 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
               pivot_started_, velocity.linear.x, velocity.angular.z,
               transfer_linear_stop_, transfer_angular_stop_))
           {
+            pivot_started_ = false;
+            last_pivot_angular_command_ = 0.0;
             return stopped(pose);
           }
           checkRotationCollision(pose, remaining);
@@ -485,11 +495,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
             pivot_max_angular_,
             std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
           const double requested = std::copysign(magnitude, remaining);
-          const double step = pivot_acceleration_ / controller_frequency_;
           geometry_msgs::msg::TwistStamped command = stopped(pose);
-          command.twist.angular.z = std::clamp(
-            requested, velocity.angular.z - step, velocity.angular.z + step);
+          command.twist.angular.z = boundedPivotAngularCommand(
+            last_pivot_angular_command_, requested,
+            pivot_max_angular_, pivot_acceleration_, controller_frequency_);
           const auto certified = checkedCommand(pose, command);
+          last_pivot_angular_command_ = certified.twist.angular.z;
           pivot_started_ = true;
           return certified;
         }
@@ -499,6 +510,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
         // In particular, re-entering RPP here can unexpectedly drive
         // forward after a successful final heading correction.
         pivot_started_ = false;
+        last_pivot_angular_command_ = 0.0;
         return stopped(pose);
       }
       return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
@@ -533,6 +545,8 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       pivot_started_, velocity.linear.x, velocity.angular.z,
       transfer_linear_stop_, transfer_angular_stop_))
   {
+    pivot_started_ = false;
+    last_pivot_angular_command_ = 0.0;
     return stopped(pose);
   }
 
@@ -559,11 +573,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   const double magnitude = std::min(
     pivot_max_angular_, std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
   const double desired = std::copysign(magnitude, remaining);
-  const double maximum_step = pivot_acceleration_ / controller_frequency_;
   geometry_msgs::msg::TwistStamped command = stopped(pose);
-  command.twist.angular.z = std::clamp(
-    desired, velocity.angular.z - maximum_step, velocity.angular.z + maximum_step);
+  command.twist.angular.z = boundedPivotAngularCommand(
+    last_pivot_angular_command_, desired,
+    pivot_max_angular_, pivot_acceleration_, controller_frequency_);
   const auto certified = checkedCommand(pose, command);
+  last_pivot_angular_command_ = certified.twist.angular.z;
   pivot_started_ = true;
   return certified;
 }

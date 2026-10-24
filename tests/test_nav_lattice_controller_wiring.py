@@ -255,7 +255,7 @@ def test_nav2_rejects_unsupported_twist_components_before_stop_shortcut():
     assert "validDifferentialDriveCommand(" in command
     assert "command.twist.linear.z" in command
     assert command.index("if (!validDifferentialDriveCommand(") < command.index(
-        "if (std::abs(linear) < 1e-10"
+        "if (std::abs(linear) < 1e-9"
     )
     for axis in ("linear_y", "linear_z", "angular_x", "angular_y"):
         assert f"std::abs({axis}) <= epsilon" in header
@@ -265,14 +265,14 @@ def test_nav2_rejects_unsupported_twist_components_before_stop_shortcut():
 def test_final_yaw_rotation_requires_swept_footprint_certification():
     source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
     final = source.split('if (stage_index_ + 1 >= stages_.size()) {', 1)[1].split(
-        'const auto end_pose = inControllerFrame(', 1
+        'const auto end_pose = storedPathPoseInControllerFrame(', 1
     )[0]
     assert 'path_.poses.back()' in final
     assert 'distance(pose, terminal) <= 0.25' in final
     assert 'if (!safeToContinuePivot(' in final
     assert 'checkRotationCollision(pose, remaining);' in final
     assert final.index('checkRotationCollision(pose, remaining);') < (
-        final.index('command.twist.angular.z = std::clamp(')
+        final.index('command.twist.angular.z = boundedPivotAngularCommand(')
     )
     assert 'return certified;' in final
 
@@ -280,7 +280,7 @@ def test_final_yaw_rotation_requires_swept_footprint_certification():
 def test_final_yaw_satisfied_cannot_resume_terminal_linear_rpp():
     source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
     final = source.split("if (stage_index_ + 1 >= stages_.size()) {", 1)[1].split(
-        "const auto end_pose = inControllerFrame(", 1
+        "const auto end_pose = storedPathPoseInControllerFrame(", 1
     )[0]
     assert "if (distance(pose, terminal) <= 0.25)" in final
     assert "return stopped(pose);" in final
@@ -315,3 +315,35 @@ def test_stored_lattice_targets_use_latest_tf_while_live_poses_retain_stamps():
         "const auto local_pose = inControllerFrame(pose, costmap_->getGlobalFrameID());"
     ) == 2
 
+
+
+
+def test_pivot_slew_uses_last_accepted_command_not_noisy_odom_derivative():
+    cpp = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    header = (
+        PACKAGE / "include/patrol_navigation_controller/segmented_rpp_controller.hpp"
+    ).read_text()
+    helper = (
+        PACKAGE / "include/patrol_navigation_controller/segment_handoff_guard.hpp"
+    ).read_text()
+    assert "last_pivot_angular_command_ = 0.0;" in header
+    assert cpp.count("command.twist.angular.z = boundedPivotAngularCommand(") == 2
+    assert cpp.count("last_pivot_angular_command_ = certified.twist.angular.z;") == 2
+    assert "velocity.angular.z - maximum_step" not in cpp
+    assert "velocity.angular.z - step" not in cpp
+    assert cpp.count("last_pivot_angular_command_ = 0.0;") >= 4
+    assert "std::clamp(desired, -angular_limit, angular_limit)" in helper
+    assert "std::abs(previous_command) > angular_limit" in helper
+
+
+def test_subepsilon_motion_is_exact_stop_before_projection():
+    cpp = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    checked = cpp.split("SegmentedRPPController::checkedCommand(", 1)[1].split(
+        "void SegmentedRPPController::checkRotationCollision(", 1
+    )[0]
+    assert "if (std::abs(linear) < 1e-9 && std::abs(angular) < 1e-9)" in checked
+    assert "return stopped(pose);" in checked
+    assert checked.index("validDifferentialDriveCommand(") < checked.index(
+        "return stopped(pose);"
+    )
+    assert "Cannot certify Nav2 motion horizon: linear=" in checked

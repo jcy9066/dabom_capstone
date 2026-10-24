@@ -91,6 +91,7 @@ private:
   // A nonempty old inner-RPP path must never authorize stale driving.
   bool plan_ready_ = false;
   bool pivot_started_ = false;
+  double last_pivot_angular_command_ = 0.0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr follow_path_publisher_;
   std::string follow_path_instance_;
   std::uint64_t follow_path_sequence_ = 0;
