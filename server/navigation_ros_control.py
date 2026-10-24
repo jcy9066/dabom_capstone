@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import threading
 import time
 from collections import deque
@@ -479,8 +480,14 @@ class NavigationRosControl:
             for p in result.result.path.poses
         ])
 
+    @staticmethod
+    def _loop_behavior_tree() -> str:
+        from ament_index_python.packages import get_package_share_directory
+        return str(Path(get_package_share_directory("patrol_navigation"))
+                   / "behavior_trees" / "navigate_ab_loop_cached_path.xml")
+
     def navigate_through_poses(
-        self, poses: list[dict[str, float]]
+        self, poses: list[dict[str, float]], *, loop: bool = False,
     ) -> dict[str, Any]:
         """Execute one Nav2 action for all intermediate and final poses."""
         self._require_started()
@@ -500,6 +507,8 @@ class NavigationRosControl:
             )
         request = NavigateThroughPoses.Goal()
         request.poses = [self._pose_stamped(item) for item in poses]
+        if loop:
+            request.behavior_tree = self._loop_behavior_tree()
         with self._lock:
             self._route_feedback_epoch += 1
             feedback_epoch = self._route_feedback_epoch
@@ -554,8 +563,8 @@ class NavigationRosControl:
                 next_epoch = self._route_feedback_epoch + 1
             request = NavigateThroughPoses.Goal()
             request.poses = [self._pose_stamped(pose) for pose in poses]
-            # Empty BT path reuses the same default tree and allows Nav2's
-            # native in-motion preemption rather than cancel + restart.
+            # Same BT filename is required for in-motion Nav2 preemption.
+            request.behavior_tree = self._loop_behavior_tree()
             handle = self._wait_future(
                 self._navigate_through_client.send_goal_async(
                     request, feedback_callback=lambda msg, epoch=next_epoch:
