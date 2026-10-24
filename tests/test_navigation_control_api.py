@@ -2372,6 +2372,122 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(failed["cancel_completed"])
         self.assertFalse(self.api.motion_allowed())
 
+
+    async def test_orphaned_cancel_with_terminal_success_fails_closed(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": time.time(), "started_at": None,
+                "nav_cancel_confirmed": False, "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "SUCCEEDED"
+        self.map_api.ros_control.state = "CANCELED"
+        state = self.api.state_response()
+        self.assertEqual("FAILED", state["navigation_state"])
+        self.assertEqual("CANCEL_STATE_INCONSISTENT", state["last_error"])
+        self.assertIsNone(state["cancel_progress"])
+        self.assertIsNotNone(state["active_goal"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNone(self.api.motion_safety_context())
+        # Previewing a new path is allowed; running it without STOP proof is not.
+        planned = await self.api.plan_goal({"x": 1.5, "y": 1.0, "yaw": 0.0})
+        self.assertEqual("PATH_READY", planned["navigation_state"])
+        with self.assertRaises(NavigationControlError):
+            await self.api.start_navigation()
+
+    async def test_stalled_cancel_dispatch_expires_and_retries_stop(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        now = time.time()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": now - self.api.CANCEL_REQUEST_TIMEOUT_SEC - 0.1,
+                "started_at": None, "nav_cancel_confirmed": False,
+                "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING"
+        failed = self.api.state_response(now=now)
+        self.assertEqual("FAILED", failed["navigation_state"])
+        self.assertEqual("NAV_CANCEL_TIMEOUT", failed["last_error"])
+        self.assertIsNone(failed["cancel_progress"])
+        self.assertIsNotNone(failed["active_goal"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_inflight_cancel_does_not_expire_early(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        now = time.time()
+        with self.api._lock:
+            self.api._arm_pending_stop_locked()
+            self.api._pending_goal_cancel = {
+                "requested_at": now, "started_at": None,
+                "nav_cancel_confirmed": False, "stop_delivered": False,
+            }
+            self.api._state["navigation_state"] = "CANCELING"
+        current = self.api.state_response(now=now + 0.1)
+        self.assertEqual("CANCELING", current["navigation_state"])
+        self.assertIsNotNone(current["cancel_progress"])
+        self.assertFalse(self.api.motion_allowed())
+
+    async def test_cancel_dispatch_timeout_does_not_unlock_motors(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = asyncio.Event()
+
+        async def stalled_stop(robot_id, command):
+            if command.get("type") == "stop":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        self.api._send_robot_command = stalled_stop
+        self.api.CANCEL_REQUEST_TIMEOUT_SEC = 0.03
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.cancel_goal()
+        self.assertEqual("NAV_CANCEL_TIMEOUT", raised.exception.error_code)
+        self.assertTrue(entered.is_set())
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertIsNone(current["cancel_progress"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+
+    async def test_cancel_task_interruption_preserves_stop_gate(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        entered = asyncio.Event()
+
+        async def stalled_stop(robot_id, command):
+            if command.get("type") == "stop":
+                entered.set()
+                await asyncio.Event().wait()
+            return True
+
+        self.api._send_robot_command = stalled_stop
+        task = asyncio.create_task(self.api.cancel_goal())
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        current = self.api.state_response()
+        self.assertEqual("FAILED", current["navigation_state"])
+        self.assertEqual("NAV_CANCEL_INTERRUPTED", current["last_error"])
+        self.assertIsNone(current["cancel_progress"])
+        self.assertIsNotNone(current["active_goal"])
+        self.assertFalse(self.api.motion_allowed())
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+
     async def test_replan_signal_recomputes_for_current_goal_not_ros_packet(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})

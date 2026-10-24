@@ -67,6 +67,8 @@ class NavigationControlApi:
     STOP_CONFIRM_STABLE_SEC = 0.5
     STOP_CONFIRM_MAX_AGE_SEC = 0.5
     STOP_CONFIRM_TIMEOUT_SEC = 3.0
+    # Bound Nav2 cancel + Pi STOP dispatch, independently of encoder settling.
+    CANCEL_REQUEST_TIMEOUT_SEC = 15.0
     ESTOP_RETRY_INTERVAL_SEC = 1.0
     ESTOP_MAX_ATTEMPTS = 3
     ESTOP_RETRY_WINDOW_SEC = 10.0
@@ -520,23 +522,58 @@ class NavigationControlApi:
 
     def _expire_pending_cancel_locked(self, now: float) -> None:
         pending = self._pending_goal_cancel
-        if (pending is None or pending.get("started_at") is None
-            or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC):
+        if pending is None:
             return
+        stop_started_at = pending.get("started_at")
+        if stop_started_at is None:
+            requested_at = pending.get("requested_at")
+            within_request_window = (
+                isinstance(requested_at, (int, float))
+                and not isinstance(requested_at, bool)
+                and math.isfinite(requested_at)
+                and 0 <= now - requested_at < self.CANCEL_REQUEST_TIMEOUT_SEC
+            )
+            if (within_request_window
+                and self._state["navigation_state"] == "CANCELING"):
+                return
+            error = (
+                "NAV_CANCEL_TIMEOUT" if within_request_window is False
+                else "CANCEL_STATE_INCONSISTENT"
+            )
+            # An unresolved Nav2 cancel / STOP dispatch is never physical
+            # proof of safety. Reissue STOP through the terminal STOP worker.
+            self._arm_pending_stop_locked()
+            self._queue_cancel_failure_stop_locked("navigation_goal_cancel_unconfirmed")
+        else:
+            if now - stop_started_at < self.STOP_CONFIRM_TIMEOUT_SEC:
+                return
+            error = "STOP_NOT_CONFIRMED"
         self._pending_goal_cancel = None
         self._state["navigation_state"] = "FAILED"
-        self._state["last_error"] = "STOP_NOT_CONFIRMED"
+        self._state["last_error"] = error
         self._last_goal_cancel = {
             **(self._last_goal_cancel or {}),
             "completed": False,
+            "nav_cancel_confirmed": pending.get("nav_cancel_confirmed") is True,
+            "stop_delivered": pending.get("stop_delivered") is True,
             "physical_stop_confirmed": False,
-            "error": "STOP_NOT_CONFIRMED",
+            "error": error,
         }
-        # Keep active_goal and path for safe diagnosis; STOP gate remains armed.
+        # Keep active_goal and path for diagnosis; never clear the STOP gate.
         self._touch_locked(now)
+
+    def _queue_cancel_failure_stop_locked(self, reason: str) -> None:
+        if self._pending_terminal_stop is None and not self._state["emergency_stop"]:
+            self._pending_terminal_stop = {
+                "reason": reason,
+                "attempts": 0,
+                "last_attempt_at": None,
+                "processing": False,
+            }
 
     def _motion_allowed_locked(self, now: float) -> bool:
         if (self._state["emergency_stop"] or self._encoder_stop_violation
+                or self._pending_goal_cancel is not None
                 or self._patrol_transition is not None
                 or self._patrol_transition_error is not None
                 or self._pending_nav_success is not None
@@ -1318,6 +1355,7 @@ class NavigationControlApi:
         goal = self._validated_goal(payload.get("goal", payload))
         waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         with self._lock:
+            self._expire_pending_cancel_locked(time.time())
             if self._pending_goal_cancel is not None:
                 raise NavigationControlError("CANCEL_IN_PROGRESS", "Wait for the encoder-confirmed Goal cancel.", 409)
             if self._state["navigation_mode"] != "DRIVING":
@@ -1464,6 +1502,7 @@ class NavigationControlApi:
             # timeout begins only after Nav2 completion and STOP delivery.
             cancel_generation = self._goal_motion_generation
             pending_cancel = {
+                "requested_at": time.time(),
                 "started_at": None,
                 "nav_cancel_requested": False,
                 "nav_cancel_confirmed": False,
@@ -1472,13 +1511,43 @@ class NavigationControlApi:
             }
             self._pending_goal_cancel = pending_cancel
             self._touch_locked()
-        cancel_result, stop_result = await asyncio.gather(
-            asyncio.to_thread(self._ros.cancel_navigation),
-            self._send_robot_command(
-                self._robot_id, {"type": "stop", "reason": "navigation_goal_cancel"}
-            ),
-            return_exceptions=True,
-        )
+        try:
+            cancel_result, stop_result = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(self._ros.cancel_navigation),
+                    self._send_robot_command(
+                        self._robot_id, {"type": "stop", "reason": "navigation_goal_cancel"}
+                    ),
+                    return_exceptions=True,
+                ),
+                timeout=self.CANCEL_REQUEST_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            error = (
+                "NAV_CANCEL_TIMEOUT"
+                if isinstance(exc, asyncio.TimeoutError)
+                else "NAV_CANCEL_INTERRUPTED"
+            )
+            with self._lock:
+                if self._pending_goal_cancel is pending_cancel:
+                    self._pending_goal_cancel = None
+                    self._arm_pending_stop_locked()
+                    self._queue_cancel_failure_stop_locked("navigation_goal_cancel_unconfirmed")
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = error
+                    self._last_goal_cancel = {
+                        "completed": False,
+                        "nav_cancel_confirmed": False,
+                        "stop_delivered": False,
+                        "physical_stop_confirmed": False,
+                        "error": error,
+                    }
+                    self._touch_locked()
+            if isinstance(exc, asyncio.TimeoutError):
+                raise NavigationControlError(
+                    "NAV_CANCEL_TIMEOUT", "Nav2 cancel / Pi STOP was not confirmed in time.", 504,
+                ) from exc
+            raise
         cancel_error = cancel_result if isinstance(cancel_result, BaseException) else None
         cancel = None if cancel_error is not None else cancel_result
         delivered = self._pi_command_delivered(stop_result)
