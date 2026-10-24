@@ -156,6 +156,7 @@ class NavigationControlApi:
         self._rotation_last_verified_yaw: float | None = None
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
+        self._last_blocked_diagnostic: dict[str, Any] | None = None
         self._pending_nav_success: dict[str, Any] | None = None
         self._pending_goal_cancel: dict[str, Any] | None = None
         self._last_goal_cancel: dict[str, Any] | None = None
@@ -768,6 +769,10 @@ class NavigationControlApi:
                     self._last_goal_cancel and self._last_goal_cancel.get("completed")
                 ),
                 "goal_generation": self._goal_motion_generation,
+                "last_blocked_diagnostic": (
+                    dict(self._last_blocked_diagnostic)
+                    if self._last_blocked_diagnostic is not None else None
+                ),
                 "executed_path": self._current_executed_path_locked(ros_nav, applied),
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
@@ -2148,7 +2153,7 @@ class NavigationControlApi:
             # operation lock. If one wins the race, re-checking inside
             # _fail_blocked_navigation() turns this watchdog attempt into a no-op.
             async with self._operation_lock:
-                failed = await self._fail_blocked_navigation()
+                failed = await self._fail_blocked_navigation(current)
             return "BLOCKED_TIMEOUT" if failed else None
         return None
 
@@ -2560,7 +2565,64 @@ class NavigationControlApi:
                 if self._pending_nav_success is pending:
                     self._pending_nav_success = None
 
-    async def _fail_blocked_navigation(self) -> bool:
+    def _blocked_diagnostic(self, triggered_at: float) -> dict[str, Any]:
+        """Capture no-progress evidence before Nav2 cancel clears motion state."""
+        try:
+            rotation = self._ros.rotation_status() or {}
+        except Exception:
+            rotation = {}
+        try:
+            pose = self._get_live_pose()
+        except Exception:
+            pose = None
+        with self._lock:
+            baseline = self._navigation_progress_pose
+            waiting = self._navigation_command_wait_started_at
+            last_progress = self._navigation_progress_at
+            diagnostic = {
+                "reason": (
+                    "controller_start_timeout" if waiting is not None
+                    else "rotation_limit" if self._rotation_limit_reached
+                    else "no_translation_progress"
+                ),
+                "recorded_at": triggered_at,
+                "seconds_since_progress": (
+                    round(max(0.0, triggered_at - last_progress), 3)
+                    if last_progress is not None else None
+                ),
+                "seconds_waiting_for_command": (
+                    round(max(0.0, triggered_at - waiting), 3)
+                    if waiting is not None else None
+                ),
+                "baseline_xy": list(baseline) if baseline is not None else None,
+                "xy_displacement_m": None,
+                "pose_age_sec": self._public_age(triggered_at, self._last_pose_at),
+                "pi_age_sec": self._public_age(triggered_at, self._pi_updated_at),
+                "rotation_extension_sec": round(self._rotation_extension_sec, 3),
+                "rotation": {},
+            }
+        if isinstance(pose, dict) and baseline is not None:
+            try:
+                x, y = float(pose["x"]), float(pose["y"])
+                if math.isfinite(x) and math.isfinite(y):
+                    diagnostic["current_xy"] = [round(x, 4), round(y, 4)]
+                    diagnostic["xy_displacement_m"] = round(
+                        math.hypot(x - baseline[0], y - baseline[1]), 4
+                    )
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+        if isinstance(rotation, dict):
+            for field in (
+                "command_age_sec", "odometry_age_sec", "command_linear_x",
+                "command_angular_z", "odom_yaw_delta", "odom_sequence",
+                "nonzero_command_sequence",
+            ):
+                value = rotation.get(field)
+                if type(value) in (int, float) and math.isfinite(float(value)):
+                    diagnostic["rotation"][field] = round(float(value), 4)
+        return diagnostic
+
+    async def _fail_blocked_navigation(self, triggered_at: float | None = None) -> bool:
         try:
             try:
                 ros_nav = self._ros.navigation_status()
@@ -2577,6 +2639,9 @@ class NavigationControlApi:
                 if self._state["navigation_state"] not in self.NO_PROGRESS_NAV_STATES:
                     return False
 
+            diagnostic = self._blocked_diagnostic(
+                triggered_at if triggered_at is not None else time.time()
+            )
             cancel_result: dict[str, Any] | None = None
             cancel_error = None
             try:
@@ -2612,10 +2677,15 @@ class NavigationControlApi:
                 ):
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "BLOCKED_TIMEOUT"
+                    self._last_blocked_diagnostic = diagnostic
                     self._reset_navigation_progress_locked()
                     self._touch_locked()
                     failed = True
 
+            if failed:
+                logging.getLogger(__name__).warning(
+                    "BLOCKED_TIMEOUT diagnostic: %s", diagnostic
+                )
             if cancel_error is not None:
                 # A concurrent E-stop or another completed state transition can
                 # make Nav2 reject a duplicate cancel. Do not reinterpret that
@@ -2634,6 +2704,7 @@ class NavigationControlApi:
                     self._arm_pending_stop_locked()
                     self._state["navigation_state"] = "FAILED"
                     self._state["last_error"] = "NAV_CANCEL_FAILED"
+                    self._last_blocked_diagnostic = diagnostic
                     self._reset_navigation_progress_locked()
                     self._touch_locked()
                 return True

@@ -985,6 +985,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("stop", self.commands[-1][1]["type"])
         self.assertEqual("navigation_blocked_timeout", self.commands[-1][1]["reason"])
         self.assertGreaterEqual(self.map_api.ros_control.cancel_calls, 1)
+        diagnostics = current["last_blocked_diagnostic"]
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual("no_translation_progress", diagnostics["reason"])
+        self.assertGreaterEqual(diagnostics["seconds_since_progress"], 5.0)
+        self.assertEqual([0.0, 0.0], diagnostics["baseline_xy"])
+        self.assertIn("rotation", diagnostics)
 
     async def test_initial_planning_does_not_consume_five_second_motion_window(self):
         await self.driving_ready()
