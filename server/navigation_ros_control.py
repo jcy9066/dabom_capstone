@@ -395,6 +395,41 @@ class NavigationRosControl:
             "amcl_pose_received": amcl_received,
         }
 
+    def _await_planning_result(self, goal_handle: Any, timeout_message: str) -> Any:
+        """Bound result wait and request cancellation of an abandoned Nav2 plan."""
+        try:
+            return self._wait_future(
+                goal_handle.get_result_async(),
+                timeout_sec=env_float("NAV_COMPUTE_PATH_TIMEOUT_SEC", minimum=0.1),
+                error_code="PATH_PLAN_TIMEOUT",
+                message=timeout_message,
+            )
+        except NavigationRosError as exc:
+            if exc.error_code != "PATH_PLAN_TIMEOUT":
+                raise
+            # Bound cancellation confirmation: a busy Nav2 executor may not
+            # respond immediately. Do not mistake silence for a safe cancel.
+            try:
+                canceled = self._wait_future(
+                    goal_handle.cancel_goal_async(),
+                    timeout_sec=1.0,
+                    error_code="PATH_CANCEL_TIMEOUT",
+                    message="Timed out requesting path-goal cancellation.",
+                )
+                if not getattr(canceled, "goals_canceling", ()):
+                    node = self._node
+                    if node is not None:
+                        node.get_logger().warning(
+                            "Timed-out Nav2 path goal cancellation was not confirmed."
+                        )
+            except Exception as cancel_error:
+                node = self._node
+                if node is not None:
+                    node.get_logger().warning(
+                        f"Could not confirm timed-out Nav2 path cancellation: {cancel_error}"
+                    )
+            raise
+
     def compute_path(self, goal: dict[str, float]) -> list[dict[str, float]]:
         """Call Nav2 ComputePathToPose without starting robot navigation."""
         self._require_started()
@@ -411,11 +446,8 @@ class NavigationRosControl:
         )
         if not goal_handle.accepted:
             raise NavigationRosError("PATH_REJECTED", "Nav2 rejected the path request.", 422)
-        result_wrapper = self._wait_future(
-            goal_handle.get_result_async(),
-            timeout_sec=env_float("NAV_COMPUTE_PATH_TIMEOUT_SEC", minimum=0.1),
-            error_code="PATH_PLAN_TIMEOUT",
-            message="Timed out while computing the path.",
+        result_wrapper = self._await_planning_result(
+            goal_handle, "Timed out while computing the path."
         )
         if int(result_wrapper.status) != int(GoalStatus.STATUS_SUCCEEDED):
             raise NavigationRosError("PATH_NOT_FOUND", "Nav2 could not compute a path.", 422)
@@ -455,11 +487,8 @@ class NavigationRosControl:
             raise NavigationRosError(
                 "PATH_REJECTED", "Nav2 rejected the waypoint path.", 422,
             )
-        result = self._wait_future(
-            handle.get_result_async(),
-            timeout_sec=env_float("NAV_COMPUTE_PATH_TIMEOUT_SEC", minimum=0.1),
-            error_code="PATH_PLAN_TIMEOUT",
-            message="Timed out computing the waypoint path.",
+        result = self._await_planning_result(
+            handle, "Timed out computing the waypoint path."
         )
         if int(result.status) != int(GoalStatus.STATUS_SUCCEEDED):
             raise NavigationRosError(
