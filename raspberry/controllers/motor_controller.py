@@ -686,12 +686,16 @@ class MotorController:
         self._last_motor_trace_state = state
         self._last_motor_trace_at = now
         safe_detail = str(detail).replace(chr(10), " ").replace(chr(13), " ")[:80]
-        print(
-            f"[motor-motion] state={state} "
-            f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
-            f"detail={safe_detail}",
-            flush=True,
-        )
+        try:
+            print(
+                f"[motor-motion] state={state} "
+                f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
+                f"detail={safe_detail}",
+                flush=True,
+            )
+        except (OSError, ValueError):
+            # Diagnostics must never affect Pico motor command delivery.
+            pass
 
     def drive(
         self,
