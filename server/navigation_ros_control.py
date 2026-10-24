@@ -531,6 +531,67 @@ class NavigationRosControl:
         )
         return {"accepted": True, "action": "/navigate_through_poses"}
 
+    def preempt_navigation_route(
+        self, poses: list[dict[str, float]]
+    ) -> dict[str, Any]:
+        """Extend an active NavigateThroughPoses action without a motor STOP.
+
+        Humble permits same-BT goal preemption. This must never be used for
+        operator cancellation, which uses cancel_navigation + Pi STOP instead.
+        """
+        self._require_started()
+        if not poses or self._navigate_through_client is None:
+            raise NavigationRosError("WAYPOINTS_REQUIRED", "Loop route is empty.", 400)
+        with self._cancel_lock:
+            with self._lock:
+                previous = self._navigate_goal_handle
+                if (previous is None
+                    or self._navigate_action_kind != "navigate_through_poses"
+                    or self._navigation_state != "NAVIGATING"):
+                    raise NavigationRosError(
+                        "LOOP_ROUTE_NOT_ACTIVE", "An active multi-pose route is required.", 409,
+                    )
+                next_epoch = self._route_feedback_epoch + 1
+            request = NavigateThroughPoses.Goal()
+            request.poses = [self._pose_stamped(pose) for pose in poses]
+            # Empty BT path reuses the same default tree and allows Nav2's
+            # native in-motion preemption rather than cancel + restart.
+            handle = self._wait_future(
+                self._navigate_through_client.send_goal_async(
+                    request, feedback_callback=lambda msg, epoch=next_epoch:
+                        self._on_waypoint_feedback(msg, epoch),
+                ),
+                timeout_sec=3.0,
+                error_code="LOOP_ROUTE_PREEMPT_TIMEOUT",
+                message="Timed out extending the loop route.",
+            )
+            if not handle.accepted:
+                raise NavigationRosError(
+                    "LOOP_ROUTE_PREEMPT_REJECTED", "Nav2 refused loop continuation.", 422,
+                )
+            future = handle.get_result_async()
+            with self._lock:
+                if (self._navigate_goal_handle is not previous
+                    or self._navigation_state != "NAVIGATING"):
+                    # Do not install a stale handle; caller must fail safely.
+                    try:
+                        handle.cancel_goal_async()
+                    except Exception:
+                        pass
+                    raise NavigationRosError(
+                        "LOOP_ROUTE_INTERRUPTED", "Navigation changed during extension.", 409,
+                    )
+                self._route_feedback_epoch = next_epoch
+                self._route_poses_remaining = len(poses)
+                self._navigate_goal_handle = handle
+                self._navigate_result_future = future
+            future.add_done_callback(
+                lambda resolved, current=handle:
+                    self._on_navigation_result(current, resolved)
+            )
+            return {"accepted": True, "action": "/navigate_through_poses",
+                    "preempted": True}
+
     def navigate_to_pose(self, goal: dict[str, float]) -> dict[str, Any]:
         self._require_started()
         with self._lock:
