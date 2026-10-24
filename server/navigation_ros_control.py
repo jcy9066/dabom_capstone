@@ -20,7 +20,7 @@ try:
     from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
     from lifecycle_msgs.srv import GetState
     from nav2_msgs.action import (
-        ComputePathToPose, ComputePathThroughPoses, NavigateToPose, NavigateThroughPoses,
+        BackUp, ComputePathToPose, ComputePathThroughPoses, NavigateToPose, NavigateThroughPoses, Spin,
     )
     from nav2_msgs.srv import LoadMap
     from nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -49,6 +49,8 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     ComputePathThroughPoses = None
     NavigateToPose = None
     NavigateThroughPoses = None
+    Spin = None
+    BackUp = None
     GetState = None
     LoadMap = None
     OccupancyGrid = None
@@ -129,6 +131,8 @@ class NavigationRosControl:
         self._compute_through_client = None
         self._navigate_client = None
         self._navigate_through_client = None
+        self._spin_client = None
+        self._backup_client = None
         self._navigate_goal_handle = None
         self._navigate_result_future = None
         self._route_poses_remaining: int | None = None
@@ -228,6 +232,8 @@ class NavigationRosControl:
                 NavigateThroughPoses,
                 "/navigate_through_poses",
             )
+            self._spin_client = ActionClient(self._node, Spin, "/spin")
+            self._backup_client = ActionClient(self._node, BackUp, "/backup")
             self._tf_buffer = Buffer()
             self._tf_listener = TransformListener(self._tf_buffer, self._node, spin_thread=False)
             self._thread = threading.Thread(
@@ -253,6 +259,8 @@ class NavigationRosControl:
             self._compute_through_client = None
             self._navigate_client = None
             self._navigate_through_client = None
+            self._spin_client = None
+            self._backup_client = None
             self._navigate_goal_handle = None
             self._navigate_result_future = None
             self._tf_listener = None
@@ -635,6 +643,75 @@ class NavigationRosControl:
             lambda future, handle=goal_handle: self._on_navigation_result(handle, future)
         )
         return {"accepted": True, "action": "/navigate_to_pose"}
+
+    def _start_loop_behavior_action(
+        self, *, client: Any, goal: Any, kind: str,
+    ) -> dict[str, Any]:
+        """Use Nav2's footprint-checked behaviors, never raw D-pad commands."""
+        self._require_started()
+        with self._cancel_lock:
+            with self._lock:
+                if self._navigate_goal_handle is not None:
+                    raise NavigationRosError(
+                        "NAVIGATION_ALREADY_ACTIVE", "Another Nav2 action is active.", 409,
+                    )
+            if client is None or not client.wait_for_server(timeout_sec=2.5):
+                raise NavigationRosError(
+                    "LOOP_BEHAVIOR_UNAVAILABLE", f"Nav2 {kind} is unavailable.", 503,
+                )
+            handle = self._wait_future(
+                client.send_goal_async(goal), timeout_sec=3.0,
+                error_code="LOOP_BEHAVIOR_TIMEOUT",
+                message=f"Timed out submitting Nav2 {kind}.",
+            )
+            if not handle.accepted:
+                raise NavigationRosError(
+                    "LOOP_BEHAVIOR_REJECTED", f"Nav2 rejected {kind}.", 422,
+                )
+            future = handle.get_result_async()
+            with self._lock:
+                self._route_feedback_epoch += 1
+                self._route_poses_remaining = None
+                self._navigate_action_kind = kind
+                self._navigate_goal_handle = handle
+                self._navigate_result_future = future
+                self._navigation_state = "NAVIGATING"
+                self._navigation_error = None
+            future.add_done_callback(
+                lambda resolved, current=handle:
+                    self._on_navigation_result(current, resolved),
+            )
+            return {"accepted": True, "action": "/" + kind}
+
+    def spin_loop_turn(self, radians: float) -> dict[str, Any]:
+        """180 degree spin with Nav2 collision checking and a time bound."""
+        self._require_started()
+        if not math.isfinite(radians) or abs(abs(radians) - math.pi) > 0.01:
+            raise NavigationRosError("INVALID_LOOP_TURN", "Expected a 180 degree turn.", 400)
+        request = Spin.Goal()
+        request.target_yaw = float(radians)
+        request.time_allowance = Duration(seconds=15.0).to_msg()
+        return self._start_loop_behavior_action(
+            client=self._spin_client, goal=request, kind="spin",
+        )
+
+    def reverse_loop_recovery(self, distance_m: float) -> dict[str, Any]:
+        """One rear-obstacle guarded Nav2 BackUp, not manual MOVE."""
+        self._require_started()
+        if not math.isfinite(distance_m) or not 0.05 < distance_m <= 10.0:
+            raise NavigationRosError("INVALID_LOOP_BACKUP", "Invalid recovery distance.", 400)
+        request = BackUp.Goal()
+        request.target.x = -float(distance_m)
+        request.target.y = 0.0
+        # Do not change configured PWM or ENV. The existing rear guard limits
+        # each reverse Twist and stops on unseen/blocked rear travel.
+        request.speed = 0.10
+        request.time_allowance = Duration(seconds=min(
+            120.0, distance_m / 0.10 * 3.0 + 10.0,
+        )).to_msg()
+        return self._start_loop_behavior_action(
+            client=self._backup_client, goal=request, kind="backup",
+        )
 
     def cancel_navigation(self) -> dict[str, Any]:
         # Multiple server paths may request a stop at nearly the same time
