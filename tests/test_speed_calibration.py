@@ -115,6 +115,9 @@ def ros_stubs(monkeypatch):
         "launch_ros.actions": {"Node": Action},
         "launch_ros.substitutions": {"FindPackageShare": Action},
         "rclpy": {},
+        # Modern Nav2 bridge uses sensor-data QoS for /scan; represent its
+        # profile as an opaque marker without importing ROS2 in unit tests.
+        "rclpy.qos": {"qos_profile_sensor_data": object()},
         "rclpy.node": {"Node": FakeNode},
         "rclpy.time": {"Time": Mock()},
         "nav_msgs": {},
@@ -182,6 +185,15 @@ def test_bridge_to_uart_max_partial_turn_stop_and_timeout(ros_stubs, monkeypatch
     monkeypatch.setattr(module.threading, "Thread", Mock())
     bridge = module.Nav2CommandBridge()
     motor._jerk_limiter.step = Mock(side_effect=lambda l, r, now: (l, r))
+    # This test isolates cmd_vel -> individual wheel speeds; it is NOT
+    # the rear-obstacle safety test. A fresh complete rear observation is
+    # independently covered by test_rear_reverse_guard.py. Supply its
+    # approved output here so a hardware-free reverse does not correctly
+    # fail closed for lack of real scan / odometry samples.
+    if hasattr(bridge, "rear_reverse_guard"):
+        bridge.rear_reverse_guard.limit_reverse = Mock(
+            side_effect=lambda speed, *, max_wheel_mps, now: (speed, False, None)
+        )
     # Direction-switch sequencing has its own interlock tests. This
     # translation contract must not depend on previous encoder snapshots.
     motor._direction_interlock.request = Mock(return_value="drive")
