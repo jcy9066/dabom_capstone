@@ -211,6 +211,7 @@ if (root && canvas) {
     let currentVisualizationState = null;
     let currentControlState = null;
     let currentDraftGoal = null;
+    let currentLoopDraft = [];
     let previousNavigationMode = null;
     let previousNavigationState = null;
     let trajectorySessionActive = false;
@@ -1794,21 +1795,37 @@ if (root && canvas) {
     }
 
     function rebuildGoals() {
-        const nextKey = `${goalKey(currentControlState?.active_goal)}|${goalKey(currentDraftGoal)}`;
+        const loopGoals = currentControlState?.loop_goals || [];
+        const draftLoop = currentLoopDraft || [];
+        const loopKey = points => points.map(goalKey).join('|');
+        const nextKey = [
+            goalKey(currentControlState?.active_goal),
+            goalKey(currentDraftGoal),
+            loopKey(loopGoals),
+            loopKey(draftLoop),
+        ].join('::');
         if (nextKey === currentGoalKey) return;
         currentGoalKey = nextKey;
 
         clearGroup(goalRoot);
-        // During replacement the previous Goal is retained for recovery,
-        // not offered as the currently executable destination.
         const replacing = String(
             currentControlState?.navigation_state || ''
         ).toUpperCase() === 'REPLACING_GOAL';
-        const active = createGoalMarker(
-            replacing ? null : currentControlState?.active_goal,
-            COLORS.goal,
-        );
-        if (active) goalRoot.add(active);
+        const loop = draftLoop.length ? draftLoop : loopGoals;
+        if (loop.length) {
+            const a = createGoalMarker(loop[0], COLORS.draftGoal, true);
+            if (a) goalRoot.add(a);
+            if (loop[1]) {
+                const b = createGoalMarker(loop[1], COLORS.goal);
+                if (b) goalRoot.add(b);
+            }
+        } else {
+            const active = createGoalMarker(
+                replacing ? null : currentControlState?.active_goal,
+                COLORS.goal,
+            );
+            if (active) goalRoot.add(active);
+        }
         const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal, true);
         if (draft) goalRoot.add(draft);
     }
@@ -1969,15 +1986,18 @@ if (root && canvas) {
 
     function syncGoalInteractionAvailability(control = currentControlState) {
         const allowed = goalInteractionAllowed(control);
-        const button = root.querySelector('[data-lidar-interaction="set-goal"]');
-        if (button) {
+        for (const kind of ['set-goal', 'set-loop']) {
+            const button = root.querySelector(`[data-lidar-interaction="${kind}"]`);
+            if (!button) continue;
             button.disabled = !allowed;
             button.setAttribute('aria-disabled', String(!allowed));
             button.title = allowed
-                ? '지도에서 Goal 위치와 방향을 지정합니다.'
+                ? (kind === 'set-loop'
+                    ? 'A와 B를 차례로 지정하여 반복 주행 경로를 만듭니다.'
+                    : '지도에서 Goal 위치와 방향을 지정합니다.')
                 : 'DRIVING 및 Pi·Localization·Nav2 준비 후 사용할 수 있습니다.';
         }
-        if (!allowed && interactionMode === 'set-goal') {
+        if (!allowed && ['set-goal', 'set-loop'].includes(interactionMode)) {
             setInteractionMode('view');
         }
     }
@@ -2076,8 +2096,8 @@ if (root && canvas) {
 
     function setInteractionMode(mode) {
         interactionMode = (
-            mode === 'set-goal' && goalInteractionAllowed()
-                ? 'set-goal'
+            ['set-goal', 'set-loop'].includes(mode) && goalInteractionAllowed()
+                ? mode
                 : 'view'
         );
         controls.enabled = viewerExpanded;
@@ -2086,7 +2106,7 @@ if (root && canvas) {
         controls.enableZoom = viewerExpanded;
         root.closest('.lidar-viewer-overlay')?.classList.toggle(
             'goal-input-active',
-            viewerExpanded && interactionMode === 'set-goal',
+            viewerExpanded && ['set-goal', 'set-loop'].includes(interactionMode),
         );
         root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
             button.classList.toggle(
@@ -2094,7 +2114,10 @@ if (root && canvas) {
                 button.dataset.lidarInteraction === interactionMode,
             );
         });
-        if (interactionMode === 'set-goal') canvas.focus({ preventScroll: true });
+        if (interactionMode !== 'view') canvas.focus({ preventScroll: true });
+        document.dispatchEvent(new CustomEvent('dabom:navigation-interaction-mode', {
+            detail: { mode: interactionMode },
+        }));
     }
 
     function isMappingMode() {
@@ -2357,6 +2380,10 @@ if (root && canvas) {
 
     document.addEventListener('dabom:navigation-goal-draft', event => {
         currentDraftGoal = event.detail || null;
+        rebuildGoals();
+    });
+    document.addEventListener('dabom:navigation-loop-draft', event => {
+        currentLoopDraft = Array.isArray(event.detail) ? event.detail : [];
         rebuildGoals();
     });
 
