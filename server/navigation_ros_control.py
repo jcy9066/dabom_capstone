@@ -702,8 +702,10 @@ class NavigationRosControl:
     def spin_loop_turn(self, radians: float) -> dict[str, Any]:
         """180 degree spin with Nav2 collision checking and a time bound."""
         self._require_started()
-        if not math.isfinite(radians) or abs(abs(radians) - math.pi) > 0.01:
-            raise NavigationRosError("INVALID_LOOP_TURN", "Expected a 180 degree turn.", 400)
+        # Initial A may require an alignment turn shorter than 180 degrees.
+        # Every completed A/B turnaround uses a signed 180-degree Spin.
+        if not math.isfinite(radians) or not 0.12 <= abs(radians) <= math.pi + 0.01:
+            raise NavigationRosError("INVALID_LOOP_TURN", "Invalid signed loop turn.", 400)
         request = Spin.Goal()
         request.target_yaw = float(radians)
         request.time_allowance = Duration(seconds=15.0).to_msg()
@@ -1109,7 +1111,7 @@ class NavigationRosControl:
             self._last_nav_command_at = now
             self._last_nav_command_linear_x = linear
             self._last_nav_command_angular_z = angular
-            if (rotating and self._navigate_action_kind == "navigate_through_poses"
+            if (rotating and self._navigate_action_kind in {"navigate_through_poses", "spin"}
                 and self._navigation_state == "NAVIGATING"):
                 self._last_loop_pivot_at = now
                 self._last_loop_pivot_angular = angular
