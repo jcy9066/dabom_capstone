@@ -147,6 +147,61 @@ void TimeScoredLatticePlanner::configure(
   declare_parameter_if_not_declared(
     node, name_ + ".max_total_planning_time", rclcpp::ParameterValue(5.0));
 
+  // Nav2 Humble PlannerServer holds dynamic_params_lock_ in computePlan().
+  // SmacPlannerLattice::configure() is invoked by createPlan() and must
+  // never declare a parameter there: its on-set-parameters callbacks
+  // would re-acquire PlannerServer's non-recursive mutex and deadlock.
+  // Declare every Humble Smac child parameter during on_configure,
+  // before PlannerServer registers its parameter callbacks on activate.
+  // Launch/YAML overrides remain effective via declare-if-not-declared.
+  for (const auto & candidate_name : {"QuickMotion", "StableTurns"}) {
+    const std::string prefix = name_ + "." + candidate_name + ".";
+    declare_parameter_if_not_declared(
+      node, prefix + "tolerance", rclcpp::ParameterValue(0.25));
+    declare_parameter_if_not_declared(
+      node, prefix + "allow_unknown", rclcpp::ParameterValue(true));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_iterations", rclcpp::ParameterValue(1000000));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_on_approach_iterations", rclcpp::ParameterValue(1000));
+    declare_parameter_if_not_declared(
+      node, prefix + "smooth_path", rclcpp::ParameterValue(false));
+    declare_parameter_if_not_declared(
+      node, prefix + "lattice_filepath", rclcpp::ParameterValue(std::string{}));
+    declare_parameter_if_not_declared(
+      node, prefix + "cache_obstacle_heuristic", rclcpp::ParameterValue(false));
+    declare_parameter_if_not_declared(
+      node, prefix + "reverse_penalty", rclcpp::ParameterValue(2.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "change_penalty", rclcpp::ParameterValue(0.05));
+    declare_parameter_if_not_declared(
+      node, prefix + "non_straight_penalty", rclcpp::ParameterValue(1.05));
+    declare_parameter_if_not_declared(
+      node, prefix + "cost_penalty", rclcpp::ParameterValue(2.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "retrospective_penalty", rclcpp::ParameterValue(0.015));
+    declare_parameter_if_not_declared(
+      node, prefix + "rotation_penalty", rclcpp::ParameterValue(5.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "analytic_expansion_ratio", rclcpp::ParameterValue(3.5));
+    declare_parameter_if_not_declared(
+      node, prefix + "analytic_expansion_max_length", rclcpp::ParameterValue(3.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_planning_time", rclcpp::ParameterValue(5.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "lookup_table_size", rclcpp::ParameterValue(20.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "allow_reverse_expansion", rclcpp::ParameterValue(false));
+
+    std::string lattice_path;
+    node->get_parameter(prefix + "lattice_filepath", lattice_path);
+    if (lattice_path.empty()) {
+      throw std::runtime_error(
+        std::string("TimeScoredLatticePlanner needs lattice_filepath for ") +
+        candidate_name);
+    }
+  }
+
   node->get_parameter(name_ + ".candidate_names", candidate_ids_);
   double wheel_mps = 0.212;
   double reverse_fraction = 0.30;
