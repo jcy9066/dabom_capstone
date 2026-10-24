@@ -1073,6 +1073,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         await self.api.plan_goal({"goal": b})
         self.assertFalse(self.map_api.ros_control.last_loop_forward)
 
+    def test_recorded_amcl_trace_is_physical_and_invalid_jump_is_discarded(self):
+        ros = NavigationRosControl()
+        ros.begin_loop_trace()
+
+        def observation(x, y, yaw=0.0):
+            q = SimpleNamespace(
+                x=0.0, y=0.0, z=math.sin(yaw / 2), w=math.cos(yaw / 2),
+            )
+            covariance = [0.0] * 36
+            return SimpleNamespace(pose=SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=x, y=y),
+                    orientation=q,
+                ), covariance=covariance,
+            ))
+
+        for i in range(14):
+            ros._on_amcl_pose(observation(0.3 + i * 0.1, 0.5))
+        trace = ros.finish_loop_trace()
+        self.assertEqual(14, len(trace))
+        self.assertEqual(1.6, round(trace[-1]["x"], 1))
+        self.assertEqual(
+            trace, self.api._certify_physical_loop_path(
+                trace, {"x": 0.3, "y": 0.5}, {"x": 1.6, "y": 0.5},
+            ),
+        )
+        ros.begin_loop_trace()
+        ros._on_amcl_pose(observation(0.3, 0.5))
+        ros._on_amcl_pose(observation(1.2, 0.5))
+        self.assertEqual([], ros.finish_loop_trace())
+
     def test_physical_path_cache_uses_driven_samples_not_global_plan(self):
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
         b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
