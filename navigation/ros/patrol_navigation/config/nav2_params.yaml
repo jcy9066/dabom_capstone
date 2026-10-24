@@ -22,7 +22,7 @@ controller_server:
     failure_tolerance: 0.3
 
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker", "loop_goal_checker"]
     controller_plugins: ["FollowPath"]
 
     progress_checker:
@@ -36,6 +36,14 @@ controller_server:
       stateful: true
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.12
+
+    # Only the A/B loop's final batch pose uses this checker.
+    # Intermediate points use XY-only RemovePassedGoals radius=0.50m.
+    loop_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: false
+      xy_goal_tolerance: 0.55
+      yaw_goal_tolerance: 3.14
 
     FollowPath:
       # SegmentedRPP, not RotationShim, collision-checks final goal yaw.
