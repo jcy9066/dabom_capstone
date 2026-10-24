@@ -2826,59 +2826,26 @@ class NavigationControlApi:
                     self._loop_refresh_inflight = False
 
     async def _advance_loop_leg(self) -> None:
-        """Plan each next leg from the current pose; never reuse an old route."""
+        """Fail closed if rolling route preemption missed the final pose.
+
+        The old fallback restarted a single NavigateToPose, which could
+        reverse without a 180-degree pivot. Do not permit that transition.
+        Nav2's terminal success already triggers the existing Pi STOP and
+        fresh encoder proof before this method is called.
+        """
         async with self._operation_lock:
             with self._lock:
-                if not self._loop_pending or len(self._loop_goals) != 2:
+                if not self._loop_pending:
                     return
-                epoch = self._loop_epoch
-                target = dict(self._loop_goals[self._loop_leg_index])
-                # Mode changes, emergencies, cancel and sensor faults may
-                # invalidate the loop while planning runs outside the lock.
-                permitted = (
-                    self._loop_started and self._state["navigation_state"] == "READY"
-                    and self._state["navigation_mode"] == "DRIVING"
-                    and self._robot_mode == "auto" and self._pi_navigation_mode == "DRIVING"
-                    and self._state["localization_ready"] and self._state["nav2_ready"]
-                    and not self._state["emergency_stop"]
-                    and self._pending_goal_cancel is None
-                    and self._motion_allowed_locked(time.time())
-                )
-                if not permitted:
-                    self._clear_loop_locked()
+                self._clear_loop_locked()
+                if self._state["emergency_stop"]:
                     return
-                self._loop_pending = False
-            try:
-                self._assert_watchdogs_healthy()
-                path = self._normalized_path(
-                    await asyncio.to_thread(self._compute_path_for_route, target, [])
-                )
-                if len(path) < 2:
-                    raise NavigationControlError("LOOP_PATH_NOT_FOUND", "Next loop leg has no safe path.", 422)
-                with self._lock:
-                    if (epoch != self._loop_epoch or not self._loop_started
-                        or self._state["emergency_stop"]
-                        or self._state["navigation_state"] != "READY"
-                        or self._robot_mode != "auto"
-                        or self._state["navigation_mode"] != "DRIVING"
-                        or not self._motion_allowed_locked(time.time())):
-                        return
-                    self._goal_motion_generation += 1
-                    self._state["active_goal"] = target
-                    self._state["waypoints"] = []
-                    self._state["planned_path"] = path
-                    self._state["navigation_state"] = "PATH_READY"
-                    self._touch_locked()
-                # start_navigation rechecks STOP, Pi safety, Nav2 and E-STOP.
-                await self.start_navigation()
-            except Exception:
-                with self._lock:
-                    if epoch == self._loop_epoch and self._loop_goals:
-                        self._clear_loop_locked()
-                        if not self._state["emergency_stop"]:
-                            self._state["navigation_state"] = "FAILED"
-                            self._state["last_error"] = "LOOP_NEXT_FAILED"
-                            self._touch_locked()
+                self._state["navigation_state"] = "FAILED"
+                self._state["last_error"] = "LOOP_CONTINUITY_LOST"
+                self._state["active_goal"] = None
+                self._state["waypoints"] = []
+                self._state["planned_path"] = []
+                self._touch_locked()
 
     @staticmethod
     def _cancel_terminal(cancel: Any) -> str | None:
