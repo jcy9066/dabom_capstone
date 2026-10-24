@@ -1135,6 +1135,37 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(0, state["loop_leg_index"])
         self.assertFalse(self.api._loop_next_turn_clockwise)
 
+    async def test_physical_recovery_reapproach_does_not_require_spin_proof(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        # This value is deliberately left over from the failed first Spin.
+        # Recovery phases must take priority over that old loop stage.
+        with self.api._lock:
+            self.api._loop_stage = "turn"
+            self.api._loop_recovery = {
+                "phase": "reapproaching", "epoch": self.api._loop_epoch,
+                "goal_index": 1, "goal": b,
+                "failed_pose": b, "spin_angle": -math.pi,
+                "started_at": time.time(),
+            }
+            self.api._state["active_goal"] = b
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_motor_output_enabled", True):
+            with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+                "x": b["x"], "y": b["y"], "yaw": 1.0,
+                "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    await self.api._resolve_pending_nav_success()
+        self.assertEqual("READY", self.api.state_response()["navigation_state"])
+        self.assertEqual("spin_wait_stop", self.api._loop_recovery["phase"])
+        self.assertEqual(1, self.map_api.ros_control.navigate_calls)
+
     async def test_loop_pending_stage_timeout_fails_closed(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
