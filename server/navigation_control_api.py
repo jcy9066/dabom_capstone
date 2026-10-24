@@ -1761,7 +1761,14 @@ class NavigationControlApi:
 
     async def emergency_stop(self, reason: str, automatic: bool = False, force: bool = False) -> dict[str, Any]:
         with self._lock:
+            was_loop = bool(self._loop_goals)
             self._clear_loop_locked()
+            if was_loop:
+                # Loop cancellation is final. Safety release must never
+                # silently restart its remaining Nav2 batch.
+                self._state["active_goal"] = None
+                self._state["waypoints"] = []
+                self._state["planned_path"] = []
         normalized_reason = (str(reason).strip() or "dashboard_emergency_stop")[:96]
         try:
             last_route_status = self._ros.navigation_status()
