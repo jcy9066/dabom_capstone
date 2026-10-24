@@ -3475,9 +3475,41 @@ class NavigationControlApi:
                         "x": destination["x"], "y": destination["y"], "yaw": heading,
                     }
                     self._validate_goal_in_active_map(target)
-                    plan = self._normalized_path(
-                        await asyncio.to_thread(self._compute_path_for_route, target, [])
-                    )
+                    with self._lock:
+                        cached = [dict(p) for p in self._loop_path_cache.get(next_index, [])]
+                    reuse = False
+                    if cached and hasattr(self._ros, "loop_path_valid"):
+                        current_pose = self._safe_live_pose()
+                        # Never attach the first saved pose to a distant or
+                        # differently oriented robot: that would cut corners.
+                        aligned = (
+                            isinstance(current_pose, dict)
+                            and math.hypot(
+                                current_pose["x"] - cached[0]["x"],
+                                current_pose["y"] - cached[0]["y"],
+                            ) <= 0.35
+                            and abs(math.atan2(
+                                math.sin(current_pose["yaw"] - cached[0]["yaw"]),
+                                math.cos(current_pose["yaw"] - cached[0]["yaw"]),
+                            )) <= 0.35
+                        )
+                        if aligned:
+                            reuse = await asyncio.to_thread(
+                                self._ros.loop_path_valid, cached,
+                            )
+                        if not reuse:
+                            with self._lock:
+                                if epoch == self._loop_epoch:
+                                    self._loop_path_cache.pop(next_index, None)
+                                    self._loop_replans += 1
+                    if reuse:
+                        plan = cached
+                    else:
+                        # First physical passage, unsafe cache, or unusable
+                        # start alignment: compute via existing Nav2 planner.
+                        plan = self._normalized_path(
+                            await asyncio.to_thread(self._compute_path_for_route, target, [])
+                        )
                     if len(plan) < 2:
                         raise NavigationControlError(
                             "LOOP_PATH_NOT_FOUND", "No safe forward loop leg.", 422,
@@ -3485,9 +3517,16 @@ class NavigationControlApi:
                     with self._lock:
                         if epoch != self._loop_epoch or not self._loop_started:
                             return
-                    action = await asyncio.to_thread(
-                        self._ros.navigate_to_pose, target, loop_reapproach=True,
-                    )
+                    if hasattr(self._ros, "begin_loop_trace"):
+                        await asyncio.to_thread(self._ros.begin_loop_trace)
+                    if reuse:
+                        action = await asyncio.to_thread(
+                            self._ros.follow_loop_path, plan,
+                        )
+                    else:
+                        action = await asyncio.to_thread(
+                            self._ros.navigate_to_pose, target, loop_reapproach=True,
+                        )
                     next_phase = "drive"
                 if not isinstance(action, dict) or action.get("accepted") is not True:
                     raise NavigationControlError(
@@ -3519,6 +3558,12 @@ class NavigationControlApi:
                     self._state["active_goal"] = target
                     self._state["waypoints"] = []
                     self._state["planned_path"] = plan
+                    if phase == "drive_pending":
+                        self._loop_follow_active = bool(reuse)
+                        self._loop_active_path = [dict(p) for p in plan] if reuse else []
+                        self._loop_validity_last_at = 0.0
+                        if reuse:
+                            self._loop_cache_hits += 1
                     self._state["navigation_state"] = "NAVIGATING"
                     self._state["last_error"] = None
                     self._stop_commanded_at = None
