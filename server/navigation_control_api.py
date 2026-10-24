@@ -2567,12 +2567,37 @@ class NavigationControlApi:
             return False
         if not 0 <= now - timestamp <= 0.5 or timestamp < after:
             return False
-        if math.hypot(x - tx, y - ty) > 0.55:
+        # Navigation arrival is deliberately relaxed; a stationary Spin
+        # must stay close to the actual rotation origin.
+        xy_limit = 0.12 if need_yaw else 0.55
+        if math.hypot(x - tx, y - ty) > xy_limit:
             return False
         if need_yaw:
             delta = math.atan2(math.sin(yaw - tyaw), math.cos(yaw - tyaw))
             return abs(delta) <= 0.20
         return True
+
+    @staticmethod
+    def _loop_signed_turn_confirmed(progress: Any, commanded: float | None) -> bool:
+        """Do not confuse a +180 with a -180 turn sharing the same final yaw."""
+        if not isinstance(progress, dict) or commanded is None:
+            return False
+        try:
+            signed = float(progress["signed_yaw_rad"])
+            age = float(progress["age_sec"])
+            requested = float(commanded)
+            samples = progress["samples"]
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return False
+        return bool(
+            all(math.isfinite(v) for v in (signed, age, requested))
+            and type(samples) is int and samples >= 2
+            and progress.get("invalid") is False
+            and 0 <= age <= 3.0  # bounded STOP/encoder proof follows Spin
+            and abs(requested) >= 0.12
+            and signed * requested > 0
+            and abs(signed - requested) <= max(0.15, min(0.30, abs(requested) * 0.30))
+        )
 
     async def _resolve_pending_nav_success(self) -> None:
         """Finalize Nav2 success only after STOP delivery and stable encoders."""
@@ -2652,6 +2677,19 @@ class NavigationControlApi:
                                 max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec),
                                 min_received_at=self._stop_commanded_at,
                             )
+                        if self._motor_output_enabled and pose_ok and (
+                            self._loop_stage == "turn"
+                            or bool(recovery and recovery["phase"] == "turning")
+                        ):
+                            try:
+                                progress = self._ros.spin_progress()
+                            except Exception:
+                                progress = None
+                            angle = (
+                                float(recovery["spin_angle"]) if recovery
+                                else self._loop_turn_requested
+                            )
+                            pose_ok = self._loop_signed_turn_confirmed(progress, angle)
                         if self._motor_output_enabled and not pose_ok:
                             self._clear_loop_locked()
                             self._state["navigation_state"] = "FAILED"
