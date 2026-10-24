@@ -49,6 +49,33 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+clock_sync_diagnostic() {
+    # Diagnostics only; never modify host clocks or block motor STOP.
+    local status synced ntp platform
+    status=""
+    synced="unknown"
+    ntp="unknown"
+    platform="Linux"
+    if grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease 2>/dev/null; then
+        platform="WSL2"
+    fi
+    if command -v timedatectl >/dev/null 2>&1; then
+        status="$(timeout 3s timedatectl show -p NTPSynchronized -p NTP 2>/dev/null || true)"
+        synced="$(printf '%s\n' "${status}" | sed -n 's/^NTPSynchronized=//p' | head -n 1)"
+        ntp="$(printf '%s\n' "${status}" | sed -n 's/^NTP=//p' | head -n 1)"
+    fi
+    synced="${synced:-unknown}"
+    ntp="${ntp:-unknown}"
+    log "Clock check: utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ') synchronized=${synced} ntp=${ntp} platform=${platform}"
+    if [[ "${synced}" == "no" ]]; then
+        warn "System clock not synchronized; LiDAR and TF timestamps may disagree."
+    elif [[ "${ntp}" == "no" && "${platform}" != "WSL2" ]]; then
+        warn "NTP disabled; verify clock synchronization before navigation."
+    fi
+    # WSL2 uses Windows/Hyper-V time sync even when NTP=no.
+    # Local NTP status cannot establish cross-host Pi/GPU clock agreement.
+}
+
 proc_cmdline() {
     local pid="$1"
 
@@ -368,6 +395,7 @@ require_cmd flock
 require_cmd setsid
 require_cmd ps
 require_cmd timeout
+clock_sync_diagnostic
 
 [[ -f /opt/ros/humble/setup.bash ]] || fail "ROS 2 Humble setup not found"
 [[ -f "${ROOT_DIR}/navigation/ros/install/setup.bash" ]] \
