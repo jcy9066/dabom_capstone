@@ -669,6 +669,30 @@ class MotorController:
                 self.last_command_at = time.monotonic()
                 self.current_motion = direction
 
+    def _trace_motor_output(
+        self, state: str, left_pwm: float = 0.0,
+        right_pwm: float = 0.0, detail: str = "",
+    ) -> None:
+        """Bounded Pi-side diagnostics; does not authorize or send motion."""
+        now = time.monotonic()
+        previous_state = getattr(self, "_last_motor_trace_state", None)
+        previous_at = getattr(self, "_last_motor_trace_at", None)
+        if (
+            previous_state == state
+            and previous_at is not None
+            and now - previous_at < 0.5
+        ):
+            return
+        self._last_motor_trace_state = state
+        self._last_motor_trace_at = now
+        safe_detail = str(detail).replace("\\n", " ").replace("\\r", " ")[:80]
+        print(
+            f"[motor-motion] state={state} "
+            f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
+            f"detail={safe_detail}",
+            flush=True,
+        )
+
     def drive(
         self,
         left_mps: float,
@@ -766,8 +790,10 @@ class MotorController:
                 self._direction_interlock.mark_stop_sent(
                     time.monotonic(), sequence,
                 )
+                self._trace_motor_output("interlock_stop", detail=mode)
                 return
             if decision == "hold":
+                self._trace_motor_output("interlock_hold", detail=mode)
                 return
             if decision == "timeout":
                 self._jerk_limiter.reset()
@@ -776,6 +802,7 @@ class MotorController:
                 with self._state_lock:
                     self.current_motion = "stop"
                     self.last_command_at = time.monotonic()
+                self._trace_motor_output("interlock_timeout", detail=mode)
                 raise MotorControllerError(
                     "direction change STOP not encoder-confirmed within 3s"
                 )
@@ -796,6 +823,10 @@ class MotorController:
                     "DRIVE,"
                     f"{limited_left:.3f},"
                     f"{limited_right:.3f}"
+                )
+                self._trace_motor_output(
+                    "uart_drive", limited_left, limited_right,
+                    "rear_limited" if rear_blind_limited else mode,
                 )
             except Exception:
                 self._jerk_limiter.reset()
@@ -828,6 +859,7 @@ class MotorController:
                 self._exchange_locked(
                     f"STOP,{self._sanitize_reason(reason)}"
                 )
+                self._trace_motor_output("uart_stop", detail=reason)
 
             except Exception as exc:
                 error = exc
