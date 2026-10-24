@@ -721,7 +721,7 @@ class NavigationRosControl:
         request = FollowPath.Goal()
         request.path = self._path_stamped(poses)
         request.controller_id = "LoopFollowPath"
-        request.goal_checker_id = "loop_goal_checker"
+        request.goal_checker_id = "loop_cached_goal_checker"
         client = self._follow_path_client
         if client is None or not client.wait_for_server(timeout_sec=2.5):
             raise NavigationRosError(
