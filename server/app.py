@@ -5636,10 +5636,14 @@ async def send_robot_command(
                 status_code=400,
             )
 
-        if (
-            abs(left_mps) > MAX_WHEEL_MPS
-            or abs(right_mps) > MAX_WHEEL_MPS
-        ):
+        # Nav2 scales wheel speeds to MAX_WHEEL_MPS, but binary floating-
+        # point operations can produce a one-ULP excess (e.g.
+        # 0.21200000000000002 for a 0.212 m/s limit). Never reject a
+        # nominally in-range command solely for that rounding difference.
+        # Larger overshoots remain a hard error, with no extra speed budget.
+        wheel_peak_mps = max(abs(left_mps), abs(right_mps))
+        wheel_limit_roundoff_mps = 1e-12
+        if wheel_peak_mps > MAX_WHEEL_MPS + wheel_limit_roundoff_mps:
             return JSONResponse(
                 {
                     "ok": False,
@@ -5648,11 +5652,19 @@ async def send_robot_command(
                     "command": command,
                     "error": (
                         "wheel speed exceeds "
-                        f"{MAX_WHEEL_MPS:.2f} m/s"
+                        f"{MAX_WHEEL_MPS:.3f} m/s"
                     ),
                 },
                 status_code=400,
             )
+
+        # Rescale BOTH wheels rather than clipping one: preserve curvature
+        # and guarantee that even an accepted rounding excess never reaches
+        # the Pi beyond the original configured wheel-speed limit.
+        if wheel_peak_mps > MAX_WHEEL_MPS:
+            scale = MAX_WHEEL_MPS / wheel_peak_mps
+            left_mps *= scale
+            right_mps *= scale
 
         command["left_mps"] = left_mps
         command["right_mps"] = right_mps

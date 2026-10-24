@@ -388,6 +388,50 @@ def test_server_accepts_calibrated_limit_and_rejects_excess(monkeypatch, limit):
         assert "wheel speed exceeds" in response.json()["error"]
 
 
+@pytest.mark.parametrize("limit", [0.17, 0.212, 0.23])
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_server_normalizes_one_ulp_overshoot_without_changing_wheel_ratio(
+    monkeypatch, limit, direction,
+):
+    """A Nav2 floating-point rounding excess must never turn into HTTP 400."""
+    monkeypatch.setenv("DASHBOARD_ESTOP_COOLDOWN_SEC", "1")
+    monkeypatch.setenv("DASHBOARD_GOAL_REACHED_TOLERANCE_M", "0.15")
+    from fastapi.testclient import TestClient
+    import server.app as server
+
+    monkeypatch.setattr(server, "MAX_WHEEL_MPS", limit)
+    monkeypatch.setattr(server, "MOTOR_OUTPUT_ENABLED", False)
+    client = TestClient(server.app)
+    headers = {"X-Robot-Control-Token": "test-robot-token"}
+
+    raw_peak = math.nextafter(limit, math.inf)
+    assert limit < raw_peak < limit + 1e-12
+    left = direction * raw_peak
+    right = -direction * limit * 0.6
+    payload = {"type": "auto_drive", "left_mps": left, "right_mps": right}
+
+    accepted = client.post(
+        "/api/robots/pi-01/command", headers=headers, json=payload,
+    )
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["ok"] is True
+    assert body["blocked"] is True
+    assert body["delivered"] is False
+    normalized = body["command"]
+    assert max(abs(normalized["left_mps"]), abs(normalized["right_mps"])) <= limit
+    assert normalized["left_mps"] == pytest.approx(direction * limit)
+    assert normalized["right_mps"] / normalized["left_mps"] == pytest.approx(right / left)
+
+    # Roundoff is the ONLY exception: a genuine speed overshoot still fails.
+    too_fast = client.post(
+        "/api/robots/pi-01/command", headers=headers,
+        json={**payload, "left_mps": direction * (limit + 2e-12)},
+    )
+    assert too_fast.status_code == 400
+    assert "wheel speed exceeds" in too_fast.json()["error"]
+
+
 def test_pico_full_pwm_and_direction_ratios_without_hardware(tmp_path):
     import shutil
     import subprocess
