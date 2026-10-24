@@ -71,3 +71,17 @@ def test_future_lidar_stamps_are_bounded_at_gpu_ingress():
     assert "valid_source and skew_sec > 0.05" in content
     assert "message.header.stamp = received_stamp" in content
     assert "_future_stamp_warning_at" in content
+
+
+def test_gpu_launch_requires_current_checkout_ros_overlay():
+    gpu = (ROOT / "start_gpu_server.sh").read_text()
+    control = (ROOT / "server/navigation_process_control.py").read_text()
+    assert 'source "${ROOT_DIR}/navigation/ros/install/local_setup.bash"' in gpu
+    assert "expected_nav_install=" in gpu
+    assert "resolved_controller_prefix=" in gpu
+    assert "Wrong Nav2 overlay:" in gpu
+    assert 'ros2 pkg prefix patrol_navigation' in gpu
+    assert 'install" / "local_setup.bash"' in control
+    assert '"patrol_navigation_controller", "patrol_navigation"' in control
+    assert 'actual_prefix=$(ros2 pkg prefix {package})' in control
+    assert "exit 78" in control
