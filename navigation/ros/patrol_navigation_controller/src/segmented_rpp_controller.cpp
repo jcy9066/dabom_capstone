@@ -532,7 +532,6 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       && std::abs(std::abs(remaining) - M_PI) <= 0.15)
   {
     loop_half_turn_in_progress_ = true;
-    loop_half_turn_target_yaw_ = yaw(rotation_goal);
   }
   const double controlled_remaining = (
     loop_forward_only_ && loop_half_turn_in_progress_ && !pivot_started_
