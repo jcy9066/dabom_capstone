@@ -155,6 +155,12 @@ class NavigationRosControl:
         self._last_loop_pivot_at = None
         self._last_loop_pivot_angular = None
         self._last_loop_pivot_linear = None
+        # Unwrapped signed wheel-odometry yaw, scoped to an accepted Spin.
+        self._spin_signed_yaw_rad = 0.0
+        self._spin_last_odom_yaw = None
+        self._spin_odom_samples = 0
+        self._spin_last_odom_at = None
+        self._spin_odom_invalid = False
         self._last_tf_at = None
         self._tf_buffer = None
         self._tf_listener = None
@@ -695,6 +701,16 @@ class NavigationRosControl:
                     self._last_loop_pivot_at = None
                     self._last_loop_pivot_angular = None
                     self._last_loop_pivot_linear = None
+                    self._spin_signed_yaw_rad = 0.0
+                    self._spin_odom_samples = 0
+                    self._spin_odom_invalid = False
+                    self._spin_last_odom_at = None
+                    self._spin_last_odom_yaw = (
+                        self._last_odom_yaw
+                        if self._last_odom_at is not None
+                        and time.monotonic() - self._last_odom_at <= 0.5
+                        else None
+                    )
                 self._navigate_goal_handle = handle
                 self._navigate_result_future = future
                 self._navigation_state = "NAVIGATING"
@@ -1093,6 +1109,17 @@ class NavigationRosControl:
                 "odom_sequence": self._odom_sequence,
             }
 
+    def spin_progress(self) -> dict[str, Any]:
+        """Independent signed rotation evidence since this Spin was accepted."""
+        with self._lock:
+            age = self._monotonic_age(time.monotonic(), self._spin_last_odom_at)
+            return {
+                "signed_yaw_rad": self._spin_signed_yaw_rad,
+                "samples": self._spin_odom_samples,
+                "age_sec": age,
+                "invalid": self._spin_odom_invalid,
+            }
+
     def _on_nav_command(self, message: Any) -> None:
         try:
             linear = float(message.linear.x)
@@ -1158,6 +1185,21 @@ class NavigationRosControl:
             self._last_odom_yaw = yaw
             self._last_odom_at = now
             self._odom_sequence += 1
+            if self._navigate_action_kind == "spin" and self._navigation_state == "NAVIGATING":
+                if self._spin_last_odom_yaw is not None:
+                    delta = math.atan2(
+                        math.sin(yaw - self._spin_last_odom_yaw),
+                        math.cos(yaw - self._spin_last_odom_yaw),
+                    )
+                    # A discontinuity can create a false 180-degree reading;
+                    # fail closed, rather than integrating a localization jump.
+                    if abs(delta) > 0.50:
+                        self._spin_odom_invalid = True
+                    if not self._spin_odom_invalid:
+                        self._spin_signed_yaw_rad += delta
+                        self._spin_odom_samples += 1
+                self._spin_last_odom_yaw = yaw
+                self._spin_last_odom_at = now
 
     def _on_map(self, message: Any) -> None:
         with self._condition:
