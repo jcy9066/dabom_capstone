@@ -4,7 +4,7 @@
   <BehaviorTree ID="MainTree">
     <Sequence name="SafeForwardReapproach">
       <Timeout msec="5000">
-        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="LoopGridBased"/>
       </Timeout>
       <PipelineSequence name="FollowObstacleCheckedReapproach">
         <RateController hz="10.0">
@@ -12,7 +12,7 @@
             <IsPathValid path="{path}" server_timeout="100"/>
             <Timeout msec="5000">
               <RetryUntilSuccessful num_attempts="5">
-                <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+                <ComputePathToPose goal="{goal}" path="{path}" planner_id="LoopGridBased"/>
               </RetryUntilSuccessful>
             </Timeout>
           </Fallback>
