@@ -1139,6 +1139,44 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             [], self.api._certify_physical_loop_path(too_short, a, b),
         )
 
+    async def test_physical_arrival_commits_recorded_a_to_b_trace(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        actual = [
+            {"x": a["x"] + 0.1 * i,
+             "y": a["y"] + 0.02 * math.sin(i / 3), "yaw": 0.0}
+            for i in range(14)
+        ]
+        # No global path is used as a substitute for these actual samples.
+        ros = self.map_api.ros_control
+        ros.trace = actual
+        with self.api._lock:
+            self.api._loop_leg_index = 1
+            self.api._loop_completed_legs = 1
+            self.api._loop_stage = "drive"
+            self.api._state["active_goal"] = dict(b)
+            self.api._state["navigation_state"] = "NAVIGATING"
+            self.api._pending_nav_success = {
+                "started_at": time.time(), "processing": False,
+            }
+        with patch.object(self.api, "_motor_output_enabled", True):
+            with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+                "x": actual[-1]["x"], "y": actual[-1]["y"],
+                "yaw": 0.0, "received_at": time.time(),
+            }):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    await self.api._resolve_pending_nav_success()
+        state = self.api.state_response()
+        self.assertEqual("READY", state["navigation_state"])
+        self.assertEqual("turn_pending", state["loop_stage"])
+        self.assertEqual([1], state["loop_cached_directions"])
+        self.assertEqual(actual, self.api._loop_path_cache[1])
+        self.assertFalse(ros.trace_started)
+        self.assertEqual(0, state["loop_cache_hits"])
+
     async def test_second_a_to_b_reuses_physical_path_without_planner(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
