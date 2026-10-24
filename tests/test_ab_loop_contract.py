@@ -142,6 +142,35 @@ def test_forward_only_loop_planner_is_separate_from_existing_goal_settings():
     assert 'request.planner_id = "LoopGridBased"' in ROS
 
 
+def test_real_trajectory_cache_replays_on_dedicated_nav2_follow_path():
+    assert "def begin_loop_trace(self)" in ROS
+    assert "def finish_loop_trace(self)" in ROS
+    assert "self._loop_trace.append(sample)" in ROS
+    assert "def follow_loop_path(" in ROS
+    assert "request = FollowPath.Goal()" in ROS
+    assert 'request.controller_id = "LoopFollowPath"' in ROS
+    assert 'request.goal_checker_id = "loop_cached_goal_checker"' in ROS
+    assert "loop_cached_goal_checker:" in CONFIG
+    assert "xy_goal_tolerance: 0.10" in CONFIG
+    assert "def _certify_physical_loop_path(" in SERVER
+    assert "def _remaining_loop_path(" in SERVER
+    assert "self._loop_path_cache[direction] = certified" in SERVER
+    assert "self._ros.follow_loop_path, plan" in SERVER
+    assert "self._ros.loop_path_valid, remainder" in SERVER
+    assert "self._ros.follow_loop_path, fresh, preempt=True" in SERVER
+    assert "self._loop_path_cache.clear()" in SERVER
+
+
+def test_forward_only_planner_is_separate_from_regular_set_goal():
+    assert 'planner_plugins: ["GridBased", "LoopGridBased"]' in CONFIG
+    assert "LoopGridBased:" in CONFIG
+    assert "allow_reverse_expansion: false" in CONFIG
+    assert 'request.planner_id = "LoopGridBased"' in ROS
+    assert "loop_forward=True" in SERVER
+    assert 'planner_id="LoopGridBased"' in RECOVERY_TREE.read_text(encoding="utf-8")
+    assert "loop_reapproach=True" in SERVER
+
+
 def test_operator_cancel_manual_mapping_estop_revoke_loop_before_next_motor_action():
     assert 'abort_loop=True' in SERVER
     assert 'abort_loop_for_mode="manual"' in SERVER
