@@ -2734,6 +2734,7 @@ class NavigationControlApi:
                                 self._state["last_error"] = "LOOP_STAGE_INVALID"
                             if self._loop_stage is not None:
                                 self._loop_pending = True
+                                self._loop_pending_since = time.time()
                                 self._state["navigation_state"] = "READY"
                         else:
                             self._clear_loop_locked()
@@ -3074,6 +3075,7 @@ class NavigationControlApi:
                     self._loop_leg_index = 1 - int(recovery["goal_index"])
                     self._loop_stage = "drive_pending"
                     self._loop_pending = True
+                    self._loop_pending_since = time.time()
                     self._loop_recovery = None
                     self._loop_turn_target = None
                     self._loop_turn_requested = None
@@ -3194,8 +3196,24 @@ class NavigationControlApi:
                 phase = self._loop_stage
                 epoch = self._loop_epoch
                 now = time.time()
+                if self._loop_pending_since is None:
+                    self._loop_pending_since = now
+                if now - self._loop_pending_since > self.LOOP_STAGE_PENDING_TIMEOUT_SEC:
+                    self._clear_loop_locked()
+                    self._arm_pending_stop_locked()
+                    self._pending_terminal_stop = {
+                        "reason": "loop_stage_wait_timeout", "attempts": 0,
+                        "last_attempt_at": None, "processing": False,
+                    }
+                    self._state["active_goal"] = None
+                    self._state["waypoints"] = []
+                    self._state["planned_path"] = []
+                    self._state["navigation_state"] = "FAILED"
+                    self._state["last_error"] = "LOOP_STAGE_WAIT_TIMEOUT"
+                    self._touch_locked()
+                    return
                 allowed = (
-                    phase in {"turn_pending", "drive_pending"}
+                    phase in {"turn_pending", "drive_pending"
                     and self._loop_started
                     and self._state["navigation_state"] == "READY"
                     and self._state["navigation_mode"] == "DRIVING"
@@ -3216,6 +3234,7 @@ class NavigationControlApi:
                 half_turn = self._loop_completed_legs >= 2
                 clockwise = self._loop_next_turn_clockwise
                 self._loop_pending = False
+                self._loop_pending_since = None
                 self._state["navigation_state"] = "LOOP_STAGE_STARTING"
                 self._touch_locked()
             action_accepted = False
@@ -3260,6 +3279,7 @@ class NavigationControlApi:
                             self._loop_leg_index = 1 - index
                             self._loop_stage = "drive_pending"
                             self._loop_pending = True
+                            self._loop_pending_since = time.time()
                             self._state["navigation_state"] = "READY"
                             self._touch_locked()
                         return
