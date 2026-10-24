@@ -68,7 +68,8 @@ async function scenario(target, options={}) {
     robot_mode:'auto',navigation_mode:'DRIVING',patrol_ready:false,
     patrol_transition:null,patrol_transition_error:null
   }});
-  assert(!r.ok && r.calls.some(x=>x[0]==='refresh'));
+  assert(r.ok && r.calls.length===1);
+  assert.equal(r.state.control.navigation_mode,'DRIVING');
   r=await scenario('AUTO',{failure:'Pi ACK missing'});
   assert(!r.ok && r.calls.some(x=>x[0]==='refresh'));
   assert(r.feedback.at(-1).error);
