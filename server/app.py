@@ -56,7 +56,7 @@ from server.database import (
     DatabaseConfigurationError,
     DatabaseOperationError,
 )
-from server.env_config import env_bool, env_float, env_int, env_text
+from server.env_config import EnvConfigurationError, env_bool, env_float, env_int, env_text
 from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
 from server.media_service import (
     FrozenFrameCache,
@@ -377,7 +377,7 @@ TRIGGER_SUSPICIOUS_VISUAL_ENABLED = env_bool("TRIGGER_SUSPICIOUS_VISUAL_ENABLED"
 INFERENCE_MAX_RESULT_AGE_SEC = env_float("INFERENCE_MAX_RESULT_AGE_SEC", minimum=0.0)
 INFERENCE_DROP_OLDER_THAN_SEC = env_float("INFERENCE_DROP_OLDER_THAN_SEC", minimum=0.0)
 CUDA_DEVICE_INDEX = env_text("CUDA_DEVICE_INDEX")
-DEVICE = env_text("DEVICE").lower()
+DEVICE = env_text("DEVICE", default=f"cuda:{CUDA_DEVICE_INDEX}").lower()
 GPU_REQUIRED_FOR_INFERENCE = env_bool("GPU_REQUIRED_FOR_INFERENCE")
 ENV_RELOAD_CHECK_INTERVAL_SEC = env_float("ENV_RELOAD_CHECK_INTERVAL_SEC", minimum=0.1)
 CAMERA_TIMEOUT_SEC = env_float("CAMERA_TIMEOUT_SEC", minimum=0.1)
@@ -1020,7 +1020,7 @@ RUNTIME_MODEL_ENV_KEYS = (
 
 def read_runtime_model_config():
     cuda_device_index = env_text("CUDA_DEVICE_INDEX")
-    device = env_text("DEVICE").lower()
+    device = env_text("DEVICE", default=f"cuda:{cuda_device_index}").lower()
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
     pipeline = env_text("PIPELINE")
@@ -5112,7 +5112,20 @@ async def set_model_pipeline_state(request: Request):
             status_code=400,
         )
 
-    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    try:
+        success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    except (EnvConfigurationError, ValueError) as exc:
+        # A malformed runtime config must not escape as an unhandled 500.
+        detail = f"Invalid model runtime configuration: {exc}"
+        return JSONResponse(
+            {
+                "ok": False,
+                "enabled": bool(MODEL_ACTIVE and frame_processor is not None),
+                "model_error": detail,
+                "detail": detail,
+            },
+            status_code=400,
+        )
     actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
 
     if not success:
