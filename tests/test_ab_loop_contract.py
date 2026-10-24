@@ -11,6 +11,7 @@ HTML = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
 CONFIG = (ROOT / "navigation/ros/patrol_navigation/config/nav2_params.yaml").read_text(encoding="utf-8")
 CONTROLLER = (ROOT / "navigation/ros/patrol_navigation_controller/src/segmented_rpp_controller.cpp").read_text(encoding="utf-8")
 TREE = ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_ab_loop_cached_path.xml"
+RECOVERY_TREE = ROOT / "navigation/ros/patrol_navigation/behavior_trees/navigate_loop_reapproach_forward.xml"
 
 
 def test_loop_tree_is_valid_and_checks_obstacles_and_new_goals():
@@ -40,12 +41,28 @@ def test_loop_does_not_modify_regular_goal_mode():
     assert "preempt_navigation_route" in ROS
 
 
-def test_pivot_turnaround_does_not_fall_back_to_reverse_navigation():
+def test_single_guarded_backup_not_uncontrolled_reverse_navigation():
     assert "heading_ab if (first + index) % 2 == 0 else heading_ba" in SERVER
     assert "LOOP_CONTINUITY_LOST" in SERVER
     assert "await self.start_navigation()" not in SERVER.split(
         "async def _advance_loop_leg", 1
     )[1].split("def _cancel_terminal", 1)[0]
+    assert "self._loop_reverse_used" in SERVER
+    assert "reverse_loop_recovery, 0.35" in SERVER
+    assert "self._loop_recovery_reverse_progress(" in SERVER
+    assert "loop_reapproach=True" in SERVER
+    assert "spin_loop_turn, spin_yaw" in SERVER
+    assert "LOOP_RECOVERY_FAILED" in SERVER
+    assert "self._pi_estop_latched is False" in SERVER
+    assert "self._stop_confirmed_locked(now)" in SERVER
+    assert "def reverse_loop_recovery" in ROS
+    assert "def spin_loop_turn" in ROS
+    assert "request.target.x = -float(distance_m)" in ROS
+    assert RECOVERY_TREE.exists()
+    assert "LoopFollowPath" in RECOVERY_TREE.read_text(encoding="utf-8")
+    assert "ComputePathToPose" in RECOVERY_TREE.read_text(encoding="utf-8")
+    assert "loop_half_turn_in_progress_" in CONTROLLER
+    assert "loop_turn_clockwise_ = !loop_turn_clockwise_" in CONTROLLER
 
 
 def test_cancel_manual_mapping_estop_revoke_loop_ownership():
