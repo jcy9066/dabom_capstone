@@ -685,7 +685,7 @@ class MotorController:
             return
         self._last_motor_trace_state = state
         self._last_motor_trace_at = now
-        safe_detail = str(detail).replace("\\n", " ").replace("\\r", " ")[:80]
+        safe_detail = str(detail).replace(chr(10), " ").replace(chr(13), " ")[:80]
         print(
             f"[motor-motion] state={state} "
             f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
