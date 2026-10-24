@@ -240,9 +240,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="lidarControlDrawerToggle"', template)
         self.assertIn("syncControlDrawerState", viewer)
         self.assertIn("dabom:drawer-toggle", viewer)
-        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16', template)
-        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16', template)
-        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16', template)
+        # Component entrypoints are stable, but cache-busting versions change
+        # independently of the navigation viewer; do not pin an obsolete tag.
+        for component in ("drawer_toggle", "viewer_status", "led_toggle"):
+            self.assertRegex(
+                template,
+                rf'<script src="/components/controls/{component}\.js\?v=[^"]+"></script>',
+            )
         self.assertIn('data-drawer-target="lidar-control-drawer"', template)
         self.assertIn('data-drawer-target="lidar-layer-drawer"', template)
         self.assertIn('dashboard-drawer-toggle--top', template)
@@ -507,7 +511,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
         assert "control?.active_goal" in displayed
         assert "control.planned_path" in displayed
         assert "REPLACING_GOAL" in displayed
-        assert "'PATH_READY', 'READY', 'NAVIGATING', 'RESUMING'" in displayed
+        # Preview paths are valid only before movement. NAVIGATING and
+        # RESUMING use an execution-owned FollowPath observation instead.
+        assert "['PATH_READY', 'READY'].includes(navState)" in displayed
+        assert "['NAVIGATING', 'RESUMING'].includes(navState)" in displayed
+        assert "control.executed_path" in displayed
         assert "return livePath" not in displayed
         assert "navigationGlobalPathRunKey === null) return;" in dashboard
         assert "if (navigationGlobalPathRunKey !== null" in dashboard
@@ -530,25 +538,32 @@ class NavigationFrontendContractTests(unittest.TestCase):
             function +
             """
             const old = [{x:0,y:0},{x:1,y:1}];
-            const newPath = [{x:0,y:0},{x:2,y:2}];
+            const preview = [{x:0,y:0},{x:2,y:2}];
+            const executed = [{x:0,y:0},{x:1,y:2},{x:2,y:2}];
             const live = {globalPath: old, globalPathStatus:'fresh'};
             const base = {
                 navigation_mode:'DRIVING', active_goal:{x:2,y:2,yaw:0},
-                planned_path:newPath, navigation_state:'NAVIGATING',
+                planned_path:preview, executed_path:executed,
+                navigation_state:'NAVIGATING',
             };
             function check(condition) { if (!condition) process.exit(1); }
-            check(displayedGlobalPath(base, live) === newPath);
+            check(displayedGlobalPath(base, live) === executed);
+            check(displayedGlobalPath({...base,navigation_state:'RESUMING'},live)===executed);
+            check(displayedGlobalPath({...base,executed_path:[]},live).length===0);
+            check(displayedGlobalPath({...base,executed_path:null},live).length===0);
+            // An anonymous ROS /plan packet cannot replace the applied route.
+            check(displayedGlobalPath(base,{globalPath:old})===executed);
             for (const s of [
                 'REPLACING_GOAL', 'FAILED', 'SUCCEEDED',
                 'CANCELED', 'EMERGENCY_STOPPED', 'PAUSING_FOR_MANUAL',
             ]) {
                 check(displayedGlobalPath({...base,navigation_state:s},live).length === 0);
             }
-            check(displayedGlobalPath({...base,navigation_state:'PATH_READY'},live)===newPath);
-            check(displayedGlobalPath({...base,navigation_state:'READY'},live)===newPath);
+            check(displayedGlobalPath({...base,navigation_state:'PATH_READY'},live)===preview);
+            check(displayedGlobalPath({...base,navigation_state:'READY'},live)===preview);
+            check(displayedGlobalPath({...base,navigation_state:'PATH_READY',planned_path:[]},live).length===0);
             check(displayedGlobalPath({...base,navigation_mode:'MAPPING'},live).length===0);
             check(displayedGlobalPath({...base,active_goal:null},live).length===0);
-            check(displayedGlobalPath({...base,planned_path:[]},live).length===0);
             """
         )
         result = subprocess.run(
@@ -557,16 +572,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
-    def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
+    def test_global_path_is_ground_adjacent_and_trajectory_filters_jitter(self):
         viewer = self.viewer
-        # Route height now clears the taller static/dynamic wall layers.
-        self.assertIn(
-            "positions.push(x, y, Math.max(0.16, obstacleHeightM + 0.04, DYNAMIC_OBSTACLE_HEIGHT_M + 0.04))",
-            viewer,
-        )
-        self.assertIn("depthTest: false", viewer)
-        self.assertIn("line.renderOrder = 100", viewer)
-        self.assertIn("points.renderOrder = 101", viewer)
+        path_renderer = viewer.split("    function rebuildPath(", 1)[1].split(
+            "    function createGoalMarker(", 1
+        )[0]
+        # The path remains near the ground and is occluded by real obstacle
+        # meshes. Do not restore the old always-on-top, elevated rendering.
+        self.assertIn("positions.push(x, y, 0.026)", path_renderer)
+        self.assertIn("depthTest: true", path_renderer)
+        self.assertNotIn("depthTest: false", path_renderer)
+        self.assertIn("line.renderOrder = 20", path_renderer)
+        self.assertIn("points.renderOrder = 21", path_renderer)
         self.assertIn("TRAJECTORY_FILTER_ALPHA = 0.45", viewer)
         self.assertIn("TRAJECTORY_FALLBACK_DISTANCE_M = 0.06", viewer)
         self.assertIn("TRAJECTORY_MAX_JUMP_M = 0.75", viewer)
