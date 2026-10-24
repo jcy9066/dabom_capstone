@@ -90,8 +90,9 @@ class FakeRos:
         self.state = "NAVIGATING"
         return {"accepted": True, "action": "/follow_path", "cached": True}
 
-    def compute_path(self, goal):
+    def compute_path(self, goal, *, loop_forward=False):
         self.plan_calls += 1
+        self.last_loop_forward = loop_forward
         return [{"x": 0.0, "y": 0.0}, {"x": goal["x"], "y": goal["y"]}]
 
     def navigate_to_pose(self, goal, *, loop_reapproach=False):
@@ -1062,6 +1063,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("drive", self.api.state_response()["loop_stage"])
         self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
         self.assertEqual([], self.map_api.ros_control.backup_distances)
+
+    async def test_loop_planning_is_forward_only_but_regular_goal_remains_original(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        self.assertTrue(self.map_api.ros_control.last_loop_forward)
+        await self.api.plan_goal({"goal": b})
+        self.assertFalse(self.map_api.ros_control.last_loop_forward)
 
     def test_physical_path_cache_uses_driven_samples_not_global_plan(self):
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
