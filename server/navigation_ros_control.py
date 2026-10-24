@@ -23,7 +23,7 @@ try:
         BackUp, ComputePathToPose, ComputePathThroughPoses, FollowPath, NavigateToPose, NavigateThroughPoses, Spin,
     )
     from nav2_msgs.srv import IsPathValid, LoadMap
-    from nav_msgs.msg import OccupancyGrid, Odometry, Path
+    from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
     from sensor_msgs.msg import LaserScan
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
@@ -57,7 +57,7 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     LoadMap = None
     OccupancyGrid = None
     Odometry = None
-    Path = None
+    NavPath = None
     LaserScan = None
     ActionClient = None
     Duration = None
@@ -216,7 +216,7 @@ class NavigationRosControl:
             self._node.create_subscription(Odometry, "/odom", self._on_odom, 10)
             self._node.create_subscription(Twist, self.NAV_COMMAND_TOPIC, self._on_nav_command, 10)
             self._node.create_subscription(
-                Path,
+                NavPath,
                 self.GLOBAL_PATH_TOPIC,
                 self._on_global_path,
                 10,
@@ -687,7 +687,7 @@ class NavigationRosControl:
     def _path_stamped(self, poses: list[dict[str, float]]) -> Any:
         if not isinstance(poses, list) or not 2 <= len(poses) <= 2000:
             raise NavigationRosError("INVALID_CACHED_PATH", "Invalid saved loop path.", 400)
-        message = Path()
+        message = NavPath()
         message.header.frame_id = "map"
         message.header.stamp = self._node.get_clock().now().to_msg()
         for pose in poses:
