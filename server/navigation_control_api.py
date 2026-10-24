@@ -3285,44 +3285,51 @@ class NavigationControlApi:
         return [dict(p) for p in path[max(index - 1, 0):]]
 
     async def _monitor_loop_cached_path(self) -> None:
-        """Reuse a safe path; replan only when its remaining cells are blocked."""
-        async with self._operation_lock:
-            with self._lock:
-                if (not self._loop_follow_active or not self._loop_started
-                    or self._loop_stage != "drive"
-                    or self._state["navigation_state"] != "NAVIGATING"
-                    or self._state["emergency_stop"]
-                    or self._pending_nav_success is not None):
-                    return
-                epoch = self._loop_epoch
-                path = [dict(p) for p in self._loop_active_path]
-                goal = dict(self._state["active_goal"] or {})
-                index = self._loop_leg_index
-            try:
-                pose = self._safe_live_pose()
-                if not isinstance(pose, dict):
+        """Check a cached trajectory without blocking authenticated Cancel.
+
+        Only the potentially mutating Nav2 route replacement needs the
+        operation lock; the periodic IsPathValid RPC is read-only.
+        """
+        with self._lock:
+            if (not self._loop_follow_active or not self._loop_started
+                or self._loop_stage != "drive"
+                or self._state["navigation_state"] != "NAVIGATING"
+                or self._state["emergency_stop"]
+                or self._pending_nav_success is not None):
+                return
+            epoch = self._loop_epoch
+            path = [dict(p) for p in self._loop_active_path]
+            goal = dict(self._state["active_goal"] or {})
+            index = self._loop_leg_index
+        try:
+            pose = self._safe_live_pose()
+            if not isinstance(pose, dict):
+                raise NavigationControlError(
+                    "LOOP_CACHE_POSE_STALE", "No live pose for cache validation.", 409,
+                )
+            remainder = self._remaining_loop_path(path, pose)
+            # Path behind the robot is deliberately omitted; the local
+            # controller independently enforces live footprint collisions.
+            if len(remainder) < 2:
+                if not remainder:
                     raise NavigationControlError(
-                        "LOOP_CACHE_POSE_STALE", "No live pose for cache validation.", 409,
+                        "LOOP_CACHE_OFF_ROUTE", "Robot diverged from saved path.", 409,
                     )
-                remainder = self._remaining_loop_path(path, pose)
-                # At the very end, the controller's local-costmap protection
-                # still runs; Nav2 terminal success requires physical STOP.
-                if len(remainder) < 2:
-                    if not remainder:
-                        raise NavigationControlError(
-                            "LOOP_CACHE_OFF_ROUTE", "Robot diverged from saved path.", 409,
-                        )
-                    return
-                safe = await asyncio.to_thread(self._ros.loop_path_valid, remainder)
-                if safe:
-                    return
-                # The cached route is genuinely obstructed. Change path only
-                # now. New geometry is not called a physical cache until driven.
+                return
+            if await asyncio.to_thread(self._ros.loop_path_valid, remainder):
+                return
+            async with self._operation_lock:
                 with self._lock:
-                    if epoch != self._loop_epoch:
+                    if (epoch != self._loop_epoch or not self._loop_follow_active
+                        or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "NAVIGATING"
+                        or self._pending_nav_success is not None):
                         return
                     self._loop_path_cache.pop(index, None)
                     self._loop_replans += 1
+                # An invalid segment is never reused. Calculate a new safe
+                # route only after the costmap has rejected its remaining
+                # physical trajectory.
                 fresh = self._normalized_path(
                     await asyncio.to_thread(self._compute_path_for_route, goal, [])
                 )
@@ -3330,18 +3337,18 @@ class NavigationControlApi:
                     self._ros.loop_path_valid, fresh,
                 ):
                     raise NavigationControlError(
-                        "LOOP_REPLAN_UNSAFE", "Obstacle blocks the new path.", 422,
+                        "LOOP_REPLAN_UNSAFE", "Obstacle blocks the new route.", 422,
                     )
                 with self._lock:
                     if (epoch != self._loop_epoch or self._state["emergency_stop"]
                         or self._state["navigation_state"] != "NAVIGATING"):
                         return
-                result = await asyncio.to_thread(
+                action = await asyncio.to_thread(
                     self._ros.follow_loop_path, fresh, preempt=True,
                 )
-                if result.get("accepted") is not True:
+                if not isinstance(action, dict) or action.get("accepted") is not True:
                     raise NavigationControlError(
-                        "LOOP_REPLAN_REJECTED", "Controller rejected replanned route.", 409,
+                        "LOOP_REPLAN_REJECTED", "FollowPath rejected rerouting.", 409,
                     )
                 with self._lock:
                     interrupted = (
@@ -3354,22 +3361,19 @@ class NavigationControlApi:
                         self._state["planned_path"] = fresh
                         self._touch_locked()
                 if interrupted:
-                    # Even an authenticated Cancel racing between the last
-                    # epoch check and action acceptance cannot leave an
-                    # unowned FollowPath goal running on the motor bridge.
                     await self.emergency_stop(
                         "LOOP_CACHE_PREEMPT_INTERRUPTED", automatic=True, force=True,
                     )
-            except Exception:
-                with self._lock:
-                    should_stop = (
-                        epoch == self._loop_epoch and self._loop_started
-                        and not self._state["emergency_stop"]
-                    )
-                if should_stop:
-                    await self.emergency_stop(
-                        "LOOP_CACHE_VALIDATION_FAILED", automatic=True, force=True,
-                    )
+        except Exception:
+            with self._lock:
+                should_stop = (
+                    epoch == self._loop_epoch and self._loop_started
+                    and not self._state["emergency_stop"]
+                )
+            if should_stop:
+                await self.emergency_stop(
+                    "LOOP_CACHE_VALIDATION_FAILED", automatic=True, force=True,
+                )
 
     async def _advance_loop_leg(self) -> None:
         """Advance only after the last action physically stopped.
