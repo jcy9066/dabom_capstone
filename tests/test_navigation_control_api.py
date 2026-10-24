@@ -1217,6 +1217,59 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.api.state_response()["loop_cached_directions"])
         self.assertEqual([], self.map_api.ros_control.follow_path_calls)
 
+    async def test_controller_abort_replans_only_once_after_confirmed_stop(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._loop_path_cache[1] = [
+                {"x": 0.3 + 0.1*i, "y": 0.5, "yaw": 0.0}
+                for i in range(14)
+            ]
+        with self.api._lock:
+            outcome = self.api._sync_ros_navigation_terminal_locked(
+                {"state": "FAILED", "action": "follow_path"}, time.time(),
+            )
+        self.assertEqual("FAILED", outcome)
+        self.assertEqual("READY", self.api.state_response()["navigation_state"])
+        self.assertEqual("drive_pending", self.api.state_response()["loop_stage"])
+        self.assertTrue(self.api._loop_pending)
+        self.assertTrue(self.api._loop_failed_follow_retry)
+        self.assertEqual([], self.api.state_response()["loop_cached_directions"])
+        self.assertIsNotNone(self.api._pending_terminal_stop)
+        before = self.map_api.ros_control.plan_calls
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=False):
+            await self.api._advance_loop_leg()
+        self.assertEqual(before, self.map_api.ros_control.plan_calls)
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                await self.api._advance_loop_leg()
+        self.assertEqual(before + 1, self.map_api.ros_control.plan_calls)
+        self.assertFalse(self.api._loop_pending)
+
+    async def test_second_followpath_abort_terminates_loop_without_retry(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        with self.api._lock:
+            self.api._loop_leg_index = 1
+            self.api._loop_stage = "drive"
+            self.api._loop_follow_active = True
+            self.api._loop_failed_follow_retry = True
+            result = self.api._sync_ros_navigation_terminal_locked(
+                {"state": "FAILED", "action": "follow_path"}, time.time(),
+            )
+        self.assertEqual("FAILED", result)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+        self.assertFalse(self.api._loop_pending)
+
     def test_cache_validation_ignores_traversed_behind_robot_path(self):
         path = [{"x": i / 10, "y": 0.0, "yaw": 0.0} for i in range(20)]
         remaining = self.api._remaining_loop_path(
