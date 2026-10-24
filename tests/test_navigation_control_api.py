@@ -628,6 +628,39 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
 
+    async def test_loop_smac_planning_waits_for_first_real_twist(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+        self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 1
+        self.refresh_watchdog_samples(base + 6.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 6.0))
+        self.assertIsNone(self.api._navigation_command_wait_started_at)
+        self.assertAlmostEqual(base + 6.0, self.api._navigation_progress_at)
+
+    async def test_loop_silent_controller_fails_after_bounded_start_window(self):
+        await self.driving_ready()
+        self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        base = self.api._navigation_command_wait_started_at
+        self.assertIsNotNone(base)
+        self.refresh_watchdog_samples(base + 15.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 15.1)
+        )
+        self.assertEqual("FAILED", self.api.state_response()["navigation_state"])
+
     async def test_loop_requires_verified_spin_before_next_forward_leg(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
