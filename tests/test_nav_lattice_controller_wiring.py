@@ -59,6 +59,7 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "stages_[stage_index_]" in source
     assert "/patrol_navigation/applied_follow_path" in source
     assert "follow_path_publisher_->publish(notice)" in source
+    assert "emitted_ns" in source
     assert "checkRotationCollision(pose, remaining)" in source
     assert "collision_->footprintCostAtPose(" in source
     # Match the GlobalPlanner's conservative collision envelope: 253

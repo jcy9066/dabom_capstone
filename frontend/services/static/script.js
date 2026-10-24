@@ -793,7 +793,9 @@ document.addEventListener('dabom:navigation-control-state', event => {
             beginNavigationGlobalPathPending();
         }
         const running = ['NAVIGATING', 'RESUMING'].includes(navState);
-        const path = running ? control.executed_path : control.planned_path;
+        const preview = ['PATH_READY', 'READY'].includes(navState);
+        const path = running ? control.executed_path
+            : preview ? control.planned_path : [];
         // An unconfirmed live FollowPath must never leave a stale preview
         // on the 2D map. Stop/cancel also clears executable path display.
         applyNavigationGlobalPath(

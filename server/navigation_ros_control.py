@@ -137,6 +137,7 @@ class NavigationRosControl:
         self._route_feedback_epoch = 0
         self._navigate_action_kind = "navigate_to_pose"
         self._route_generation = 0
+        self._nav_run_started_ns = 0
         self._applied_follow_path = None
         self._navigation_state = "IDLE"
         self._navigation_error = None
@@ -539,6 +540,7 @@ class NavigationRosControl:
             feedback_epoch = self._route_feedback_epoch
             self._route_poses_remaining = len(poses)
             self._navigate_action_kind = "navigate_through_poses"
+        request_started_ns = time.monotonic_ns()
         handle = self._wait_future(
             self._navigate_through_client.send_goal_async(
                 request,
@@ -558,6 +560,7 @@ class NavigationRosControl:
             self._navigate_goal_handle = handle
             self._navigate_result_future = future
             self._route_generation += 1
+            self._nav_run_started_ns = request_started_ns
             self._applied_follow_path = None
             self._navigation_state = "NAVIGATING"
             self._navigation_error = None
@@ -583,6 +586,7 @@ class NavigationRosControl:
             self._route_feedback_epoch += 1
             self._route_poses_remaining = None
             self._navigate_action_kind = "navigate_to_pose"
+        request_started_ns = time.monotonic_ns()
         goal_handle = self._wait_future(
             self._navigate_client.send_goal_async(request),
             timeout_sec=3.0,
@@ -596,6 +600,7 @@ class NavigationRosControl:
             self._navigate_goal_handle = goal_handle
             self._navigate_result_future = result_future
             self._route_generation += 1
+            self._nav_run_started_ns = request_started_ns
             self._applied_follow_path = None
             self._navigation_state = "NAVIGATING"
             self._navigation_error = None
@@ -1045,8 +1050,11 @@ class NavigationRosControl:
             instance = event.get("instance")
             sequence = event.get("sequence")
             raw = event.get("path")
+            emitted_ns = event.get("emitted_ns")
             if (not isinstance(instance, str) or not instance
                 or type(sequence) is not int or sequence <= 0
+                or type(emitted_ns) is not int or emitted_ns <= 0
+                or emitted_ns > time.monotonic_ns() + 1_000_000_000
                 or not isinstance(raw, list) or not 2 <= len(raw) <= 5000):
                 return
             path = []
@@ -1063,7 +1071,9 @@ class NavigationRosControl:
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
             return
         with self._lock:
-            if self._navigation_state != "NAVIGATING" or self._navigate_goal_handle is None:
+            if (self._navigation_state != "NAVIGATING"
+                or self._navigate_goal_handle is None
+                or emitted_ns < self._nav_run_started_ns):
                 return
             previous = self._applied_follow_path
             if (previous is not None and previous["instance"] == instance

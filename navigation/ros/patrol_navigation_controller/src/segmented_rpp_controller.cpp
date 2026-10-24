@@ -281,7 +281,10 @@ void SegmentedRPPController::setPlan(const nav_msgs::msg::Path & path)
       json << std::setprecision(17)
            << "{\"source\":\"segmented_rpp\",\"instance\":\""
            << follow_path_instance_ << "\",\"sequence\":"
-           << ++follow_path_sequence_ << ",\"path\":[";
+           << ++follow_path_sequence_ << ",\"emitted_ns\":"
+           << std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()
+           << ",\"path\":[";
       for (size_t i = 0; i < path_.poses.size(); ++i) {
         const auto & pose = path_.poses[i].pose;
         if (i > 0) {json << ',';}
