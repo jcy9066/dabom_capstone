@@ -2755,20 +2755,25 @@ class NavigationControlApi:
     def _loop_route_points(
         goals: list[dict[str, float]], first: int, count: int = 12,
     ) -> list[dict[str, float]]:
-        """Shuttle without A/B yaw pivots; reverse on alternating legs.
+        """At each A/B turnaround, pivot 180 degrees before driving forward.
 
-        Same heading at A and B lets the reversible segmented controller
-        travel A->B forward, B->A backward. Intermediate arrival is XY-only.
+        The intermediate pose orientation faces the NEXT waypoint: at A it
+        faces B, at B it faces A. This requires a pivot at each turnaround;
+        the loop-specific forward-only controller refuses any reverse edge.
         """
-        heading = math.atan2(
+        heading_ab = math.atan2(
             goals[1]["y"] - goals[0]["y"],
             goals[1]["x"] - goals[0]["x"],
+        )
+        heading_ba = math.atan2(
+            math.sin(heading_ab + math.pi),
+            math.cos(heading_ab + math.pi),
         )
         return [
             {
                 "x": goals[(first + index) % 2]["x"],
                 "y": goals[(first + index) % 2]["y"],
-                "yaw": heading,
+                "yaw": heading_ab if (first + index) % 2 == 0 else heading_ba,
             }
             for index in range(count)
         ]
