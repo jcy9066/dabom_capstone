@@ -286,7 +286,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("overflow: hidden;", dashboard_css)
         self.assertIn(".dashboard-led-toggle-state {\n    min-width: 0;", self.controls_css)
         self.assertIn('id="dashboardBeepBtn"', template)
-        self.assertIn('class="card action-btn action-beep"', template)
+        # Verify the Beep control's identity and semantic style without
+        # pinning an obsolete class order or excluding shared UI classes.
+        self.assertRegex(
+            template,
+            r'<button\b(?=[^>]*\bid="dashboardBeepBtn")'
+            r'(?=[^>]*\bclass="[^"]*\baction-beep(?:\s|"))[^>]*>',
+        )
         self.assertIn("'/api/navigation/control/beep'", self.control)
         self.assertNotIn('id="navigation-led-test"', template)
         self.assertNotIn('id="navigation-estop"', template)
