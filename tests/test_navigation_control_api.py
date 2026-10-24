@@ -860,7 +860,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         }
         with self.api._lock:
             self.api._sync_ros_navigation_terminal_locked(
-                {"state": "FAILED", "action": "navigate_through_poses"}, now,
+                {"state": "FAILED", "action": "navigate_to_pose"}, now,
             )
         self.assertIsNone(self.api._loop_recovery)
         self.assertEqual([], self.api.state_response()["loop_goals"])
