@@ -596,6 +596,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(12, len(route))
         self.assertEqual([a["x"], b["x"], a["x"], b["x"]],
                          [p["x"] for p in route[:4]])
+        self.assertTrue(all(abs(p["yaw"]) < 1e-7 for p in route))
         self.assertEqual(0, sum(command[1]["type"] == "stop" for command in self.commands))
 
         self.api._loop_refresh_inflight = True
@@ -617,6 +618,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stopped["emergency_stop"])
         self.assertFalse(stopped["loop_active"])
         self.assertEqual([], stopped["loop_goals"])
+        self.assertIsNone(stopped["active_goal"])
+        self.assertEqual([], stopped["waypoints"])
         await self.api._refresh_loop_route({"number_of_poses_remaining": 4})
         self.assertEqual(before, len(self.map_api.ros_control.through_navigation_calls))
 
