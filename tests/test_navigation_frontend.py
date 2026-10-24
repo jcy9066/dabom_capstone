@@ -33,6 +33,8 @@ class NavigationFrontendContractTests(unittest.TestCase):
             self.assertIn(f"'{status}'", allowed)
         self.assertIn("&& control.active_goal", allowed)
         self.assertIn("control.planned_path", allowed)
+        self.assertIn("running ? control.executed_path : control.planned_path", allowed)
+        self.assertIn("applyNavigationGlobalPath(", allowed)
 
     def test_consumes_frozen_dashboard_navigation_contract(self):
         for contract in (
