@@ -288,3 +288,30 @@ def test_final_yaw_satisfied_cannot_resume_terminal_linear_rpp():
     assert final.index("pivot_started_ = false;") < final.index(
         "return checkedCommand(pose, rpp_->computeVelocityCommands"
     )
+
+def test_stored_lattice_targets_use_latest_tf_while_live_poses_retain_stamps():
+    """A long FollowPath run must not query expired planning-time map->odom TF."""
+    source = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    header = (
+        PACKAGE / "include/patrol_navigation_controller/segmented_rpp_controller.hpp"
+    ).read_text()
+    assert "storedPathPoseInControllerFrame(" in header
+    helper = source.split(
+        "SegmentedRPPController::storedPathPoseInControllerFrame(", 1
+    )[1].split("void SegmentedRPPController::buildStages()", 1)[0]
+    assert "auto latest_target = path_pose;" in helper
+    assert "latest_target.header.stamp.sec = 0;" in helper
+    assert "latest_target.header.stamp.nanosec = 0;" in helper
+    assert "return inControllerFrame(latest_target, target_frame);" in helper
+    # The final XY/yaw, drive-segment handoff, pivot center, and pivot target
+    # must all use the same latest-TF semantics.
+    for path_expr in (
+        "path_.poses.back()",
+        "path_.poses[stage.begin]",
+    ):
+        assert path_expr + ", pose.header.frame_id);" in source
+    assert source.count("= storedPathPoseInControllerFrame(") == 4
+    assert source.count(
+        "const auto local_pose = inControllerFrame(pose, costmap_->getGlobalFrameID());"
+    ) == 2
+

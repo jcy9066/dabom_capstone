@@ -140,6 +140,21 @@ geometry_msgs::msg::PoseStamped SegmentedRPPController::inControllerFrame(
   return transformed;
 }
 
+geometry_msgs::msg::PoseStamped SegmentedRPPController::storedPathPoseInControllerFrame(
+  const geometry_msgs::msg::PoseStamped & path_pose,
+  const std::string & target_frame) const
+{
+  // A planned path pose is a stationary target in map, not an observation
+  // requiring the planning-time TF. The map->odom transform may have moved,
+  // and its old samples may have expired by the time we reach this stage.
+  // Look up the latest transform on a COPY; retain stamped live robot
+  // poses in inControllerFrame() so current-motion safety checks stay fresh.
+  auto latest_target = path_pose;
+  latest_target.header.stamp.sec = 0;
+  latest_target.header.stamp.nanosec = 0;
+  return inControllerFrame(latest_target, target_frame);
+}
+
 void SegmentedRPPController::buildStages()
 {
   stages_.clear();
@@ -450,7 +465,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     // heading threshold causes the Humble collision sweep to skip checks.
     // Once near the final endpoint, pivot using OUR swept-footprint gate.
     if (stage_index_ + 1 >= stages_.size()) {
-      const auto terminal = inControllerFrame(
+      const auto terminal = storedPathPoseInControllerFrame(
         path_.poses.back(), pose.header.frame_id);
       if (distance(pose, terminal) <= 0.25) {
         const double remaining = angles::shortest_angular_distance(
@@ -488,7 +503,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       }
       return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
     }
-    const auto end_pose = inControllerFrame(
+    const auto end_pose = storedPathPoseInControllerFrame(
       path_.poses[stage.end], pose.header.frame_id);
     const double to_end = distance(pose, end_pose);
     if (to_end <= transfer_position_tolerance_) {
@@ -504,7 +519,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
   }
 
-  const auto center = inControllerFrame(
+  const auto center = storedPathPoseInControllerFrame(
     path_.poses[stage.begin], pose.header.frame_id);
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
     throw std::runtime_error("Robot moved away from planned rotation point");
@@ -521,7 +536,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     return stopped(pose);
   }
 
-  const auto rotation_goal = inControllerFrame(
+  const auto rotation_goal = storedPathPoseInControllerFrame(
     path_.poses[stage.end], pose.header.frame_id);
   const double remaining = angles::shortest_angular_distance(
     yaw(pose), yaw(rotation_goal));

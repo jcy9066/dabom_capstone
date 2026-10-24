@@ -290,8 +290,9 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   // A nearby XY goal with a large heading difference is a differential
   // drive pivot, not a reason to backtrack through a metre-long loop.
   // Preserve the actual rotation center. Nav2's existing XY goal checker
-  // tolerance (0.25m) is unchanged; this candidate is only considered when
-  // requested XY differs by at most 0.05m.
+  // tolerance (0.25m) is unchanged; select a verified pivot within a
+  // conservative 0.20m margin rather than a multi-cusp triangular detour.
+  // The output stays at the actual rotation center (the start XY).
   const double start_x = start.pose.position.x;
   const double start_y = start.pose.position.y;
   const double start_yaw = tf2::getYaw(start.pose.orientation);
@@ -300,7 +301,7 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     std::cos(original_goal.yaw - start_yaw));
   if (std::isfinite(start_x) && std::isfinite(start_yaw) &&
     std::isfinite(start_y) && std::isfinite(requested_turn) &&
-    std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.05 &&
+    std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.20 &&
     std::abs(requested_turn) > 0.12)
   {
     nav_msgs::msg::Path pivot_path;

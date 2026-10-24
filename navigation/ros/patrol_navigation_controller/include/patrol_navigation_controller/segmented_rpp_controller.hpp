@@ -60,6 +60,9 @@ private:
   geometry_msgs::msg::PoseStamped inControllerFrame(
     const geometry_msgs::msg::PoseStamped & target,
     const std::string & target_frame) const;
+  geometry_msgs::msg::PoseStamped storedPathPoseInControllerFrame(
+    const geometry_msgs::msg::PoseStamped & path_pose,
+    const std::string & target_frame) const;
   void buildStages();
   void activateStage();
   void advanceStage();

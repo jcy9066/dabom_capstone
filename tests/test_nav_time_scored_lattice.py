@@ -263,10 +263,24 @@ def test_pure_cpp_cost_model_execution(tmp_path):
 
 def test_nearby_yaw_goal_has_swept_collision_checked_pivot():
     code = SOURCE.read_text()
-    assert "std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.05" in code
+    assert "std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.20" in code
     assert "std::abs(requested_turn) > 0.12" in code
     assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in code
     assert "return pivot_path;" in code
     assert "kSecondCandidateReserveSec" in code
     assert "kSecondCandidateReserveSec = 4.3" in code
+
+
+def test_near_goal_pivot_remains_within_actual_nav2_xy_goal_tolerance():
+    """Do not accept a rotation-only route outside the arrival envelope."""
+    conf = yaml.safe_load((NAV / "config/nav2_params.yaml").read_text())
+    tolerance = conf["controller_server"]["ros__parameters"][
+        "general_goal_checker"
+    ]["xy_goal_tolerance"]
+    cpp = SOURCE.read_text()
+    pivot_radius = 0.20
+    assert pivot_radius < tolerance
+    assert f"std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= {pivot_radius:.2f}" in cpp
+    assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in cpp
+    assert "const bool original_goal_clear = endpointFootprintClear(" in cpp
 
