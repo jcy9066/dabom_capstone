@@ -177,6 +177,9 @@ class NavigationControlApi:
         self._loop_started = False
         self._loop_pending = False
         self._loop_epoch = 0
+        self._loop_route_size = 0
+        self._loop_route_start_index = 0
+        self._loop_refresh_inflight = False
         self._replan_refresh_started_at = 0.0
         self._replan_refresh_inflight = False
         self._estop_attempt_reason: str | None = None
@@ -671,6 +674,10 @@ class NavigationControlApi:
         passed = outstanding + 1 - count
         if passed > 0:
             self._state["waypoints"] = self._state["waypoints"][passed:]
+            if self._loop_goals and self._loop_route_size:
+                self._loop_leg_index = (
+                    self._loop_route_start_index + self._loop_route_size - count
+                ) % 2
             self._touch_locked()
 
     def _sync_ros_navigation_terminal_locked(
@@ -757,6 +764,7 @@ class NavigationControlApi:
                 "loop_goals": [dict(p) for p in self._loop_goals],
                 "loop_leg_index": self._loop_leg_index if self._loop_goals else None,
                 "loop_pending": self._loop_pending,
+                "loop_refreshing": self._loop_refresh_inflight,
                 "loop_active": bool(self._loop_goals and self._loop_started),
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
@@ -1442,6 +1450,8 @@ class NavigationControlApi:
         with self._lock:
             goal = dict(self._state["active_goal"] or {})
             waypoints = [dict(p) for p in self._state["waypoints"]]
+            loop_goals = [dict(p) for p in self._loop_goals]
+            loop_epoch = self._loop_epoch
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
             self._assert_resume_safety_locked(require_estop=False)
@@ -1456,6 +1466,20 @@ class NavigationControlApi:
             if not goal or not path_ready:
                 raise NavigationControlError("PATH_REQUIRED", "Plan a goal before starting navigation.")
         self._assert_watchdogs_healthy()
+        if loop_goals:
+            # Each A/B is an intermediate pose. Only the batch's last pose
+            # requires Nav2 terminal XY/yaw, avoided by rolling preemption.
+            batch = self._loop_route_points(loop_goals, 0)
+            goal, waypoints = batch[-1], batch[:-1]
+            loop_path = self._normalized_path(
+                await asyncio.to_thread(self._compute_path_for_route, goal, waypoints)
+            )
+            if len(loop_path) < 2:
+                raise NavigationControlError("LOOP_PATH_NOT_FOUND", "No initial loop route.", 422)
+            with self._lock:
+                if (self._loop_epoch != loop_epoch or self._state["emergency_stop"]
+                    or self._state["navigation_state"] != "PATH_READY"):
+                    raise NavigationControlError("LOOP_INTERRUPTED", "Loop setup was interrupted.", 409)
         result = await asyncio.to_thread(self._navigate_route, goal, waypoints)
         try:
             progress_pose = self._get_live_pose()
@@ -1478,8 +1502,14 @@ class NavigationControlApi:
             if not interrupted:
                 self._state["navigation_state"] = "NAVIGATING"
                 self._state["last_error"] = None
-                if self._loop_goals:
+                if loop_goals and self._loop_epoch == loop_epoch:
                     self._loop_started = True
+                    self._loop_route_size = len(batch)
+                    self._loop_route_start_index = 0
+                    self._loop_leg_index = 0
+                    self._state["active_goal"] = dict(goal)
+                    self._state["waypoints"] = [dict(p) for p in waypoints]
+                    self._state["planned_path"] = loop_path
                 # Only an accepted run supersedes the previous stop baseline.
                 self._stop_commanded_at = None
                 self._stop_encoder_ticks = None
@@ -2076,6 +2106,21 @@ class NavigationControlApi:
             await self._deliver_terminal_stop()
         if not recovering and not hard_fault and self._loop_pending:
             await self._advance_loop_leg()
+        with self._lock:
+            remaining = ros_nav.get("number_of_poses_remaining")
+            extend = bool(
+                self._loop_goals and self._loop_started
+                and self._state["navigation_state"] == "NAVIGATING"
+                and not self._loop_refresh_inflight
+                and not self._state["emergency_stop"]
+                and ros_nav.get("action") == "navigate_through_poses"
+                and type(remaining) is int and 1 <= remaining <= 4
+                and not recovering and not hard_fault
+            )
+            if extend:
+                self._loop_refresh_inflight = True
+        if extend:
+            await self._refresh_loop_route(ros_nav)
         if recovering and not hard_fault:
             await self._advance_sensor_recovery(current)
             return None
@@ -2689,6 +2734,71 @@ class NavigationControlApi:
         self._loop_pending = False
         self._loop_started = False
         self._loop_leg_index = 0
+        self._loop_route_size = 0
+        self._loop_route_start_index = 0
+        self._loop_refresh_inflight = False
+
+    @staticmethod
+    def _loop_route_points(
+        goals: list[dict[str, float]], first: int, count: int = 12,
+    ) -> list[dict[str, float]]:
+        """Build a rolling route; intermediate poses use XY-only arrival."""
+        points = []
+        for index in range(count):
+            goal = goals[(first + index) % 2]
+            following = goals[(first + index + 1) % 2]
+            heading = math.atan2(
+                following["y"] - goal["y"], following["x"] - goal["x"],
+            )
+            points.append({"x": goal["x"], "y": goal["y"], "yaw": heading})
+        return points
+
+    async def _refresh_loop_route(self, ros_nav: dict[str, Any]) -> None:
+        """Extend NavigateThroughPoses before final arrival without STOP."""
+        async with self._operation_lock:
+            with self._lock:
+                remaining = ros_nav.get("number_of_poses_remaining")
+                if (len(self._loop_goals) != 2 or not self._loop_started
+                    or not self._loop_refresh_inflight
+                    or self._state["navigation_state"] != "NAVIGATING"
+                    or self._state["emergency_stop"]
+                    or self._robot_mode != "auto"
+                    or self._state["navigation_mode"] != "DRIVING"
+                    or isinstance(remaining, bool)
+                    or not isinstance(remaining, int)
+                    or not 1 <= remaining <= 4):
+                    self._loop_refresh_inflight = False
+                    return
+                epoch = self._loop_epoch
+                first = (self._loop_route_start_index
+                         + self._loop_route_size - remaining) % 2
+                route = self._loop_route_points(self._loop_goals, first)
+            try:
+                self._assert_watchdogs_healthy()
+                await asyncio.to_thread(self._ros.preempt_navigation_route, route)
+                with self._lock:
+                    if (epoch != self._loop_epoch or self._state["emergency_stop"]
+                        or self._state["navigation_state"] != "NAVIGATING"):
+                        return
+                    self._goal_motion_generation += 1
+                    self._loop_route_start_index = first
+                    self._loop_route_size = len(route)
+                    self._loop_leg_index = first
+                    self._state["active_goal"] = dict(route[-1])
+                    self._state["waypoints"] = [dict(p) for p in route[:-1]]
+                    self._touch_locked()
+            except Exception:
+                with self._lock:
+                    still_active = epoch == self._loop_epoch and bool(self._loop_goals)
+                    if still_active:
+                        self._clear_loop_locked()
+                if still_active:
+                    await self.emergency_stop(
+                        "LOOP_ROUTE_EXTENSION_FAILED", automatic=True, force=True,
+                    )
+            finally:
+                with self._lock:
+                    self._loop_refresh_inflight = False
 
     async def _advance_loop_leg(self) -> None:
         """Plan each next leg from the current pose; never reuse an old route."""
