@@ -497,10 +497,7 @@
             applyControlState(confirmed);
             if (confirmed.patrol_transition
                 || String(confirmed.robot_mode || '').toUpperCase() !== target
-                || confirmed.patrol_transition_error
-                || (target === 'AUTO'
-                    && String(confirmed.navigation_mode || '').toUpperCase() === 'DRIVING'
-                    && confirmed.patrol_ready !== true)) {
+                || confirmed.patrol_transition_error) {
                 throw new Error('GPU·Pi 주행 모드가 일치하지 않습니다.');
             }
             if (options.announce !== false) {
