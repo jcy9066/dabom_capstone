@@ -432,14 +432,18 @@ class NavigationRosControl:
             "amcl_pose_received": amcl_received,
         }
 
-    def compute_path(self, goal: dict[str, float]) -> list[dict[str, float]]:
-        """Call Nav2 ComputePathToPose without starting robot navigation."""
+    def compute_path(
+        self, goal: dict[str, float], *, loop_forward: bool = False,
+    ) -> list[dict[str, float]]:
+        """Use the dedicated forward-only planner for loop travel only."""
         self._require_started()
         if not self._compute_path_client.wait_for_server(timeout_sec=2.5):
             raise NavigationRosError("PATH_PLANNER_UNAVAILABLE", "ComputePathToPose action is unavailable.", 503)
         request = ComputePathToPose.Goal()
         request.goal = self._pose_stamped(goal)
         request.use_start = False
+        if loop_forward:
+            request.planner_id = "LoopGridBased"
         goal_handle = self._wait_future(
             self._compute_path_client.send_goal_async(request),
             timeout_sec=3.0,
