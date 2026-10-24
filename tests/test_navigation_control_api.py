@@ -743,6 +743,54 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("turning", self.api._loop_recovery["phase"])
         self.assertTrue(self.api._loop_reverse_used)
 
+    async def test_loop_second_pivot_failure_never_retries_backup(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        self.api._loop_reverse_used = True
+        now = time.time()
+        self.map_api.ros_control.rotation = {
+            "command_age_sec": 0.1, "command_angular_z": -0.4,
+            "command_linear_x": 0.0,
+        }
+        with patch.object(self.api, "_safe_live_pose", return_value={
+            "x": b["x"], "y": b["y"], "yaw": 0.0, "received_at": now,
+        }):
+            with self.api._lock:
+                result = self.api._sync_ros_navigation_terminal_locked(
+                    {"state": "FAILED", "action": "navigate_through_poses"}, now,
+                )
+        self.assertEqual("FAILED", result)
+        self.assertIsNone(self.api._loop_recovery)
+        self.assertEqual([], self.api.state_response()["loop_goals"])
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
+
+    async def test_loop_backup_requires_encoder_confirmed_stop(self):
+        await self.driving_ready()
+        a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
+        b = {"x": 1.6, "y": 0.5, "yaw": 0.0}
+        await self.api.plan_goal({"goal": a, "loop_goals": [a, b]})
+        await self.api.start_navigation()
+        recovery = {
+            "phase": "backup_wait_stop", "epoch": self.api._loop_epoch,
+            "goal_index": 1, "goal": b,
+            "failed_pose": {"x": 1.6, "y": 0.5, "yaw": 0.0},
+            "spin_angle": math.pi, "started_at": time.time(),
+        }
+        self.api._loop_recovery = recovery
+        self.api._loop_reverse_used = True
+        self.api._state["navigation_state"] = "LOOP_RECOVERY_STOPPING"
+        with patch.object(self.api, "_stop_confirmed_locked", return_value=False):
+            await self.api._advance_loop_recovery()
+        self.assertEqual("backup_wait_stop", recovery["phase"])
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
+        await self.api.emergency_stop("test_backup_preempt")
+        await self.api._advance_loop_recovery()
+        self.assertIsNone(self.api._loop_recovery)
+        self.assertEqual([], self.map_api.ros_control.backup_distances)
+
     async def test_operator_estop_destroys_loop_and_blocks_refill(self):
         await self.driving_ready()
         a = {"x": 0.3, "y": 0.5, "yaw": 0.0}
