@@ -1518,6 +1518,8 @@ class NavigationControlApi:
                 if (self._loop_epoch != loop_epoch or self._state["emergency_stop"]
                     or self._state["navigation_state"] != "PATH_READY"):
                     raise NavigationControlError("LOOP_INTERRUPTED", "Loop start interrupted.", 409)
+        if loop_goals and hasattr(self._ros, "begin_loop_trace"):
+            await asyncio.to_thread(self._ros.begin_loop_trace)
         result = (
             await asyncio.to_thread(self._ros.navigate_to_pose, goal, loop_reapproach=True)
             if loop_goals
@@ -2170,6 +2172,18 @@ class NavigationControlApi:
             await self._advance_loop_recovery()
         if not recovering and not hard_fault and self._loop_pending:
             await self._advance_loop_leg()
+        with self._lock:
+            cache_monitor_due = (
+                not recovering and not hard_fault and self._loop_follow_active
+                and self._loop_started and self._loop_stage == "drive"
+                and self._state["navigation_state"] == "NAVIGATING"
+                and self._pending_nav_success is None
+                and time.monotonic() - self._loop_validity_last_at >= 0.5
+            )
+            if cache_monitor_due:
+                self._loop_validity_last_at = time.monotonic()
+        if cache_monitor_due:
+            await self._monitor_loop_cached_path()
         if recovering and not hard_fault:
             await self._advance_sensor_recovery(current)
             return None
@@ -2732,6 +2746,20 @@ class NavigationControlApi:
                             and self._robot_mode == "auto"
                             and self._state["navigation_mode"] == "DRIVING"):
                             if self._loop_stage == "drive":
+                                if hasattr(self._ros, "finish_loop_trace"):
+                                    trace = self._ros.finish_loop_trace()
+                                    direction = self._loop_leg_index
+                                    if (self._motor_output_enabled
+                                        and self._loop_completed_legs >= 1
+                                        and direction not in self._loop_path_cache):
+                                        certified = self._certify_physical_loop_path(
+                                            trace, self._loop_goals[1 - direction],
+                                            self._loop_goals[direction],
+                                        )
+                                        if certified:
+                                            self._loop_path_cache[direction] = certified
+                                self._loop_active_path = []
+                                self._loop_follow_active = False
                                 self._loop_completed_legs += 1
                                 self._loop_stage = "turn_pending"
                             elif self._loop_stage == "turn":
