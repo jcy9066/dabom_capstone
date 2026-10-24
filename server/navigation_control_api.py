@@ -144,6 +144,8 @@ class NavigationControlApi:
         self._last_pose_at: float | None = None
         self._navigation_progress_pose: tuple[float, float] | None = None
         self._navigation_progress_at: float | None = None
+        self._navigation_command_baseline: int | None = None
+        self._navigation_command_wait_started_at: float | None = None
         self._rotation_extension_sec = 0.0
         self._rotation_last_odom_sequence: int | None = None
         self._rotation_last_verified_yaw: float | None = None
@@ -2650,8 +2652,6 @@ class NavigationControlApi:
         self._navigation_command_baseline = None
         self._navigation_command_wait_started_at = None
         self._rotation_extension_sec = 0.0
-        self._navigation_command_baseline = None
-        self._navigation_command_wait_started_at = None
         self._rotation_last_odom_sequence = None
         self._rotation_last_verified_yaw = None
         self._rotation_limit_reached = False
