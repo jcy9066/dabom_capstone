@@ -628,6 +628,24 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.map_api.ros_control.through_navigation_calls))
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
 
+    def test_ros_command_sequence_excludes_stop_and_invalid_twists(self):
+        ros = NavigationRosControl()
+        def twist(linear, angular):
+            return SimpleNamespace(
+                linear=SimpleNamespace(x=linear),
+                angular=SimpleNamespace(z=angular),
+            )
+        self.assertEqual(0, ros.rotation_status()["nonzero_command_sequence"])
+        ros._on_nav_command(twist(0.0, 0.0))
+        self.assertEqual(0, ros.rotation_status()["nonzero_command_sequence"])
+        ros._on_nav_command(twist(0.1, 0.0))
+        self.assertEqual(1, ros.rotation_status()["nonzero_command_sequence"])
+        ros._on_nav_command(twist(0.0, -0.3))
+        self.assertEqual(2, ros.rotation_status()["nonzero_command_sequence"])
+        ros._on_nav_command(twist(float("nan"), 0.0))
+        ros._on_nav_command(twist(0.0, float("inf")))
+        self.assertEqual(2, ros.rotation_status()["nonzero_command_sequence"])
+
     async def test_loop_smac_planning_waits_for_first_real_twist(self):
         await self.driving_ready()
         self.map_api.ros_control.rotation["nonzero_command_sequence"] = 0
