@@ -225,10 +225,11 @@ class LiveMappingGrid:
                 # Replace scan-only preview geometry with slam_toolbox's first
                 # authoritative OccupancyGrid instead of reprojecting preview
                 # cells into the real map frame.
-                if self._preview_pose_active:
-                    self._cells.clear()
-                    self._last_update_monotonic = None
-                    self._preview_pose_active = False
+                # All scan-only cells are provisional, even when a valid
+                # TF pose was received before the first SLAM map.
+                self._cells.clear()
+                self._last_update_monotonic = None
+                self._preview_pose_active = False
                 self._reanchor_locked(
                     origin_x,
                     origin_y,
@@ -313,7 +314,11 @@ class LiveMappingGrid:
             ):
                 return None
 
-            self._integrate_locked(pose, self._scan)
+            # After SLAM publishes /map, it is the sole occupancy-grid
+            # authority. Raw scans projected with delayed odom poses can
+            # otherwise leave rotated ghost walls in the saved map.
+            if not self._base_map_seen:
+                self._integrate_locked(pose, self._scan)
             self._last_update_monotonic = float(monotonic_now)
             self._sequence += 1
             return self._snapshot_locked(robot_id, wall_time)

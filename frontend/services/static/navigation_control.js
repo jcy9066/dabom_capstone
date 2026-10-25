@@ -14,6 +14,7 @@
         csrf: null,
         busy: false,
         drivePending: false,
+        lastDriveError: null,
         navigationPending: false,
         estopPending: false,
         warningPending: false,
@@ -300,7 +301,13 @@
         const mode = payload?.navigation_mode || 'UNKNOWN';
         const navState = payload?.navigation_state || 'UNKNOWN';
         const pathReady = navState === 'PATH_READY' && Array.isArray(payload.planned_path) && payload.planned_path.length > 1;
-        const viewerStateText = `MODE ${mode} / NAV ${navState}`;
+        const viewerStateText = payload?.cancel_progress
+            ? 'Goal 취소 중 / Pi 엔코더 정지 확인 대기'
+            : navState === 'FAILED' && payload?.last_error
+                ? `MODE ${mode} / NAV FAILED: ${payload.last_error}`
+                : payload?.cancel_completed && !payload?.active_goal
+                    ? 'Goal 취소 및 엔코더 정지 확인 완료'
+                    : `MODE ${mode} / NAV ${navState}`;
         if (viewerStateText !== state.lastViewerStateText) {
             state.lastViewerStateText = viewerStateText;
             setFeedback(viewerStateText);
@@ -472,59 +479,35 @@
 
     async function requestDriveMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
-        if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending) return false;
-        if (state.control?.connected !== true) {
-            setFeedback('Pi가 연결되어 있지 않아 주행 모드를 변경할 수 없습니다.', true);
-            return false;
-        }
-        if (String(state.control?.robot_mode || '').toUpperCase() === target) return true;
+        if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending || state.navigationPending) return false;
+        // Only the server can verify fresh Pi telemetry. Stale UI snapshots
+        // must not falsely report a disconnected robot.
+        state.lastDriveError = null;
+        // AUTO/MANUAL selection must not change MAPPING/DRIVING mode.
         state.drivePending = true;
         state.pointerId = null;
         state.pointerStart = null;
         state.draftGoal = null;
         syncControlComponents();
-        if (options.announce !== false) setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드 전환 요청 중...`);
+        if (options.announce !== false) setFeedback('주행 모드 전환 및 Pi 상태 확인 중...');
         try {
-            if (target === 'MANUAL') {
-                const latest = await refreshState();
-                if (!latest) throw new Error('상태 조회 실패');
-                const retainedGoal = latest.active_goal ? JSON.stringify(latest.active_goal) : null;
-                const retainedPath = Array.isArray(latest.planned_path) && latest.planned_path.length
-                    ? JSON.stringify(latest.planned_path)
-                    : null;
-                setFeedback('Navigation을 안전하게 일시 정지하는 중...');
-                const paused = await mutate('/api/navigation/control/pause-for-manual');
-                applyControlState(paused);
-                if (paused.stop_delivered !== true) {
-                    throw new Error('Pi 정지 명령 전달을 확인하지 못해 MANUAL 전환을 중단했습니다.');
-                }
-                const pausedState = String(paused.navigation_state || '').toUpperCase();
-                const pausedRosState = String(paused.ros_navigation?.state || '').toUpperCase();
-                if (
-                    ['NAVIGATING', 'RESUMING'].includes(pausedState)
-                    || ['NAVIGATING', 'RESUMING'].includes(pausedRosState)
-                ) {
-                    throw new Error('Navigation 일시 정지 완료를 확인하지 못했습니다.');
-                }
-                if (
-                    retainedGoal
-                    && (paused.goal_retained !== true || JSON.stringify(paused.active_goal) !== retainedGoal)
-                ) {
-                    throw new Error('수동 주행용 active Goal이 유지되지 않았습니다.');
-                }
-                if (retainedPath && JSON.stringify(paused.planned_path) !== retainedPath) {
-                    throw new Error('수동 주행용 경로가 유지되지 않았습니다.');
-                }
+            const confirmed = await mutate('/api/navigation/control/patrol-mode', {
+                mode: target.toLowerCase(),
+            });
+            applyControlState(confirmed);
+            if (confirmed.patrol_transition
+                || String(confirmed.robot_mode || '').toUpperCase() !== target
+                || confirmed.patrol_transition_error) {
+                throw new Error('GPU·Pi 주행 모드가 일치하지 않습니다.');
             }
-            await mutate('/api/robots/pi-01/command', { type: 'mode', mode: target.toLowerCase() });
-            await waitForControl(payload => (
-                payload?.connected === true
-                && String(payload?.robot_mode || '').toUpperCase() === target
-            ));
-            if (options.announce !== false) setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드로 전환되었습니다.`);
+            if (options.announce !== false) {
+                setFeedback(`${target === 'AUTO' ? '자동' : '수동'} 모드 전환이 확인되었습니다.`);
+            }
             return true;
         } catch (error) {
-            setFeedback(`주행 모드 전환 실패: ${error.message}`, true);
+            state.lastDriveError = String(error?.message || '서버가 모드 변경을 거부했습니다.');
+            await refreshState().catch(() => {});
+            setFeedback(`주행 모드 전환 실패: ${state.lastDriveError}`, true);
             return false;
         } finally {
             state.drivePending = false;
@@ -540,7 +523,6 @@
     }
 
     async function setMappingMode({ restart = false } = {}) {
-        if (state.control?.navigation_mode === 'MAPPING' && !restart) return true;
         if (state.busy || state.drivePending || state.navigationPending) return false;
         const moving = navigationIsMoving();
         if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return false;
@@ -549,6 +531,17 @@
         syncControlComponents();
         setFeedback('Mapping 모드로 전환 중...');
         try {
+            if (state.control?.navigation_mode === 'MAPPING' && !restart) {
+                const runtime = await requestJson('/api/system-control/status');
+                const mapping = runtime.gpu?.find(component => component.id === 'slam_mapping');
+                if (!mapping || !['off', 'on', 'duplicate'].includes(mapping.state)) {
+                    throw new Error('Mapping 실행 상태를 확인할 수 없습니다.');
+                }
+                if (mapping.state !== 'off') {
+                    setFeedback('Mapping 모드가 실행 중입니다.');
+                    return true;
+                }
+            }
             const mappingPayload = {
                 mode: 'MAPPING',
                 ...(restart ? { restart: true } : {}),
@@ -611,7 +604,9 @@
                     source: 'current',
                 });
                 applyControlState(response);
-                setFeedback('Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
+                setFeedback(response.emergency_stop
+                    ? 'Driving 모드로 전환했습니다. 긴급 정지 해제 후 Set Goal을 사용할 수 있습니다.'
+                    : 'Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
                 return true;
             } catch (error) {
                 setFeedback(`Driving 모드 전환 실패: ${error.message}`, true);
@@ -636,9 +631,35 @@
             if (response.navigation_mode && response.navigation_state) {
                 applyControlState(response);
             }
-            setFeedback('요청이 적용되었습니다.');
+            if (path.endsWith('/cancel')) {
+                if (response.cancel_completed === true && response.physical_stop_confirmed === true) {
+                    setFeedback('Goal 취소와 엔코더 정지가 확인되었습니다.');
+                } else if (response.navigation_state === 'EMERGENCY_STOPPED') {
+                    setFeedback('Goal 취소가 E-STOP에 의해 중단되었습니다. 안전 상태를 확인해주세요.', true);
+                } else if (response.stop_delivered !== true || response.navigation_state === 'FAILED') {
+                    setFeedback(`취소 부분 실패: ${response.last_error || 'Pi STOP 확인 실패'}`, true);
+                } else if (response.cancel?.terminal === 'SUCCEEDED') {
+                    setFeedback('Nav2 Goal이 취소보다 먼저 종료되었습니다. Pi 정지 확인 중...');
+                } else {
+                    setFeedback('Nav2 취소 후 Pi 엔코더 정지 확인 중...');
+                }
+                await refreshState();
+            } else {
+                setFeedback('요청이 적용되었습니다.');
+            }
         } catch (error) {
-            setFeedback(`요청 실패: ${error.message}`, true);
+            if (path.endsWith('/cancel')) {
+                let latest = null;
+                try {
+                    latest = await refreshState();
+                } catch (_) {
+                    // Preserve the transport failure; status may be offline.
+                }
+                const reason = latest?.last_error || error.message;
+                setFeedback(`Goal 취소 실패·정지 확인 필요: ${reason}`, true);
+            } else {
+                setFeedback(`요청 실패: ${error.message}`, true);
+            }
         } finally {
             state.busy = false;
         }
@@ -815,6 +836,7 @@
             emergencyStop,
             refreshState,
             requestDriveMode,
+            lastDriveError: () => state.lastDriveError,
             requestEmergencyToggle,
             requestLedToggle,
             requestNavigationMode,

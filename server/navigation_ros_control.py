@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
@@ -10,16 +11,20 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from server.env_config import env_float
+from server.navigation_motion_segments import annotate_path
 
 try:
     import rclpy
     from action_msgs.msg import GoalStatus
     from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
     from lifecycle_msgs.srv import GetState
-    from nav2_msgs.action import ComputePathToPose, NavigateToPose
+    from nav2_msgs.action import (
+        ComputePathToPose, ComputePathThroughPoses, NavigateToPose, NavigateThroughPoses,
+    )
     from nav2_msgs.srv import LoadMap
     from nav_msgs.msg import OccupancyGrid, Odometry, Path
     from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import String
     from rclpy.action import ActionClient
     from rclpy.duration import Duration
     from rclpy.executors import SingleThreadedExecutor
@@ -41,13 +46,16 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     PoseWithCovarianceStamped = None
     Twist = None
     ComputePathToPose = None
+    ComputePathThroughPoses = None
     NavigateToPose = None
+    NavigateThroughPoses = None
     GetState = None
     LoadMap = None
     OccupancyGrid = None
     Odometry = None
     Path = None
     LaserScan = None
+    String = None
     ActionClient = None
     Duration = None
     SingleThreadedExecutor = None
@@ -99,6 +107,7 @@ class NavigationRosControl:
     MAP_TOPIC = "/map"
     AMCL_POSE_TOPIC = "/amcl_pose"
     GLOBAL_PATH_TOPIC = "/plan"
+    APPLIED_PATH_TOPIC = "/patrol_navigation/applied_follow_path"
     GLOBAL_COSTMAP_TOPIC = "/global_costmap/costmap"
     NAV_COMMAND_TOPIC = "/cmd_vel_nav_dry_run"
     ROTATION_COMMAND_MAX_AGE_SEC = 0.5
@@ -119,9 +128,17 @@ class NavigationRosControl:
         self._amcl_state_client = None
         self._initial_pose_publisher = None
         self._compute_path_client = None
+        self._compute_through_client = None
         self._navigate_client = None
+        self._navigate_through_client = None
         self._navigate_goal_handle = None
         self._navigate_result_future = None
+        self._route_poses_remaining: int | None = None
+        self._route_feedback_epoch = 0
+        self._navigate_action_kind = "navigate_to_pose"
+        self._route_generation = 0
+        self._nav_run_started_ns = 0
+        self._applied_follow_path = None
         self._navigation_state = "IDLE"
         self._navigation_error = None
         self._last_scan_at = None
@@ -129,10 +146,14 @@ class NavigationRosControl:
         self._last_odom_stamp_ns = None
         self._last_odom_previous_at = None
         self._last_odom_yaw = None
+        self._last_odom_xy = None
+        self._last_odom_linear_x = None
+        self._last_odom_angular_z = None
         self._last_odom_yaw_delta = None
         self._odom_yaw_window = deque()
         self._odom_sequence = 0
         self._last_nav_command_at = None
+        self._nonzero_nav_command_sequence = 0
         self._last_nav_command_linear_x = None
         self._last_nav_command_angular_z = None
         self._rotation_command_since_at = None
@@ -187,6 +208,9 @@ class NavigationRosControl:
                 10,
             )
             self._node.create_subscription(
+                String, self.APPLIED_PATH_TOPIC, self._on_applied_follow_path, 10,
+            )
+            self._node.create_subscription(
                 OccupancyGrid,
                 self.GLOBAL_COSTMAP_TOPIC,
                 self._on_global_costmap,
@@ -201,6 +225,16 @@ class NavigationRosControl:
                 self._node,
                 NavigateToPose,
                 "/navigate_to_pose",
+            )
+            self._compute_through_client = ActionClient(
+                self._node,
+                ComputePathThroughPoses,
+                "/compute_path_through_poses",
+            )
+            self._navigate_through_client = ActionClient(
+                self._node,
+                NavigateThroughPoses,
+                "/navigate_through_poses",
             )
             self._tf_buffer = Buffer()
             self._tf_listener = TransformListener(self._tf_buffer, self._node, spin_thread=False)
@@ -224,7 +258,9 @@ class NavigationRosControl:
             self._thread = None
             self._node = None
             self._compute_path_client = None
+            self._compute_through_client = None
             self._navigate_client = None
+            self._navigate_through_client = None
             self._navigate_goal_handle = None
             self._navigate_result_future = None
             self._tf_listener = None
@@ -373,6 +409,41 @@ class NavigationRosControl:
             "amcl_pose_received": amcl_received,
         }
 
+    def _await_planning_result(self, goal_handle: Any, timeout_message: str) -> Any:
+        """Bound result wait and request cancellation of an abandoned Nav2 plan."""
+        try:
+            return self._wait_future(
+                goal_handle.get_result_async(),
+                timeout_sec=env_float("NAV_COMPUTE_PATH_TIMEOUT_SEC", minimum=0.1),
+                error_code="PATH_PLAN_TIMEOUT",
+                message=timeout_message,
+            )
+        except NavigationRosError as exc:
+            if exc.error_code != "PATH_PLAN_TIMEOUT":
+                raise
+            # Bound cancellation confirmation: a busy Nav2 executor may not
+            # respond immediately. Do not mistake silence for a safe cancel.
+            try:
+                canceled = self._wait_future(
+                    goal_handle.cancel_goal_async(),
+                    timeout_sec=1.0,
+                    error_code="PATH_CANCEL_TIMEOUT",
+                    message="Timed out requesting path-goal cancellation.",
+                )
+                if not getattr(canceled, "goals_canceling", ()):
+                    node = self._node
+                    if node is not None:
+                        node.get_logger().warning(
+                            "Timed-out Nav2 path goal cancellation was not confirmed."
+                        )
+            except Exception as cancel_error:
+                node = self._node
+                if node is not None:
+                    node.get_logger().warning(
+                        f"Could not confirm timed-out Nav2 path cancellation: {cancel_error}"
+                    )
+            raise
+
     def compute_path(self, goal: dict[str, float]) -> list[dict[str, float]]:
         """Call Nav2 ComputePathToPose without starting robot navigation."""
         self._require_started()
@@ -389,18 +460,118 @@ class NavigationRosControl:
         )
         if not goal_handle.accepted:
             raise NavigationRosError("PATH_REJECTED", "Nav2 rejected the path request.", 422)
-        result_wrapper = self._wait_future(
-            goal_handle.get_result_async(),
-            timeout_sec=env_float("NAV_COMPUTE_PATH_TIMEOUT_SEC", minimum=0.1),
-            error_code="PATH_PLAN_TIMEOUT",
-            message="Timed out while computing the path.",
+        result_wrapper = self._await_planning_result(
+            goal_handle, "Timed out while computing the path."
         )
         if int(result_wrapper.status) != int(GoalStatus.STATUS_SUCCEEDED):
             raise NavigationRosError("PATH_NOT_FOUND", "Nav2 could not compute a path.", 422)
-        return [
-            {"x": float(item.pose.position.x), "y": float(item.pose.position.y)}
+        return annotate_path([
+            {
+                "x": float(item.pose.position.x),
+                "y": float(item.pose.position.y),
+                "yaw": self._yaw_from_orientation(item.pose.orientation),
+            }
             for item in result_wrapper.result.path.poses
-        ]
+        ])
+
+    def compute_path_through_poses(
+        self, poses: list[dict[str, float]]
+    ) -> list[dict[str, float | str]]:
+        """Plan one ordered route using Nav2 Humble's multi-pose planner."""
+        self._require_started()
+        if not poses or self._compute_through_client is None:
+            raise NavigationRosError(
+                "WAYPOINTS_REQUIRED", "An ordered waypoint route is required.", 400,
+            )
+        if not self._compute_through_client.wait_for_server(timeout_sec=2.5):
+            raise NavigationRosError(
+                "PATH_PLANNER_UNAVAILABLE",
+                "ComputePathThroughPoses is unavailable.", 503,
+            )
+        request = ComputePathThroughPoses.Goal()
+        request.goals = [self._pose_stamped(item) for item in poses]
+        request.use_start = False
+        handle = self._wait_future(
+            self._compute_through_client.send_goal_async(request),
+            timeout_sec=3.0,
+            error_code="PATH_PLAN_TIMEOUT",
+            message="Timed out while submitting waypoint path request.",
+        )
+        if not handle.accepted:
+            raise NavigationRosError(
+                "PATH_REJECTED", "Nav2 rejected the waypoint path.", 422,
+            )
+        result = self._await_planning_result(
+            handle, "Timed out computing the waypoint path."
+        )
+        if int(result.status) != int(GoalStatus.STATUS_SUCCEEDED):
+            raise NavigationRosError(
+                "PATH_NOT_FOUND", "No path through all waypoints.", 422,
+            )
+        return annotate_path([
+            {
+                "x": float(p.pose.position.x),
+                "y": float(p.pose.position.y),
+                "yaw": self._yaw_from_orientation(p.pose.orientation),
+            }
+            for p in result.result.path.poses
+        ])
+
+    def navigate_through_poses(
+        self, poses: list[dict[str, float]]
+    ) -> dict[str, Any]:
+        """Execute one Nav2 action for all intermediate and final poses."""
+        self._require_started()
+        if not poses or self._navigate_through_client is None:
+            raise NavigationRosError(
+                "WAYPOINTS_REQUIRED", "An ordered waypoint route is required.", 400,
+            )
+        with self._lock:
+            if self._navigate_goal_handle is not None:
+                raise NavigationRosError(
+                    "NAVIGATION_ALREADY_ACTIVE",
+                    "Cancel the active Nav2 action before starting the route.",
+                )
+        if not self._navigate_through_client.wait_for_server(timeout_sec=2.5):
+            raise NavigationRosError(
+                "NAVIGATOR_UNAVAILABLE", "NavigateThroughPoses is unavailable.", 503,
+            )
+        request = NavigateThroughPoses.Goal()
+        request.poses = [self._pose_stamped(item) for item in poses]
+        with self._lock:
+            self._route_feedback_epoch += 1
+            feedback_epoch = self._route_feedback_epoch
+            self._route_poses_remaining = len(poses)
+            self._navigate_action_kind = "navigate_through_poses"
+        request_started_ns = time.monotonic_ns()
+        handle = self._wait_future(
+            self._navigate_through_client.send_goal_async(
+                request,
+                feedback_callback=lambda msg, epoch=feedback_epoch:
+                    self._on_waypoint_feedback(msg, epoch),
+            ),
+            timeout_sec=3.0,
+            error_code="NAVIGATION_START_TIMEOUT",
+            message="Timed out submitting waypoint route.",
+        )
+        if not handle.accepted:
+            raise NavigationRosError(
+                "NAVIGATION_REJECTED", "Nav2 rejected the waypoint route.", 422,
+            )
+        future = handle.get_result_async()
+        with self._lock:
+            self._navigate_goal_handle = handle
+            self._navigate_result_future = future
+            self._route_generation += 1
+            self._nav_run_started_ns = request_started_ns
+            self._applied_follow_path = None
+            self._navigation_state = "NAVIGATING"
+            self._navigation_error = None
+        future.add_done_callback(
+            lambda resolved, current=handle:
+                self._on_navigation_result(current, resolved)
+        )
+        return {"accepted": True, "action": "/navigate_through_poses"}
 
     def navigate_to_pose(self, goal: dict[str, float]) -> dict[str, Any]:
         self._require_started()
@@ -414,6 +585,11 @@ class NavigationRosControl:
             raise NavigationRosError("NAVIGATOR_UNAVAILABLE", "NavigateToPose action is unavailable.", 503)
         request = NavigateToPose.Goal()
         request.pose = self._pose_stamped(goal)
+        with self._lock:
+            self._route_feedback_epoch += 1
+            self._route_poses_remaining = None
+            self._navigate_action_kind = "navigate_to_pose"
+        request_started_ns = time.monotonic_ns()
         goal_handle = self._wait_future(
             self._navigate_client.send_goal_async(request),
             timeout_sec=3.0,
@@ -426,6 +602,9 @@ class NavigationRosControl:
         with self._lock:
             self._navigate_goal_handle = goal_handle
             self._navigate_result_future = result_future
+            self._route_generation += 1
+            self._nav_run_started_ns = request_started_ns
+            self._applied_follow_path = None
             self._navigation_state = "NAVIGATING"
             self._navigation_error = None
         result_future.add_done_callback(
@@ -519,9 +698,45 @@ class NavigationRosControl:
                     self._navigate_result_future = None
             return {"requested": True, "confirmed": True, "completed": True}
 
+    def _on_waypoint_feedback(self, msg: Any, epoch: int) -> None:
+        try:
+            count = int(msg.feedback.number_of_poses_remaining)
+        except (AttributeError, ValueError, TypeError, OverflowError):
+            return
+        with self._lock:
+            if (
+                epoch == self._route_feedback_epoch
+                and self._navigate_action_kind == "navigate_through_poses"
+                and self._navigation_state == "NAVIGATING"
+                and count >= 1
+            ):
+                # Never increase the remaining count from delayed feedback.
+                if self._route_poses_remaining is not None:
+                    self._route_poses_remaining = min(
+                        self._route_poses_remaining, count,
+                    )
+
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:
-            return {"state": self._navigation_state, "error": self._navigation_error}
+            return {
+                "state": self._navigation_state,
+                "error": self._navigation_error,
+                "action": self._navigate_action_kind,
+                "number_of_poses_remaining": self._route_poses_remaining,
+                "route_generation": self._route_generation,
+            }
+
+    def applied_follow_path(self) -> dict[str, Any] | None:
+        """Controller-applied path observed during the current accepted action."""
+        with self._lock:
+            if (self._navigation_state != "NAVIGATING"
+                or self._navigate_goal_handle is None
+                or not isinstance(self._applied_follow_path, dict)):
+                return None
+            return {
+                **self._applied_follow_path,
+                "path": [dict(p) for p in self._applied_follow_path["path"]],
+            }
 
     def navigation_ready(self) -> bool:
         if ROS_IMPORT_ERROR is not None or not self._started:
@@ -740,12 +955,17 @@ class NavigationRosControl:
             now = time.monotonic()
             return {
                 "command_age_sec": self._monotonic_age(now, self._last_nav_command_at),
+                "nonzero_command_sequence": self._nonzero_nav_command_sequence,
                 "command_linear_x": self._last_nav_command_linear_x,
                 "command_angular_z": self._last_nav_command_angular_z,
                 "command_since_at": self._rotation_command_since_at,
                 "odometry_age_sec": self._monotonic_age(now, self._last_odom_at),
                 "odom_interval_start_at": self._last_odom_previous_at,
                 "odom_yaw": self._last_odom_yaw,
+                "odom_x": self._last_odom_xy[0] if self._last_odom_xy is not None else None,
+                "odom_y": self._last_odom_xy[1] if self._last_odom_xy is not None else None,
+                "odom_linear_x": self._last_odom_linear_x,
+                "odom_angular_z": self._last_odom_angular_z,
                 "odom_yaw_delta": self._last_odom_yaw_delta,
                 "odom_sequence": self._odom_sequence,
             }
@@ -756,8 +976,12 @@ class NavigationRosControl:
             angular = float(message.angular.z)
         except (AttributeError, TypeError, ValueError, OverflowError):
             return
+        if not math.isfinite(linear) or not math.isfinite(angular):
+            return
         now = time.monotonic()
         with self._lock:
+            if abs(linear) > 1e-6 or abs(angular) > 1e-6:
+                self._nonzero_nav_command_sequence += 1
             previously_rotating = (
                 self._rotation_command_since_at is not None
                 and self._monotonic_age(now, self._last_nav_command_at) <= self.ROTATION_COMMAND_MAX_AGE_SEC
@@ -778,9 +1002,13 @@ class NavigationRosControl:
     def _on_odom(self, message: Any) -> None:
         try:
             yaw = self._yaw_from_orientation(message.pose.pose.orientation)
+            x = float(message.pose.pose.position.x)
+            y = float(message.pose.pose.position.y)
+            odom_linear = float(message.twist.twist.linear.x)
+            odom_angular = float(message.twist.twist.angular.z)
         except (AttributeError, TypeError, ValueError, OverflowError):
             return
-        if not math.isfinite(yaw):
+        if not all(math.isfinite(value) for value in (x, y, yaw, odom_linear, odom_angular)):
             return
         stamp_ns = None
         if self._node is not None:
@@ -808,6 +1036,9 @@ class NavigationRosControl:
                 if len(self._odom_yaw_window) > 1 else None
             )
             self._last_odom_yaw = yaw
+            self._last_odom_xy = (x, y)
+            self._last_odom_linear_x = odom_linear
+            self._last_odom_angular_z = odom_angular
             self._last_odom_at = now
             self._odom_sequence += 1
 
@@ -824,13 +1055,60 @@ class NavigationRosControl:
             self._map.received_at = time.monotonic()
             self._condition.notify_all()
 
+    def _on_applied_follow_path(self, message: Any) -> None:
+        """Reject anonymous /plan; accept only FollowPath controller notices."""
+        try:
+            event = json.loads(message.data)
+            if event.get("source") != "segmented_rpp":
+                return
+            instance = event.get("instance")
+            sequence = event.get("sequence")
+            raw = event.get("path")
+            emitted_ns = event.get("emitted_ns")
+            if (not isinstance(instance, str) or not instance
+                or type(sequence) is not int or sequence <= 0
+                or type(emitted_ns) is not int or emitted_ns <= 0
+                or emitted_ns > time.monotonic_ns() + 1_000_000_000
+                or not isinstance(raw, list) or not 2 <= len(raw) <= 5000):
+                return
+            path = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    return
+                coords = tuple(float(item[k]) for k in ("x", "y", "yaw"))
+                if not all(math.isfinite(v) for v in coords):
+                    return
+                path.append(dict(zip(("x", "y", "yaw"), coords)))
+            normalized = annotate_path(path)
+            if len(normalized) != len(raw):
+                return
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            return
+        with self._lock:
+            if (self._navigation_state != "NAVIGATING"
+                or self._navigate_goal_handle is None
+                or emitted_ns < self._nav_run_started_ns):
+                return
+            previous = self._applied_follow_path
+            if (previous is not None and previous["instance"] == instance
+                and sequence <= previous["sequence"]):
+                return
+            self._applied_follow_path = {
+                "instance": instance, "sequence": sequence,
+                "route_generation": self._route_generation,
+                "path": normalized,
+            }
+
     def _on_global_path(self, message: Any) -> None:
-        path: list[dict[str, float]] = []
-        for item in list(message.poses)[:5000]:
-            x = float(item.pose.position.x)
-            y = float(item.pose.position.y)
-            if math.isfinite(x) and math.isfinite(y):
-                path.append({"x": x, "y": y})
+        """Use the same forward/reverse/spin semantics as ComputePathToPose."""
+        path = annotate_path([
+            {
+                "x": float(item.pose.position.x),
+                "y": float(item.pose.position.y),
+                "yaw": self._yaw_from_orientation(item.pose.orientation),
+            }
+            for item in list(message.poses)[:5000]
+        ])
         self._publish_visualization(
             {"type": "global_path", "path": path, "received_at": time.time()}
         )

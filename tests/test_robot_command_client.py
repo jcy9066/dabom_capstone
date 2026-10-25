@@ -104,6 +104,7 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.emergency_stop_latched)
         self.assertTrue(socket.messages[-1]["ok"])
         self.assertFalse(socket.messages[-1]["emergency_stop"])
+        client.motor.clear_direction_fault_after_safety_resume.assert_called_once_with()
 
     async def test_inflight_motion_invalidated_by_safety_epoch_change(self):
         import asyncio

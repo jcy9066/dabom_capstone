@@ -55,7 +55,7 @@
             const next = explicitTarget
                 || (current === 'MAPPING' ? 'DRIVING' : 'MAPPING');
 
-            if (next === current) return;
+            if (next === current && next !== 'MAPPING') return;
             controller.request(next);
         });
     }

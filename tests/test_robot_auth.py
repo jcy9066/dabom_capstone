@@ -70,7 +70,7 @@ def test_robot_command_requires_robot_header_or_user_csrf():
         == 401
     )
 
-    with patch.object(server.connections, "send_command", AsyncMock(return_value=True)):
+    with patch.object(server.connections, "send_command_wait_ack", AsyncMock(return_value=True)):
         response = client.post(
             "/api/robots/pi-01/command",
             json=payload,

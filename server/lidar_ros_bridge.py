@@ -199,6 +199,7 @@ class LidarRosBridge:
 
         # 오래된 scan이 밀리지 않도록 최신 scan만 유지한다.
         self.scan_queue: queue.Queue[LaserScan] = queue.Queue(maxsize=1)
+        self._future_stamp_warning_at = 0.0
 
         self.node = None
         self.executor = None
@@ -361,17 +362,36 @@ class LidarRosBridge:
             header.get("frame_id") or self.lidar_frame
         )
 
-        if self.use_source_timestamp:
+        # The Pi and GPU can both be NTP-synchronized yet disagree.
+        # Only evidently future source stamps are replaced by GPU receipt
+        # time; otherwise keep the original measurement time for SLAM.
+        received_stamp = self.node.get_clock().now().to_msg()
+        # A current Pi clock estimate is required for newly updated senders.
+        # Legacy senders have no trustworthy cross-host offset; use GPU time.
+        # This also allows the GPU update before the Pi branch is updated.
+        if self.use_source_timestamp and header.get("clock_sync_valid") is True:
             stamp_sec = int(header.get("stamp_sec") or 0)
             stamp_nanosec = int(header.get("stamp_nanosec") or 0)
-
-            if stamp_sec > 0 and 0 <= stamp_nanosec < 1_000_000_000:
+            valid_source = stamp_sec > 0 and 0 <= stamp_nanosec < 1_000_000_000
+            skew_sec = (
+                stamp_sec + stamp_nanosec / 1_000_000_000
+                - (received_stamp.sec + received_stamp.nanosec / 1_000_000_000)
+            ) if valid_source else 0.0
+            if valid_source and skew_sec <= 0.05:
                 message.header.stamp.sec = stamp_sec
                 message.header.stamp.nanosec = stamp_nanosec
             else:
-                message.header.stamp = self.node.get_clock().now().to_msg()
+                message.header.stamp = received_stamp
+                if valid_source and skew_sec > 0.05:
+                    now_mono = time.monotonic()
+                    if now_mono - self._future_stamp_warning_at >= 5.0:
+                        self._future_stamp_warning_at = now_mono
+                        self.node.get_logger().warning(
+                            f"LiDAR stamp {skew_sec:.3f}s ahead of GPU time; "
+                            "using GPU receive timestamp for TF compatibility"
+                        )
         else:
-            message.header.stamp = self.node.get_clock().now().to_msg()
+            message.header.stamp = received_stamp
 
         message.angle_min = angle_min
         message.angle_max = angle_max

@@ -154,9 +154,8 @@ def test_pipeline8_factory_uses_rtmo_onnx_botsort_and_x3d():
     source = (ROOT_DIR / "perception" / "pipeline_factory.py").read_text(
         encoding="utf-8"
     )
-    start = source.index('    if choice == "8":')
-    end = source.index('    if choice == "9":', start)
-    block = source[start:end]
+    start = source.index('    assets = ensure_pipeline_assets(choice)')
+    block = source[start:]
 
     assert "RTMOPoseDetector" in block
     assert 'onnx_model=assets["rtmo_onnx"]' in block

@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -16,6 +18,24 @@ class NavigationFrontendContractTests(unittest.TestCase):
         cls.drive_component = (ROOT / "frontend/components/controls/drive_mode_control.js").read_text(encoding="utf-8")
         cls.navigation_component = (ROOT / "frontend/components/controls/navigation_mode_control.js").read_text(encoding="utf-8")
         cls.controls_css = (ROOT / "frontend/components/controls/controls.css").read_text(encoding="utf-8")
+
+    def test_cancel_success_race_and_estop_are_not_displayed_as_cancel_success(self):
+        source = self.control
+        self.assertIn("response.cancel?.terminal === 'SUCCEEDED'", source)
+        self.assertIn("response.navigation_state === 'EMERGENCY_STOPPED'", source)
+        self.assertIn("response.cancel_completed === true && response.physical_stop_confirmed === true", source)
+        self.assertIn("취소 부분 실패", source)
+
+    def test_global_path_retained_while_manual_pauses_or_cancel_waits_for_stop(self):
+        js = (ROOT / "frontend/services/static/script.js").read_text(encoding="utf-8")
+        allowed = js.split("document.addEventListener('dabom:navigation-control-state'", 1)[1]
+        for status in ("READY", "PAUSING_FOR_MANUAL", "CANCELING", "CANCELING_STOP"):
+            self.assertIn(f"'{status}'", allowed)
+        self.assertIn("&& control.active_goal", allowed)
+        self.assertIn("control.planned_path", allowed)
+        self.assertIn("const path = running ? control.executed_path", allowed)
+        self.assertIn("preview ? control.planned_path : []", allowed)
+        self.assertIn("applyNavigationGlobalPath(", allowed)
 
     def test_consumes_frozen_dashboard_navigation_contract(self):
         for contract in (
@@ -47,6 +67,17 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("GLTFLoader", viewer)
         self.assertIn("robot_upper_chassis.glb", viewer)
 
+    def test_3d_viewer_never_labels_preview_as_live_executed_path(self):
+        viewer = self.viewer
+        allowed = viewer.split("function displayedGlobalPath(", 1)[1].split(
+            "function pathKey(", 1
+        )[0]
+        self.assertIn("['PATH_READY', 'READY'].includes(navState)", allowed)
+        self.assertIn("'NAVIGATING'", allowed)
+        self.assertIn("'RESUMING'", allowed)
+        self.assertIn("control.executed_path", allowed)
+        self.assertIn("control.planned_path", allowed)
+
     def test_3d_viewer_rotates_lidar_visuals_180_degrees_in_place(self):
         template = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
         viewer = (
@@ -60,7 +91,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31',
+            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
             template,
         )
 
@@ -77,7 +108,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31',
+            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
             template,
         )
 
@@ -115,7 +146,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31',
+            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
             template,
         )
 
@@ -181,7 +212,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31',
+            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
             template,
         )
 
@@ -209,9 +240,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn('id="lidarControlDrawerToggle"', template)
         self.assertIn("syncControlDrawerState", viewer)
         self.assertIn("dabom:drawer-toggle", viewer)
-        self.assertIn('/components/controls/drawer_toggle.js?v=20260930-lidar3d-controls-v16', template)
-        self.assertIn('/components/controls/viewer_status.js?v=20260930-lidar3d-controls-v16', template)
-        self.assertIn('/components/controls/led_toggle.js?v=20260930-lidar3d-controls-v16', template)
+        # Component entrypoints are stable, but cache-busting versions change
+        # independently of the navigation viewer; do not pin an obsolete tag.
+        for component in ("drawer_toggle", "viewer_status", "led_toggle"):
+            self.assertRegex(
+                template,
+                rf'<script src="/components/controls/{component}\.js\?v=[^"]+"></script>',
+            )
         self.assertIn('data-drawer-target="lidar-control-drawer"', template)
         self.assertIn('data-drawer-target="lidar-layer-drawer"', template)
         self.assertIn('dashboard-drawer-toggle--top', template)
@@ -251,7 +286,13 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("overflow: hidden;", dashboard_css)
         self.assertIn(".dashboard-led-toggle-state {\n    min-width: 0;", self.controls_css)
         self.assertIn('id="dashboardBeepBtn"', template)
-        self.assertIn('class="card action-btn action-beep"', template)
+        # Verify the Beep control's identity and semantic style without
+        # pinning an obsolete class order or excluding shared UI classes.
+        self.assertRegex(
+            template,
+            r'<button\b(?=[^>]*\bid="dashboardBeepBtn")'
+            r'(?=[^>]*\bclass="[^"]*\baction-beep(?:\s|"))[^>]*>',
+        )
         self.assertIn("'/api/navigation/control/beep'", self.control)
         self.assertNotIn('id="navigation-led-test"', template)
         self.assertNotIn('id="navigation-estop"', template)
@@ -321,12 +362,14 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("mappingLabel.dataset.navigationModeTarget = 'MAPPING'", self.navigation_component)
         self.assertIn("drivingLabel.dataset.navigationModeTarget = 'DRIVING'", self.navigation_component)
         self.assertIn("const explicitTarget = event.target?.closest?.(", self.navigation_component)
-        self.assertIn("if (next === current) return;", self.navigation_component)
+        self.assertIn("if (next === current && next !== 'MAPPING') return;", self.navigation_component)
         self.assertIn("async function setMappingMode({ restart = false } = {})", self.control)
         self.assertIn("...(restart ? { restart: true } : {})", self.control)
         self.assertIn("setMappingMode(options)", self.control)
         self.assertIn("source: 'current'", self.control)
         self.assertIn("현재 Mapping 결과로 Driving 모드 전환 중...", self.control)
+        self.assertIn("response.emergency_stop", self.control)
+        self.assertIn("긴급 정지 해제 후 Set Goal을 사용할 수 있습니다.", self.control)
         self.assertIn("view.map", self.control)
 
     def test_dashboard_and_expanded_map_share_navigation_state(self):
@@ -439,27 +482,116 @@ class NavigationFrontendContractTests(unittest.TestCase):
         start = self.control.index("async function requestDriveMode")
         end = self.control.index("function navigationIsMoving", start)
         request = self.control[start:end]
-        state_read = request.index("await refreshState()")
-        pause = request.index("mutate('/api/navigation/control/pause-for-manual')")
-        mode_command = request.index("mutate('/api/robots/pi-01/command'")
-        self.assertLess(state_read, pause)
-        self.assertLess(pause, mode_command)
+        self.assertIn("mutate('/api/navigation/control/patrol-mode'", request)
+        self.assertNotIn("mutate('/api/robots/pi-01/command'", request)
         self.assertNotIn("mutate('/api/navigation/control/cancel')", request)
-        self.assertIn("paused.goal_retained !== true", request)
-        self.assertIn("JSON.stringify(paused.active_goal) !== retainedGoal", request)
-        self.assertIn("JSON.stringify(paused.planned_path) !== retainedPath", request)
-        stop_delivery = request.index("paused.stop_delivered !== true")
-        self.assertLess(stop_delivery, mode_command)
-        self.assertIn("MANUAL 전환을 중단했습니다", request)
+        self.assertIn("confirmed.patrol_transition", request)
+        self.assertNotIn("confirmed.patrol_ready", request)
+        self.assertNotIn("requestNavigationMode('DRIVING')", request)
         self.assertIn("state.drivePending", request)
+        server = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+        start = server.index("async def switch_patrol_mode")
+        end = server.index("async def switch_mode(", start)
+        self.assertIn("await self.pause_for_manual()", server[start:end])
+        self.assertIn('{"type": "mode", "mode": target}', server[start:end])
 
 
-    def test_global_path_is_foreground_and_trajectory_filters_jitter(self):
+    def test_cancel_http_failure_reloads_server_state_before_error_feedback(self):
+        dashboard = (ROOT / "frontend/services/static/navigation_control.js").read_text(
+            encoding="utf-8"
+        )
+        start = dashboard.index("async function simpleAction(")
+        end = dashboard.index("async function requestLedToggle(", start)
+        handler = dashboard[start:end]
+        self.assertIn("if (path.endsWith('/cancel'))", handler)
+        self.assertIn("latest = await refreshState();", handler)
+        self.assertIn("latest?.last_error || error.message", handler)
+        self.assertIn("Goal 취소 실패", handler)
+
+    def test_goal_bound_global_path_and_terminal_visibility_contract(self):
+        dashboard = (
+            ROOT / "frontend/services/static/script.js"
+        ).read_text(encoding="utf-8")
         viewer = self.viewer
-        self.assertIn("positions.push(x, y, 0.16)", viewer)
-        self.assertIn("depthTest: false", viewer)
-        self.assertIn("line.renderOrder = 100", viewer)
-        self.assertIn("points.renderOrder = 101", viewer)
+        displayed = viewer.split("    function displayedGlobalPath(", 1)[1].split(
+            "    function pathKey(", 1
+        )[0]
+        assert "control?.active_goal" in displayed
+        assert "control.planned_path" in displayed
+        assert "REPLACING_GOAL" in displayed
+        # Preview paths are valid only before movement. NAVIGATING and
+        # RESUMING use an execution-owned FollowPath observation instead.
+        assert "['PATH_READY', 'READY'].includes(navState)" in displayed
+        assert "['NAVIGATING', 'RESUMING'].includes(navState)" in displayed
+        assert "control.executed_path" in displayed
+        assert "return livePath" not in displayed
+        assert "navigationGlobalPathRunKey === null) return;" in dashboard
+        assert "if (navigationGlobalPathRunKey !== null" in dashboard
+        assert "if (!movingNow) trajectorySessionActive = false;" in viewer
+        assert "replacing ? null : currentControlState?.active_goal" in viewer
+
+    def test_goal_path_owner_decision_executes_with_node_when_available(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js not installed; source contract still checked")
+        viewer = self.viewer
+        function = (
+            "function displayedGlobalPath(" +
+            viewer.split("    function displayedGlobalPath(", 1)[1].split(
+                "    function pathKey(", 1
+            )[0]
+        )
+        javascript = (
+            "const currentControlState=null, currentVisualizationState=null;\n" +
+            function +
+            """
+            const old = [{x:0,y:0},{x:1,y:1}];
+            const preview = [{x:0,y:0},{x:2,y:2}];
+            const executed = [{x:0,y:0},{x:1,y:2},{x:2,y:2}];
+            const live = {globalPath: old, globalPathStatus:'fresh'};
+            const base = {
+                navigation_mode:'DRIVING', active_goal:{x:2,y:2,yaw:0},
+                planned_path:preview, executed_path:executed,
+                navigation_state:'NAVIGATING',
+            };
+            function check(condition) { if (!condition) process.exit(1); }
+            check(displayedGlobalPath(base, live) === executed);
+            check(displayedGlobalPath({...base,navigation_state:'RESUMING'},live)===executed);
+            check(displayedGlobalPath({...base,executed_path:[]},live).length===0);
+            check(displayedGlobalPath({...base,executed_path:null},live).length===0);
+            // An anonymous ROS /plan packet cannot replace the applied route.
+            check(displayedGlobalPath(base,{globalPath:old})===executed);
+            for (const s of [
+                'REPLACING_GOAL', 'FAILED', 'SUCCEEDED',
+                'CANCELED', 'EMERGENCY_STOPPED', 'PAUSING_FOR_MANUAL',
+            ]) {
+                check(displayedGlobalPath({...base,navigation_state:s},live).length === 0);
+            }
+            check(displayedGlobalPath({...base,navigation_state:'PATH_READY'},live)===preview);
+            check(displayedGlobalPath({...base,navigation_state:'READY'},live)===preview);
+            check(displayedGlobalPath({...base,navigation_state:'PATH_READY',planned_path:[]},live).length===0);
+            check(displayedGlobalPath({...base,navigation_mode:'MAPPING'},live).length===0);
+            check(displayedGlobalPath({...base,active_goal:null},live).length===0);
+            """
+        )
+        result = subprocess.run(
+            [node, "-e", javascript],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr or result.stdout)
+
+    def test_global_path_is_ground_adjacent_and_trajectory_filters_jitter(self):
+        viewer = self.viewer
+        path_renderer = viewer.split("    function rebuildPath(", 1)[1].split(
+            "    function createGoalMarker(", 1
+        )[0]
+        # The path remains near the ground and is occluded by real obstacle
+        # meshes. Do not restore the old always-on-top, elevated rendering.
+        self.assertIn("positions.push(x, y, 0.026)", path_renderer)
+        self.assertIn("depthTest: true", path_renderer)
+        self.assertNotIn("depthTest: false", path_renderer)
+        self.assertIn("line.renderOrder = 20", path_renderer)
+        self.assertIn("points.renderOrder = 21", path_renderer)
         self.assertIn("TRAJECTORY_FILTER_ALPHA = 0.45", viewer)
         self.assertIn("TRAJECTORY_FALLBACK_DISTANCE_M = 0.06", viewer)
         self.assertIn("TRAJECTORY_MAX_JUMP_M = 0.75", viewer)

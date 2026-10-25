@@ -88,13 +88,14 @@ def test_pipeline8_asset_urls_are_pinned_to_expected_models():
     assert "final_x3d_realtime.pt" in model_assets.SCENE_CHECKPOINT.url
 
 
-def test_non_pipeline8_does_not_download_assets(tmp_path, monkeypatch):
+def test_non_pipeline8_is_rejected_without_downloading_assets(tmp_path, monkeypatch):
     def fail_download(*_args, **_kwargs):
         raise AssertionError("unexpected download")
 
     monkeypatch.setattr(model_assets, "_download_atomic", fail_download)
 
-    assert model_assets.ensure_pipeline_assets("7", weights_dir=tmp_path) == {}
+    with pytest.raises(ValueError, match="Only RTMO-M"):
+        model_assets.ensure_pipeline_assets("7", weights_dir=tmp_path)
 
 
 @pytest.mark.skipif(
