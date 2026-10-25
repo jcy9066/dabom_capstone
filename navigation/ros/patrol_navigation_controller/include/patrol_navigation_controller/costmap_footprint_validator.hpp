@@ -14,7 +14,7 @@
 
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
-#include "nav2_costmap_2d/footprint.hpp"
+#include "geometry_msgs/msg/point.hpp"
 
 namespace patrol_navigation_controller
 {
@@ -22,7 +22,7 @@ namespace patrol_navigation_controller
 inline bool polygonFootprintClear(
   const nav2_costmap_2d::Costmap2D * costmap,
   const MotionPose & pose, const double footprint_cost,
-  const nav2_costmap_2d::Footprint & footprint,
+  const std::vector<geometry_msgs::msg::Point> & footprint,
   int * center_cost_out = nullptr, int * occupied_cell_cost_out = nullptr)
 {
   unsigned int mx = 0;
