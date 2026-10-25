@@ -149,9 +149,9 @@ def test_selected_route_is_rechecked_before_publishing():
     # Humble Smac checks the inscribed threshold at the center, but
     # lethal/unknown at the polygon edge; never apply center inflation twice.
     assert "bool polygonFootprintClear(" in code
-    assert "center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in code
-    assert "footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in code
-    assert "footprint_cost >= 0.0" in code
+    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in code
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in code
+    assert "footprint_cost < 0.0" in code
     assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
     assert "const bool clear = polygonFootprintClear(" in code
     assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
@@ -168,9 +168,9 @@ def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_sm
     )[0]
     assert "costmap->worldToMap(pose.x, pose.y, mx, my)" in helper
     assert "costmap->getCost(mx, my)" in helper
-    assert "center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in helper
-    assert "footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in helper
-    assert "std::isfinite(footprint_cost) && footprint_cost >= 0.0" in helper
+    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in helper
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in helper
+    assert "!std::isfinite(footprint_cost) || footprint_cost < 0.0" in helper
     # 253 is safe for a polygon boundary, but never safe at the robot center.
     # 254, 255 and negative/nonfinite footprint values remain unsafe.
     assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
@@ -187,6 +187,7 @@ def test_full_chassis_area_blocks_lethal_and_unknown_cells_not_just_outline():
     assert "costmap->worldToMap(x, y, vertex_mx, vertex_my)" in code
     assert "const double cos_yaw = std::cos(pose.yaw);" in code
     assert "const double sin_yaw = std::sin(pose.yaw);" in code
+    assert "validConvexFootprint(" in helper
     assert "Boundary contact counts as overlap" in helper
     assert "positive_turn && negative_turn" in helper
     assert "if (!overlaps_axis(1.0, 0.0)" in helper
