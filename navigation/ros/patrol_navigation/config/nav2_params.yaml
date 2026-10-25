@@ -210,7 +210,8 @@ planner_server:
       # FastMotion permits low-cost reverse and pivot candidates.
       QuickMotion:
         tolerance: 0.50
-        allow_unknown: true
+        # Do not plan through unknown cells: the swept-footprint safety gate rejects them.
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
@@ -227,7 +228,8 @@ planner_server:
       # through the exact same live Costmap and motion primitives.
       StableTurns:
         tolerance: 0.50
-        allow_unknown: true
+        # Same verified-free-space contract as QuickMotion and the final sweep.
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
