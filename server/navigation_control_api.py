@@ -162,6 +162,9 @@ class NavigationControlApi:
         self._navigation_command_wait_started_at: float | None = None
         self._rotation_extension_sec = 0.0
         self._rotation_last_odom_sequence: int | None = None
+        # Curve translation and in-place rotation are independent proofs;
+        # the watchdog may sample odom before the pose subscriber does.
+        self._curve_last_odom_sequence: int | None = None
         self._rotation_last_verified_yaw: float | None = None
         self._rotation_limit_reached = False
         self._blocked_failure_in_progress = False
@@ -2799,6 +2802,7 @@ class NavigationControlApi:
         self._navigation_command_wait_started_at = None
         self._rotation_extension_sec = 0.0
         self._rotation_last_odom_sequence = None
+        self._curve_last_odom_sequence = None
         self._rotation_last_verified_yaw = None
         self._rotation_limit_reached = False
 
@@ -2919,10 +2923,10 @@ class NavigationControlApi:
                     and abs(yaw_delta) >= self.ROTATION_MIN_YAW_DELTA_RAD
                     and angular * yaw_delta > 0
                     and linear * forward_progress > 0
-                    and odom_sequence != self._rotation_last_odom_sequence
+                    and odom_sequence != self._curve_last_odom_sequence
                 )
                 if moved:
-                    self._rotation_last_odom_sequence = odom_sequence
+                    self._curve_last_odom_sequence = odom_sequence
         if moved:
             if odom_position is not None:
                 self._navigation_progress_odom_pose = odom_position
