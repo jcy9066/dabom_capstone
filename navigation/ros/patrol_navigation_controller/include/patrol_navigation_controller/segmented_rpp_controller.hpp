@@ -3,6 +3,7 @@
 #define PATROL_NAVIGATION_CONTROLLER__SEGMENTED_RPP_CONTROLLER_HPP_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 #include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include "pluginlib/class_loader.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 
 namespace patrol_navigation_controller
@@ -58,6 +60,9 @@ private:
   geometry_msgs::msg::PoseStamped inControllerFrame(
     const geometry_msgs::msg::PoseStamped & target,
     const std::string & target_frame) const;
+  geometry_msgs::msg::PoseStamped storedPathPoseInControllerFrame(
+    const geometry_msgs::msg::PoseStamped & path_pose,
+    const std::string & target_frame) const;
   void buildStages();
   void activateStage();
   void advanceStage();
@@ -94,6 +99,10 @@ private:
   // a rejected path, a safety STOP, or an incomplete pivot.
   bool loop_turn_clockwise_ = true;
   bool loop_half_turn_in_progress_ = false;
+  double last_pivot_angular_command_ = 0.0;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr follow_path_publisher_;
+  std::string follow_path_instance_;
+  std::uint64_t follow_path_sequence_ = 0;
   double controller_frequency_ = 10.0;
   double pivot_max_angular_ = 1.05;
   double pivot_acceleration_ = 1.0;
