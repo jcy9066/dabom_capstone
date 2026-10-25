@@ -113,7 +113,9 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "validAgainstCurrentCostmap(best, costmap_)" in code
     assert "costmap_ros->isCurrent()" in code
     assert "checker.footprintCostAtPose(" in code
-    assert "return validateSweptPath(" in code
+    assert "const bool path_safe = validateSweptPath(" in code
+    assert "if (!path_safe) {" in code
+    assert "return path_safe;" in code
     assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     pure = HEADER.read_text()
     assert "linear_accel_mps2" in pure
@@ -159,7 +161,12 @@ def test_selected_route_checks_every_interpolated_chassis_pose():
     assert "max_samples = 60000" in geometry
     assert "for (size_t step =" in geometry
     assert "if (!collision_free(sample))" in geometry
-    assert "return validateSweptPath(" in SOURCE.read_text()
+    planner = SOURCE.read_text()
+    # Preserve the full interpolated sweep while exposing the rejected pose.
+    assert "const bool path_safe = validateSweptPath(" in planner
+    assert "return clear;" in planner
+    assert "return path_safe;" in planner
+    assert "if (!clear && !has_rejected_sample)" in planner
     cpp = CPP_TEST.read_text()
     assert "std::abs(pose.x - 0.05)" in cpp
     assert "std::abs(pose.yaw - 0.2)" in cpp
