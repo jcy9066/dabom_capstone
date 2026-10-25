@@ -1082,7 +1082,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(case=override):
                 with self.api._lock:
                     self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
-                self.set_rotation(100 + seq, linear=-0.07, angular=0.35, **override)
+                command = {"linear": -0.07, "angular": 0.35}
+                command.update(override)
+                self.set_rotation(100 + seq, **command)
                 self.api.note_navigation_sample(
                     "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0},
                 )
