@@ -11,6 +11,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(angles REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -28,7 +29,7 @@ target_include_directories(segmented_rpp_controller PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(segmented_rpp_controller
-  rclcpp rclcpp_lifecycle geometry_msgs nav_msgs tf2 tf2_ros
+  rclcpp rclcpp_lifecycle geometry_msgs nav_msgs std_msgs tf2 tf2_ros
   angles pluginlib nav2_core nav2_costmap_2d nav2_util
 )
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)
@@ -42,7 +43,7 @@ install(DIRECTORY include/ DESTINATION include)
 ament_export_include_directories(include)
 ament_export_libraries(segmented_rpp_controller)
 ament_export_dependencies(
-  rclcpp rclcpp_lifecycle geometry_msgs nav_msgs tf2 tf2_ros
+  rclcpp rclcpp_lifecycle geometry_msgs nav_msgs std_msgs tf2 tf2_ros
   angles pluginlib nav2_core nav2_costmap_2d nav2_util
 )
 ament_package()

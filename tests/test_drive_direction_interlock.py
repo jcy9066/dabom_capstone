@@ -141,3 +141,40 @@ def test_segment_timeout_latches_pi_motion_fault():
     motor.clear_direction_fault_after_safety_resume()
     motor.drive(0.1, 0.1)
     assert commands[-1].startswith("DRIVE,")
+
+
+def test_pi_motor_trace_distinguishes_uart_drive_from_interlock_hold(capsys):
+    motor, commands = bare_motor()
+    motor.drive(0.1, 0.1)
+    assert "[motor-motion] state=uart_drive" in capsys.readouterr().out
+
+    motor.drive(-0.1, -0.1)
+    assert "[motor-motion] state=interlock_stop" in capsys.readouterr().out
+    assert commands[-1] == "STOP,direction_switch"
+
+    count = len(commands)
+    motor.drive(-0.1, -0.1)
+    assert "[motor-motion] state=interlock_hold" in capsys.readouterr().out
+    assert len(commands) == count  # Pi returned normally, but no UART DRIVE
+
+    motor.stop("nav2_zero_twist")
+    assert "[motor-motion] state=uart_stop" in capsys.readouterr().out
+
+
+def test_pi_motor_trace_only_reports_successful_uart_output(capsys):
+    motor, _ = bare_motor()
+
+    def failed_exchange(_command):
+        raise OSError("simulated UART failure")
+
+    motor._exchange_locked = failed_exchange
+    with pytest.raises(OSError, match="simulated UART failure"):
+        motor.drive(0.1, 0.1)
+    assert "state=uart_drive" not in capsys.readouterr().out
+
+
+def test_pi_motor_trace_repeats_are_rate_limited(capsys):
+    motor, _ = bare_motor()
+    motor._trace_motor_output("interlock_hold", detail="pivot_left")
+    motor._trace_motor_output("interlock_hold", detail="pivot_left")
+    assert capsys.readouterr().out.count("state=interlock_hold") == 1

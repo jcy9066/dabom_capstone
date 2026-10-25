@@ -1,6 +1,7 @@
 """Hardware-free reverse blind-zone safety regressions."""
 from __future__ import annotations
 
+import ast
 import math
 import os
 import sys
@@ -158,3 +159,36 @@ def test_pi_blind_pwm_cap_is_below_breakaway_floor():
     motor.drive(-0.025, -0.025, True)
     left, right = map(float, commands[0].split(",")[1:])
     assert max(abs(left), abs(right)) < 0.30
+
+
+def test_nav2_bridge_scan_subscriber_uses_best_effort_sensor_qos():
+    """The LiDAR publisher is BEST_EFFORT; RELIABLE cannot receive scans."""
+    bridge = ROOT / (
+        "navigation/ros/patrol_navigation/patrol_navigation/"
+        "nav2_command_bridge.py"
+    )
+    source = bridge.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "rclpy.qos"
+        and any(alias.name == "qos_profile_sensor_data" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    scan_subscriptions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "create_subscription"
+        and len(node.args) >= 4
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "LaserScan"
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "/scan"
+    ]
+    assert len(scan_subscriptions) == 1
+    qos = scan_subscriptions[0].args[3]
+    assert isinstance(qos, ast.Name)
+    assert qos.id == "qos_profile_sensor_data"

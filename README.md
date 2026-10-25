@@ -293,3 +293,108 @@ dabom_capstone/
 - `review-change`
 
 하드웨어가 연결되지 않은 개발 환경에서는 shell syntax와 정적 코드 검증까지만 수행하고 실제 Camera/LiDAR/Pico 동작을 검증했다고 간주하지 않습니다.
+
+## Pi/GPU clock alignment and LiDAR TF
+
+The GPU server (including WSL2) and Raspberry Pi are independent hosts.
+Copying `.env` does **not** change OS time. When
+`LIDAR_USE_SOURCE_TIMESTAMP=true`, raw Pi scan stamps previously appeared
+0.1-0.4 seconds in the GPU's future, causing TF future-stamp warnings.
+
+With this revision the Pi's LiDAR sender takes authenticated, short-RTT
+samples from `/api/time/sync` every 15 seconds, estimates the GPU-minus-Pi
+offset, and translates LiDAR stamps to the GPU's clock domain. No root
+permissions, OS clock changes, or new `.env` secrets are required. During
+startup, loss of synchronization or high network latency, the GPU stamps
+incoming scans with its own receipt time. This **fallback is approximate**:
+it may introduce latency error, so persistent bad sync still needs repair.
+
+On the **Pi**, with the GPU server already running:
+
+```bash
+cd ~/dabom_capstone
+python3 scripts/check_gpu_pi_clock.py
+timedatectl status
+```
+
+On the **GPU server**:
+
+```bash
+timedatectl status
+date -u '+%Y-%m-%dT%H:%M:%S.%NZ'
+```
+
+For a Pi using systemd-timesyncd, enable its normal automatic NTP sync
+(when running a different time client such as chrony, use that instead):
+
+```bash
+sudo timedatectl set-ntp true
+timedatectl timesync-status
+```
+
+For a GPU host running WSL2, synchronize **Windows** time first; WSL2
+normally receives its time from the Windows/Hyper-V host. Run
+`w32tm /query /status` from Windows PowerShell. Reinitialize WSL using
+`wsl --shutdown` **only with all robot/GPU processes safely stopped**;
+this forcibly terminates WSL sessions. Do not automatically set host time
+while motors or navigation are running.
+
+Review only non-secret settings on each machine; the user-managed local
+`.env` is not stored in GitHub:
+
+```bash
+grep -nE '^(LIDAR_USE_SOURCE_TIMESTAMP|PIPELINE|STATUS_REQUEST_TIMEOUT_SEC)=' .env
+```
+
+`STATUS_REQUEST_TIMEOUT_SEC` governs Pi HTTP `/status` telemetry and
+is unrelated to LiDAR clock skew. Repeated HTTP timeouts or WebSocket
+`InvalidMessage` still need an independent network/server-load check.
+
+GPU-first deployment: when the Pi is still running an older branch without
+`clock_sync_valid` in LiDAR packets, the updated GPU bridge uses receipt
+timestamps rather than trusting unsynchronized Pi timestamps. This prevents
+future-stamp warnings while preserving LiDAR delivery, but it cannot provide
+accurate sensor exposure times. After updating both ends, the authenticated
+clock probe supplies corrected source timestamps.
+
+## 30% motor PWM hardware-safety ceiling (PR #90)
+
+All **motor-drive** PWM outputs are limited to 30% duty magnitude on both
+hosts: manual `MOVE` (forward, reverse, turns, spin), Nav2 autonomous
+`DRIVE`, and the Pico's physical PWM channels. Left/right commands preserve
+their steering ratio when scaled. STOP, emergency STOP, direction-reversal
+interlocks, watchdogs and buzzer volume are unchanged.
+
+- Pi `raspberry/controllers/motor_controller.py`: always caps signed PWM
+  to ±0.300 before UART, including the output **after** jerk limiting.
+- Pico `raspberry/pico_w_sdk/main.c`: `MOTOR_MAX_PWM=0.30f`; directly
+  received commands are capped in the command handlers and again in
+  `motor_request_signed_speed()` / `motor_write_pwm()`.
+- GPU Nav2 `nav2_command_bridge.py` diagnostic estimates cap at 0.300.
+  `MIN_AUTO_DRIVE_PWM` can never override the physical ceiling.
+
+**Important:** Flashing the **updated firmware** is required for the Pico-side
+change. Pulling the GitHub branch only updates source files, not the
+firmware already running on the MCU. With wheel power safely disconnected,
+compile the firmware using the installed Pico SDK:
+
+```bash
+cmake -S raspberry/pico_w_sdk -B raspberry/pico_w_sdk/build
+cmake --build raspberry/pico_w_sdk/build -j2
+```
+
+Deploy `raspberry/pico_w_sdk/build/pico_motor_controller.uf2` to the
+Pico W via BOOTSEL. Check Pico startup/UART STOP behavior before
+reconnecting motor power. The Pi runtime must also be restarted to load
+the new Python code; GPU runtime/rebuilt ROS overlay is required for new
+Nav2 diagnostic output.
+
+**This is a duty-cycle limit, not current limiting.** A stalled motor,
+mechanical obstruction, high startup current, undersized wiring or a
+damaged MDD10A can still exceed its thermal/electrical capacity at 30%.
+Check wheel freedom, wiring and driver temperature/current before
+resuming physical navigation. `MAX_WHEEL_MPS=0.212` was only a theoretical
+100%-PWM wheel-speed ceiling; remeasure actual wheel speed at <=30% and
+recalibrate Nav2 and both hosts before relying on traversal-time or
+blocked-progress thresholds. Low PWM may fail to overcome stiction and
+trigger `BLOCKED_TIMEOUT`; never automatically raise PWM to compensate.

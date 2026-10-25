@@ -25,7 +25,7 @@ struct MotionTimeLimits
   double forward_mps = 0.212;
   // Conservative reverse traversal assumption: the rear may be unobserved.
   // A real observation may permit faster reverse, but cannot weaken safety.
-  double reverse_mps = 0.212 * 0.30;
+  double reverse_mps = 0.212;  // Same nominal speed as forward
   double angular_rps = 1.05;
   double wheel_track_m = 0.21;  // overridden from WHEEL_TRACK_M at launch
   double linear_accel_mps2 = 0.50;

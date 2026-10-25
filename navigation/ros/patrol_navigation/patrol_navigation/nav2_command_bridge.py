@@ -12,6 +12,7 @@ import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.node import Node
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -76,7 +77,7 @@ class Nav2CommandBridge(Node):
         )
         self.declare_parameter(
             "min_auto_drive_pwm",
-            0.50,
+            0.30,
         )
 
         self.cmd_vel_topic = str(
@@ -144,10 +145,9 @@ class Nav2CommandBridge(Node):
                 "base_frame"
             ).value
         )
-        self.min_auto_drive_pwm = float(
-            self.get_parameter(
-                "min_auto_drive_pwm"
-            ).value
+        self.min_auto_drive_pwm = min(
+            float(self.get_parameter("min_auto_drive_pwm").value),
+            0.30,
         )
 
         if not math.isfinite(self.wheel_track_m) or self.wheel_track_m <= 0.0:
@@ -236,6 +236,11 @@ class Nav2CommandBridge(Node):
         # A failed physical STOP must be explicitly retried/acknowledged
         # before accepting any subsequent auto_drive.
         self._stop_delivery_failed = bool(self.motor_output_enabled)
+        # One acknowledged STOP is sufficient for a continuous zero-Twist
+        # interval. Sending a STOP on each controller tick repeatedly advances
+        # the Pi safety_epoch and cancels its physical direction-switch
+        # confirmation, starving reverse -> forward handoffs.
+        self._zero_twist_stop_active = False
         self._stop_retry_command: dict | None = None
         self._stop_retry_due_at: float | None = None
 
@@ -262,7 +267,7 @@ class Nav2CommandBridge(Node):
             LaserScan,
             "/scan",
             self.on_scan,
-            10,
+            qos_profile_sensor_data,
         )
 
         self.create_timer(
@@ -299,6 +304,21 @@ class Nav2CommandBridge(Node):
                 return False
 
             is_stop = command.get("type") in ("stop", "emergency_stop")
+            is_zero_twist_stop = (
+                command.get("type") == "stop"
+                and command.get("reason") == "nav2_zero_twist"
+            )
+            if (
+                is_zero_twist_stop
+                and self._zero_twist_stop_active
+                and not self._stop_delivery_failed
+            ):
+                # First STOP is already queued, in flight, or acknowledged.
+                # Never reset the Pi's STOP/encoder handoff for every zero
+                # velocity sample. An unacknowledged STOP is still retried
+                # by the existing worker, and all OTHER safety STOPs bypass
+                # this idempotence gate.
+                return True
             pending_is_stop = (
                 self._pending_command is not None
                 and self._pending_command.get("type") in ("stop", "emergency_stop")
@@ -321,6 +341,12 @@ class Nav2CommandBridge(Node):
                     self._command_condition.notify_all()
                 return True
             self._pending_command = command
+            if is_zero_twist_stop:
+                self._zero_twist_stop_active = True
+            elif not is_stop:
+                # Any newly queued movement invalidates the previous STOP;
+                # even a later zero Twist must issue a new physical STOP.
+                self._zero_twist_stop_active = False
             self._command_condition.notify()
 
         return True
@@ -626,6 +652,13 @@ class Nav2CommandBridge(Node):
             left_pwm *= scale
             right_pwm *= scale
 
+        # Diagnostics reflect the Pi/Pico physical ceiling even with
+        # a larger legacy minimum-PWM configuration.
+        peak = max(abs(left_pwm), abs(right_pwm))
+        if peak > 0.30:
+            scale = 0.30 / peak
+            left_pwm *= scale
+            right_pwm *= scale
         return left_pwm, right_pwm
 
     def _lookup_pose(

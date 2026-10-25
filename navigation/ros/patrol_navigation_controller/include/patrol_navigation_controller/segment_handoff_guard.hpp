@@ -3,10 +3,38 @@
 #ifndef PATROL_NAVIGATION_CONTROLLER__SEGMENT_HANDOFF_GUARD_HPP_
 #define PATROL_NAVIGATION_CONTROLLER__SEGMENT_HANDOFF_GUARD_HPP_
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace patrol_navigation_controller
 {
+
+// Slew by the last ACCEPTED command, not raw wheel-derived angular odometry.
+// Encoder derivative spikes otherwise propagate directly into the new Twist;
+// the local 0.5s safety horizon correctly rejects those out-of-range speeds
+// and Nav2 aborts a healthy in-place turn.
+inline double boundedPivotAngularCommand(
+  double previous_command, double desired,
+  double angular_limit, double acceleration_limit, double controller_frequency)
+{
+  if (!std::isfinite(previous_command) || !std::isfinite(desired) ||
+    !std::isfinite(angular_limit) || !std::isfinite(acceleration_limit) ||
+    !std::isfinite(controller_frequency) || angular_limit <= 0.0 ||
+    acceleration_limit <= 0.0 || controller_frequency <= 0.0 ||
+    std::abs(previous_command) > angular_limit)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  const double increment = acceleration_limit / controller_frequency;
+  if (!std::isfinite(increment) || increment <= 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  const double requested = std::clamp(desired, -angular_limit, angular_limit);
+  return std::clamp(requested,
+    std::max(-angular_limit, previous_command - increment),
+    std::min(angular_limit, previous_command + increment));
+}
 
 inline bool validUnitQuaternion(
   double x, double y, double z, double w, double norm_tolerance = 0.05)

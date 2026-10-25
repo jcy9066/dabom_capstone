@@ -7,6 +7,7 @@
 using patrol_navigation_controller::stationaryForSegmentTransition;
 using patrol_navigation_controller::validUnitQuaternion;
 using patrol_navigation_controller::safeToContinuePivot;
+using patrol_navigation_controller::boundedPivotAngularCommand;
 using patrol_navigation_controller::validDifferentialDriveCommand;
 
 int main()
@@ -32,6 +33,14 @@ int main()
   assert(!safeToContinuePivot(true, nan, 0.10, 0.02, 0.04));
   assert(!safeToContinuePivot(true, 0.0, inf, 0.02, 0.04));
   assert(!safeToContinuePivot(true, 0.0, 0.10, -0.02, 0.04));
+  // A single spike in measured odometry must not enter the command ramp:
+  // each 10Hz output increments from the previous accepted command by 0.1rad/s.
+  assert(std::abs(boundedPivotAngularCommand(0.0, 1.05, 1.05, 1.0, 10.0) - 0.1) < 1e-12);
+  assert(std::abs(boundedPivotAngularCommand(0.1, 1.05, 1.05, 1.0, 10.0) - 0.2) < 1e-12);
+  assert(std::abs(boundedPivotAngularCommand(0.5, -1.05, 1.05, 1.0, 10.0) - 0.4) < 1e-12);
+  assert(std::abs(boundedPivotAngularCommand(1.0, 10.0, 1.05, 1.0, 10.0) - 1.05) < 1e-12);
+  assert(std::isnan(boundedPivotAngularCommand(nan, 1.0, 1.05, 1.0, 10.0)));
+  assert(std::isnan(boundedPivotAngularCommand(0.0, 1.0, 1.05, 1.0, 0.0)));
   // Differential drive must reject an invalid 6D twist even when vx/wz
   // are zero; otherwise the STOP fast-path would ignore the other axes.
   assert(validDifferentialDriveCommand(0.0, 0.0, 0.0, 0.0, 0.0, 0.0));

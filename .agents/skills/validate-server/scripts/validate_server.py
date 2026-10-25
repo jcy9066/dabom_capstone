@@ -401,7 +401,7 @@ def collect_used_env_vars(root: Path) -> set[str]:
         used.update(SHELL_REQUIRED_ENV_RE.findall(source))
         used.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
         )
         # Runtime launchers also validate indirectly via required_env arrays.
         for block in re.findall(r"required_env\s*=\s*\((.*?)\)", source, re.DOTALL):
@@ -474,6 +474,7 @@ def check_env_example(root: Path, findings: list[Finding]) -> None:
         entries.append(name)
         # Documented non-secret defaults; credentials must remain empty.
         defaults = {
+            "PIPELINE": "8",
             "MAX_WHEEL_MPS": "0.212",
             "MIN_AUTO_DRIVE_PWM": "0.30",
             "LIDAR_YAW": "3.141592653589793",

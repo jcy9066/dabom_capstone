@@ -1,8 +1,10 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/time_scored_lattice_planner.hpp"
 #include "patrol_navigation_controller/alternate_goal_candidates.hpp"
+#include "patrol_navigation_controller/costmap_footprint_validator.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -27,6 +29,12 @@ namespace
 // candidate penalties, even if each action has its own Smac instance.
 std::timed_mutex lattice_candidate_search_mutex;
 
+// Match Nav2 Humble Smac's polygon footprint collision contract:
+// inscribed inflation (253) blocks the robot CENTER, whereas an actual
+// polygon boundary blocks only on lethal (254) or unknown (255) cost.
+// Applying the center threshold to every footprint edge double-counts the
+// inscribed inflation and discards Smac's collision-valid lattice paths.
+// Caller must hold the costmap mutex while reading cells.
 // Smac verified the candidate against the costmap when it was created.
 // Two subsequent searches may have allowed an obstacle update, so verify
 // the selected path again against the *current* chassis footprint.
@@ -63,17 +71,62 @@ bool validAgainstCurrentCostmap(
   // sensor clearance here. Reject rather than converting "allow_unknown"
   // into permission to drive with an unverified footprint. Sensor-proved
   // clearance can be introduced separately only with explicit evidence.
-  return validateSweptPath(
+  // Capture only the first rejected pose, under the same costmap lock used
+  // for the decision. Emit the diagnostic after unlocking; never relax it.
+  size_t samples_checked = 0;
+  bool has_rejected_sample = false;
+  MotionPose rejected_pose{0.0, 0.0, 0.0};
+  double rejected_footprint_cost = 0.0;
+  int rejected_center_cost = -1;
+  int rejected_occupied_cell_cost = -1;
+  const bool path_safe = validateSweptPath(
     poses, [&](const MotionPose & sample) {
+      ++samples_checked;
       const double cost = checker.footprintCostAtPose(
         sample.x, sample.y, sample.yaw, footprint);
-      // Collision checker's -1 means off-map / invalid geometry.
-      // >= 253 includes inscribed obstacles, lethal cells, and unknown
-      // cells. All are STOP/invalid-path conditions without proof of safety.
-      return std::isfinite(cost) && cost >= 0.0 &&
-        cost < static_cast<double>(
-        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+      // Polygon boundary at cost 253 is not a collision in Nav2 Humble;
+      // the center still rejects inscribed (253), lethal (254), unknown (255).
+      int center_cost = -1;
+      int occupied_cell_cost = -1;
+      const bool clear = polygonFootprintClear(
+        costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);
+      if (!clear && !has_rejected_sample) {
+        has_rejected_sample = true;
+        rejected_pose = sample;
+        rejected_footprint_cost = cost;
+        rejected_center_cost = center_cost;
+        rejected_occupied_cell_cost = occupied_cell_cost;
+      }
+      return clear;
     });
+  lock.unlock();
+  if (!path_safe) {
+    if (has_rejected_sample) {
+      const char * reason = rejected_occupied_cell_cost >= nav2_costmap_2d::LETHAL_OBSTACLE ?
+        "occupied_cell_inside_chassis" : rejected_center_cost < 0 ? "center_offmap" :
+        (rejected_center_cost >= nav2_costmap_2d::NO_INFORMATION ? "center_unknown" :
+        (rejected_center_cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE ?
+        "center_inscribed_or_lethal" :
+        (!std::isfinite(rejected_footprint_cost) ? "nonfinite_footprint_cost" :
+        (rejected_footprint_cost < 0.0 ? "footprint_offmap_or_invalid" :
+        (rejected_footprint_cost >= nav2_costmap_2d::NO_INFORMATION ?
+        "footprint_unknown" : "footprint_lethal_obstacle")))));
+      RCLCPP_WARN(
+        rclcpp::get_logger("planner_server"),
+        "GridBased swept path first rejected sample=%zu/%zu at (%.3f, %.3f, yaw=%.3f) "
+        "footprint_cost=%.0f center_cost=%d occupied_cell_cost=%d reason=%s",
+        samples_checked, poses.size(), rejected_pose.x, rejected_pose.y,
+        rejected_pose.yaw, rejected_footprint_cost, rejected_center_cost,
+        rejected_occupied_cell_cost, reason);
+    } else {
+      RCLCPP_WARN(
+        rclcpp::get_logger("planner_server"),
+        "GridBased swept path rejected without colliding sample: "
+        "invalid geometry, interpolation, or sample budget (poses=%zu)",
+        poses.size());
+    }
+  }
+  return path_safe;
 }
 
 // Verify the entire chassis at a candidate's final Yaw using the CURRENT
@@ -101,8 +154,7 @@ bool endpointFootprintClear(
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(map);
   const double cost = checker.footprintCostAtPose(
     pose.x, pose.y, pose.yaw, footprint);
-  return std::isfinite(cost) && cost >= 0.0 &&
-    cost < static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+  return polygonFootprintClear(map, pose, cost, footprint);
 }
 
 }  // namespace
@@ -141,15 +193,70 @@ void TimeScoredLatticePlanner::configure(
   declare_parameter_if_not_declared(
     node, name_ + ".max_linear_jerk", rclcpp::ParameterValue(2.0));
   declare_parameter_if_not_declared(
-    node, name_ + ".reverse_fraction", rclcpp::ParameterValue(0.30));
+    node, name_ + ".reverse_fraction", rclcpp::ParameterValue(1.0));
   declare_parameter_if_not_declared(
     node, name_ + ".switch_stop_sec", rclcpp::ParameterValue(0.50));
   declare_parameter_if_not_declared(
     node, name_ + ".max_total_planning_time", rclcpp::ParameterValue(5.0));
 
+  // Nav2 Humble PlannerServer holds dynamic_params_lock_ in computePlan().
+  // SmacPlannerLattice::configure() is invoked by createPlan() and must
+  // never declare a parameter there: its on-set-parameters callbacks
+  // would re-acquire PlannerServer's non-recursive mutex and deadlock.
+  // Declare every Humble Smac child parameter during on_configure,
+  // before PlannerServer registers its parameter callbacks on activate.
+  // Launch/YAML overrides remain effective via declare-if-not-declared.
+  for (const auto & candidate_name : {"QuickMotion", "StableTurns"}) {
+    const std::string prefix = name_ + "." + candidate_name + ".";
+    declare_parameter_if_not_declared(
+      node, prefix + "tolerance", rclcpp::ParameterValue(0.25));
+    declare_parameter_if_not_declared(
+      node, prefix + "allow_unknown", rclcpp::ParameterValue(false));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_iterations", rclcpp::ParameterValue(1000000));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_on_approach_iterations", rclcpp::ParameterValue(1000));
+    declare_parameter_if_not_declared(
+      node, prefix + "smooth_path", rclcpp::ParameterValue(false));
+    declare_parameter_if_not_declared(
+      node, prefix + "lattice_filepath", rclcpp::ParameterValue(std::string{}));
+    declare_parameter_if_not_declared(
+      node, prefix + "cache_obstacle_heuristic", rclcpp::ParameterValue(false));
+    declare_parameter_if_not_declared(
+      node, prefix + "reverse_penalty", rclcpp::ParameterValue(2.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "change_penalty", rclcpp::ParameterValue(0.05));
+    declare_parameter_if_not_declared(
+      node, prefix + "non_straight_penalty", rclcpp::ParameterValue(1.05));
+    declare_parameter_if_not_declared(
+      node, prefix + "cost_penalty", rclcpp::ParameterValue(2.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "retrospective_penalty", rclcpp::ParameterValue(0.015));
+    declare_parameter_if_not_declared(
+      node, prefix + "rotation_penalty", rclcpp::ParameterValue(5.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "analytic_expansion_ratio", rclcpp::ParameterValue(3.5));
+    declare_parameter_if_not_declared(
+      node, prefix + "analytic_expansion_max_length", rclcpp::ParameterValue(3.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "max_planning_time", rclcpp::ParameterValue(5.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "lookup_table_size", rclcpp::ParameterValue(20.0));
+    declare_parameter_if_not_declared(
+      node, prefix + "allow_reverse_expansion", rclcpp::ParameterValue(false));
+
+    std::string lattice_path;
+    node->get_parameter(prefix + "lattice_filepath", lattice_path);
+    if (lattice_path.empty()) {
+      throw std::runtime_error(
+        std::string("TimeScoredLatticePlanner needs lattice_filepath for ") +
+        candidate_name);
+    }
+  }
+
   node->get_parameter(name_ + ".candidate_names", candidate_ids_);
   double wheel_mps = 0.212;
-  double reverse_fraction = 0.30;
+  double reverse_fraction = 1.0;
   node->get_parameter(name_ + ".max_wheel_mps", wheel_mps);
   node->get_parameter(name_ + ".max_angular_rps", time_limits_.angular_rps);
   node->get_parameter(name_ + ".wheel_track_m", time_limits_.wheel_track_m);
@@ -229,9 +336,64 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   };
   // An unknown/stale map never justifies moving to an alternate endpoint.
   if (!costmap_ || !costmap_->isCurrent()) {
+    if (node) {
+      RCLCPP_WARN(node->get_logger(), "%s rejected request: global costmap unavailable or stale", name_.c_str());
+    }
     return best;
   }
+  // A nearby XY goal with a large heading difference is a differential
+  // drive pivot, not a reason to backtrack through a metre-long loop.
+  // Preserve the actual rotation center. Nav2's existing XY goal checker
+  // tolerance (0.25m) is unchanged; select a verified pivot within a
+  // conservative 0.20m margin rather than a multi-cusp triangular detour.
+  // The output stays at the actual rotation center (the start XY).
+  const double start_x = start.pose.position.x;
+  const double start_y = start.pose.position.y;
+  const double start_yaw = tf2::getYaw(start.pose.orientation);
+  const double requested_turn = std::atan2(
+    std::sin(original_goal.yaw - start_yaw),
+    std::cos(original_goal.yaw - start_yaw));
+  if (std::isfinite(start_x) && std::isfinite(start_yaw) &&
+    std::isfinite(start_y) && std::isfinite(requested_turn) &&
+    std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.20 &&
+    std::abs(requested_turn) > 0.12)
+  {
+    nav_msgs::msg::Path pivot_path;
+    pivot_path.header = start.header;
+    const int steps = std::max(1, static_cast<int>(
+        std::ceil(std::abs(requested_turn) / 0.05)));
+    for (int i = 0; i <= steps; ++i) {
+      auto pose = start;
+      const double heading = start_yaw + requested_turn *
+        static_cast<double>(i) / static_cast<double>(steps);
+      pose.pose.orientation.x = 0.0;
+      pose.pose.orientation.y = 0.0;
+      pose.pose.orientation.z = std::sin(heading * 0.5);
+      pose.pose.orientation.w = std::cos(heading * 0.5);
+      pivot_path.poses.push_back(std::move(pose));
+    }
+    const auto elapsed = std::chrono::duration<double>(
+      std::chrono::steady_clock::now() - started).count();
+    if (elapsed < max_total_planning_sec_ &&
+      validAgainstCurrentCostmap(pivot_path, costmap_) &&
+      std::chrono::steady_clock::now() < deadline)
+    {
+      if (node) {
+        RCLCPP_INFO(
+          node->get_logger(), "%s selected swept-footprint-verified in-place pivot",
+          name_.c_str());
+      }
+      return pivot_path;
+    }
+    // Unsafe pivot: fall back to regular lattice planning, never command
+    // unverified turning or silently relax the footprint limits.
+  }
   const bool original_goal_clear = endpointFootprintClear(original_goal, costmap_);
+  if (!original_goal_clear && node) {
+    RCLCPP_WARN(
+      node->get_logger(), "%s requested Goal footprint blocked or unknown at (%.3f, %.3f, %.3f); trying nearby safe goals",
+      name_.c_str(), original_goal.x, original_goal.y, original_goal.yaw);
+  }
 
   // When the original Goal's swept chassis footprint is already blocked,
   // searching a lattice to that exact endpoint spends the whole deadline
@@ -240,6 +402,16 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     const auto elapsed = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - started).count();
     if (elapsed >= max_total_planning_sec_) {
+      break;
+    }
+    // Smac child initialization takes meaningful wall time on Humble.
+    // Never spend the remaining budget configuring StableTurns if a
+    // collision-verified first path is already available. Reserve time
+    // for the second search plus the final fresh-costmap validation.
+    constexpr double kSecondCandidateReserveSec = 4.3;
+    if (index > 0 && !best.poses.empty() &&
+      max_total_planning_sec_ - elapsed < kSecondCandidateReserveSec)
+    {
       break;
     }
     // Construct and configure an isolated search per candidate. Humble's
@@ -289,6 +461,14 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
         const bool collision_safe =
           score.valid && terminal_safe &&
           validAgainstCurrentCostmap(path, costmap_);
+        if (!collision_safe && node) {
+          const char * rejection_reason = !score.valid ? "invalid_motion_time_score" :
+            (!terminal_safe ? "terminal_pose_out_of_tolerance" : "swept_footprint_blocked_or_unknown");
+          RCLCPP_WARN(
+            node->get_logger(), "%s candidate %s rejected: %s, poses=%zu, elapsed=%.3fs",
+            name_.c_str(), candidate_ids_[index].c_str(), rejection_reason,
+            path.poses.size(), elapsed_after_candidate);
+        }
         if (collision_safe &&
           (score.seconds < best_seconds - 1e-6 ||
           (std::abs(score.seconds - best_seconds) <= 1e-6 &&
@@ -299,6 +479,10 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
           best_candidate = candidate_ids_[index];
           best = std::move(path);
         }
+      } else if (node && elapsed_after_candidate < max_total_planning_sec_) {
+        RCLCPP_WARN(
+          node->get_logger(), "%s candidate %s returned no usable path (poses=%zu, elapsed=%.3fs)",
+          name_.c_str(), candidate_ids_[index].c_str(), path.poses.size(), elapsed_after_candidate);
       }
     } catch (const std::exception & error) {
       if (node) {

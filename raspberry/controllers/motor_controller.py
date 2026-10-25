@@ -41,7 +41,25 @@ ALLOWED_DIRECTIONS = frozenset(
 )
 
 _REASON_PATTERN = re.compile(r"[^a-zA-Z0-9_-]+")
-MIN_AUTO_DRIVE_PWM = env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0)
+# Hard motor duty-cycle ceiling, independent of the .env breakaway setting.
+# The Pico independently enforces this exact same physical limit.
+MOTOR_MAX_PWM = 0.30
+MIN_AUTO_DRIVE_PWM = min(
+    env_float("MIN_AUTO_DRIVE_PWM", minimum=0.0, maximum=1.0),
+    MOTOR_MAX_PWM,
+)
+
+
+def cap_motor_pwm_pair(left: float, right: float) -> tuple[float, float]:
+    """Proportional peak clipping preserves differential steering curvature."""
+    peak = max(abs(left), abs(right))
+    if not math.isfinite(peak):
+        raise MotorControllerError("Non-finite motor PWM command")
+    if peak > MOTOR_MAX_PWM:
+        scale = MOTOR_MAX_PWM / peak
+        return left * scale, right * scale
+    return left, right
+
 
 
 class MotorControllerError(RuntimeError):
@@ -497,7 +515,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
             print(
                 f"[motor] Pico W connected: "
@@ -531,7 +549,7 @@ class MotorController:
             with self._state_lock:
                 self.led_enabled = False
             self._exchange_locked("ENC_STREAM,1")
-            self._read_volume_locked()
+            self._sync_optional_volume_locked()
 
         self._pico_reboot_event.clear()
         print("[motor] encoder stream recovered after Pico reboot")
@@ -582,6 +600,20 @@ class MotorController:
         with self._state_lock:
             self.volume_percent = volume
         return volume
+
+    def _sync_optional_volume_locked(self) -> None:
+        """Support older Pico firmware without optional volume query."""
+        try:
+            self._read_volume_locked()
+        except MotorControllerError as exc:
+            if "ERR,unknown command" not in str(exc):
+                raise
+            with self._state_lock:
+                self.volume_percent = None
+            print(
+                "[motor] WARN: Pico firmware does not support "
+                "VOLUME_GET; encoder streaming remains enabled"
+            )
 
     def get_volume(self) -> int:
         with self._command_lock:
@@ -635,7 +667,7 @@ class MotorController:
 
         normalized_speed = max(
             0.0,
-            min(normalized_speed, 1.0),
+            min(normalized_speed, MOTOR_MAX_PWM),
         )
 
         if normalized_speed <= 0.0:
@@ -654,6 +686,34 @@ class MotorController:
             with self._state_lock:
                 self.last_command_at = time.monotonic()
                 self.current_motion = direction
+
+    def _trace_motor_output(
+        self, state: str, left_pwm: float = 0.0,
+        right_pwm: float = 0.0, detail: str = "",
+    ) -> None:
+        """Bounded Pi-side diagnostics; does not authorize or send motion."""
+        now = time.monotonic()
+        previous_state = getattr(self, "_last_motor_trace_state", None)
+        previous_at = getattr(self, "_last_motor_trace_at", None)
+        if (
+            previous_state == state
+            and previous_at is not None
+            and now - previous_at < 0.5
+        ):
+            return
+        self._last_motor_trace_state = state
+        self._last_motor_trace_at = now
+        safe_detail = str(detail).replace(chr(10), " ").replace(chr(13), " ")[:80]
+        try:
+            print(
+                f"[motor-motion] state={state} "
+                f"left_pwm={left_pwm:.3f} right_pwm={right_pwm:.3f} "
+                f"detail={safe_detail}",
+                flush=True,
+            )
+        except (OSError, ValueError):
+            # Diagnostics must never affect Pico motor command delivery.
+            pass
 
     def drive(
         self,
@@ -708,17 +768,16 @@ class MotorController:
             abs(right_normalized),
         )
 
-        if rear_blind_limited:
-            # A safety cap MUST take precedence over motor breakaway PWM.
-            # The motor may fail to move at 30% duty, but silently raising
-            # it to MIN_AUTO_DRIVE_PWM (often 50%) is not permitted.
-            if peak > 0.30:
-                left_normalized *= 0.30 / peak
-                right_normalized *= 0.30 / peak
-        elif 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+        if not rear_blind_limited and 0.0 < peak < MIN_AUTO_DRIVE_PWM:
             pwm_scale = MIN_AUTO_DRIVE_PWM / peak
             left_normalized *= pwm_scale
             right_normalized *= pwm_scale
+
+        # Apply the 30% hard ceiling to BOTH normal and rear-blind driving.
+        # Never raise output above this bound to overcome stiction.
+        left_normalized, right_normalized = cap_motor_pwm_pair(
+            left_normalized, right_normalized,
+        )
 
         with self._command_lock:
             self._ensure_connected_locked()
@@ -752,8 +811,10 @@ class MotorController:
                 self._direction_interlock.mark_stop_sent(
                     time.monotonic(), sequence,
                 )
+                self._trace_motor_output("interlock_stop", detail=mode)
                 return
             if decision == "hold":
+                self._trace_motor_output("interlock_hold", detail=mode)
                 return
             if decision == "timeout":
                 self._jerk_limiter.reset()
@@ -762,6 +823,7 @@ class MotorController:
                 with self._state_lock:
                     self.current_motion = "stop"
                     self.last_command_at = time.monotonic()
+                self._trace_motor_output("interlock_timeout", detail=mode)
                 raise MotorControllerError(
                     "direction change STOP not encoder-confirmed within 3s"
                 )
@@ -769,19 +831,24 @@ class MotorController:
             limited_left, limited_right = self._jerk_limiter.step(
                 left_normalized, right_normalized, time.monotonic(),
             )
-            if rear_blind_limited:
-                # Deceleration is allowed to bypass jerk smoothing when a
-                # fresh safety restriction lowers the permitted output.
-                final_peak = max(abs(limited_left), abs(limited_right))
-                if final_peak > 0.30:
-                    limited_left *= 0.30 / final_peak
-                    limited_right *= 0.30 / final_peak
-                    self._jerk_limiter.reset()
+            # The jerk limiter can overshoot a new target during a sharp
+            # reversal. Apply the physical ceiling *again* before UART.
+            final_peak = max(abs(limited_left), abs(limited_right))
+            limited_left, limited_right = cap_motor_pwm_pair(
+                limited_left, limited_right,
+            )
+            if final_peak > MOTOR_MAX_PWM:
+                # Clear the profile's pre-cap acceleration/target state.
+                self._jerk_limiter.reset()
             try:
                 self._exchange_locked(
                     "DRIVE,"
                     f"{limited_left:.3f},"
                     f"{limited_right:.3f}"
+                )
+                self._trace_motor_output(
+                    "uart_drive", limited_left, limited_right,
+                    "rear_limited" if rear_blind_limited else mode,
                 )
             except Exception:
                 self._jerk_limiter.reset()
@@ -814,6 +881,7 @@ class MotorController:
                 self._exchange_locked(
                     f"STOP,{self._sanitize_reason(reason)}"
                 )
+                self._trace_motor_output("uart_stop", detail=reason)
 
             except Exception as exc:
                 error = exc

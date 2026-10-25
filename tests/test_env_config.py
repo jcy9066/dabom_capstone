@@ -47,7 +47,7 @@ def runtime_env_keys() -> set[str]:
         keys.update(required_shell_env.findall(source))
         keys.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
         )
 
         # Root runtime launchers keep required .env keys in a shell array and
@@ -79,6 +79,7 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     assert len(keys) == len(set(keys))
     assert dict(entries)["MAX_WHEEL_MPS"] == "0.212"
     defaults = {
+        "PIPELINE": "8",
         "MAX_WHEEL_MPS": "0.212",
         "MIN_AUTO_DRIVE_PWM": "0.30",
         "LIDAR_YAW": "3.141592653589793",
@@ -93,6 +94,17 @@ def test_env_example_matches_runtime_keys_and_marks_provisional_calibration():
     }
     assert all(value == defaults.get(key, "") for key, value in entries)
     assert set(keys) == runtime_env_keys()
+
+
+def test_gpu_launcher_rejects_missing_control_token_before_starting_fastapi():
+    """A missing GPU/Pi shared secret must fail before the server starts."""
+    script = (ROOT_DIR / "start_gpu_server.sh").read_text(encoding="utf-8")
+    match = re.search(r"required_env\s*=\s*\((.*?)\)", script, re.DOTALL)
+    assert match is not None
+    required = match.group(1).split()
+    assert "ROBOT_CONTROL_TOKEN" in required
+    assert script.index('for key in "${required_env[@]}"') < script.index('log "Starting FastAPI"')
+    assert '[[ -n "${!key:-}" ]] || fail "${key} is required"' in script
 
 
 def test_boolean_parser_is_strict_and_motor_default_is_safe(monkeypatch):
