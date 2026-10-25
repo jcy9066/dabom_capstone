@@ -285,6 +285,9 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
   };
   // An unknown/stale map never justifies moving to an alternate endpoint.
   if (!costmap_ || !costmap_->isCurrent()) {
+    if (node) {
+      RCLCPP_WARN(node->get_logger(), "%s rejected request: global costmap unavailable or stale", name_.c_str());
+    }
     return best;
   }
   // A nearby XY goal with a large heading difference is a differential
@@ -335,6 +338,11 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
     // unverified turning or silently relax the footprint limits.
   }
   const bool original_goal_clear = endpointFootprintClear(original_goal, costmap_);
+  if (!original_goal_clear && node) {
+    RCLCPP_WARN(
+      node->get_logger(), "%s requested Goal footprint blocked or unknown at (%.3f, %.3f, %.3f); trying nearby safe goals",
+      name_.c_str(), original_goal.x, original_goal.y, original_goal.yaw);
+  }
 
   // When the original Goal's swept chassis footprint is already blocked,
   // searching a lattice to that exact endpoint spends the whole deadline
@@ -402,6 +410,14 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
         const bool collision_safe =
           score.valid && terminal_safe &&
           validAgainstCurrentCostmap(path, costmap_);
+        if (!collision_safe && node) {
+          const char * rejection_reason = !score.valid ? "invalid_motion_time_score" :
+            (!terminal_safe ? "terminal_pose_out_of_tolerance" : "swept_footprint_blocked_or_unknown");
+          RCLCPP_WARN(
+            node->get_logger(), "%s candidate %s rejected: %s, poses=%zu, elapsed=%.3fs",
+            name_.c_str(), candidate_ids_[index].c_str(), rejection_reason,
+            path.poses.size(), elapsed_after_candidate);
+        }
         if (collision_safe &&
           (score.seconds < best_seconds - 1e-6 ||
           (std::abs(score.seconds - best_seconds) <= 1e-6 &&
@@ -412,6 +428,10 @@ nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(
           best_candidate = candidate_ids_[index];
           best = std::move(path);
         }
+      } else if (node && elapsed_after_candidate < max_total_planning_sec_) {
+        RCLCPP_WARN(
+          node->get_logger(), "%s candidate %s returned no usable path (poses=%zu, elapsed=%.3fs)",
+          name_.c_str(), candidate_ids_[index].c_str(), path.poses.size(), elapsed_after_candidate);
       }
     } catch (const std::exception & error) {
       if (node) {
