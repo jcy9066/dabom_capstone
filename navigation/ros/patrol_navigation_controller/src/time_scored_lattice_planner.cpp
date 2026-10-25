@@ -46,7 +46,9 @@ bool polygonFootprintClear(
   if (occupied_cell_cost_out) {
     *occupied_cell_cost_out = -1;
   }
-  if (!costmap || !costmap->worldToMap(pose.x, pose.y, mx, my)) {
+  if (!costmap || !std::isfinite(pose.x) || !std::isfinite(pose.y) ||
+    !std::isfinite(pose.yaw) ||
+    !costmap->worldToMap(pose.x, pose.y, mx, my)) {
     if (center_cost_out) {
       *center_cost_out = -1;
     }
@@ -92,6 +94,10 @@ bool polygonFootprintClear(
     max_x = std::max(max_x, x);
     min_y = std::min(min_y, y);
     max_y = std::max(max_y, y);
+  }
+
+  if (!validConvexFootprint(polygon)) {
+    return false;
   }
 
   unsigned int min_mx = 0;
