@@ -36,8 +36,12 @@ if ! command -v colcon >/dev/null 2>&1; then
   exit 2
 fi
 echo "[4/4] Compile ROS2 Nav2 planner/controller plugin"
+# ROS2 Humble's generated setup scripts may read unset AMENT variables.
+# Relax nounset only while sourcing the environment, then restore it.
+set +u
 # shellcheck disable=SC1091
 source /opt/ros/humble/setup.bash
+set -u
 (
   cd "$ROOT/navigation/ros"
   colcon build --packages-select patrol_navigation_controller patrol_navigation --symlink-install
