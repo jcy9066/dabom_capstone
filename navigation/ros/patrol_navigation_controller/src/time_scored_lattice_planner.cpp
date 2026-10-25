@@ -28,6 +28,33 @@ namespace
 // candidate penalties, even if each action has its own Smac instance.
 std::timed_mutex lattice_candidate_search_mutex;
 
+// Match Nav2 Humble Smac's polygon footprint collision contract:
+// inscribed inflation (253) blocks the robot CENTER, whereas an actual
+// polygon boundary blocks only on lethal (254) or unknown (255) cost.
+// Applying the center threshold to every footprint edge double-counts the
+// inscribed inflation and discards Smac's collision-valid lattice paths.
+// Caller must hold the costmap mutex while reading cells.
+bool polygonFootprintClear(
+  const nav2_costmap_2d::Costmap2D * costmap,
+  const MotionPose & pose, const double footprint_cost, int * center_cost_out = nullptr)
+{
+  unsigned int mx = 0;
+  unsigned int my = 0;
+  if (!costmap || !costmap->worldToMap(pose.x, pose.y, mx, my)) {
+    if (center_cost_out) {
+      *center_cost_out = -1;
+    }
+    return false;
+  }
+  const int center_cost = static_cast<int>(costmap->getCost(mx, my));
+  if (center_cost_out) {
+    *center_cost_out = center_cost;
+  }
+  return center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) &&
+    std::isfinite(footprint_cost) && footprint_cost >= 0.0 &&
+    footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE);
+}
+
 // Smac verified the candidate against the costmap when it was created.
 // Two subsequent searches may have allowed an obstacle update, so verify
 // the selected path again against the *current* chassis footprint.
@@ -76,33 +103,29 @@ bool validAgainstCurrentCostmap(
       ++samples_checked;
       const double cost = checker.footprintCostAtPose(
         sample.x, sample.y, sample.yaw, footprint);
-      // Collision checker's -1 means off-map / invalid geometry.
-      // >= 253 includes inscribed obstacles, lethal cells, and unknown
-      // cells. All are STOP/invalid-path conditions without proof of safety.
-      const bool clear = std::isfinite(cost) && cost >= 0.0 &&
-        cost < static_cast<double>(
-        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+      // Polygon boundary at cost 253 is not a collision in Nav2 Humble;
+      // the center still rejects inscribed (253), lethal (254), unknown (255).
+      int center_cost = -1;
+      const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);
       if (!clear && !has_rejected_sample) {
         has_rejected_sample = true;
         rejected_pose = sample;
         rejected_footprint_cost = cost;
-        unsigned int mx = 0;
-        unsigned int my = 0;
-        if (costmap->worldToMap(sample.x, sample.y, mx, my)) {
-          rejected_center_cost = static_cast<int>(costmap->getCost(mx, my));
-        }
+        rejected_center_cost = center_cost;
       }
       return clear;
     });
   lock.unlock();
   if (!path_safe) {
     if (has_rejected_sample) {
-      const char * reason = !std::isfinite(rejected_footprint_cost) ?
-        "nonfinite_cost" :
-        (rejected_footprint_cost < 0.0 ? "offmap_or_invalid_geometry" :
-        (rejected_footprint_cost >= nav2_costmap_2d::NO_INFORMATION ? "unknown" :
-        (rejected_footprint_cost >= nav2_costmap_2d::LETHAL_OBSTACLE ? "lethal_obstacle" :
-        "inscribed_obstacle")));
+      const char * reason = rejected_center_cost < 0 ? "center_offmap" :
+        (rejected_center_cost >= nav2_costmap_2d::NO_INFORMATION ? "center_unknown" :
+        (rejected_center_cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE ?
+        "center_inscribed_or_lethal" :
+        (!std::isfinite(rejected_footprint_cost) ? "nonfinite_footprint_cost" :
+        (rejected_footprint_cost < 0.0 ? "footprint_offmap_or_invalid" :
+        (rejected_footprint_cost >= nav2_costmap_2d::NO_INFORMATION ?
+        "footprint_unknown" : "footprint_lethal_obstacle")))));
       RCLCPP_WARN(
         rclcpp::get_logger("planner_server"),
         "GridBased swept path first rejected sample=%zu/%zu at (%.3f, %.3f, yaw=%.3f) "
@@ -145,8 +168,7 @@ bool endpointFootprintClear(
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(map);
   const double cost = checker.footprintCostAtPose(
     pose.x, pose.y, pose.yaw, footprint);
-  return std::isfinite(cost) && cost >= 0.0 &&
-    cost < static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+  return polygonFootprintClear(map, pose, cost);
 }
 
 }  // namespace
