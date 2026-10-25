@@ -72,6 +72,7 @@ class NavigationControlApi:
     # simply because the previous gate only admitted <=0.10m/s.
     CURVED_PROGRESS_MAX_LINEAR_MPS = 0.212
     CURVED_PROGRESS_MIN_ANGULAR_RPS = 0.15
+    CURVED_PROGRESS_MIN_ODOM_LINEAR_MPS = 0.005
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
     # A verified in-place 180-degree turn can take 25-30s at the measured
@@ -2625,6 +2626,7 @@ class NavigationControlApi:
                 "xy_displacement_m": None,
                 "odom_displacement_m": None,
                 "curved_progress_max_linear_mps": self.CURVED_PROGRESS_MAX_LINEAR_MPS,
+                "curved_progress_min_measured_mps": self.CURVED_PROGRESS_MIN_ODOM_LINEAR_MPS,
                 "pose_age_sec": self._public_age(triggered_at, self._last_pose_at),
                 "pi_age_sec": self._public_age(triggered_at, self._pi_updated_at),
                 "rotation_extension_sec": round(self._rotation_extension_sec, 3),
@@ -2644,6 +2646,7 @@ class NavigationControlApi:
             for field in (
                 "command_age_sec", "odometry_age_sec", "command_linear_x",
                 "command_angular_z", "odom_x", "odom_y", "odom_yaw",
+                "odom_linear_x", "odom_angular_z",
                 "odom_yaw_delta", "odom_sequence", "nonzero_command_sequence",
             ):
                 value = rotation.get(field)
@@ -2907,15 +2910,20 @@ class NavigationControlApi:
             and self._navigation_progress_odom_pose is not None
             and isinstance(rotation, dict)
         ):
-            # A genuine slow curve must move both MAP and ODOM poses in the
-            # commanded direction while a new odometry sample proves turning.
-            # AMCL correction alone and a stalled motor cannot reset the timer.
+            # A genuine slow curve must move both MAP and ODOM poses.
+            # The net displacement since the last watchdog checkpoint may
+            # include a PRIOR reverse leg, pivot or turn. Compare the current
+            # command with fresh, instantaneous wheel odom TWIST, NOT the
+            # full historical displacement projected onto the last yaw.
+            # AMCL correction, a stalled motor, and reversed wheel motion
+            # never reset the watchdog.
             try:
                 linear = float(rotation["command_linear_x"])
                 angular = float(rotation["command_angular_z"])
                 command_age = float(rotation["command_age_sec"])
-                yaw = float(rotation["odom_yaw"])
                 yaw_delta = float(rotation["odom_yaw_delta"])
+                measured_linear = float(rotation["odom_linear_x"])
+                measured_angular = float(rotation["odom_angular_z"])
                 odom_sequence = rotation["odom_sequence"]
             except (KeyError, TypeError, ValueError, OverflowError):
                 pass
@@ -2923,11 +2931,10 @@ class NavigationControlApi:
                 odom_dx = odom_position[0] - self._navigation_progress_odom_pose[0]
                 odom_dy = odom_position[1] - self._navigation_progress_odom_pose[1]
                 odom_distance = math.hypot(odom_dx, odom_dy)
-                forward_progress = odom_dx * math.cos(yaw) + odom_dy * math.sin(yaw)
                 moved = (
                     all(math.isfinite(v) for v in (
-                        linear, angular, command_age, yaw, yaw_delta,
-                        odom_distance, forward_progress
+                        linear, angular, command_age, yaw_delta,
+                        odom_distance, measured_linear, measured_angular
                     ))
                     and type(odom_sequence) is int and odom_sequence >= 0
                     and 0 <= command_age <= self.ROTATION_DATA_MAX_AGE_SEC
@@ -2937,7 +2944,9 @@ class NavigationControlApi:
                     and abs(angular) >= self.CURVED_PROGRESS_MIN_ANGULAR_RPS
                     and abs(yaw_delta) >= self.ROTATION_MIN_YAW_DELTA_RAD
                     and angular * yaw_delta > 0
-                    and linear * forward_progress > 0
+                    and abs(measured_linear) >= self.CURVED_PROGRESS_MIN_ODOM_LINEAR_MPS
+                    and linear * measured_linear > 0
+                    and angular * measured_angular > 0
                     and odom_sequence != self._curve_last_odom_sequence
                 )
                 if moved:
