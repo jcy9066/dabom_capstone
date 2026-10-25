@@ -258,14 +258,15 @@ planner_server:
       max_linear_accel: 0.50
       max_angular_accel: 1.0
       max_linear_jerk: 2.0
-      reverse_fraction: 0.30
+      reverse_fraction: 1.00  # Same nominal speed as forward; rear blind guard remains independent
       switch_stop_sec: 0.50
       max_total_planning_time: 5.0
 
       # FastMotion permits low-cost reverse and pivot candidates.
       QuickMotion:
         tolerance: 0.50
-        allow_unknown: true
+        # Do not plan through unknown cells: the swept-footprint safety gate rejects them.
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
@@ -282,7 +283,8 @@ planner_server:
       # through the exact same live Costmap and motion primitives.
       StableTurns:
         tolerance: 0.50
-        allow_unknown: true
+        # Same verified-free-space contract as QuickMotion and the final sweep.
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
