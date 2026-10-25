@@ -1009,30 +1009,41 @@ class NavigationControlApi:
                     "goal_reached_tolerance_m": self._goal_reached_tolerance_m,
                 },
             }
-            # Preview != controller-applied path. Publish only the path that
-            # belongs to the currently running Nav2 generation and Goal.
-            executed_path = []
-            goal = self._state.get("active_goal")
-            if (self._state.get("navigation_mode") == "DRIVING"
-                and self._state.get("navigation_state") in {"NAVIGATING", "RESUMING"}
-                and isinstance(goal, dict) and isinstance(applied, dict)
-                and applied.get("route_generation") == ros_nav.get("route_generation")):
-                route = applied.get("path")
-                if isinstance(route, list) and len(route) >= 2:
-                    try:
-                        end = route[-1]
-                        distance = math.hypot(float(end["x"]) - float(goal["x"]),
-                                              float(end["y"]) - float(goal["y"]))
-                        yaw_delta = math.atan2(
-                            math.sin(float(end["yaw"]) - float(goal.get("yaw", 0.0))),
-                            math.cos(float(end["yaw"]) - float(goal.get("yaw", 0.0))),
-                        )
-                        if distance <= 0.35 and abs(yaw_delta) <= 0.25:
-                            executed_path = [dict(point) for point in route]
-                    except (KeyError, TypeError, ValueError, OverflowError):
-                        pass
-            payload["executed_path"] = executed_path
+            payload["executed_path"] = self._current_executed_path_locked(ros_nav, applied)
         return payload
+
+    def _current_executed_path_locked(
+        self, ros_nav: dict[str, Any], applied: Any,
+    ) -> list[dict[str, float | str]]:
+        """Only actual FollowPath-installed paths matching current Nav2 action."""
+        if (self._state["navigation_mode"] != "DRIVING"
+            or self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
+            or self._state["emergency_stop"] or self._encoder_stop_violation
+            or self._pending_goal_cancel is not None
+            or ros_nav.get("state") != "NAVIGATING"
+            or not isinstance(applied, dict)
+            or type(applied.get("route_generation")) is not int
+            or applied["route_generation"] != ros_nav.get("route_generation")):
+            return []
+        goal = self._state.get("active_goal")
+        path = applied.get("path")
+        if (not isinstance(goal, dict) or not isinstance(path, list)
+            or not 2 <= len(path) <= 5000 or not isinstance(path[-1], dict)):
+            return []
+        terminal = path[-1]
+        try:
+            dx = float(goal["x"]) - float(terminal["x"])
+            dy = float(goal["y"]) - float(terminal["y"])
+            d_yaw = math.atan2(
+                math.sin(float(goal["yaw"]) - float(terminal["yaw"])),
+                math.cos(float(goal["yaw"]) - float(terminal["yaw"])),
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return []
+        if (not all(math.isfinite(v) for v in (dx, dy, d_yaw))
+            or math.hypot(dx, dy) > 0.20 or abs(d_yaw) > 0.20):
+            return []
+        return [dict(point) for point in path]
 
     async def _await_pi_navigation_telemetry(
         self, expected: str, after: float | None, timeout_sec: float | None = None
