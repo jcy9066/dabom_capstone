@@ -3,9 +3,13 @@
 #include "patrol_navigation_controller/segment_handoff_guard.hpp"
 #include "patrol_navigation_controller/local_motion_sweep.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
+#include "patrol_navigation_controller/costmap_footprint_validator.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -15,6 +19,7 @@
 #include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "nav2_util/node_utils.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "nav2_util/robot_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
@@ -39,6 +44,12 @@ void SegmentedRPPController::configure(
   tf_ = tf;
   costmap_ = std::move(costmap_ros);
   plugin_name_ = std::move(name);
+  // Observe exactly the path installed by Nav2's FollowPath controller.
+  follow_path_publisher_ = node->create_publisher<std_msgs::msg::String>(
+    "/patrol_navigation/applied_follow_path", rclcpp::QoS(10));
+  follow_path_instance_ = std::to_string(
+    std::chrono::steady_clock::now().time_since_epoch().count());
+  follow_path_sequence_ = 0;
   using nav2_util::declare_parameter_if_not_declared;
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_pivot_max_angular", rclcpp::ParameterValue(1.05));
@@ -100,6 +111,7 @@ void SegmentedRPPController::cleanup()
     rpp_.reset();
   }
   collision_.reset();
+  follow_path_publisher_.reset();
   costmap_.reset();
   invalidatePlan();
 }
@@ -130,6 +142,21 @@ geometry_msgs::msg::PoseStamped SegmentedRPPController::inControllerFrame(
       "Cannot transform lattice segment target to controller frame");
   }
   return transformed;
+}
+
+geometry_msgs::msg::PoseStamped SegmentedRPPController::storedPathPoseInControllerFrame(
+  const geometry_msgs::msg::PoseStamped & path_pose,
+  const std::string & target_frame) const
+{
+  // A planned path pose is a stationary target in map, not an observation
+  // requiring the planning-time TF. The map->odom transform may have moved,
+  // and its old samples may have expired by the time we reach this stage.
+  // Look up the latest transform on a COPY; retain stamped live robot
+  // poses in inControllerFrame() so current-motion safety checks stay fresh.
+  auto latest_target = path_pose;
+  latest_target.header.stamp.sec = 0;
+  latest_target.header.stamp.nanosec = 0;
+  return inControllerFrame(latest_target, target_frame);
 }
 
 void SegmentedRPPController::buildStages()
@@ -248,6 +275,7 @@ void SegmentedRPPController::invalidatePlan() noexcept
   stages_.clear();
   stage_index_ = 0;
   pivot_started_ = false;
+  last_pivot_angular_command_ = 0.0;
   loop_half_turn_in_progress_ = false;
   path_.poses.clear();
 }
@@ -259,6 +287,7 @@ void SegmentedRPPController::advanceStage()
   // until a new, fully installed path replaces it.
   ++stage_index_;
   pivot_started_ = false;
+  last_pivot_angular_command_ = 0.0;
   try {
     activateStage();
   } catch (...) {
@@ -279,6 +308,28 @@ void SegmentedRPPController::setPlan(const nav_msgs::msg::Path & path)
     buildStages();
     activateStage();
     plan_ready_ = true;
+    // Announce the installed path; this does not issue motor commands.
+    if (follow_path_publisher_ && path_.poses.size() <= 5000) {
+      std::ostringstream json;
+      json << std::setprecision(17)
+           << "{\"source\":\"segmented_rpp\",\"instance\":\""
+           << follow_path_instance_ << "\",\"sequence\":"
+           << ++follow_path_sequence_ << ",\"emitted_ns\":"
+           << std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()
+           << ",\"path\":[";
+      for (size_t i = 0; i < path_.poses.size(); ++i) {
+        const auto & pose = path_.poses[i].pose;
+        if (i > 0) {json << ',';}
+        json << "{\"x\":" << pose.position.x
+             << ",\"y\":" << pose.position.y
+             << ",\"yaw\":" << tf2::getYaw(pose.orientation) << '}';
+      }
+      json << "]}";
+      std_msgs::msg::String notice;
+      notice.data = json.str();
+      follow_path_publisher_->publish(notice);
+    }
   } catch (...) {
     invalidatePlan();
     throw;
@@ -308,8 +359,11 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
   {
     throw std::runtime_error("Non-differential or non-finite Nav2 motion command");
   }
-  if (std::abs(linear) < 1e-10 && std::abs(angular) < 1e-10) {
-    return command;  // A physical STOP never requires costmap clearance.
+  // The projection treats displacement below 1e-10m/rad per 0.5s
+  // as zero. Normalize sub-microscopic commands to an exact STOP before
+  // projection, avoiding an empty horizon/Goal abort on an epsilon mismatch.
+  if (std::abs(linear) < 1e-9 && std::abs(angular) < 1e-9) {
+    return stopped(pose);  // A physical STOP never requires costmap clearance.
   }
   if (!costmap_ || !costmap_->isCurrent() || !collision_) {
     throw std::runtime_error("Local costmap stale during Nav2 motion");
@@ -320,7 +374,10 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
   const auto initial = MotionPose{position.x, position.y, yaw(local_pose)};
   const auto projected = localMotionHorizon(initial, linear, angular);
   if (projected.size() < 2) {
-    throw std::runtime_error("Cannot certify Nav2 motion horizon");
+    std::ostringstream reason;
+    reason << "Cannot certify Nav2 motion horizon: linear=" << linear
+           << " angular=" << angular << " yaw=" << initial.yaw;
+    throw std::runtime_error(reason.str());
   }
   auto * map = costmap_->getCostmap();
   if (!map) {
@@ -338,10 +395,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
     projected, [&](const MotionPose & sample) {
       const double cost = collision_->footprintCostAtPose(
         sample.x, sample.y, sample.yaw, footprint);
-      // Includes inscribed 253, lethal 254, unknown 255 and off-map -1.
-      return std::isfinite(cost) && cost >= 0.0 &&
-        cost < static_cast<double>(
-        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+      // Global and local share the exact same full-area collision check.
+      // Center 253+, interior/boundary 254/255 and off-map always block.
+      return polygonFootprintClear(map, sample, cost, footprint);
     });
   if (!safe) {
     throw std::runtime_error("Local swept chassis obstructed during Nav2 motion");
@@ -393,11 +449,12 @@ void SegmentedRPPController::checkRotationCollision(
     const double test_heading = heading + angle_error * static_cast<double>(i) / steps;
     const double cost = collision_->footprintCostAtPose(
       local_pose.pose.position.x, local_pose.pose.position.y, test_heading, footprint);
-    // Identical conservative threshold to the global candidate scorer:
-    // 253 is inscribed/inflated, 254 lethal, 255 unknown.
-    // No unknown rotation is safe without current positive clearance.
-    if (!std::isfinite(cost) || cost < 0.0 ||
-      cost >= static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE))
+    // Identical full-chassis costmap contract for planned paths, projected
+    // motion, and every intermediate in-place heading. Unknown stays blocked.
+    if (!polygonFootprintClear(
+        costmap,
+        MotionPose{local_pose.pose.position.x, local_pose.pose.position.y, test_heading},
+        cost, footprint))
     {
       throw std::runtime_error("In-place rotation footprint is obstructed");
     }
@@ -432,7 +489,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     // heading threshold causes the Humble collision sweep to skip checks.
     // Once near the final endpoint, pivot using OUR swept-footprint gate.
     if (stage_index_ + 1 >= stages_.size()) {
-      const auto terminal = inControllerFrame(
+      const auto terminal = storedPathPoseInControllerFrame(
         path_.poses.back(), pose.header.frame_id);
       // A freshly planned loop leg uses XY=0.55m, but replayed physical
       // FollowPath has XY=0.10m. Obey the selected Nav2 goal checker;
@@ -471,6 +528,8 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
               pivot_started_, velocity.linear.x, velocity.angular.z,
               transfer_linear_stop_, transfer_angular_stop_))
           {
+            pivot_started_ = false;
+            last_pivot_angular_command_ = 0.0;
             return stopped(pose);
           }
           checkRotationCollision(pose, remaining);
@@ -478,11 +537,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
             pivot_max_angular_,
             std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
           const double requested = std::copysign(magnitude, remaining);
-          const double step = pivot_acceleration_ / controller_frequency_;
           geometry_msgs::msg::TwistStamped command = stopped(pose);
-          command.twist.angular.z = std::clamp(
-            requested, velocity.angular.z - step, velocity.angular.z + step);
+          command.twist.angular.z = boundedPivotAngularCommand(
+            last_pivot_angular_command_, requested,
+            pivot_max_angular_, pivot_acceleration_, controller_frequency_);
           const auto certified = checkedCommand(pose, command);
+          last_pivot_angular_command_ = certified.twist.angular.z;
           pivot_started_ = true;
           return certified;
         }
@@ -492,11 +552,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
         // In particular, re-entering RPP here can unexpectedly drive
         // forward after a successful final heading correction.
         pivot_started_ = false;
+        last_pivot_angular_command_ = 0.0;
         return stopped(pose);
       }
       return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
     }
-    const auto end_pose = inControllerFrame(
+    const auto end_pose = storedPathPoseInControllerFrame(
       path_.poses[stage.end], pose.header.frame_id);
     const double to_end = distance(pose, end_pose);
     if (to_end <= transfer_position_tolerance_) {
@@ -512,7 +573,7 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     return checkedCommand(pose, rpp_->computeVelocityCommands(pose, velocity, goal_checker));
   }
 
-  const auto center = inControllerFrame(
+  const auto center = storedPathPoseInControllerFrame(
     path_.poses[stage.begin], pose.header.frame_id);
   if (distance(pose, center) > transfer_position_tolerance_ + 0.04) {
     throw std::runtime_error("Robot moved away from planned rotation point");
@@ -526,10 +587,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
       pivot_started_, velocity.linear.x, velocity.angular.z,
       transfer_linear_stop_, transfer_angular_stop_))
   {
+    pivot_started_ = false;
+    last_pivot_angular_command_ = 0.0;
     return stopped(pose);
   }
 
-  const auto rotation_goal = inControllerFrame(
+  const auto rotation_goal = storedPathPoseInControllerFrame(
     path_.poses[stage.end], pose.header.frame_id);
   const double remaining = angles::shortest_angular_distance(
     yaw(pose), yaw(rotation_goal));
@@ -571,11 +634,12 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     : remaining
   );
   const double desired = std::copysign(magnitude, controlled_remaining);
-  const double maximum_step = pivot_acceleration_ / controller_frequency_;
   geometry_msgs::msg::TwistStamped command = stopped(pose);
-  command.twist.angular.z = std::clamp(
-    desired, velocity.angular.z - maximum_step, velocity.angular.z + maximum_step);
+  command.twist.angular.z = boundedPivotAngularCommand(
+    last_pivot_angular_command_, desired,
+    pivot_max_angular_, pivot_acceleration_, controller_frequency_);
   const auto certified = checkedCommand(pose, command);
+  last_pivot_angular_command_ = certified.twist.angular.z;
   pivot_started_ = true;
   return certified;
 }
