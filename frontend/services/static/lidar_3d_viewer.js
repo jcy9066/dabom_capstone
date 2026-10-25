@@ -2160,7 +2160,9 @@ if (root && canvas) {
         // Map/pose still stay session-filtered so stale Driving localization is
         // never reused as Mapping geometry.
         const liveScan = state.scan || null;
-        const liveCostmap = state.costmap || null;
+        // Mapping must display the SLAM map and raw LiDAR, never stale
+        // dynamic obstacles from a previous Driving Costmap.
+        const liveCostmap = mappingMode ? null : (state.costmap || null);
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
         rebuildCostmap(liveCostmap);

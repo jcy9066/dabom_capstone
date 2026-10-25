@@ -16,6 +16,7 @@
         busy: false,
         cancelPending: false,
         drivePending: false,
+        lastDriveError: null,
         navigationPending: false,
         estopPending: false,
         warningPending: false,
@@ -532,10 +533,9 @@
     async function requestDriveMode(mode, options = {}) {
         const target = String(mode || '').toUpperCase();
         if (!['AUTO', 'MANUAL'].includes(target) || state.drivePending || state.navigationPending) return false;
-        if (state.control?.connected !== true) {
-            setFeedback('Pi 연결 상태를 확인할 수 없어 주행 모드를 변경하지 않습니다.', true);
-            return false;
-        }
+        // Server validates fresh Pi telemetry. Stale UI state must not
+        // reject a connection already confirmed by the backend.
+        state.lastDriveError = null;
         // AUTO/MANUAL selection must not change MAPPING/DRIVING mode.
         state.drivePending = true;
         state.pointerId = null;
@@ -558,8 +558,9 @@
             }
             return true;
         } catch (error) {
-            await refreshState();
-            setFeedback(`주행 모드 전환 실패: ${error.message}`, true);
+            state.lastDriveError = String(error?.message || '서버가 모드 변경을 거부했습니다.');
+            await refreshState().catch(() => {});
+            setFeedback(`주행 모드 전환 실패: ${state.lastDriveError}`, true);
             return false;
         } finally {
             state.drivePending = false;
@@ -912,6 +913,7 @@
             emergencyStop,
             refreshState,
             requestDriveMode,
+            lastDriveError: () => state.lastDriveError,
             requestEmergencyToggle,
             requestLedToggle,
             requestNavigationMode,

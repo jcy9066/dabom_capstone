@@ -1492,11 +1492,10 @@ async function togglePatrolMode() {
         const ok = await requestDriveMode(targetMode.toUpperCase());
 
         if (!ok) {
-            alert(
-                '로봇이 연결되지 않아 '
-                + '모드를 변경하지 못했습니다.',
-            );
-
+            const reason = window.navigationControl?.lastDriveError?.();
+            alert(reason
+                ? `주행 모드 전환 실패: ${reason}`
+                : '주행 모드 전환에 실패했습니다. 서버 상태를 확인해주세요.');
             return;
         }
 
