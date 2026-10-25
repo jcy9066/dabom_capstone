@@ -311,14 +311,14 @@ planner_server:
       max_linear_accel: 0.50
       max_angular_accel: 1.0
       max_linear_jerk: 2.0
-      reverse_fraction: 0.30
+      reverse_fraction: 1.00
       switch_stop_sec: 0.50
       max_total_planning_time: 5.0
 
       # Loop search excludes reverse expansion; pivot/forward remain available.
       QuickMotion:
         tolerance: 0.50
-        allow_unknown: true
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
@@ -335,7 +335,7 @@ planner_server:
       # through the exact same live Costmap and motion primitives.
       StableTurns:
         tolerance: 0.50
-        allow_unknown: true
+        allow_unknown: false
         max_iterations: 1000000
         max_planning_time: 1.8
         lattice_filepath: ""
