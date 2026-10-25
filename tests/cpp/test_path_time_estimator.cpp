@@ -74,11 +74,12 @@ int main()
   assert(fast_turn.valid && slow_turn.valid);
   assert(slow_turn.seconds > fast_turn.seconds);
 
-  // Reversing may be slow in an unknown rear sector; cost must include it.
+  // With verified rear coverage, forward and reverse have identical nominal
+  // speed/cost limits. Blind rear speed caps remain a separate runtime gate.
   const std::vector<MotionPose> reverse{{0, 0, 0}, {-0.2, 0, 0}};
   const auto reverse_score = estimatePathTime(reverse, limits);
   assert(reverse_score.valid);
-  assert(reverse_score.seconds > short_score.seconds);
+  assert(std::abs(reverse_score.seconds - short_score.seconds) < 1e-9);
 
   // An encoder-verified direction switch costs more than a continuous run.
   const std::vector<MotionPose> cusp{
