@@ -1076,6 +1076,41 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1),
         )
 
+    async def test_curve_progress_survives_watchdog_sampling_same_odom_sequence(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, linear=-0.07, angular=0.35, odom_x=0.0, odom_y=0.0)
+        self.api.note_navigation_sample(
+            "pose", now=base + 0.1, payload={"x": 0.0, "y": 0.0}
+        )
+
+        # The watchdog observes odom #3 before the next live map pose.
+        # It must not use up that sequence for the separate curved-motion gate.
+        self.set_rotation(
+            3, linear=-0.07, angular=0.35, yaw_delta=0.01,
+            yaw=0.12, odom_x=-0.052, odom_y=0.0,
+        )
+        self.refresh_watchdog_samples(base + 2.0)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 2.0))
+        self.assertEqual(3, self.api._rotation_last_odom_sequence)
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0}
+        )
+        self.assertAlmostEqual(base + 4.0, self.api._navigation_progress_at)
+        self.assertEqual(3, self.api._curve_last_odom_sequence)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+
+        # No new odometry and no new map progress: fail after the next 5s.
+        self.refresh_watchdog_samples(base + 9.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1)
+        )
+
     async def test_curve_command_alone_or_stale_odometry_cannot_reset_progress(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
