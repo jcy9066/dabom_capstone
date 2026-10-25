@@ -3373,8 +3373,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
 class NavigationRosRotationTelemetryTests(unittest.TestCase):
     @staticmethod
-    def odom(yaw, stamp_ns=None):
+    def odom(yaw, stamp_ns=None, *, x=0.0, y=0.0):
+        # nav_msgs/Odometry.pose.pose contains BOTH position and orientation.
+        # NavigationRosControl requires finite wheel-odom XY to certify
+        # actual translation independently of AMCL/map corrections.
         message = SimpleNamespace(pose=SimpleNamespace(pose=SimpleNamespace(
+            position=SimpleNamespace(x=x, y=y, z=0.0),
             orientation=SimpleNamespace(x=0.0, y=0.0, z=math.sin(yaw / 2), w=math.cos(yaw / 2)),
         )))
         if stamp_ns is not None:
@@ -3388,10 +3392,12 @@ class NavigationRosRotationTelemetryTests(unittest.TestCase):
         ros._on_nav_command(SimpleNamespace(
             linear=SimpleNamespace(x=0.0), angular=SimpleNamespace(z=0.4),
         ))
-        ros._on_odom(self.odom(3.13))
-        ros._on_odom(self.odom(-3.13))
+        ros._on_odom(self.odom(3.13, x=-0.01, y=0.02))
+        ros._on_odom(self.odom(-3.13, x=-0.03, y=0.02))
         status = ros.rotation_status()
         self.assertEqual(2, status["odom_sequence"])
+        self.assertAlmostEqual(-0.03, status["odom_x"])
+        self.assertAlmostEqual(0.02, status["odom_y"])
         self.assertAlmostEqual(-3.13, status["odom_yaw"])
         self.assertGreater(status["odom_yaw_delta"], 0.005)
         self.assertLess(status["command_age_sec"], 0.5)
@@ -3412,11 +3418,13 @@ class NavigationRosRotationTelemetryTests(unittest.TestCase):
         ))
         ros._on_odom(self.odom(0.0, 9_000_000_000))
         self.assertEqual(0, ros.rotation_status()["odom_sequence"])
-        ros._on_odom(self.odom(0.0, 9_900_000_000))
-        ros._on_odom(self.odom(0.4, 9_900_000_000))
+        ros._on_odom(self.odom(0.0, 9_900_000_000, x=0.01))
+        ros._on_odom(self.odom(0.4, 9_900_000_000, x=0.02))
         self.assertEqual(1, ros.rotation_status()["odom_sequence"])
-        ros._on_odom(self.odom(0.4, 9_950_000_000))
+        self.assertAlmostEqual(0.01, ros.rotation_status()["odom_x"])
+        ros._on_odom(self.odom(0.4, 9_950_000_000, x=0.03))
         self.assertEqual(2, ros.rotation_status()["odom_sequence"])
+        self.assertAlmostEqual(0.03, ros.rotation_status()["odom_x"])
 
 
 class NavigationRosPlanningTimeoutTests(unittest.TestCase):
