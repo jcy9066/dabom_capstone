@@ -67,7 +67,10 @@ class NavigationControlApi:
     # Stationary wheels / stale commands / straight runs keep the strict
     # 0.10m-in-5s timeout.
     CURVED_PROGRESS_DISTANCE_M = 0.02
-    CURVED_PROGRESS_MAX_LINEAR_MPS = 0.10
+    # Match Nav2's configured 0.212 m/s nominal linear command ceiling:
+    # a valid curved drive at ~0.12m/s must not bypass odom-verified progress
+    # simply because the previous gate only admitted <=0.10m/s.
+    CURVED_PROGRESS_MAX_LINEAR_MPS = 0.212
     CURVED_PROGRESS_MIN_ANGULAR_RPS = 0.15
     ROTATION_DATA_MAX_AGE_SEC = 0.5
     ROTATION_MIN_YAW_DELTA_RAD = 0.005
