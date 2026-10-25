@@ -64,17 +64,60 @@ bool validAgainstCurrentCostmap(
   // sensor clearance here. Reject rather than converting "allow_unknown"
   // into permission to drive with an unverified footprint. Sensor-proved
   // clearance can be introduced separately only with explicit evidence.
-  return validateSweptPath(
+  // Capture only the first rejected pose, under the same costmap lock used
+  // for the decision. Emit the diagnostic after unlocking; never relax it.
+  size_t samples_checked = 0;
+  bool has_rejected_sample = false;
+  MotionPose rejected_pose{0.0, 0.0, 0.0};
+  double rejected_footprint_cost = 0.0;
+  int rejected_center_cost = -1;
+  const bool path_safe = validateSweptPath(
     poses, [&](const MotionPose & sample) {
+      ++samples_checked;
       const double cost = checker.footprintCostAtPose(
         sample.x, sample.y, sample.yaw, footprint);
       // Collision checker's -1 means off-map / invalid geometry.
       // >= 253 includes inscribed obstacles, lethal cells, and unknown
       // cells. All are STOP/invalid-path conditions without proof of safety.
-      return std::isfinite(cost) && cost >= 0.0 &&
+      const bool clear = std::isfinite(cost) && cost >= 0.0 &&
         cost < static_cast<double>(
         nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+      if (!clear && !has_rejected_sample) {
+        has_rejected_sample = true;
+        rejected_pose = sample;
+        rejected_footprint_cost = cost;
+        unsigned int mx = 0;
+        unsigned int my = 0;
+        if (costmap->worldToMap(sample.x, sample.y, mx, my)) {
+          rejected_center_cost = static_cast<int>(costmap->getCost(mx, my));
+        }
+      }
+      return clear;
     });
+  lock.unlock();
+  if (!path_safe) {
+    if (has_rejected_sample) {
+      const char * reason = !std::isfinite(rejected_footprint_cost) ?
+        "nonfinite_cost" :
+        (rejected_footprint_cost < 0.0 ? "offmap_or_invalid_geometry" :
+        (rejected_footprint_cost >= nav2_costmap_2d::NO_INFORMATION ? "unknown" :
+        (rejected_footprint_cost >= nav2_costmap_2d::LETHAL_OBSTACLE ? "lethal_obstacle" :
+        "inscribed_obstacle")));
+      RCLCPP_WARN(
+        rclcpp::get_logger("planner_server"),
+        "GridBased swept path first rejected sample=%zu/%zu at (%.3f, %.3f, yaw=%.3f) "
+        "footprint_cost=%.0f center_cost=%d reason=%s",
+        samples_checked, poses.size(), rejected_pose.x, rejected_pose.y,
+        rejected_pose.yaw, rejected_footprint_cost, rejected_center_cost, reason);
+    } else {
+      RCLCPP_WARN(
+        rclcpp::get_logger("planner_server"),
+        "GridBased swept path rejected without colliding sample: "
+        "invalid geometry, interpolation, or sample budget (poses=%zu)",
+        poses.size());
+    }
+  }
+  return path_safe;
 }
 
 // Verify the entire chassis at a candidate's final Yaw using the CURRENT
