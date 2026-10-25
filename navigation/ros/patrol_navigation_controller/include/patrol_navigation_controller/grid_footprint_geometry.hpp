@@ -18,20 +18,13 @@ struct GridPoint
   double y;
 };
 
-// Boundary contact counts as overlap. Invalid or non-convex robot footprints
-// fail closed: a "true" result always causes an occupied cell to be rejected.
-inline bool polygonOverlapsGridCell(
-  const std::vector<GridPoint> & polygon,
-  const double cell_center_x, const double cell_center_y,
-  const double half_cell_width)
+// The runtime footprint must be finite, non-degenerate and convex.
+// A malformed polygon must never be treated as a valid collision envelope.
+inline bool validConvexFootprint(const std::vector<GridPoint> & polygon)
 {
-  if (polygon.size() < 3 ||
-    !std::isfinite(cell_center_x) || !std::isfinite(cell_center_y) ||
-    !std::isfinite(half_cell_width) || half_cell_width <= 0.0)
-  {
-    return true;
+  if (polygon.size() < 3) {
+    return false;
   }
-
   bool positive_turn = false;
   bool negative_turn = false;
   for (size_t i = 0; i < polygon.size(); ++i) {
@@ -41,20 +34,33 @@ inline bool polygonOverlapsGridCell(
     if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
       std::hypot(b.x - a.x, b.y - a.y) <= 1e-12)
     {
-      return true;
+      return false;
     }
     const double cross =
       (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
     if (!std::isfinite(cross)) {
-      return true;
+      return false;
     }
     positive_turn |= cross > 1e-12;
     negative_turn |= cross < -1e-12;
     if (positive_turn && negative_turn) {
-      return true;
+      return false;
     }
   }
-  if (!positive_turn && !negative_turn) {
+  return positive_turn || negative_turn;
+}
+
+// Boundary contact counts as overlap. Invalid or non-convex robot footprints
+// fail closed: a "true" result always causes an occupied cell to be rejected.
+inline bool polygonOverlapsGridCell(
+  const std::vector<GridPoint> & polygon,
+  const double cell_center_x, const double cell_center_y,
+  const double half_cell_width)
+{
+  if (!validConvexFootprint(polygon) ||
+    !std::isfinite(cell_center_x) || !std::isfinite(cell_center_y) ||
+    !std::isfinite(half_cell_width) || half_cell_width <= 0.0)
+  {
     return true;
   }
 
@@ -71,8 +77,8 @@ inline bool polygonOverlapsGridCell(
       const double center = cell_center_x * ax + cell_center_y * ay;
       const double radius = half_cell_width * (std::abs(ax) + std::abs(ay));
       // Comparisons use strict separation: touching the boundary is blocked.
-      return !(max_projection < center - radius ||
-        min_projection > center + radius);
+      return !(max_projection < center - radius - 1e-12 ||
+        min_projection > center + radius + 1e-12);
     };
 
   if (!overlaps_axis(1.0, 0.0) || !overlaps_axis(0.0, 1.0)) {
