@@ -10,7 +10,8 @@ def test_amcl_stability_is_gated_after_initial_pose_published():
     assert "stable_amcl_observations(recent, initial_pose)" in ros
     assert 'max(float(covariance[0]), float(covariance[7]))' in ros
     assert "yaw_variance = float(covariance[35])" in ros
-    assert '"stable_samples": 3' in ros
+    assert '"stable_samples": 3 if stable else 1' in ros
+    assert "minimum_samples=1, minimum_span=0.0" in ros
 
 
 def test_no_amcl_stable_check_bypass_to_driving():
@@ -29,3 +30,15 @@ def test_amcl_history_handles_100hz_stability_window():
     ros = (Path(__file__).resolve().parents[1] / "server/navigation_ros_control.py").read_text(encoding="utf-8")
     assert "self._amcl_history = deque(maxlen=128)" in ros
     assert "stable_amcl_observations(recent, initial_pose)" in ros
+
+
+def test_stationary_one_sample_still_checks_covariance():
+    import math
+    from server.amcl_pose_stability import stable_amcl_observations
+    initial = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    sample = {"at": 10.0, "x": 0.02, "y": 0.01, "yaw": 0.02,
+              "xy_variance": 0.05, "yaw_variance": math.radians(5) ** 2}
+    assert stable_amcl_observations([sample], initial, minimum_samples=1, minimum_span=0.0)
+    assert not stable_amcl_observations([sample], initial)
+    sample["yaw_variance"] = math.radians(50) ** 2
+    assert not stable_amcl_observations([sample], initial, minimum_samples=1, minimum_span=0.0)

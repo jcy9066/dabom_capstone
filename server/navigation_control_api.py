@@ -1054,16 +1054,8 @@ class NavigationControlApi:
                 raise NavigationControlError("PI_CONNECTION_LOSS", "Fresh Pi status is required.", 503)
             if self._state["emergency_stop"] or self._pi_estop_latched is not False:
                 raise NavigationControlError("EMERGENCY_STOP_ACTIVE", "Release the safety stop first.", 409)
-            if target == "auto" and (
-                self._state["navigation_mode"] != "DRIVING"
-                or self._pi_navigation_mode != "DRIVING"
-                or not self._state["localization_ready"]
-                or not self._state["nav2_ready"]
-                or not self._state["active_map"]
-            ):
-                raise NavigationControlError(
-                    "DRIVING_NOT_READY", "Verified map, Initial Pose, AMCL, Nav2 and Pi DRIVING are required.", 409
-                )
+            # AUTO/MANUAL remains independent of MAPPING/DRIVING.
+            # Motion authorization still requires Nav2, localization and Pi readiness.
             if (self._robot_mode == target and not (
                 target == "manual"
                 and self._state["navigation_state"] in {"NAVIGATING", "RESUMING"}
@@ -1081,6 +1073,7 @@ class NavigationControlApi:
                     raise NavigationControlError(
                         "STOP_NOT_CONFIRMED", "Verify a fresh encoder STOP before retrying mode sync.", 409
                     )
+            expected_navigation_mode = self._state["navigation_mode"]
             self._patrol_transition = target
             self._patrol_transition_error = None
             self._touch_locked()

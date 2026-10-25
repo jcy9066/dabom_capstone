@@ -1207,12 +1207,20 @@ class NavigationRosControl:
                         if item["sequence"] > before_sequence
                         and item["at"] >= self._amcl_initial_pose_after
                     ]
-                    if stable_amcl_observations(recent, initial_pose):
+                    stable = stable_amcl_observations(recent, initial_pose)
+                    # A stationary AMCL may publish once and wait for movement.
+                    # The fallback still needs a new, covariance-checked
+                    # post-initialpose estimate near the requested pose.
+                    single = bool(recent) and stable_amcl_observations(
+                        recent[-1:], initial_pose,
+                        minimum_samples=1, minimum_span=0.0,
+                    )
+                    if stable or single:
                         return {
                             "x": self._amcl.x,
                             "y": self._amcl.y,
                             "yaw": self._amcl.yaw,
-                            "stable_samples": 3,
+                            "stable_samples": 3 if stable else 1,
                         }
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
