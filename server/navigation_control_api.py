@@ -66,7 +66,7 @@ class NavigationControlApi:
     # XY displacement ONLY with fresh, directed wheel-odometry yaw motion.
     # Stationary wheels / stale commands / straight runs keep the strict
     # 0.10m-in-5s timeout.
-    CURVED_PROGRESS_DISTANCE_M = 0.04
+    CURVED_PROGRESS_DISTANCE_M = 0.02
     CURVED_PROGRESS_MAX_LINEAR_MPS = 0.10
     CURVED_PROGRESS_MIN_ANGULAR_RPS = 0.15
     ROTATION_DATA_MAX_AGE_SEC = 0.5
@@ -156,6 +156,7 @@ class NavigationControlApi:
         self._last_scan_at: float | None = None
         self._last_pose_at: float | None = None
         self._navigation_progress_pose: tuple[float, float] | None = None
+        self._navigation_progress_odom_pose: tuple[float, float] | None = None
         self._navigation_progress_at: float | None = None
         self._navigation_command_baseline: int | None = None
         self._navigation_command_wait_started_at: float | None = None
@@ -2792,6 +2793,7 @@ class NavigationControlApi:
     def _reset_navigation_progress_locked(self) -> None:
         self._pending_nav_success = None
         self._navigation_progress_pose = None
+        self._navigation_progress_odom_pose = None
         self._navigation_progress_at = None
         self._navigation_command_baseline = None
         self._navigation_command_wait_started_at = None
@@ -2860,39 +2862,70 @@ class NavigationControlApi:
             return
 
         displacement = math.hypot(x - previous[0], y - previous[1])
+        # Initialize an independent odom-frame anchor. Map->odom can jump
+        # during AMCL corrections; map XY alone must not certify motion.
+        odom_position = None
+        if isinstance(rotation, dict):
+            try:
+                ox = float(rotation["odom_x"])
+                oy = float(rotation["odom_y"])
+                odom_age = float(rotation["odometry_age_sec"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+            else:
+                if (
+                    all(math.isfinite(v) for v in (ox, oy, odom_age))
+                    and 0 <= odom_age <= self.ROTATION_DATA_MAX_AGE_SEC
+                ):
+                    odom_position = (ox, oy)
+        if odom_position is not None and self._navigation_progress_odom_pose is None:
+            self._navigation_progress_odom_pose = odom_position
+
         moved = displacement >= self.PROGRESS_DISTANCE_M
-        if not moved and displacement >= self.CURVED_PROGRESS_DISTANCE_M:
-            # A controller-requested curve is not proof of actual progress.
-            # Require fresh, NEW wheel-odometry yaw movement in the same
-            # direction; mere TF/AMCL drift or a stationary command cannot
-            # extend the blockage deadline.
-            if isinstance(rotation, dict):
-                try:
-                    linear = float(rotation["command_linear_x"])
-                    angular = float(rotation["command_angular_z"])
-                    command_age = float(rotation["command_age_sec"])
-                    odom_age = float(rotation["odometry_age_sec"])
-                    yaw_delta = float(rotation["odom_yaw_delta"])
-                    odom_sequence = rotation["odom_sequence"]
-                except (KeyError, TypeError, ValueError, OverflowError):
-                    pass
-                else:
-                    moved = (
-                        all(math.isfinite(v) for v in (
-                            linear, angular, command_age, odom_age, yaw_delta
-                        ))
-                        and type(odom_sequence) is int and odom_sequence >= 0
-                        and 0 <= command_age <= self.ROTATION_DATA_MAX_AGE_SEC
-                        and 0 <= odom_age <= self.ROTATION_DATA_MAX_AGE_SEC
-                        and abs(linear) <= self.CURVED_PROGRESS_MAX_LINEAR_MPS
-                        and abs(angular) >= self.CURVED_PROGRESS_MIN_ANGULAR_RPS
-                        and abs(yaw_delta) >= self.ROTATION_MIN_YAW_DELTA_RAD
-                        and angular * yaw_delta > 0
-                        and odom_sequence != self._rotation_last_odom_sequence
-                    )
-                    if moved:
-                        self._rotation_last_odom_sequence = odom_sequence
+        if (
+            not moved and displacement >= self.CURVED_PROGRESS_DISTANCE_M
+            and odom_position is not None
+            and self._navigation_progress_odom_pose is not None
+            and isinstance(rotation, dict)
+        ):
+            # A genuine slow curve must move both MAP and ODOM poses in the
+            # commanded direction while a new odometry sample proves turning.
+            # AMCL correction alone and a stalled motor cannot reset the timer.
+            try:
+                linear = float(rotation["command_linear_x"])
+                angular = float(rotation["command_angular_z"])
+                command_age = float(rotation["command_age_sec"])
+                yaw = float(rotation["odom_yaw"])
+                yaw_delta = float(rotation["odom_yaw_delta"])
+                odom_sequence = rotation["odom_sequence"]
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+            else:
+                odom_dx = odom_position[0] - self._navigation_progress_odom_pose[0]
+                odom_dy = odom_position[1] - self._navigation_progress_odom_pose[1]
+                odom_distance = math.hypot(odom_dx, odom_dy)
+                forward_progress = odom_dx * math.cos(yaw) + odom_dy * math.sin(yaw)
+                moved = (
+                    all(math.isfinite(v) for v in (
+                        linear, angular, command_age, yaw, yaw_delta,
+                        odom_distance, forward_progress
+                    ))
+                    and type(odom_sequence) is int and odom_sequence >= 0
+                    and 0 <= command_age <= self.ROTATION_DATA_MAX_AGE_SEC
+                    and self.CURVED_PROGRESS_DISTANCE_M <= odom_distance
+                    and self._ros.ROTATION_MAX_LINEAR_MPS < abs(linear) <=
+                        self.CURVED_PROGRESS_MAX_LINEAR_MPS
+                    and abs(angular) >= self.CURVED_PROGRESS_MIN_ANGULAR_RPS
+                    and abs(yaw_delta) >= self.ROTATION_MIN_YAW_DELTA_RAD
+                    and angular * yaw_delta > 0
+                    and linear * forward_progress > 0
+                    and odom_sequence != self._rotation_last_odom_sequence
+                )
+                if moved:
+                    self._rotation_last_odom_sequence = odom_sequence
         if moved:
+            if odom_position is not None:
+                self._navigation_progress_odom_pose = odom_position
             self._navigation_progress_pose = (x, y)
             self._navigation_progress_at = received_at
             self._rotation_extension_sec = 0.0
