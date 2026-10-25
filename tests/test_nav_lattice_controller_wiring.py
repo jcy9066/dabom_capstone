@@ -62,12 +62,15 @@ def test_segmented_controller_handles_spin_without_rewriting_goal_action():
     assert "emitted_ns" in source
     assert "checkRotationCollision(pose, remaining)" in source
     assert "collision_->footprintCostAtPose(" in source
-    # Match the GlobalPlanner's conservative collision envelope: 253
-    # inscribed/inflated, 254 lethal and 255 unknown must all block a spin.
-    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in source
+    # The exact padded chassis-cell validator is shared with the global planner.
+    validator = (PACKAGE / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    assert 'costmap_footprint_validator.hpp' in source
+    assert "polygonFootprintClear(" in source
+    assert "INSCRIBED_INFLATED_OBSTACLE" in validator
+    assert "LETHAL_OBSTACLE" in validator
     assert "costmap_->isCurrent()" in source
     assert "footprint.size() < 3" in source
-    assert "std::isfinite(cost)" in source
+    assert "polygonFootprintClear(" in source
     assert "nav2_costmap_2d::LETHAL_OBSTACLE" not in source
     assert "std::runtime_error" in source  # Humble exception path
     assert "nav2_core::NoValidControl" not in source
@@ -200,10 +203,23 @@ def test_nav2_motion_commands_require_fresh_local_swept_chassis_clearance():
     assert "return validateSweptPath(" not in source  # checkedCommand fails by throw
     assert "const bool safe = validateSweptPath(" in source
     assert "collision_->footprintCostAtPose(" in source
-    assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in source
-    assert "cost >= 0.0" in source
+    assert "polygonFootprintClear(map, sample, cost, footprint)" in source
+    assert "polygonFootprintClear(" in source
     assert "Local swept chassis obstructed during Nav2 motion" in source
     assert "travel > 0.25 || rotation > 1.20" in pure
+
+
+def test_local_and_global_use_the_same_full_chassis_collision_contract():
+    local = (PACKAGE / "src/segmented_rpp_controller.cpp").read_text()
+    global_planner = (PACKAGE / "src/time_scored_lattice_planner.cpp").read_text()
+    shared = (PACKAGE / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    for code in (local, global_planner):
+        assert 'costmap_footprint_validator.hpp' in code
+        assert 'polygonFootprintClear(' in code
+    assert "polygonFootprintClear(map, sample, cost, footprint)" in local
+    assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in shared
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in shared
+    assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in shared
 
 
 def test_ros_free_local_motion_horizon_cpp(tmp_path):
