@@ -481,7 +481,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "nav2_twist_timeout_sec",
-                default_value="0.50",
+                default_value="0.30",
             ),
             DeclareLaunchArgument(
                 "nav2_request_timeout_sec",
