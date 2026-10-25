@@ -146,11 +146,34 @@ def test_selected_route_is_rechecked_before_publishing():
     assert "costmap_ros->isCurrent()" in code
     assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     assert "cost == nav2_costmap_2d::NO_INFORMATION" not in code
-    assert "return std::isfinite(cost) && cost >= 0.0" in code
+    # Humble Smac checks the inscribed threshold at the center, but
+    # lethal/unknown at the polygon edge; never apply center inflation twice.
+    assert "bool polygonFootprintClear(" in code
+    assert "center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in code
+    assert "footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in code
+    assert "footprint_cost >= 0.0" in code
+    assert "return polygonFootprintClear(map, pose, cost);" in code
+    assert "const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);" in code
     # Reject updated obstacles rather than falling back to a stale candidate.
     assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
     assert "best.poses.clear();" in code
 
+
+
+def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_smac():
+    code = SOURCE.read_text()
+    helper = code.split("bool polygonFootprintClear(", 1)[1].split(
+        "\n}", 1
+    )[0]
+    assert "costmap->worldToMap(pose.x, pose.y, mx, my)" in helper
+    assert "costmap->getCost(mx, my)" in helper
+    assert "center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in helper
+    assert "footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in helper
+    assert "std::isfinite(footprint_cost) && footprint_cost >= 0.0" in helper
+    # 253 is safe for a polygon boundary, but never safe at the robot center.
+    # 254, 255 and negative/nonfinite footprint values remain unsafe.
+    assert "return polygonFootprintClear(map, pose, cost);" in code
+    assert "const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);" in code
 
 def test_selected_route_checks_every_interpolated_chassis_pose():
     geometry = (
