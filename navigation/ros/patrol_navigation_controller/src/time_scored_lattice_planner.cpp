@@ -1,6 +1,7 @@
 // Copyright (c) 2026. Licensed under MIT.
 #include "patrol_navigation_controller/time_scored_lattice_planner.hpp"
 #include "patrol_navigation_controller/alternate_goal_candidates.hpp"
+#include "patrol_navigation_controller/grid_footprint_geometry.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
 
 #include <algorithm>
@@ -36,10 +37,15 @@ std::timed_mutex lattice_candidate_search_mutex;
 // Caller must hold the costmap mutex while reading cells.
 bool polygonFootprintClear(
   const nav2_costmap_2d::Costmap2D * costmap,
-  const MotionPose & pose, const double footprint_cost, int * center_cost_out = nullptr)
+  const MotionPose & pose, const double footprint_cost,
+  const nav2_costmap_2d::Footprint & footprint,
+  int * center_cost_out = nullptr, int * occupied_cell_cost_out = nullptr)
 {
   unsigned int mx = 0;
   unsigned int my = 0;
+  if (occupied_cell_cost_out) {
+    *occupied_cell_cost_out = -1;
+  }
   if (!costmap || !costmap->worldToMap(pose.x, pose.y, mx, my)) {
     if (center_cost_out) {
       *center_cost_out = -1;
@@ -50,9 +56,77 @@ bool polygonFootprintClear(
   if (center_cost_out) {
     *center_cost_out = center_cost;
   }
-  return center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) &&
-    std::isfinite(footprint_cost) && footprint_cost >= 0.0 &&
-    footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE);
+  // Preserve the original Nav2 Humble Smac center + boundary checks.
+  if (center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) ||
+    !std::isfinite(footprint_cost) || footprint_cost < 0.0 ||
+    footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE) ||
+    footprint.size() < 3)
+  {
+    return false;
+  }
+
+  // The stock FootprintCollisionChecker rasterizes the polygon PERIMETER.
+  // A lethal / unknown map cell can lie entirely INSIDE a rectangular chassis
+  // without intersecting any perimeter or its center. Check the whole area.
+  // The footprint passed here already includes configured footprint_padding.
+  const double cos_yaw = std::cos(pose.yaw);
+  const double sin_yaw = std::sin(pose.yaw);
+  std::vector<GridPoint> polygon;
+  polygon.reserve(footprint.size());
+  double min_x = std::numeric_limits<double>::infinity();
+  double max_x = -std::numeric_limits<double>::infinity();
+  double min_y = std::numeric_limits<double>::infinity();
+  double max_y = -std::numeric_limits<double>::infinity();
+  for (const auto & vertex : footprint) {
+    const double x = pose.x + vertex.x * cos_yaw - vertex.y * sin_yaw;
+    const double y = pose.y + vertex.x * sin_yaw + vertex.y * cos_yaw;
+    unsigned int vertex_mx = 0;
+    unsigned int vertex_my = 0;
+    if (!std::isfinite(x) || !std::isfinite(y) ||
+      !costmap->worldToMap(x, y, vertex_mx, vertex_my))
+    {
+      return false;  // No clearance proof if the chassis leaves the map.
+    }
+    polygon.push_back({x, y});
+    min_x = std::min(min_x, x);
+    max_x = std::max(max_x, x);
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+  }
+
+  unsigned int min_mx = 0;
+  unsigned int min_my = 0;
+  unsigned int max_mx = 0;
+  unsigned int max_my = 0;
+  if (!costmap->worldToMap(min_x, min_y, min_mx, min_my) ||
+    !costmap->worldToMap(max_x, max_y, max_mx, max_my))
+  {
+    return false;
+  }
+  const double resolution = costmap->getResolution();
+  if (!std::isfinite(resolution) || resolution <= 0.0) {
+    return false;
+  }
+  for (size_t cy = min_my; cy <= max_my; ++cy) {
+    for (size_t cx = min_mx; cx <= max_mx; ++cx) {
+      const auto cell_cost = costmap->getCost(
+        static_cast<unsigned int>(cx), static_cast<unsigned int>(cy));
+      if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE) {
+        continue;  // Cost 253 is inflation, not physical occupation.
+      }
+      double wx = 0.0;
+      double wy = 0.0;
+      costmap->mapToWorld(
+        static_cast<unsigned int>(cx), static_cast<unsigned int>(cy), wx, wy);
+      if (polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)) {
+        if (occupied_cell_cost_out) {
+          *occupied_cell_cost_out = static_cast<int>(cell_cost);
+        }
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 // Smac verified the candidate against the costmap when it was created.
@@ -98,6 +172,7 @@ bool validAgainstCurrentCostmap(
   MotionPose rejected_pose{0.0, 0.0, 0.0};
   double rejected_footprint_cost = 0.0;
   int rejected_center_cost = -1;
+  int rejected_occupied_cell_cost = -1;
   const bool path_safe = validateSweptPath(
     poses, [&](const MotionPose & sample) {
       ++samples_checked;
@@ -106,19 +181,23 @@ bool validAgainstCurrentCostmap(
       // Polygon boundary at cost 253 is not a collision in Nav2 Humble;
       // the center still rejects inscribed (253), lethal (254), unknown (255).
       int center_cost = -1;
-      const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);
+      int occupied_cell_cost = -1;
+      const bool clear = polygonFootprintClear(
+        costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);
       if (!clear && !has_rejected_sample) {
         has_rejected_sample = true;
         rejected_pose = sample;
         rejected_footprint_cost = cost;
         rejected_center_cost = center_cost;
+        rejected_occupied_cell_cost = occupied_cell_cost;
       }
       return clear;
     });
   lock.unlock();
   if (!path_safe) {
     if (has_rejected_sample) {
-      const char * reason = rejected_center_cost < 0 ? "center_offmap" :
+      const char * reason = rejected_occupied_cell_cost >= nav2_costmap_2d::LETHAL_OBSTACLE ?
+        "occupied_cell_inside_chassis" : rejected_center_cost < 0 ? "center_offmap" :
         (rejected_center_cost >= nav2_costmap_2d::NO_INFORMATION ? "center_unknown" :
         (rejected_center_cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE ?
         "center_inscribed_or_lethal" :
@@ -129,9 +208,10 @@ bool validAgainstCurrentCostmap(
       RCLCPP_WARN(
         rclcpp::get_logger("planner_server"),
         "GridBased swept path first rejected sample=%zu/%zu at (%.3f, %.3f, yaw=%.3f) "
-        "footprint_cost=%.0f center_cost=%d reason=%s",
+        "footprint_cost=%.0f center_cost=%d occupied_cell_cost=%d reason=%s",
         samples_checked, poses.size(), rejected_pose.x, rejected_pose.y,
-        rejected_pose.yaw, rejected_footprint_cost, rejected_center_cost, reason);
+        rejected_pose.yaw, rejected_footprint_cost, rejected_center_cost,
+        rejected_occupied_cell_cost, reason);
     } else {
       RCLCPP_WARN(
         rclcpp::get_logger("planner_server"),
@@ -168,7 +248,7 @@ bool endpointFootprintClear(
   nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(map);
   const double cost = checker.footprintCostAtPose(
     pose.x, pose.y, pose.yaw, footprint);
-  return polygonFootprintClear(map, pose, cost);
+  return polygonFootprintClear(map, pose, cost, footprint);
 }
 
 }  // namespace
