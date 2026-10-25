@@ -152,8 +152,9 @@ def test_selected_route_is_rechecked_before_publishing():
     assert "center_cost < static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in code
     assert "footprint_cost < static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in code
     assert "footprint_cost >= 0.0" in code
-    assert "return polygonFootprintClear(map, pose, cost);" in code
-    assert "const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);" in code
+    assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
+    assert "const bool clear = polygonFootprintClear(" in code
+    assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
     # Reject updated obstacles rather than falling back to a stale candidate.
     assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
     assert "best.poses.clear();" in code
@@ -172,8 +173,24 @@ def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_sm
     assert "std::isfinite(footprint_cost) && footprint_cost >= 0.0" in helper
     # 253 is safe for a polygon boundary, but never safe at the robot center.
     # 254, 255 and negative/nonfinite footprint values remain unsafe.
-    assert "return polygonFootprintClear(map, pose, cost);" in code
-    assert "const bool clear = polygonFootprintClear(costmap, sample, cost, &center_cost);" in code
+    assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
+    assert "const bool clear = polygonFootprintClear(" in code
+    assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
+
+def test_full_chassis_area_blocks_lethal_and_unknown_cells_not_just_outline():
+    code = SOURCE.read_text()
+    helper = (PKG / "include/patrol_navigation_controller/grid_footprint_geometry.hpp").read_text()
+    assert 'grid_footprint_geometry.hpp' in code
+    assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in code
+    assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in code
+    assert "occupied_cell_inside_chassis" in code
+    assert "costmap->worldToMap(x, y, vertex_mx, vertex_my)" in code
+    assert "const double cos_yaw = std::cos(pose.yaw);" in code
+    assert "const double sin_yaw = std::sin(pose.yaw);" in code
+    assert "Boundary contact counts as overlap" in helper
+    assert "positive_turn && negative_turn" in helper
+    assert "if (!overlaps_axis(1.0, 0.0)" in helper
+
 
 def test_selected_route_checks_every_interpolated_chassis_pose():
     geometry = (
