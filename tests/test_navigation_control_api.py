@@ -1172,9 +1172,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("drive_pending", self.api.state_response()["loop_stage"])
         self.assertEqual(0, self.api.state_response()["loop_leg_index"])
         self.assertTrue(self.api._loop_pending)
-        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
-            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
-                await self.api._advance_loop_leg()
+        # The recovered Spin has finished at B; a new A-bound drive
+        # requires a fresh, physically plausible localization sample.
+        with patch.object(self.api, "_safe_live_pose", side_effect=lambda: {
+            "x": b["x"], "y": b["y"], "yaw": math.pi,
+            "received_at": time.time(),
+        }):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
         self.assertEqual("NAVIGATING", self.api.state_response()["navigation_state"])
         self.assertEqual("drive", self.api.state_response()["loop_stage"])
         self.assertEqual(a["x"], self.map_api.ros_control.loop_reapproach_calls[-1]["x"])
