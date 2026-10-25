@@ -1038,6 +1038,73 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.refresh_watchdog_samples(base + 9.1)
         self.assertEqual("BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1))
 
+    async def test_fresh_odometry_confirmed_slow_curve_resets_progress_timeout(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+
+        # Reproduces the observed reverse curve: 5.69cm in five seconds,
+        # with fresh measured yaw change rather than command-only turning.
+        self.set_rotation(
+            3, linear=-0.070, angular=0.35, yaw_delta=0.01,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0},
+        )
+        self.assertAlmostEqual(self.api._navigation_progress_at, base + 4.0)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+
+        # Progress is not indefinitely excused by a single real movement.
+        self.map_api.ros_control.rotation["odom_yaw_delta"] = 0.0
+        self.refresh_watchdog_samples(base + 9.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1),
+        )
+
+    async def test_curve_command_alone_or_stale_odometry_cannot_reset_progress(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        cases = [
+            {"yaw_delta": 0.0},
+            {"odom_age": 0.75},
+            {"command_age": 0.75},
+            {"angular": -0.35, "yaw_delta": 0.02},
+            {"linear": -0.12},
+            {"angular": 0.0},
+        ]
+        for seq, override in enumerate(cases, start=1):
+            with self.subTest(case=override):
+                with self.api._lock:
+                    self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+                self.set_rotation(100 + seq, linear=-0.07, angular=0.35, **override)
+                self.api.note_navigation_sample(
+                    "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0},
+                )
+                self.assertAlmostEqual(self.api._navigation_progress_at, base)
+
+    async def test_straight_slow_displacement_keeps_standard_no_progress_threshold(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(50, linear=-0.07, angular=0.0, yaw_delta=0.0)
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0},
+        )
+        self.assertAlmostEqual(self.api._navigation_progress_at, base)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1),
+        )
+
     async def test_rotation_does_not_mask_blocked_translation(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
