@@ -401,17 +401,8 @@ class NavigationControlApi:
                 )
 
     def note_replanned_path(self, path: Any) -> None:
-        normalized = self._normalized_path(path)
-        if len(normalized) < 2:
-            return
-        with self._lock:
-            if (
-                self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
-                or not self._state["active_goal"]
-            ):
-                return
-            self._state["planned_path"] = normalized
-            self._touch_locked()
+        """Never replace a Goal-owned path using an anonymous ROS topic."""
+        return
 
     def note_active_map(self, active_map: dict[str, Any]) -> None:
         if not isinstance(active_map, dict):
