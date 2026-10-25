@@ -55,9 +55,6 @@ class FakeRos:
         self.rotation = {}
         self.live_generation = 0
         self.live_route = None
-
-    def applied_follow_path(self):
-        return self.live_route
         self.backup_distances = []
         self.spin_radians = []
         self.loop_reapproach_calls = []
@@ -67,6 +64,9 @@ class FakeRos:
         self.cache_valid = True
         self.validity_queries = 0
         self.path_valid_results = []
+
+    def applied_follow_path(self):
+        return self.live_route
 
     def begin_loop_trace(self):
         self.trace_started = True
@@ -213,7 +213,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                 self.api.note_pi_status({
                     "navigation_mode": command["mode"],
                     "mode": self.api._robot_mode,
-                    "emergency_stop": False,
+                    # Navigation mode selection does not release E-STOP.
+                    "emergency_stop": self.api._pi_estop_latched is True,
                     **({
                         "safety_session": "test-pi",
                         "safety_epoch": self._fake_safety_epoch,
@@ -1907,13 +1908,23 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         ros._navigation_state = "NAVIGATING"
         ros._spin_last_odom_yaw = math.pi - 0.2
         for angle in (math.pi - 0.1, -math.pi + 0.05, -math.pi + 0.2):
-            pose = SimpleNamespace(
-                pose=SimpleNamespace(orientation=SimpleNamespace(
-                    x=0.0, y=0.0, z=math.sin(angle / 2),
-                    w=math.cos(angle / 2),
-                ))
+            orientation = SimpleNamespace(
+                x=0.0, y=0.0, z=math.sin(angle / 2),
+                w=math.cos(angle / 2),
             )
-            ros._on_odom(SimpleNamespace(pose=pose))
+            pose = SimpleNamespace(
+                pose=SimpleNamespace(
+                    position=SimpleNamespace(x=0.0, y=0.0),
+                    orientation=orientation,
+                )
+            )
+            twist = SimpleNamespace(
+                twist=SimpleNamespace(
+                    linear=SimpleNamespace(x=0.0),
+                    angular=SimpleNamespace(z=0.1),
+                )
+            )
+            ros._on_odom(SimpleNamespace(pose=pose, twist=twist))
         progress = ros.spin_progress()
         self.assertEqual(3, progress["samples"])
         self.assertAlmostEqual(0.4, progress["signed_yaw_rad"], places=5)
@@ -1921,12 +1932,17 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         # A 1.2 rad jump is not legitimate short-interval yaw motion.
         angle = -math.pi + 1.4
         pose = SimpleNamespace(pose=SimpleNamespace(
-            pose=SimpleNamespace(orientation=SimpleNamespace(
+            position=SimpleNamespace(x=0.0, y=0.0),
+            orientation=SimpleNamespace(
                 x=0.0, y=0.0, z=math.sin(angle / 2),
                 w=math.cos(angle / 2),
-            ))
+            )
         ))
-        ros._on_odom(pose)
+        twist = SimpleNamespace(twist=SimpleNamespace(
+            linear=SimpleNamespace(x=0.0),
+            angular=SimpleNamespace(z=0.1),
+        ))
+        ros._on_odom(SimpleNamespace(pose=pose, twist=twist))
         self.assertTrue(ros.spin_progress()["invalid"])
 
     async def test_loop_rejects_overlapping_a_b(self):
@@ -4415,7 +4431,11 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         before = self.map_api.ros_control.plan_calls
         old_path = list(self.api.state_response()["planned_path"])
         # No anonymous /plan event is permitted to schedule a new action.
-        self.assertFalse(hasattr(self.api, "note_nav2_replan_signal"))
+        # An unowned /plan may arrive, but cannot replace our approved path.
+        self.api.note_replanned_path([
+            {"x": 99.0, "y": 99.0, "yaw": 0.0},
+            {"x": 100.0, "y": 100.0, "yaw": 0.0},
+        ])
         await asyncio.sleep(0.02)
         self.assertEqual(before, self.map_api.ros_control.plan_calls)
         self.assertEqual(old_path, self.api.state_response()["planned_path"])

@@ -498,21 +498,12 @@ class NavigationControlApi:
                 self._replan_refresh_inflight = False
 
     def note_replanned_path(self, path: Any) -> None:
-        normalized = self._normalized_path(path)
-        if len(normalized) < 2:
-            return
-        with self._lock:
-            if self._loop_goals and self._loop_started:
-                # Only the epoch-checked cached-path owner may replace the
-                # actual loop route, not anonymous Nav2 topic messages.
-                return
-            if (
-                self._state["navigation_state"] not in {"NAVIGATING", "RESUMING"}
-                or not self._state["active_goal"]
-            ):
-                return
-            self._state["planned_path"] = normalized
-            self._touch_locked()
+        """Unowned Nav2 /plan messages cannot overwrite a Goal-bound path.
+
+        The approved replan is computed using our active Goal generation in
+        _refresh_approved_replan; ROS topic payloads have no ownership token.
+        """
+        return
 
     def note_active_map(self, active_map: dict[str, Any]) -> None:
         if not isinstance(active_map, dict):
@@ -592,10 +583,12 @@ class NavigationControlApi:
 
     def _expire_pending_cancel_locked(self, now: float) -> None:
         pending = self._pending_goal_cancel
-        if (pending is None or pending.get("started_at") is None
-            or now - pending["started_at"] < self.STOP_CONFIRM_TIMEOUT_SEC):
+        if pending is None:
             return
         stop_started_at = pending.get("started_at")
+        if (stop_started_at is not None
+            and now - stop_started_at < self.STOP_CONFIRM_TIMEOUT_SEC):
+            return
         if stop_started_at is None:
             requested_at = pending.get("requested_at")
             within_request_window = (
@@ -951,6 +944,10 @@ class NavigationControlApi:
                 "loop_replans": self._loop_replans,
                 "patrol_transition": self._patrol_transition,
                 "patrol_transition_error": self._patrol_transition_error,
+                "last_blocked_diagnostic": (
+                    dict(self._last_blocked_diagnostic)
+                    if self._last_blocked_diagnostic is not None else None
+                ),
                 "patrol_ready": bool(
                     self._patrol_transition is None
                     and self._connected and self._pi_updated_at is not None
@@ -1012,6 +1009,29 @@ class NavigationControlApi:
                     "goal_reached_tolerance_m": self._goal_reached_tolerance_m,
                 },
             }
+            # Preview != controller-applied path. Publish only the path that
+            # belongs to the currently running Nav2 generation and Goal.
+            executed_path = []
+            goal = self._state.get("active_goal")
+            if (self._state.get("navigation_mode") == "DRIVING"
+                and self._state.get("navigation_state") in {"NAVIGATING", "RESUMING"}
+                and isinstance(goal, dict) and isinstance(applied, dict)
+                and applied.get("route_generation") == ros_nav.get("route_generation")):
+                route = applied.get("path")
+                if isinstance(route, list) and len(route) >= 2:
+                    try:
+                        end = route[-1]
+                        distance = math.hypot(float(end["x"]) - float(goal["x"]),
+                                              float(end["y"]) - float(goal["y"]))
+                        yaw_delta = math.atan2(
+                            math.sin(float(end["yaw"]) - float(goal.get("yaw", 0.0))),
+                            math.cos(float(end["yaw"]) - float(goal.get("yaw", 0.0))),
+                        )
+                        if distance <= 0.35 and abs(yaw_delta) <= 0.25:
+                            executed_path = [dict(point) for point in route]
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        pass
+            payload["executed_path"] = executed_path
         return payload
 
     async def _await_pi_navigation_telemetry(
@@ -1030,8 +1050,11 @@ class NavigationControlApi:
                     and (after is None or self._pi_updated_at > after)
                     and self._age(time.time(), self._pi_updated_at) <= self._watchdog.pi_timeout_sec
                     and self._pi_navigation_mode == expected
-                    and self._pi_estop_latched is False
-                    and not self._state["emergency_stop"]
+                    # Mode configuration is permitted while physically
+                    # E-stopped; only motion authorization requires release.
+                    # Never accept an unknown/mismatched stop state.
+                    and (self._pi_estop_latched is False and not self._state["emergency_stop"]
+                         or self._pi_estop_latched is True and self._state["emergency_stop"])
                 )
             if confirmed:
                 return True

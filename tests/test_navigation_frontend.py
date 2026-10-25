@@ -88,11 +88,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const LIDAR_VISUAL_YAW_OFFSET_RAD = Math.PI;", viewer)
         self.assertIn("for (const group of [scanRoot, pointsRoot])", viewer)
         self.assertIn(
-            "group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;",
+            "group.rotation.z = yaw + scanMountLocal.yaw;",
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
+            'static/lidar_3d_viewer.js?v=20261024-loop-ab-v1',
             template,
         )
 
@@ -109,7 +109,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("cameraTextureContext.drawImage(", viewer)
         self.assertIn("const cameraImage = document.getElementById('camera-stream')", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
+            'static/lidar_3d_viewer.js?v=20261024-loop-ab-v1',
             template,
         )
 
@@ -147,7 +147,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("const forwardError = errorX * forwardX + errorY * forwardY", viewer)
         self.assertIn("const lateralError = errorX * lateralX + errorY * lateralY", viewer)
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
+            'static/lidar_3d_viewer.js?v=20261024-loop-ab-v1',
             template,
         )
 
@@ -213,7 +213,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
             viewer,
         )
         self.assertIn(
-            'static/lidar_3d_viewer.js?v=20261020-dark-technical-v1',
+            'static/lidar_3d_viewer.js?v=20261024-loop-ab-v1',
             template,
         )
 
