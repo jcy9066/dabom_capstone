@@ -146,6 +146,7 @@ class NavigationRosControl:
         self._last_odom_stamp_ns = None
         self._last_odom_previous_at = None
         self._last_odom_yaw = None
+        self._last_odom_xy = None
         self._last_odom_yaw_delta = None
         self._odom_yaw_window = deque()
         self._odom_sequence = 0
@@ -959,6 +960,8 @@ class NavigationRosControl:
                 "odometry_age_sec": self._monotonic_age(now, self._last_odom_at),
                 "odom_interval_start_at": self._last_odom_previous_at,
                 "odom_yaw": self._last_odom_yaw,
+                "odom_x": self._last_odom_xy[0] if self._last_odom_xy is not None else None,
+                "odom_y": self._last_odom_xy[1] if self._last_odom_xy is not None else None,
                 "odom_yaw_delta": self._last_odom_yaw_delta,
                 "odom_sequence": self._odom_sequence,
             }
@@ -995,9 +998,11 @@ class NavigationRosControl:
     def _on_odom(self, message: Any) -> None:
         try:
             yaw = self._yaw_from_orientation(message.pose.pose.orientation)
+            x = float(message.pose.pose.position.x)
+            y = float(message.pose.pose.position.y)
         except (AttributeError, TypeError, ValueError, OverflowError):
             return
-        if not math.isfinite(yaw):
+        if not all(math.isfinite(value) for value in (x, y, yaw)):
             return
         stamp_ns = None
         if self._node is not None:
@@ -1025,6 +1030,7 @@ class NavigationRosControl:
                 if len(self._odom_yaw_window) > 1 else None
             )
             self._last_odom_yaw = yaw
+            self._last_odom_xy = (x, y)
             self._last_odom_at = now
             self._odom_sequence += 1
 
