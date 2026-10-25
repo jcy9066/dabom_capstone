@@ -50,8 +50,26 @@ async function scenario(target, options={}) {
   assert.equal(r.calls[0][0],'/api/navigation/control/patrol-mode');
   assert.equal(r.calls[0][1].mode,'auto');
   assert(!r.calls.some(x=>String(x[0]).includes('/start')));
-  r=await scenario('AUTO',{navigation_mode:'MAPPING',prepared:false});
-  assert(!r.ok && r.calls.length===1 && r.calls[0][0]==='prepare');
+  r=await scenario('AUTO',{navigation_mode:'MAPPING',answer:{
+    robot_mode:'auto',navigation_mode:'MAPPING',patrol_ready:false,
+    patrol_transition:null,patrol_transition_error:null
+  }});
+  assert(r.ok && r.calls.length===1);
+  assert.equal(r.calls[0][0],'/api/navigation/control/patrol-mode');
+  assert(!r.calls.some(x=>x[0]==='prepare' || x[0]==='/api/navigation/control/mode'));
+  assert.equal(r.state.control.navigation_mode,'MAPPING');
+  r=await scenario('MANUAL',{navigation_mode:'MAPPING',robot_mode:'auto',answer:{
+    robot_mode:'manual',navigation_mode:'MAPPING',patrol_ready:false,
+    patrol_transition:null,patrol_transition_error:null
+  }});
+  assert(r.ok && r.calls.length===1);
+  assert.equal(r.state.control.navigation_mode,'MAPPING');
+  r=await scenario('AUTO',{answer:{
+    robot_mode:'auto',navigation_mode:'DRIVING',patrol_ready:false,
+    patrol_transition:null,patrol_transition_error:null
+  }});
+  assert(r.ok && r.calls.length===1);
+  assert.equal(r.state.control.navigation_mode,'DRIVING');
   r=await scenario('AUTO',{failure:'Pi ACK missing'});
   assert(!r.ok && r.calls.some(x=>x[0]==='refresh'));
   assert(r.feedback.at(-1).error);
@@ -69,5 +87,5 @@ async function scenario(target, options={}) {
   assert(!r.ok && r.calls.some(x=>x[0]==='refresh'));
   r=await scenario('AUTO',{pending:true});
   assert(!r.ok && r.calls.length===0);
-  console.log('PASS: 7 server-authoritative patrol mode cases');
+  console.log('PASS: 9 server-authoritative patrol mode cases');
 })().catch(e=>{console.error(e);process.exitCode=1});
