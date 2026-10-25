@@ -2618,7 +2618,13 @@ class NavigationControlApi:
                     if waiting is not None else None
                 ),
                 "baseline_xy": list(baseline) if baseline is not None else None,
+                "baseline_odom_xy": (
+                    list(self._navigation_progress_odom_pose)
+                    if self._navigation_progress_odom_pose is not None else None
+                ),
                 "xy_displacement_m": None,
+                "odom_displacement_m": None,
+                "curved_progress_max_linear_mps": self.CURVED_PROGRESS_MAX_LINEAR_MPS,
                 "pose_age_sec": self._public_age(triggered_at, self._last_pose_at),
                 "pi_age_sec": self._public_age(triggered_at, self._pi_updated_at),
                 "rotation_extension_sec": round(self._rotation_extension_sec, 3),
@@ -2637,12 +2643,18 @@ class NavigationControlApi:
         if isinstance(rotation, dict):
             for field in (
                 "command_age_sec", "odometry_age_sec", "command_linear_x",
-                "command_angular_z", "odom_yaw_delta", "odom_sequence",
-                "nonzero_command_sequence",
+                "command_angular_z", "odom_x", "odom_y", "odom_yaw",
+                "odom_yaw_delta", "odom_sequence", "nonzero_command_sequence",
             ):
                 value = rotation.get(field)
                 if type(value) in (int, float) and math.isfinite(float(value)):
                     diagnostic["rotation"][field] = round(float(value), 4)
+            baseline_odom = diagnostic["baseline_odom_xy"]
+            ox, oy = diagnostic["rotation"].get("odom_x"), diagnostic["rotation"].get("odom_y")
+            if baseline_odom is not None and ox is not None and oy is not None:
+                diagnostic["odom_displacement_m"] = round(
+                    math.hypot(ox - baseline_odom[0], oy - baseline_odom[1]), 4
+                )
         return diagnostic
 
     async def _fail_blocked_navigation(self, triggered_at: float | None = None) -> bool:
