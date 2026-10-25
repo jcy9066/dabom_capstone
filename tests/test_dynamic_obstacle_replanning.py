@@ -10,8 +10,9 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn("update_frequency: 10.0", params)
         self.assertIn("publish_frequency: 2.0", params)
         self.assertIn("expected_planner_frequency: 0.25", params)
-        self.assertIn("observation_persistence: 0.5", params)
-        self.assertIn("allow_unknown: true", params)
+        self.assertIn("observation_persistence: 0.0", params)
+        self.assertNotIn("allow_unknown: true", params)
+        self.assertEqual(params.count("allow_unknown: false"), 4)
         self.assertEqual(params.count("inflation_radius: 0.35"), 2)
         self.assertEqual(params.count("clearing: true"), 2)
 

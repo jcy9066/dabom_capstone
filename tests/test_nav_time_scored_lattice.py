@@ -45,7 +45,12 @@ def test_planner_is_registered_as_nav2_global_planner():
 def test_planner_config_has_two_separately_parameterized_safe_smac_candidates():
     conf = yaml.safe_load((NAV / "config/nav2_params.yaml").read_text())
     planner = conf["planner_server"]["ros__parameters"]
-    assert planner["planner_plugins"] == ["GridBased"]
+    assert planner["planner_plugins"] == ["GridBased", "LoopGridBased"]
+    loop = planner["LoopGridBased"]
+    assert loop["plugin"] == "patrol_navigation_controller::TimeScoredLatticePlanner"
+    for name in ("QuickMotion", "StableTurns"):
+        assert loop[name]["allow_reverse_expansion"] is False
+        assert loop[name]["lattice_filepath"] == ""
     chosen = planner["GridBased"]
     assert chosen["plugin"] == "patrol_navigation_controller::TimeScoredLatticePlanner"
     assert chosen["candidate_names"] == ["QuickMotion", "StableTurns"]

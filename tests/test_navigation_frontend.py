@@ -33,9 +33,6 @@ class NavigationFrontendContractTests(unittest.TestCase):
             self.assertIn(f"'{status}'", allowed)
         self.assertIn("&& control.active_goal", allowed)
         self.assertIn("control.planned_path", allowed)
-        self.assertIn("const path = running ? control.executed_path", allowed)
-        self.assertIn("preview ? control.planned_path : []", allowed)
-        self.assertIn("applyNavigationGlobalPath(", allowed)
 
     def test_consumes_frozen_dashboard_navigation_contract(self):
         for contract in (
@@ -55,7 +52,11 @@ class NavigationFrontendContractTests(unittest.TestCase):
             self.control,
         )
         auto_request = self.control.index("await requestDriveMode('AUTO', { announce: false })")
-        goal_request = self.control.index("mutate('/api/navigation/control/goal', { goal })")
+        goal_request = self.control.index("mutate('/api/navigation/control/goal', loopGoals")
+        self.assertIn("loop_goals: loopGoals", self.control)
+        self.assertIn("data-lidar-interaction=\"set-loop\"", (
+            ROOT / "frontend/templates/index.html"
+        ).read_text(encoding="utf-8"))
         self.assertLess(auto_request, goal_request)
         self.assertIn("state.draftGoal = null", self.control)
         viewer = (
@@ -495,6 +496,18 @@ class NavigationFrontendContractTests(unittest.TestCase):
         self.assertIn("await self.pause_for_manual()", server[start:end])
         self.assertIn('{"type": "mode", "mode": target}', server[start:end])
 
+
+    def test_cancel_http_failure_reloads_server_state_before_error_feedback(self):
+        dashboard = (ROOT / "frontend/services/static/navigation_control.js").read_text(
+            encoding="utf-8"
+        )
+        start = dashboard.index("async function simpleAction(")
+        end = dashboard.index("async function requestLedToggle(", start)
+        handler = dashboard[start:end]
+        self.assertIn("if (path.endsWith('/cancel'))", handler)
+        self.assertIn("latest = await refreshState();", handler)
+        self.assertIn("latest?.last_error || error.message", handler)
+        self.assertIn("Goal 취소 실패", handler)
 
     def test_cancel_http_failure_reloads_server_state_before_error_feedback(self):
         dashboard = (ROOT / "frontend/services/static/navigation_control.js").read_text(

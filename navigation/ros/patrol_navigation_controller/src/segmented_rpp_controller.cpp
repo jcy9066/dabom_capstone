@@ -58,12 +58,15 @@ void SegmentedRPPController::configure(
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_pivot_yaw_tolerance", rclcpp::ParameterValue(0.12));
   declare_parameter_if_not_declared(
+    node, plugin_name_ + ".loop_forward_only", rclcpp::ParameterValue(false));
+  declare_parameter_if_not_declared(
     node, plugin_name_ + ".segment_transfer_position_tolerance",
     rclcpp::ParameterValue(0.08));
   node->get_parameter("controller_frequency", controller_frequency_);
   node->get_parameter(plugin_name_ + ".segment_pivot_max_angular", pivot_max_angular_);
   node->get_parameter(plugin_name_ + ".segment_pivot_acceleration", pivot_acceleration_);
   node->get_parameter(plugin_name_ + ".segment_pivot_yaw_tolerance", pivot_yaw_tolerance_);
+  node->get_parameter(plugin_name_ + ".loop_forward_only", loop_forward_only_);
   node->get_parameter(
     plugin_name_ + ".segment_transfer_position_tolerance", transfer_position_tolerance_);
 
@@ -182,7 +185,13 @@ void SegmentedRPPController::buildStages()
       const auto & q = path_.poses[index + 1];
       const double separation = distance(p, q);
       const double delta_yaw = angles::shortest_angular_distance(yaw(p), yaw(q));
-      if (separation < 0.003 && std::abs(delta_yaw) > 0.03) {
+      // The approved 32-heading loop lattice samples a stationary pivot
+      // in ~0.02454 rad increments. The legacy 0.03 rad threshold silently
+      // classified EVERY sampled pivot edge as a duplicate (kind 4).
+      // Restrict this fix to the loop controller; normal SET GOAL keeps
+      // its existing segmentation threshold and behavior.
+      const double minimum_pivot_yaw = loop_forward_only_ ? 0.005 : 0.03;
+      if (separation < 0.003 && std::abs(delta_yaw) > minimum_pivot_yaw) {
         return delta_yaw > 0 ? 2 : 3;  // spin left, spin right
       }
       if (separation < 0.003) {
@@ -198,6 +207,11 @@ void SegmentedRPPController::buildStages()
   int previous_kind = -1;
   for (size_t edge = 0; edge < n - 1; ++edge) {
     const int current_kind = kind(edge);
+    if (loop_forward_only_ && current_kind == 1) {
+      // A/B loop requires a stationary in-place pivot followed by forward
+      // movement. Reject reverse candidates before any motion is authorized.
+      throw std::runtime_error("Loop path contains reverse drive instead of a 180-degree pivot");
+    }
     if (current_kind == 4) {
       // Treat a duplicate as a path separator, never invent a spin.
       if (previous_kind != -1 && edge > run_begin) {
@@ -262,6 +276,7 @@ void SegmentedRPPController::invalidatePlan() noexcept
   stage_index_ = 0;
   pivot_started_ = false;
   last_pivot_angular_command_ = 0.0;
+  loop_half_turn_in_progress_ = false;
   path_.poses.clear();
 }
 
@@ -476,7 +491,33 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     if (stage_index_ + 1 >= stages_.size()) {
       const auto terminal = storedPathPoseInControllerFrame(
         path_.poses.back(), pose.header.frame_id);
-      if (distance(pose, terminal) <= 0.25) {
+      // A freshly planned loop leg uses XY=0.55m, but replayed physical
+      // FollowPath has XY=0.10m. Obey the selected Nav2 goal checker;
+      // stopping at 0.55m for a 0.10m goal causes a permanent stall.
+      double terminal_xy_tolerance = 0.25;
+      if (loop_forward_only_) {
+        terminal_xy_tolerance = 0.55;
+        if (goal_checker != nullptr) {
+          geometry_msgs::msg::Pose pose_tolerance;
+          geometry_msgs::msg::Twist velocity_tolerance;
+          if (goal_checker->getTolerances(pose_tolerance, velocity_tolerance)
+              && std::isfinite(pose_tolerance.position.x)
+              && pose_tolerance.position.x > 0.0)
+          {
+            terminal_xy_tolerance = std::clamp(
+              pose_tolerance.position.x, 0.05, 0.55);
+          }
+        }
+      }
+      if (distance(pose, terminal) <= terminal_xy_tolerance) {
+        // Loop arrival is XY-only. The server authorizes a separate Spin
+        // after an encoder-confirmed STOP. Terminal yaw alignment here would
+        // add an unrequested pivot and unnecessary motor-driver loading.
+        // The ordinary SET GOAL controller keeps its original yaw behavior.
+        if (loop_forward_only_) {
+          pivot_started_ = false;
+          return stopped(pose);
+        }
         const double remaining = angles::shortest_angular_distance(
           yaw(pose), yaw(terminal));
         if (!std::isfinite(remaining)) {
@@ -565,6 +606,11 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
     {
       return stopped(pose);
     }
+    if (loop_forward_only_ && loop_half_turn_in_progress_) {
+      // Toggle ONLY after the encoder/odometry-gated pivot has completed.
+      loop_turn_clockwise_ = !loop_turn_clockwise_;
+      loop_half_turn_in_progress_ = false;
+    }
     advanceStage();
     return stopped(pose);
   }
@@ -573,7 +619,21 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::computeVelocityCommands
   checkRotationCollision(pose, remaining);
   const double magnitude = std::min(
     pivot_max_angular_, std::sqrt(2.0 * pivot_acceleration_ * std::abs(remaining)));
-  const double desired = std::copysign(magnitude, remaining);
+  // A half-turn admits both +pi and -pi solutions. The loop alone picks
+  // a deterministic sign, alternating after each completed 180-degree turn.
+  // The next cycle retains the existing turn direction as remaining yaw
+  // decreases; path changes never count as a completed pivot.
+  if (loop_forward_only_ && !pivot_started_
+      && std::abs(std::abs(remaining) - M_PI) <= 0.15)
+  {
+    loop_half_turn_in_progress_ = true;
+  }
+  const double controlled_remaining = (
+    loop_forward_only_ && loop_half_turn_in_progress_ && !pivot_started_
+    ? std::copysign(std::abs(remaining), loop_turn_clockwise_ ? -1.0 : 1.0)
+    : remaining
+  );
+  const double desired = std::copysign(magnitude, controlled_remaining);
   geometry_msgs::msg::TwistStamped command = stopped(pose);
   command.twist.angular.z = boundedPivotAngularCommand(
     last_pivot_angular_command_, desired,

@@ -12,6 +12,8 @@ import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 
+from lidar_recovery_policy import restart_backoff
+
 
 class ScanMonitor:
     def __init__(self, topic: str):
@@ -93,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--startup-timeout", type=float, default=15.0)
     parser.add_argument("--stale-timeout", type=float, default=3.0)
     parser.add_argument("--restart-delay", type=float, default=1.0)
+    parser.add_argument("--max-restart-delay", type=float, default=10.0)
     parser.add_argument("launch_args", nargs=argparse.REMAINDER)
     return parser
 
@@ -104,6 +107,7 @@ def main() -> int:
 
     stop_requested = False
     current: subprocess.Popen | None = None
+    consecutive_failures = 0
 
     def request_stop(_signum, _frame):
         nonlocal stop_requested
@@ -175,7 +179,23 @@ def main() -> int:
         )
         terminate_group(current, signal.SIGINT)
         current = None
-        time.sleep(max(0.1, args.restart_delay))
+        # Failure bursts (including driver error 80008002 followed by stale
+        # scans) must not spin unlimited ROS launch/serial reopen attempts.
+        # Successful, sustained scan delivery resets the penalty.
+        consecutive_failures = (
+            0 if monitor.scan_count >= 20
+            and time.monotonic() - started_at >= 10.0
+            else consecutive_failures + 1
+        )
+        delay = restart_backoff(
+            consecutive_failures,
+            base_delay=args.restart_delay,
+            max_delay=args.max_restart_delay,
+        )
+        print(f"[lidar-supervisor] retry_count={consecutive_failures} delay={delay:.1f}s", flush=True)
+        until = time.monotonic() + delay
+        while not stop_requested and time.monotonic() < until:
+            time.sleep(min(0.25, max(0.0, until - time.monotonic())))
 
     if current is not None:
         terminate_group(current, signal.SIGINT)

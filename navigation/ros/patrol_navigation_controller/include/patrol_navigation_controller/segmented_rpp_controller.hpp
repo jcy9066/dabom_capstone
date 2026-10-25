@@ -91,6 +91,14 @@ private:
   // A nonempty old inner-RPP path must never authorize stale driving.
   bool plan_ready_ = false;
   bool pivot_started_ = false;
+  // Loop-only controller rejects any reverse-drive segment instead of
+  // silently backing up when the planner cannot provide a pivot route.
+  bool loop_forward_only_ = false;
+  // Loop half-turn ambiguity (pi == -pi): prefer clockwise first, then
+  // counterclockwise after a physically completed turn. Never toggle on
+  // a rejected path, a safety STOP, or an incomplete pivot.
+  bool loop_turn_clockwise_ = true;
+  bool loop_half_turn_in_progress_ = false;
   double last_pivot_angular_command_ = 0.0;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr follow_path_publisher_;
   std::string follow_path_instance_;

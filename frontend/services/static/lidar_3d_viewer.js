@@ -211,6 +211,7 @@ if (root && canvas) {
     let currentVisualizationState = null;
     let currentControlState = null;
     let currentDraftGoal = null;
+    let currentLoopDraft = [];
     let previousNavigationMode = null;
     let previousNavigationState = null;
     let trajectorySessionActive = false;
@@ -220,6 +221,9 @@ if (root && canvas) {
     let cameraVisualReady = false;
     let cameraMountLocal = new THREE.Vector3(0.12, 0, LIDAR_HEIGHT_M);
     let scanVisualHeightM = 0.16;
+    // Default is the legacy physical 180-degree mounting correction.
+    // New scan packets carry the ROS laser->base_link mounting transform.
+    let scanMountLocal = { x: 0, y: 0, yaw: LIDAR_VISUAL_YAW_OFFSET_RAD };
     let cameraAspect = 4 / 3;
     let cameraViewPlane = null;
     let cameraViewBorder = null;
@@ -1248,12 +1252,8 @@ if (root && canvas) {
             group.rotation.z = pose.yaw;
         }
 
-        // Rotate both LiDAR layers in place around the current robot/LiDAR origin.
-        // This fixes the physical mount being reversed without altering ROS/map data.
-        for (const group of [scanRoot, pointsRoot]) {
-            group.position.set(pose.x, pose.y, pose.z);
-            group.rotation.z = pose.yaw + LIDAR_VISUAL_YAW_OFFSET_RAD;
-        }
+        // Scan geometry is frozen at the received frame's world pose in
+        // rebuildScan(), not dragged along with interpolated robot movement.
         setPoseVisibility(true);
 
         followTarget = new THREE.Vector3(pose.x, pose.y, pose.z);
@@ -1469,6 +1469,14 @@ if (root && canvas) {
     // every incoming scan replaces the previous frame. A transient obstacle
     // disappears from the live LiDAR layer on the next valid scan.
     function rebuildScan(scan) {
+        const mount = scan?.mount;
+        if (mount && [mount.x, mount.y, mount.yaw].every(v => Number.isFinite(Number(v)))) {
+            scanMountLocal = {
+                x: Number(mount.x),
+                y: Number(mount.y),
+                yaw: Number(mount.yaw),
+            };
+        }
         const nextKey = scanKey(scan);
         if (nextKey === currentScanKey) return;
         currentScanKey = nextKey;
@@ -1482,6 +1490,21 @@ if (root && canvas) {
         }
 
         ensureScanCapacity(scan.ranges.length);
+
+        // Anchor this single scan at the latest available base map pose.
+        // The previous scan stays fixed while the robot moves; each new scan
+        // replaces it (LaserScan Decay Time = 0). Never translate map/costmap.
+        if (targetPose) {
+            const yaw = targetPose.yaw;
+            const cy = Math.cos(yaw);
+            const sy = Math.sin(yaw);
+            const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
+            const sensorY = targetPose.y + sy * scanMountLocal.x + cy * scanMountLocal.y;
+            for (const group of [scanRoot, pointsRoot]) {
+                group.position.set(sensorX, sensorY, targetPose.z);
+                group.rotation.z = yaw + scanMountLocal.yaw;
+            }
+        }
 
         const angleMin = Number(scan.angle_min) || 0;
         const angleIncrement = Number(scan.angle_increment) || 0;
@@ -1782,21 +1805,37 @@ if (root && canvas) {
     }
 
     function rebuildGoals() {
-        const nextKey = `${goalKey(currentControlState?.active_goal)}|${goalKey(currentDraftGoal)}`;
+        const loopGoals = currentControlState?.loop_goals || [];
+        const draftLoop = currentLoopDraft || [];
+        const loopKey = points => points.map(goalKey).join('|');
+        const nextKey = [
+            goalKey(currentControlState?.active_goal),
+            goalKey(currentDraftGoal),
+            loopKey(loopGoals),
+            loopKey(draftLoop),
+        ].join('::');
         if (nextKey === currentGoalKey) return;
         currentGoalKey = nextKey;
 
         clearGroup(goalRoot);
-        // During replacement the previous Goal is retained for recovery,
-        // not offered as the currently executable destination.
         const replacing = String(
             currentControlState?.navigation_state || ''
         ).toUpperCase() === 'REPLACING_GOAL';
-        const active = createGoalMarker(
-            replacing ? null : currentControlState?.active_goal,
-            COLORS.goal,
-        );
-        if (active) goalRoot.add(active);
+        const loop = draftLoop.length ? draftLoop : loopGoals;
+        if (loop.length) {
+            const a = createGoalMarker(loop[0], COLORS.draftGoal, true);
+            if (a) goalRoot.add(a);
+            if (loop[1]) {
+                const b = createGoalMarker(loop[1], COLORS.goal);
+                if (b) goalRoot.add(b);
+            }
+        } else {
+            const active = createGoalMarker(
+                replacing ? null : currentControlState?.active_goal,
+                COLORS.goal,
+            );
+            if (active) goalRoot.add(active);
+        }
         const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal, true);
         if (draft) goalRoot.add(draft);
     }
@@ -1957,15 +1996,18 @@ if (root && canvas) {
 
     function syncGoalInteractionAvailability(control = currentControlState) {
         const allowed = goalInteractionAllowed(control);
-        const button = root.querySelector('[data-lidar-interaction="set-goal"]');
-        if (button) {
+        for (const kind of ['set-goal', 'set-loop']) {
+            const button = root.querySelector(`[data-lidar-interaction="${kind}"]`);
+            if (!button) continue;
             button.disabled = !allowed;
             button.setAttribute('aria-disabled', String(!allowed));
             button.title = allowed
-                ? '지도에서 Goal 위치와 방향을 지정합니다.'
+                ? (kind === 'set-loop'
+                    ? 'A와 B를 차례로 지정하여 반복 주행 경로를 만듭니다.'
+                    : '지도에서 Goal 위치와 방향을 지정합니다.')
                 : 'DRIVING 및 Pi·Localization·Nav2 준비 후 사용할 수 있습니다.';
         }
-        if (!allowed && interactionMode === 'set-goal') {
+        if (!allowed && ['set-goal', 'set-loop'].includes(interactionMode)) {
             setInteractionMode('view');
         }
     }
@@ -2064,8 +2106,8 @@ if (root && canvas) {
 
     function setInteractionMode(mode) {
         interactionMode = (
-            mode === 'set-goal' && goalInteractionAllowed()
-                ? 'set-goal'
+            ['set-goal', 'set-loop'].includes(mode) && goalInteractionAllowed()
+                ? mode
                 : 'view'
         );
         controls.enabled = viewerExpanded;
@@ -2074,7 +2116,7 @@ if (root && canvas) {
         controls.enableZoom = viewerExpanded;
         root.closest('.lidar-viewer-overlay')?.classList.toggle(
             'goal-input-active',
-            viewerExpanded && interactionMode === 'set-goal',
+            viewerExpanded && ['set-goal', 'set-loop'].includes(interactionMode),
         );
         root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
             button.classList.toggle(
@@ -2082,7 +2124,10 @@ if (root && canvas) {
                 button.dataset.lidarInteraction === interactionMode,
             );
         });
-        if (interactionMode === 'set-goal') canvas.focus({ preventScroll: true });
+        if (interactionMode !== 'view') canvas.focus({ preventScroll: true });
+        document.dispatchEvent(new CustomEvent('dabom:navigation-interaction-mode', {
+            detail: { mode: interactionMode },
+        }));
     }
 
     function isMappingMode() {
@@ -2138,7 +2183,18 @@ if (root && canvas) {
             : (mappingMode ? MAPPING_PREVIEW_POSE : null);
         applyTfPose(tfVisualizationPose);
         updateRobotPose(visualizationPose);
-        rebuildScan(liveScan);
+        // An older robot pose must not be applied to a newer scan as if
+        // both came from the same TF frame. The next fresh pair restores
+        // the scan automatically; the map and approved path stay unchanged.
+        const scanReceived = Number(liveScan?.received_at);
+        const poseReceived = Number(livePose?.received_at);
+        const scanPoseMismatch = Boolean(
+            validPose(livePose)
+            && Number.isFinite(scanReceived) && scanReceived > 0
+            && Number.isFinite(poseReceived) && poseReceived > 0
+            && Math.abs(scanReceived - poseReceived) > 0.75
+        );
+        rebuildScan(scanPoseMismatch ? null : liveScan);
 
         if (
             trajectorySessionActive
@@ -2336,6 +2392,10 @@ if (root && canvas) {
 
     document.addEventListener('dabom:navigation-goal-draft', event => {
         currentDraftGoal = event.detail || null;
+        rebuildGoals();
+    });
+    document.addEventListener('dabom:navigation-loop-draft', event => {
+        currentLoopDraft = Array.isArray(event.detail) ? event.detail : [];
         rebuildGoals();
     });
 
