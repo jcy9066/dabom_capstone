@@ -1765,10 +1765,16 @@ class NavigationControlApi:
                 return {**self.state_response(), "stop_delivered": True,
                         "physical_stop_confirmed": True, "cancel_completed": True}
             if self._pending_goal_cancel is not None:
-                # Includes the Nav2/ACK in-flight phase. Never dispatch a
-                # second physical STOP for the same cancel execution.
-                return {**self.state_response(), "cancel_completed": False,
-                        "stop_delivered": self._pending_goal_cancel.get("stop_delivered") is True,
+                # A state snapshot may expire the pending cancel before the
+                # response is assembled. Never dereference the mutable owner
+                # after reading state_response(), and never issue a second STOP.
+                pending = self._pending_goal_cancel
+                snapshot = self.state_response()
+                return {**snapshot, "cancel_completed": False,
+                        "stop_delivered": (
+                            snapshot.get("cancel_progress") is not None
+                            and pending.get("stop_delivered") is True
+                        ),
                         "physical_stop_confirmed": False}
             self._pending_nav_success = None
             self._sensor_recovery = None
@@ -1782,6 +1788,7 @@ class NavigationControlApi:
             # timeout begins only after Nav2 completion and STOP delivery.
             cancel_generation = self._goal_motion_generation
             pending_cancel = {
+                "requested_at": time.time(),
                 "started_at": None,
                 "nav_cancel_requested": False,
                 "nav_cancel_confirmed": False,
