@@ -203,7 +203,7 @@ planner_server:
       max_linear_accel: 0.50
       max_angular_accel: 1.0
       max_linear_jerk: 2.0
-      reverse_fraction: 0.30
+      reverse_fraction: 1.00  # Same nominal speed as forward; rear blind guard remains independent
       switch_stop_sec: 0.50
       max_total_planning_time: 5.0
 
