@@ -221,10 +221,11 @@ global_costmap:
           clearing: true
           marking: true
           inf_is_valid: false
-          # Keep dynamic obstacles across brief scan loss without tying
-          # their persistence to the global costmap update frequency.
-          # Local costmap remains immediately responsive to obstacles.
-          observation_persistence: 0.5
+          # Each scan replaces the previous observation in the global layer.
+          # A turning robot otherwise retains obstacle arcs from earlier
+          # headings and marks ghost obstacles in free space.
+          # Local obstacle marking and full-footprint collision checks remain.
+          observation_persistence: 0.0
 
           max_obstacle_height: 2.0
           obstacle_min_range: 0.10
