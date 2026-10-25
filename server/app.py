@@ -350,6 +350,19 @@ def robot_id_failure(payload):
     )
 
 
+@app.get("/api/time/sync")
+async def gpu_time_sync(request: Request):
+    """Authenticated wall-clock sample for Pi/GPU LiDAR timestamp alignment.
+
+    This endpoint never changes either system clock. Client estimates transport
+    offset using multiple bounded RTT probes and falls back if unavailable.
+    """
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
+    return {"server_time_sec": time.time()}
+
+
 @app.get("/api/auth/csrf")
 async def get_auth_csrf_token(request: Request):
     return {"ok": True, "csrf_token": issue_csrf_token(request)}
@@ -770,10 +783,27 @@ class RobotConnectionManager:
                 timeout=max(0.001, deadline - loop.time()),
             )
             if not sent:
+                reporter = getattr(self, "command_transport_observer", None)
+                if callable(reporter) and command.get("type") == "auto_drive":
+                    try:
+                        reporter(robot_id, "auto_drive", "WebSocket send/preflight rejected")
+                    except Exception:
+                        pass
                 return False
             ack = await asyncio.wait_for(
                 future, timeout=max(0.001, deadline - loop.time())
             )
+            # ACK is authenticated to the current Pi WebSocket and matched
+            # against its pending command_id by receive_ack(). Report STOP
+            # safety epochs immediately, before the next auto_drive request,
+            # and retain the Pi's rejection reason for diagnosis.
+            observer = getattr(self, "command_ack_observer", None)
+            if callable(observer) and isinstance(ack, dict):
+                try:
+                    observer(robot_id, command, ack)
+                except Exception:
+                    # Observability never changes the physical ACK contract.
+                    pass
             if command.get("type") == "resume_safety_check":
                 # Only a command_id-matched Pi ACK can prove processing.
                 # The Pi's raw ACK has "ok" but no "delivered" field.
@@ -818,7 +848,18 @@ class RobotConnectionManager:
                     and ack["safety_epoch"] == command.get("safety_epoch")
                 )
             return isinstance(ack, dict) and ack.get("ok") is True
-        except Exception:
+        except Exception as exc:
+            reporter = getattr(self, "command_transport_observer", None)
+            if callable(reporter) and command.get("type") == "auto_drive":
+                try:
+                    reason = (
+                        "ACK/send deadline exceeded"
+                        if isinstance(exc, asyncio.TimeoutError)
+                        else type(exc).__name__
+                    )
+                    reporter(robot_id, "auto_drive", reason)
+                except Exception:
+                    pass
             return False
         finally:
             async with self.lock:
@@ -1025,6 +1066,15 @@ navigation_control_api = NavigationControlApi(
     clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+# A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
+# This observer only accepts command_id-matched ACKs from the current socket.
+connections.command_ack_observer = navigation_control_api.note_pi_command_ack
+connections.command_transport_observer = (
+    lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
+        "Pi command transport failure robot=%s type=%s reason=%s",
+        robot_id, command_type, reason,
+    )
+)
 
 def publish_navigation_ros_visualization(event):
     if not isinstance(event, dict):
@@ -1032,13 +1082,9 @@ def publish_navigation_ros_visualization(event):
     payload = dict(event)
     event_type = str(payload.get("type") or "")
     if event_type == "global_path":
-        # /plan carries no Nav2 action/Goal ID. A delayed event from an
-        # earlier execution cannot become the current approved path.
-        # Path messages have no execution owner; use only their arrival
-        # to trigger a NEW, Goal-bound ComputePathToPose request. This
-        # preserves conditional replan visualization without accepting an
-        # old /plan message as the current Goal path.
-        navigation_control_api.note_nav2_replan_signal()
+        # /plan has no execution owner. Never trigger a duplicate Nav2
+        # ComputePath action for visualization or mislabel this anonymous
+        # planner output as the controller's currently executed path.
         return
     if event_type == "costmap":
         costmap = payload.get("costmap")
@@ -1116,6 +1162,8 @@ def read_runtime_model_config():
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
     pipeline = env_text("PIPELINE")
+    if pipeline != "8":
+        raise ValueError("Only PIPELINE=8 (RTMO-M + BotSORT + X3D-M) is supported.")
     stream_infer_every_n = env_int("STREAM_INFER_EVERY_N", minimum=1)
     inference_max_fps = env_float("INFERENCE_MAX_FPS", minimum=0.1)
     effective_request_fps = min(
@@ -5652,10 +5700,14 @@ async def send_robot_command(
                 status_code=400,
             )
 
-        if (
-            abs(left_mps) > MAX_WHEEL_MPS
-            or abs(right_mps) > MAX_WHEEL_MPS
-        ):
+        # Nav2 scales wheel speeds to MAX_WHEEL_MPS, but binary floating-
+        # point operations can produce a one-ULP excess (e.g.
+        # 0.21200000000000002 for a 0.212 m/s limit). Never reject a
+        # nominally in-range command solely for that rounding difference.
+        # Larger overshoots remain a hard error, with no extra speed budget.
+        wheel_peak_mps = max(abs(left_mps), abs(right_mps))
+        wheel_limit_roundoff_mps = 1e-12
+        if wheel_peak_mps > MAX_WHEEL_MPS + wheel_limit_roundoff_mps:
             return JSONResponse(
                 {
                     "ok": False,
@@ -5664,11 +5716,19 @@ async def send_robot_command(
                     "command": command,
                     "error": (
                         "wheel speed exceeds "
-                        f"{MAX_WHEEL_MPS:.2f} m/s"
+                        f"{MAX_WHEEL_MPS:.3f} m/s"
                     ),
                 },
                 status_code=400,
             )
+
+        # Rescale BOTH wheels rather than clipping one: preserve curvature
+        # and guarantee that even an accepted rounding excess never reaches
+        # the Pi beyond the original configured wheel-speed limit.
+        if wheel_peak_mps > MAX_WHEEL_MPS:
+            scale = MAX_WHEEL_MPS / wheel_peak_mps
+            left_mps *= scale
+            right_mps *= scale
 
         command["left_mps"] = left_mps
         command["right_mps"] = right_mps
