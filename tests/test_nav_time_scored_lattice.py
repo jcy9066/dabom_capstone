@@ -56,7 +56,8 @@ def test_planner_config_has_two_separately_parameterized_safe_smac_candidates():
     for name in chosen["candidate_names"]:
         candidate = chosen[name]
         assert candidate["allow_reverse_expansion"] is True
-        assert candidate["allow_unknown"] is True
+        # Smac and the swept-footprint safety gate must agree on unknown cells.
+        assert candidate["allow_unknown"] is False
         assert candidate["tolerance"] == pytest.approx(0.50)
         assert candidate["max_planning_time"] <= 2.0
         assert candidate["lattice_filepath"] == ""
