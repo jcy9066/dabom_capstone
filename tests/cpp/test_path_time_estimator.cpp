@@ -6,6 +6,7 @@
 
 #include "patrol_navigation_controller/path_time_estimator.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
+#include "patrol_navigation_controller/grid_footprint_geometry.hpp"
 #include "patrol_navigation_controller/alternate_goal_candidates.hpp"
 
 using patrol_navigation_controller::MotionPose;
@@ -14,9 +15,34 @@ using patrol_navigation_controller::estimatePathTime;
 using patrol_navigation_controller::PathSweepLimits;
 using patrol_navigation_controller::validateSweptPath;
 using patrol_navigation_controller::goalEndpointWithinTolerance;
+using patrol_navigation_controller::GridPoint;
+using patrol_navigation_controller::polygonOverlapsGridCell;
 
 int main()
 {
+  // Check the FULL occupied grid cell against the FULL chassis polygon.
+  // A hazard completely inside the chassis must be detected even though
+  // Nav2's built-in perimeter rasterization could miss it.
+  const std::vector<GridPoint> chassis{
+    {-0.14, -0.105}, {0.14, -0.105}, {0.14, 0.105}, {-0.14, 0.105}
+  };
+  assert(polygonOverlapsGridCell(chassis, 0.0, 0.0, 0.025));
+  assert(polygonOverlapsGridCell(chassis, 0.14, 0.0, 0.025));
+  assert(polygonOverlapsGridCell(chassis, 0.165, 0.0, 0.025));
+  assert(!polygonOverlapsGridCell(chassis, 0.20, 0.0, 0.025));
+  assert(!polygonOverlapsGridCell(chassis, 0.20, 0.20, 0.025));
+  const std::vector<GridPoint> diamond{
+    {0.0, -0.20}, {0.20, 0.0}, {0.0, 0.20}, {-0.20, 0.0}
+  };
+  assert(polygonOverlapsGridCell(diamond, 0.0, 0.0, 0.025));
+  assert(!polygonOverlapsGridCell(diamond, 0.20, 0.20, 0.025));
+  // Invalid and non-convex footprints fail closed rather than omit hazards.
+  assert(polygonOverlapsGridCell({}, 0.0, 0.0, 0.025));
+  assert(polygonOverlapsGridCell(
+    {{-0.2, -0.2}, {0.2, -0.2}, {0.0, 0.0}, {0.2, 0.2}, {-0.2, 0.2}},
+    0.0, 0.0, 0.025));
+  assert(polygonOverlapsGridCell(chassis, 0.0, 0.0, -0.025));
+
   MotionTimeLimits limits;
   const std::vector<MotionPose> short_forward{{0, 0, 0}, {0.20, 0, 0}};
   const std::vector<MotionPose> long_forward{{0, 0, 0}, {0.55, 0, 0}};
