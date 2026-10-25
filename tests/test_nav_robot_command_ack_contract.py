@@ -101,6 +101,56 @@ def test_timeout_and_invalid_ack_fail_closed(name):
     assert result is False
 
 
+def test_ack_observer_receives_only_command_id_matched_live_pi_acks():
+    async def scenario():
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        observed = []
+        manager.command_ack_observer = lambda robot, cmd, ack: observed.append(
+            (robot, cmd["type"], ack.get("safety_epoch"))
+        )
+        task = asyncio.create_task(manager.send_command_wait_ack(
+            "pi-01", {"type": "stop", "command_id": "stop-observe"},
+        ))
+        await asyncio.wait_for(ws.sent.wait(), 1)
+        assert not await manager.receive_ack("pi-01", ws, {
+            "command_id": "wrong-id", "ok": True, "safety_epoch": 99,
+        })
+        assert observed == []
+        assert await manager.receive_ack("pi-01", ws, {
+            "command_id": "stop-observe", "ok": True, "safety_epoch": 78,
+        })
+        assert await task is True
+        assert observed == [("pi-01", "stop", 78)]
+    asyncio.run(scenario())
+
+
+def test_transport_failure_observer_reports_preflight_and_timeout():
+    async def scenario():
+        manager = _manager()
+        ws = FakeWebSocket()
+        manager.active["pi-01"] = ws
+        failures = []
+        manager.command_transport_observer = (
+            lambda robot, kind, reason: failures.append((robot, kind, reason))
+        )
+        assert not await manager.send_command_wait_ack(
+            "pi-01", {"type": "auto_drive"}, preflight=lambda: False,
+        )
+        assert ws.commands == []
+        assert failures == [
+            ("pi-01", "auto_drive", "WebSocket send/preflight rejected"),
+        ]
+        assert not await manager.send_command_wait_ack(
+            "pi-01", {"type": "auto_drive"},
+        )
+        assert failures[-1] == (
+            "pi-01", "auto_drive", "ACK/send deadline exceeded",
+        )
+    asyncio.run(scenario())
+
+
 def test_motion_safety_generation_must_match_pi_ack():
     command = {
         "type": "auto_drive", "safety_session": "pi-session-1",
@@ -338,6 +388,14 @@ def test_pi_mode_ack_must_report_actual_requested_mode():
         assert asyncio.run(scenario(command, good)) is True
         assert asyncio.run(scenario(command, bad)) is False
         assert asyncio.run(scenario(command, {})) is False
+
+
+def test_ack_dispatch_never_promotes_ack_frame_to_pi_telemetry():
+    source = (ROOT / "server/app.py").read_text(encoding="utf-8")
+    ack_block = source.split('elif message.get("type") == "ack":', 1)[1]
+    ack_block = ack_block.split("except WebSocketDisconnect", 1)[0]
+    assert "connections.receive_ack" in ack_block
+    assert "navigation_control_api.note_pi_status(message)" not in ack_block
 
 
 def test_ack_dispatch_never_promotes_ack_frame_to_pi_telemetry():
