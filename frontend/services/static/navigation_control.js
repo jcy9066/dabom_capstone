@@ -536,11 +536,7 @@
             setFeedback('Pi 연결 상태를 확인할 수 없어 주행 모드를 변경하지 않습니다.', true);
             return false;
         }
-        // Selecting AUTO prepares navigation only. It never starts a Goal.
-        if (target === 'AUTO' && state.control?.navigation_mode !== 'DRIVING') {
-            const ready = await requestNavigationMode('DRIVING');
-            if (ready !== true) return false; // e.g. operator must select a map/Initial Pose
-        }
+        // AUTO/MANUAL selection must not change MAPPING/DRIVING mode.
         state.drivePending = true;
         state.pointerId = null;
         state.pointerStart = null;
@@ -554,8 +550,7 @@
             applyControlState(confirmed);
             if (confirmed.patrol_transition
                 || String(confirmed.robot_mode || '').toUpperCase() !== target
-                || confirmed.patrol_transition_error
-                || (target === 'AUTO' && confirmed.patrol_ready !== true)) {
+                || confirmed.patrol_transition_error) {
                 throw new Error('GPU·Pi 주행 모드가 일치하지 않습니다.');
             }
             if (options.announce !== false) {
@@ -580,7 +575,6 @@
     }
 
     async function setMappingMode({ restart = false } = {}) {
-        if (state.control?.navigation_mode === 'MAPPING' && !restart) return true;
         if (state.busy || state.drivePending || state.navigationPending) return false;
         const moving = navigationIsMoving();
         if (moving && !window.confirm('현재 자율주행 중입니다. 주행을 중지하고 Mapping 모드로 전환하시겠습니까?')) return false;
@@ -589,6 +583,17 @@
         syncControlComponents();
         setFeedback('Mapping 모드로 전환 중...');
         try {
+            if (state.control?.navigation_mode === 'MAPPING' && !restart) {
+                const runtime = await requestJson('/api/system-control/status');
+                const mapping = runtime.gpu?.find(component => component.id === 'slam_mapping');
+                if (!mapping || !['off', 'on', 'duplicate'].includes(mapping.state)) {
+                    throw new Error('Mapping 실행 상태를 확인할 수 없습니다.');
+                }
+                if (mapping.state !== 'off') {
+                    setFeedback('Mapping 모드가 실행 중입니다.');
+                    return true;
+                }
+            }
             const mappingPayload = {
                 mode: 'MAPPING',
                 ...(restart ? { restart: true } : {}),
@@ -651,7 +656,9 @@
                     source: 'current',
                 });
                 applyControlState(response);
-                setFeedback('Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
+                setFeedback(response.emergency_stop
+                    ? 'Driving 모드로 전환했습니다. 긴급 정지 해제 후 Set Goal을 사용할 수 있습니다.'
+                    : 'Driving 준비 완료. Global Path를 확인하며 Goal을 지정할 수 있습니다.');
                 return true;
             } catch (error) {
                 setFeedback(`Driving 모드 전환 실패: ${error.message}`, true);
