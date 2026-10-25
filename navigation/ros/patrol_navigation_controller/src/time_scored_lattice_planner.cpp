@@ -293,7 +293,7 @@ void TimeScoredLatticePlanner::configure(
   declare_parameter_if_not_declared(
     node, name_ + ".max_linear_jerk", rclcpp::ParameterValue(2.0));
   declare_parameter_if_not_declared(
-    node, name_ + ".reverse_fraction", rclcpp::ParameterValue(0.30));
+    node, name_ + ".reverse_fraction", rclcpp::ParameterValue(1.0));
   declare_parameter_if_not_declared(
     node, name_ + ".switch_stop_sec", rclcpp::ParameterValue(0.50));
   declare_parameter_if_not_declared(
@@ -356,7 +356,7 @@ void TimeScoredLatticePlanner::configure(
 
   node->get_parameter(name_ + ".candidate_names", candidate_ids_);
   double wheel_mps = 0.212;
-  double reverse_fraction = 0.30;
+  double reverse_fraction = 1.0;
   node->get_parameter(name_ + ".max_wheel_mps", wheel_mps);
   node->get_parameter(name_ + ".max_angular_rps", time_limits_.angular_rps);
   node->get_parameter(name_ + ".wheel_track_m", time_limits_.wheel_track_m);
