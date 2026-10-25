@@ -146,12 +146,12 @@ def test_selected_route_is_rechecked_before_publishing():
     assert "costmap_ros->isCurrent()" in code
     assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     assert "cost == nav2_costmap_2d::NO_INFORMATION" not in code
-    # Humble Smac checks the inscribed threshold at the center, but
-    # lethal/unknown at the polygon edge; never apply center inflation twice.
-    assert "bool polygonFootprintClear(" in code
-    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in code
-    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in code
-    assert "footprint_cost < 0.0" in code
+    # The same full-area verification is shared with the local controller.
+    validator = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    assert "inline bool polygonFootprintClear(" in validator
+    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in validator
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in validator
+    assert "footprint_cost < 0.0" in validator
     assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
     assert "const bool clear = polygonFootprintClear(" in code
     assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
@@ -163,9 +163,9 @@ def test_selected_route_is_rechecked_before_publishing():
 
 def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_smac():
     code = SOURCE.read_text()
-    helper = code.split("bool polygonFootprintClear(", 1)[1].split(
-        "\n}", 1
-    )[0]
+    helper = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text().split(
+        "inline bool polygonFootprintClear(", 1
+    )[1].split("\n}", 1)[0]
     assert "costmap->worldToMap(pose.x, pose.y, mx, my)" in helper
     assert "costmap->getCost(mx, my)" in helper
     assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in helper
@@ -180,13 +180,15 @@ def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_sm
 def test_full_chassis_area_blocks_lethal_and_unknown_cells_not_just_outline():
     code = SOURCE.read_text()
     helper = (PKG / "include/patrol_navigation_controller/grid_footprint_geometry.hpp").read_text()
-    assert 'grid_footprint_geometry.hpp' in code
-    assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in code
-    assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in code
+    validator = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    assert 'costmap_footprint_validator.hpp' in code
+    assert 'grid_footprint_geometry.hpp' in validator
+    assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in validator
+    assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in validator
     assert "occupied_cell_inside_chassis" in code
-    assert "costmap->worldToMap(x, y, vertex_mx, vertex_my)" in code
-    assert "const double cos_yaw = std::cos(pose.yaw);" in code
-    assert "const double sin_yaw = std::sin(pose.yaw);" in code
+    assert "costmap->worldToMap(x, y, vertex_mx, vertex_my)" in validator
+    assert "const double cos_yaw = std::cos(pose.yaw);" in validator
+    assert "const double sin_yaw = std::sin(pose.yaw);" in validator
     assert "validConvexFootprint(" in helper
     assert "Boundary contact counts as overlap" in helper
     assert "positive_turn && negative_turn" in helper
