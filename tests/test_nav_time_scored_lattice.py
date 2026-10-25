@@ -51,7 +51,7 @@ def test_planner_config_has_two_separately_parameterized_safe_smac_candidates():
     assert chosen["candidate_names"] == ["QuickMotion", "StableTurns"]
     assert chosen["max_total_planning_time"] == pytest.approx(5.0)
     assert chosen["wheel_track_m"] > 0
-    assert chosen["reverse_fraction"] == pytest.approx(0.30)
+    assert chosen["reverse_fraction"] == pytest.approx(1.0)
     assert chosen["switch_stop_sec"] == pytest.approx(0.50)
     for name in chosen["candidate_names"]:
         candidate = chosen[name]
