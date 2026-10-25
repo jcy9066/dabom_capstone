@@ -367,11 +367,14 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
     def set_rotation(self, sequence, *, command_age=0.01, odom_age=0.01,
                      angular=0.4, yaw_delta=0.04, linear=0.0, yaw=None,
-                     odom_x=0.0, odom_y=0.0):
+                     odom_x=0.0, odom_y=0.0,
+                     measured_linear=None, measured_angular=None):
         self.map_api.ros_control.rotation = {
             "odom_sequence": sequence,
             "odom_x": odom_x,
             "odom_y": odom_y,
+            "odom_linear_x": linear if measured_linear is None else measured_linear,
+            "odom_angular_z": angular if measured_angular is None else measured_angular,
             "command_age_sec": command_age,
             "odometry_age_sec": odom_age,
             "command_linear_x": linear,
@@ -1137,6 +1140,65 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.refresh_watchdog_samples(base + 5.1)
         self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
 
+    async def test_curved_progress_uses_current_wheel_twist_after_direction_change(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked(
+                {"x": -0.2641739185, "y": 0.0849498098}, base,
+            )
+        self.set_rotation(
+            3600, linear=-0.07, angular=-0.35, yaw_delta=-0.02,
+            odom_x=-0.2147760099, odom_y=0.0651938960, yaw=-1.0,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 0.1,
+            payload={"x": -0.2641739185, "y": 0.0849498098},
+        )
+        # Real BLOCKED_TIMEOUT telemetry: accumulated odom displacement
+        # points opposite the NEW forward command due to prior maneuvers.
+        # The new, fresh encoder TWIST correctly proves forward movement.
+        self.set_rotation(
+            3697, linear=0.1287, angular=-0.53,
+            measured_linear=0.045, measured_angular=-0.31,
+            yaw_delta=-0.0207, yaw=-1.2177,
+            odom_x=-0.2578, odom_y=0.0973,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0,
+            payload={"x": -0.2956, "y": 0.1213},
+        )
+        self.assertAlmostEqual(base + 4.0, self.api._navigation_progress_at)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+
+    async def test_curve_rejects_opposite_wheel_twist_even_when_positions_change(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        self.set_rotation(1, linear=0.12, angular=-0.35)
+        self.api.note_navigation_sample(
+            "pose", now=base + 0.1, payload={"x": 0.0, "y": 0.0},
+        )
+        self.set_rotation(
+            2, linear=0.12, angular=-0.35,
+            measured_linear=-0.05, measured_angular=-0.25,
+            yaw_delta=-0.02, odom_x=0.055, odom_y=0.0, yaw=0.0,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0, payload={"x": 0.055, "y": 0.0},
+        )
+        self.assertAlmostEqual(base, self.api._navigation_progress_at)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertEqual(
+            "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 5.1),
+        )
+
     async def test_curve_command_alone_or_stale_odometry_cannot_reset_progress(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
@@ -1150,7 +1212,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             {"linear": -0.25},  # Above the verified Nav2 linear speed cap
             {"angular": 0.0},
             {"odom_x": 0.0},  # AMCL correction without wheel movement
-            {"odom_x": 0.050},  # wheel movement opposite the reverse command
+            {"measured_linear": 0.050},  # fresh measured forward, commanded reverse
+            {"measured_linear": 0.0},  # wheel position accumulated but now stopped
+            {"measured_angular": -0.350},  # turning opposite the command
         ]
         for seq, override in enumerate(cases, start=1):
             with self.subTest(case=override):
@@ -3434,13 +3498,15 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
 class NavigationRosRotationTelemetryTests(unittest.TestCase):
     @staticmethod
-    def odom(yaw, stamp_ns=None, *, x=0.0, y=0.0):
+    def odom(yaw, stamp_ns=None, *, x=0.0, y=0.0, linear=0.0, angular=0.0):
         # nav_msgs/Odometry.pose.pose contains BOTH position and orientation.
         # NavigationRosControl requires finite wheel-odom XY to certify
         # actual translation independently of AMCL/map corrections.
         message = SimpleNamespace(pose=SimpleNamespace(pose=SimpleNamespace(
             position=SimpleNamespace(x=x, y=y, z=0.0),
             orientation=SimpleNamespace(x=0.0, y=0.0, z=math.sin(yaw / 2), w=math.cos(yaw / 2)),
+        )), twist=SimpleNamespace(twist=SimpleNamespace(
+            linear=SimpleNamespace(x=linear), angular=SimpleNamespace(z=angular),
         )))
         if stamp_ns is not None:
             message.header = SimpleNamespace(stamp=SimpleNamespace(
