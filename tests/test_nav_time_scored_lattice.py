@@ -56,12 +56,13 @@ def test_planner_config_has_two_separately_parameterized_safe_smac_candidates():
     assert chosen["candidate_names"] == ["QuickMotion", "StableTurns"]
     assert chosen["max_total_planning_time"] == pytest.approx(5.0)
     assert chosen["wheel_track_m"] > 0
-    assert chosen["reverse_fraction"] == pytest.approx(0.30)
+    assert chosen["reverse_fraction"] == pytest.approx(1.0)
     assert chosen["switch_stop_sec"] == pytest.approx(0.50)
     for name in chosen["candidate_names"]:
         candidate = chosen[name]
         assert candidate["allow_reverse_expansion"] is True
-        assert candidate["allow_unknown"] is True
+        # Smac and the swept-footprint safety gate must agree on unknown cells.
+        assert candidate["allow_unknown"] is False
         assert candidate["tolerance"] == pytest.approx(0.50)
         assert candidate["max_planning_time"] <= 2.0
         assert candidate["lattice_filepath"] == ""
@@ -117,7 +118,9 @@ def test_planner_really_compares_path_time_not_just_path_length():
     assert "validAgainstCurrentCostmap(best, costmap_)" in code
     assert "costmap_ros->isCurrent()" in code
     assert "checker.footprintCostAtPose(" in code
-    assert "return validateSweptPath(" in code
+    assert "const bool path_safe = validateSweptPath(" in code
+    assert "if (!path_safe) {" in code
+    assert "return path_safe;" in code
     assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     pure = HEADER.read_text()
     assert "linear_accel_mps2" in pure
@@ -148,10 +151,53 @@ def test_selected_route_is_rechecked_before_publishing():
     assert "costmap_ros->isCurrent()" in code
     assert "nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE" in code
     assert "cost == nav2_costmap_2d::NO_INFORMATION" not in code
-    assert "return std::isfinite(cost) && cost >= 0.0" in code
+    # The same full-area verification is shared with the local controller.
+    validator = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    assert "inline bool polygonFootprintClear(" in validator
+    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in validator
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in validator
+    assert "footprint_cost < 0.0" in validator
+    assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
+    assert "const bool clear = polygonFootprintClear(" in code
+    assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
     # Reject updated obstacles rather than falling back to a stale candidate.
     assert "if (!best.poses.empty() && !validAgainstCurrentCostmap(best, costmap_))" in code
     assert "best.poses.clear();" in code
+
+
+
+def test_polygon_collision_uses_same_center_and_boundary_thresholds_as_humble_smac():
+    code = SOURCE.read_text()
+    helper = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text().split(
+        "inline bool polygonFootprintClear(", 1
+    )[1].split("\n}", 1)[0]
+    assert "costmap->worldToMap(pose.x, pose.y, mx, my)" in helper
+    assert "costmap->getCost(mx, my)" in helper
+    assert "center_cost >= static_cast<int>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)" in helper
+    assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in helper
+    assert "!std::isfinite(footprint_cost) || footprint_cost < 0.0" in helper
+    # 253 is safe for a polygon boundary, but never safe at the robot center.
+    # 254, 255 and negative/nonfinite footprint values remain unsafe.
+    assert "return polygonFootprintClear(map, pose, cost, footprint);" in code
+    assert "const bool clear = polygonFootprintClear(" in code
+    assert "costmap, sample, cost, footprint, &center_cost, &occupied_cell_cost);" in code
+
+def test_full_chassis_area_blocks_lethal_and_unknown_cells_not_just_outline():
+    code = SOURCE.read_text()
+    helper = (PKG / "include/patrol_navigation_controller/grid_footprint_geometry.hpp").read_text()
+    validator = (PKG / "include/patrol_navigation_controller/costmap_footprint_validator.hpp").read_text()
+    assert 'costmap_footprint_validator.hpp' in code
+    assert 'grid_footprint_geometry.hpp' in validator
+    assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in validator
+    assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in validator
+    assert "occupied_cell_inside_chassis" in code
+    assert "costmap->worldToMap(x, y, vertex_mx, vertex_my)" in validator
+    assert "const double cos_yaw = std::cos(pose.yaw);" in validator
+    assert "const double sin_yaw = std::sin(pose.yaw);" in validator
+    assert "validConvexFootprint(" in helper
+    assert "Boundary contact counts as overlap" in helper
+    assert "positive_turn && negative_turn" in helper
+    assert "if (!overlaps_axis(1.0, 0.0)" in helper
 
 
 def test_selected_route_checks_every_interpolated_chassis_pose():
@@ -163,7 +209,12 @@ def test_selected_route_checks_every_interpolated_chassis_pose():
     assert "max_samples = 60000" in geometry
     assert "for (size_t step =" in geometry
     assert "if (!collision_free(sample))" in geometry
-    assert "return validateSweptPath(" in SOURCE.read_text()
+    planner = SOURCE.read_text()
+    # Preserve the full interpolated sweep while exposing the rejected pose.
+    assert "const bool path_safe = validateSweptPath(" in planner
+    assert "return clear;" in planner
+    assert "return path_safe;" in planner
+    assert "if (!clear && !has_rejected_sample)" in planner
     cpp = CPP_TEST.read_text()
     assert "std::abs(pose.x - 0.05)" in cpp
     assert "std::abs(pose.yaw - 0.2)" in cpp
@@ -219,6 +270,35 @@ def test_each_time_ranked_candidate_is_collision_checked_before_selection():
     assert code.index("const bool collision_safe") < code.index("best = std::move(path)")
 
 
+def test_humble_smac_parameters_declared_during_parent_configure():
+    # PlannerServer::computePlan() holds dynamic_params_lock_ on Humble.
+    # Smac nested parameter declarations during createPlan() cause deadlock.
+    code = SOURCE.read_text()
+    parent_config = code.split(
+        "void TimeScoredLatticePlanner::configure(", 1
+    )[1].split("void TimeScoredLatticePlanner::activate()", 1)[0]
+    assert 'for (const auto & candidate_name : {"QuickMotion", "StableTurns"})' in parent_config
+    assert "declare_parameter_if_not_declared(" in parent_config
+    for name in {
+        "tolerance", "allow_unknown", "max_iterations",
+        "max_on_approach_iterations", "smooth_path", "lattice_filepath",
+        "cache_obstacle_heuristic", "reverse_penalty", "change_penalty",
+        "non_straight_penalty", "cost_penalty", "retrospective_penalty",
+        "rotation_penalty", "analytic_expansion_ratio",
+        "analytic_expansion_max_length", "max_planning_time",
+        "lookup_table_size", "allow_reverse_expansion",
+    }:
+        assert f'prefix + "{name}"' in parent_config
+    assert "if (lattice_path.empty())" in parent_config
+    assert parent_config.index('prefix + "max_on_approach_iterations"') < (
+        parent_config.index('node->get_parameter(name_ + ".candidate_names"')
+    )
+    action_code = code.split(
+        "nav_msgs::msg::Path TimeScoredLatticePlanner::createPlan(", 1
+    )[1]
+    assert "declare_parameter_if_not_declared(" not in action_code
+
+
 def test_pure_cpp_cost_model_execution(tmp_path):
     compiler = shutil.which("g++") or shutil.which("clang++")
     if compiler is None:
@@ -236,3 +316,27 @@ def test_pure_cpp_cost_model_execution(tmp_path):
         [str(binary)], capture_output=True, text=True, timeout=15, check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
+
+def test_nearby_yaw_goal_has_swept_collision_checked_pivot():
+    code = SOURCE.read_text()
+    assert "std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= 0.20" in code
+    assert "std::abs(requested_turn) > 0.12" in code
+    assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in code
+    assert "return pivot_path;" in code
+    assert "kSecondCandidateReserveSec" in code
+    assert "kSecondCandidateReserveSec = 4.3" in code
+
+
+def test_near_goal_pivot_remains_within_actual_nav2_xy_goal_tolerance():
+    """Do not accept a rotation-only route outside the arrival envelope."""
+    conf = yaml.safe_load((NAV / "config/nav2_params.yaml").read_text())
+    tolerance = conf["controller_server"]["ros__parameters"][
+        "general_goal_checker"
+    ]["xy_goal_tolerance"]
+    cpp = SOURCE.read_text()
+    pivot_radius = 0.20
+    assert pivot_radius < tolerance
+    assert f"std::hypot(original_goal.x - start_x, original_goal.y - start_y) <= {pivot_radius:.2f}" in cpp
+    assert "validAgainstCurrentCostmap(pivot_path, costmap_)" in cpp
+    assert "const bool original_goal_clear = endpointFootprintClear(" in cpp
+
