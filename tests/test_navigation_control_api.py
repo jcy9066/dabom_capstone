@@ -746,7 +746,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("NAVIGATING", started["navigation_state"])
         self.assertEqual("drive", started["loop_stage"])
         self.assertEqual(1, self.map_api.ros_control.navigate_calls)
-        self.assertEqual([a], self.map_api.ros_control.loop_reapproach_calls)
+        # Initial approach faces the live inbound heading, not the
+        # user-selected final yaw for a completed loop turnaround.
+        self.assertEqual(
+            [started["active_goal"]],
+            self.map_api.ros_control.loop_reapproach_calls,
+        )
         self.assertEqual([], self.map_api.ros_control.through_navigation_calls)
         self.assertEqual([], self.map_api.ros_control.spin_radians)
 
@@ -1140,7 +1145,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
             with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
                 await self.api._advance_loop_recovery()
-        self.assertEqual([b], self.map_api.ros_control.loop_reapproach_calls)
+        # The first item is the initial A approach; this step adds the
+        # once-only recovery reapproach to B without redoing the first leg.
+        self.assertEqual(2, len(self.map_api.ros_control.loop_reapproach_calls))
+        self.assertEqual(b, self.map_api.ros_control.loop_reapproach_calls[-1])
         self.assertEqual("reapproaching", recovery["phase"])
 
         recovery["phase"] = "spin_wait_stop"
@@ -1524,16 +1532,23 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
 
         before = self.map_api.ros_control.navigate_calls
         try:
-            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
-                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
-                    with patch.object(self.api, "_compute_path_for_route", side_effect=slow_plan):
-                        task = asyncio.create_task(self.api._advance_loop_leg())
-                        self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
-                        # Slow planning must not block authenticated cancellation.
-                        self.assertFalse(self.api._operation_lock.locked())
-                        await asyncio.wait_for(self.api.cancel_goal(), 1.0)
-                        release.set()
-                        await asyncio.wait_for(task, 3.0)
+            # A loop leg requires a fresh map-frame localization sample;
+            # the shared FakeMapApi's ordinary pose intentionally has no timestamp.
+            fresh_pose = lambda: {
+                "x": a["x"], "y": a["y"], "yaw": 0.0,
+                "received_at": time.time(),
+            }
+            with patch.object(self.api, "_safe_live_pose", side_effect=fresh_pose):
+                with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                    with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                        with patch.object(self.api, "_compute_path_for_route", side_effect=slow_plan):
+                            task = asyncio.create_task(self.api._advance_loop_leg())
+                            self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
+                            # Slow planning must not block authenticated cancellation.
+                            self.assertFalse(self.api._operation_lock.locked())
+                            await asyncio.wait_for(self.api.cancel_goal(), 1.0)
+                            release.set()
+                            await asyncio.wait_for(task, 3.0)
         finally:
             release.set()
         self.assertEqual(before, self.map_api.ros_control.navigate_calls)
@@ -1708,9 +1723,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.api, "_stop_confirmed_locked", return_value=False):
             await self.api._advance_loop_leg()
         self.assertEqual(before, self.map_api.ros_control.plan_calls)
-        with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
-            with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
-                await self.api._advance_loop_leg()
+        # Replanning cannot proceed while a terminal STOP is still
+        # outstanding. Simulate the STOP worker completion only after
+        # verified physical stop, then supply a fresh localization sample.
+        with self.api._lock:
+            self.api._pending_terminal_stop = None
+            self.api._stop_confirmation_after_sequence = self.api._encoder_sequence or 0
+        current_pose = lambda: {
+            "x": a["x"], "y": a["y"], "yaw": 0.0,
+            "received_at": time.time(),
+        }
+        with patch.object(self.api, "_safe_live_pose", side_effect=current_pose):
+            with patch.object(self.api, "_stop_confirmed_locked", return_value=True):
+                with patch.object(self.api, "_watchdog_issue_locked", return_value=None):
+                    await self.api._advance_loop_leg()
         self.assertEqual(before + 1, self.map_api.ros_control.plan_calls)
         self.assertFalse(self.api._loop_pending)
 
