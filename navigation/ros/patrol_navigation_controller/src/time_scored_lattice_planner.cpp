@@ -203,7 +203,7 @@ void TimeScoredLatticePlanner::configure(
     declare_parameter_if_not_declared(
       node, prefix + "tolerance", rclcpp::ParameterValue(0.25));
     declare_parameter_if_not_declared(
-      node, prefix + "allow_unknown", rclcpp::ParameterValue(true));
+      node, prefix + "allow_unknown", rclcpp::ParameterValue(false));
     declare_parameter_if_not_declared(
       node, prefix + "max_iterations", rclcpp::ParameterValue(1000000));
     declare_parameter_if_not_declared(
