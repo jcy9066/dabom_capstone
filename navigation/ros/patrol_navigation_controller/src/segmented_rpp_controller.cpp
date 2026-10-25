@@ -3,6 +3,7 @@
 #include "patrol_navigation_controller/segment_handoff_guard.hpp"
 #include "patrol_navigation_controller/local_motion_sweep.hpp"
 #include "patrol_navigation_controller/path_sweep.hpp"
+#include "patrol_navigation_controller/costmap_footprint_validator.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -379,10 +380,9 @@ geometry_msgs::msg::TwistStamped SegmentedRPPController::checkedCommand(
     projected, [&](const MotionPose & sample) {
       const double cost = collision_->footprintCostAtPose(
         sample.x, sample.y, sample.yaw, footprint);
-      // Includes inscribed 253, lethal 254, unknown 255 and off-map -1.
-      return std::isfinite(cost) && cost >= 0.0 &&
-        cost < static_cast<double>(
-        nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+      // Global and local share the exact same full-area collision check.
+      // Center 253+, interior/boundary 254/255 and off-map always block.
+      return polygonFootprintClear(map, sample, cost, footprint);
     });
   if (!safe) {
     throw std::runtime_error("Local swept chassis obstructed during Nav2 motion");
@@ -434,11 +434,12 @@ void SegmentedRPPController::checkRotationCollision(
     const double test_heading = heading + angle_error * static_cast<double>(i) / steps;
     const double cost = collision_->footprintCostAtPose(
       local_pose.pose.position.x, local_pose.pose.position.y, test_heading, footprint);
-    // Identical conservative threshold to the global candidate scorer:
-    // 253 is inscribed/inflated, 254 lethal, 255 unknown.
-    // No unknown rotation is safe without current positive clearance.
-    if (!std::isfinite(cost) || cost < 0.0 ||
-      cost >= static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE))
+    // Identical full-chassis costmap contract for planned paths, projected
+    // motion, and every intermediate in-place heading. Unknown stays blocked.
+    if (!polygonFootprintClear(
+        costmap,
+        MotionPose{local_pose.pose.position.x, local_pose.pose.position.y, test_heading},
+        cost, footprint))
     {
       throw std::runtime_error("In-place rotation footprint is obstructed");
     }
