@@ -366,9 +366,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.api._stop_confirmed_locked(time.time()))
 
     def set_rotation(self, sequence, *, command_age=0.01, odom_age=0.01,
-                     angular=0.4, yaw_delta=0.04, linear=0.0, yaw=None):
+                     angular=0.4, yaw_delta=0.04, linear=0.0, yaw=None,
+                     odom_x=0.0, odom_y=0.0):
         self.map_api.ros_control.rotation = {
             "odom_sequence": sequence,
+            "odom_x": odom_x,
+            "odom_y": odom_y,
             "command_age_sec": command_age,
             "odometry_age_sec": odom_age,
             "command_linear_x": linear,
@@ -1046,10 +1049,18 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
         with self.api._lock:
             self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
 
+        # Anchor wheel odometry at start, independently of AMCL map corrections.
+        self.set_rotation(
+            1, linear=-0.070, angular=0.35, odom_x=0.0, odom_y=0.0,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 0.1, payload={"x": 0.0, "y": 0.0},
+        )
         # Reproduces the observed reverse curve: 5.69cm in five seconds,
-        # with fresh measured yaw change rather than command-only turning.
+        # with genuine, fresh wheel odometry translation and directed yaw.
         self.set_rotation(
             3, linear=-0.070, angular=0.35, yaw_delta=0.01,
+            odom_x=-0.052, odom_y=0.0,
         )
         self.api.note_navigation_sample(
             "pose", now=base + 4.0, payload={"x": -0.055, "y": 0.0},
@@ -1077,12 +1088,20 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             {"angular": -0.35, "yaw_delta": 0.02},
             {"linear": -0.12},
             {"angular": 0.0},
+            {"odom_x": 0.0},  # AMCL correction without wheel movement
+            {"odom_x": 0.050},  # wheel movement opposite the reverse command
         ]
         for seq, override in enumerate(cases, start=1):
             with self.subTest(case=override):
                 with self.api._lock:
                     self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
-                command = {"linear": -0.07, "angular": 0.35}
+                self.set_rotation(
+                    1, linear=-0.07, angular=0.35, odom_x=0.0, odom_y=0.0,
+                )
+                self.api.note_navigation_sample(
+                    "pose", now=base + 0.1, payload={"x": 0.0, "y": 0.0},
+                )
+                command = {"linear": -0.07, "angular": 0.35, "odom_x": -0.050, "yaw": 0.12}
                 command.update(override)
                 self.set_rotation(100 + seq, **command)
                 self.api.note_navigation_sample(
