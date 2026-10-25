@@ -220,6 +220,11 @@ def test_local_and_global_use_the_same_full_chassis_collision_contract():
     assert "polygonOverlapsGridCell(polygon, wx, wy, resolution / 2.0)" in shared
     assert "footprint_cost >= static_cast<double>(nav2_costmap_2d::LETHAL_OBSTACLE)" in shared
     assert "if (cell_cost < nav2_costmap_2d::LETHAL_OBSTACLE)" in shared
+    # Humble exposes Costmap2DROS footprint as vector<geometry_msgs::msg::Point>,
+    # not an invented nav2_costmap_2d::Footprint alias.
+    assert '#include "geometry_msgs/msg/point.hpp"' in shared
+    assert "const std::vector<geometry_msgs::msg::Point> & footprint" in shared
+    assert "nav2_costmap_2d::Footprint" not in shared
 
 
 def test_ros_free_local_motion_horizon_cpp(tmp_path):
