@@ -289,7 +289,12 @@ def test_final_yaw_rotation_requires_swept_footprint_certification():
         'const auto end_pose = storedPathPoseInControllerFrame(', 1
     )[0]
     assert 'path_.poses.back()' in final
-    assert 'distance(pose, terminal) <= 0.25' in final
+    # Normal SET GOAL retains its 0.25m terminal radius. A/B loop paths
+    # must use the selected Nav2 checker (first pass vs cached FollowPath).
+    assert 'double terminal_xy_tolerance = 0.25;' in final
+    assert 'goal_checker->getTolerances(pose_tolerance, velocity_tolerance)' in final
+    assert 'terminal_xy_tolerance = std::clamp(' in final
+    assert 'distance(pose, terminal) <= terminal_xy_tolerance' in final
     assert 'if (!safeToContinuePivot(' in final
     assert 'checkRotationCollision(pose, remaining);' in final
     assert final.index('checkRotationCollision(pose, remaining);') < (
@@ -303,7 +308,7 @@ def test_final_yaw_satisfied_cannot_resume_terminal_linear_rpp():
     final = source.split("if (stage_index_ + 1 >= stages_.size()) {", 1)[1].split(
         "const auto end_pose = storedPathPoseInControllerFrame(", 1
     )[0]
-    assert "if (distance(pose, terminal) <= 0.25)" in final
+    assert "if (distance(pose, terminal) <= terminal_xy_tolerance)" in final
     assert "return stopped(pose);" in final
     assert "pivot_started_ = false;" in final
     assert final.index("pivot_started_ = false;") < final.index(
