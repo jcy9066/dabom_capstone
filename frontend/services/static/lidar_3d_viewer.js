@@ -2115,7 +2115,9 @@ if (root && canvas) {
         // Map/pose still stay session-filtered so stale Driving localization is
         // never reused as Mapping geometry.
         const liveScan = state.scan || null;
-        const liveCostmap = state.costmap || null;
+        // Mapping displays the SLAM occupancy grid and live LiDAR,
+        // never a stale global Costmap from an earlier Driving session.
+        const liveCostmap = mappingMode ? null : (state.costmap || null);
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
         rebuildCostmap(liveCostmap);
