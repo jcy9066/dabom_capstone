@@ -1111,6 +1111,32 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             "BLOCKED_TIMEOUT", await self.api.evaluate_watchdog(now=base + 9.1)
         )
 
+    async def test_high_linear_command_curved_motion_is_not_falsely_blocked(self):
+        await self.driving_ready()
+        await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        await self.api.start_navigation()
+        base = time.time()
+        with self.api._lock:
+            self.api._start_navigation_progress_locked({"x": 0.0, "y": 0.0}, base)
+        # The live bridge may command 0.12m/s on a sharp curve even when
+        # one PWM channel is very small. Require REAL odom translation/yaw.
+        self.set_rotation(
+            1, linear=0.12, angular=-0.35, odom_x=0.0, odom_y=0.0,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 0.1, payload={"x": 0.0, "y": 0.0},
+        )
+        self.set_rotation(
+            2, linear=0.12, angular=-0.35, yaw_delta=-0.02,
+            odom_x=0.052, odom_y=0.0, yaw=0.0,
+        )
+        self.api.note_navigation_sample(
+            "pose", now=base + 4.0, payload={"x": 0.052, "y": 0.0},
+        )
+        self.assertAlmostEqual(base + 4.0, self.api._navigation_progress_at)
+        self.refresh_watchdog_samples(base + 5.1)
+        self.assertIsNone(await self.api.evaluate_watchdog(now=base + 5.1))
+
     async def test_curve_command_alone_or_stale_odometry_cannot_reset_progress(self):
         await self.driving_ready()
         await self.api.plan_goal({"x": 1.0, "y": 1.0, "yaw": 0.0})
@@ -1121,7 +1147,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             {"odom_age": 0.75},
             {"command_age": 0.75},
             {"angular": -0.35, "yaw_delta": 0.02},
-            {"linear": -0.12},
+            {"linear": -0.25},  # Above the verified Nav2 linear speed cap
             {"angular": 0.0},
             {"odom_x": 0.0},  # AMCL correction without wheel movement
             {"odom_x": 0.050},  # wheel movement opposite the reverse command
