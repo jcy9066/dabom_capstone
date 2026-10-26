@@ -60,10 +60,12 @@ class RecordedLoopApi:
             record = self._record
             if record is None or record["error"]:
                 return
-            if record["map"] != self._active()[0]:
+            state = self.navigation.state_response()
+            active = state.get("active_map")
+            if (state.get("navigation_mode") != "DRIVING" or not isinstance(active, dict)
+                or active.get("map_name") != record["map"]):
                 record["error"] = "MAP_CHANGED"
                 return
-            state = self.navigation.state_response()
             expected_mode = "manual" if record["source"] == "manual" else "auto"
             if (str(state.get("robot_mode", "")).lower() != expected_mode
                 or state.get("emergency_stop") is True):
@@ -214,6 +216,9 @@ class RecordedLoopApi:
                 raise RecordedLoopError(record["error"], "Recording invalid: discard before retry")
             if not record["stopped"]:
                 raise RecordedLoopError("MOTOR_STILL_ACTIVE", "Release motor control and confirm STOP")
+            name, digest = self._active()
+            if name != record["map"] or digest != record["digest"]:
+                raise RecordedLoopError("MAP_CHANGED", "Selected map changed since recording began")
             if record["source"] == "set_goal":
                 if self.navigation.state_response().get("navigation_state") != "SUCCEEDED":
                     raise RecordedLoopError("GOAL_NOT_SUCCEEDED", "Only successful Set Goal traces can be saved")
