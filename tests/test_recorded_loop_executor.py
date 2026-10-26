@@ -60,6 +60,13 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         engine.CLEAR_CONFIRM_SEC = .02
         return engine, events, where
 
+    async def test_stop_before_task_runs_is_not_cleared(self):
+        engine, events, _ = await self.build()
+        engine.cancel()
+        with self.assertRaisesRegex(ReplayFailure, "REPLAY_CANCELLED"):
+            await engine.run(route(), "WAIT", max_laps=1)
+        self.assertNotIn("motor_sent", events)
+
     async def test_first_stop_must_be_confirmed_before_motor(self):
         engine, events, _ = await self.build(stop_ok=False)
         with self.assertRaisesRegex(ReplayFailure, "STOP_NOT_CONFIRMED"):
