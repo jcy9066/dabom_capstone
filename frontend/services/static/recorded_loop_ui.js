@@ -52,6 +52,8 @@
         $("recorded-play-route").disabled = busy || active;
         $("recorded-play-start").disabled = busy || active;
         $("recorded-play-stop").disabled = busy || !active;
+        $("recorded-play-reset").disabled = busy || active;
+        $("recorded-delete").disabled = busy || active || Boolean(data.recording?.active);
         const viewer = document.getElementById("recordedLoopViewerStatus");
         if (viewer) {
             const visible = ["WAITING", "REPLANNING", "FAILED"].includes(replay.state);
@@ -134,6 +136,14 @@
     });
     $("recorded-play-stop").addEventListener("click", () =>
         void mutate("replay/stop", {}, "반복 주행 정지 요청 완료"));
+    $("recorded-play-reset").addEventListener("click", () =>
+        void mutate("replay/reset", {}, "재생 상태 초기화 완료"));
+    $("recorded-delete").addEventListener("click", () => {
+        const kind = $("recorded-delete-kind").value;
+        const id = $("recorded-delete-id").value.trim();
+        if (!id || !window.confirm(kind + " " + id + "를 삭제하시겠습니까?")) return;
+        void mutate("delete", { kind, id }, "삭제 완료");
+    });
     refresh(true);
     setInterval(() => { if (!document.hidden && !busy) void refresh(true); }, 1000);
 })();
