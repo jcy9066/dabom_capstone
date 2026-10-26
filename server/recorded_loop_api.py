@@ -655,18 +655,32 @@ class RecordedLoopApi:
         if self.send_robot_command is None:
             raise RecordedLoopError("REPLAY_UNAVAILABLE", "Pi command transport not configured")
         name, digest = self._active()
+        one_shot = payload.get("kind") == "path"
+        if payload.get("kind", "loop") not in {"loop", "path"}:
+            raise RecordedLoopError("INVALID_KIND", "Select a recorded Path or Loop")
         route_id = identifier(payload.get("route_id"), "route_id")
         selected = self.store.snapshot(name, digest)
-        route = selected["routes"].get(route_id)
-        if route is None:
-            raise RecordedLoopError("ROUTE_MISSING", "Selected route not found")
+        if one_shot:
+            segment = selected["segments"].get(route_id)
+            if segment is None:
+                raise RecordedLoopError("SEGMENT_MISSING", "Selected recorded Path not found")
+            segment_ids = [route_id]
+        else:
+            route = selected["routes"].get(route_id)
+            if route is None:
+                raise RecordedLoopError("ROUTE_MISSING", "Selected Loop not found")
+            segment_ids = route["segments"]
         policy = payload.get("policy", "WAIT")
         if policy not in {"WAIT", "REPLAN"}:
             raise RecordedLoopError("INVALID_POLICY", "Select WAIT or REPLAN before Start")
         max_laps = payload.get("max_laps")
         if max_laps is not None and (type(max_laps) is not int or not 1 <= max_laps <= 100):
             raise RecordedLoopError("INVALID_LAPS", "max_laps must be 1..100 or null")
-        segments = [selected["segments"][key] for key in route["segments"]]
+        if one_shot:
+            if max_laps not in (None, 1):
+                raise RecordedLoopError("INVALID_LAPS", "Recorded Path is one-shot only")
+            max_laps = 1
+        segments = [selected["segments"][key] for key in segment_ids]
         # Manual recordings replay motors; successful automatic recordings
         # use the stored trajectory and Nav2 FollowPath without ComputePath.
         if self.calibration_check is not None:
@@ -692,7 +706,8 @@ class RecordedLoopApi:
             on_status=self._play_update)
         self._play_task = asyncio.create_task(
             self._run_playback(segments, policy, max_laps), name="recorded-loop-replay")
-        return {"ok": True, "started": True, "route_id": route_id, "policy": policy}
+        return {"ok": True, "started": True, "route_id": route_id,
+                "kind": "path" if one_shot else "loop", "policy": policy}
 
     async def stop_playback(self) -> dict:
         task, executor = self._play_task, self._executor
