@@ -97,6 +97,15 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             await engine.run(route(), "WAIT", max_laps=1)
         self.assertEqual(engine.playback.status, ReplayStatus.FAILED)
 
+    async def test_operator_cancel_is_distinct_from_safety_failure(self):
+        engine, events, _ = await self.build()
+        engine.cancel()
+        # Cancellation arriving while an active callback runs is checked
+        # before issuing any further motor output.
+        with self.assertRaisesRegex(ReplayFailure, "REPLAY_CANCELLED"):
+            await engine._health()
+        self.assertNotIn("motor_sent", events)
+
     async def test_unacknowledged_stop_is_fatal(self):
         engine, events, _ = await self.build(stop_ok=False)
         with self.assertRaises(ReplayFailure):
