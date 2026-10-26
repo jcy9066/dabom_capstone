@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from server.recorded_loop_core import (
     RecordedLoopError, RecordedRouteStore, identifier, map_digest,
-    pose_dict,
+    map_identifier, pose_dict,
 )
 from server.recorded_loop_executor import RecordedMotorExecutor, ReplayFailure
 from server.recorded_loop_runtime import ReplayStatus
@@ -58,7 +58,7 @@ class RecordedLoopApi:
         active = state.get("active_map")
         if not isinstance(active, dict):
             raise RecordedLoopError("MAP_REQUIRED", "No active map")
-        name = identifier(active.get("map_name"), "map_name")
+        name = map_identifier(active.get("map_name"))
         selected = self.map_api.resolve_map(name)
         return name, map_digest(Path(selected.yaml_path))
 
