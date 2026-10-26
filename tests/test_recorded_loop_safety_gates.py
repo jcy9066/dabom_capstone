@@ -34,6 +34,13 @@ class RecordedObstaclesTests(unittest.TestCase):
         self.assertTrue(path_blocked(scan(front=0.3), "forward"))
         self.assertFalse(path_blocked(scan(front=1.1), "forward"))
 
+    def test_narrow_front_obstacle_is_not_hidden_by_clear_scans(self):
+        data = scan(front=1.0)
+        # A two-degree obstacle is well below the former 10% quantile.
+        data["ranges"][179] = 0.28
+        data["ranges"][180] = 0.29
+        self.assertTrue(path_blocked(data, "forward"))
+
     def test_reverse_checks_rear_not_front(self):
         self.assertFalse(path_blocked(scan(front=0.2, rear=1.0), "backward"))
         self.assertTrue(path_blocked(scan(front=1.0, rear=0.2), "backward"))
