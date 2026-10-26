@@ -87,6 +87,7 @@ class RecordedLoopApi:
                 nav_mode = self.navigation._state.get("navigation_mode")
                 robot_mode = self.navigation._robot_mode
                 estopped = self.navigation._state.get("emergency_stop")
+                nav_state = self.navigation._state.get("navigation_state")
             if (nav_mode != "DRIVING" or not isinstance(active, dict)
                 or active.get("map_name") != record["map"]):
                 record["error"] = "MAP_CHANGED"
@@ -95,6 +96,14 @@ class RecordedLoopApi:
             if str(robot_mode).lower() != expected_mode or estopped is True:
                 record["error"] = "MODE_OR_SAFETY_CHANGED"
                 return
+            if record["source"] == "set_goal":
+                if nav_state == "NAVIGATING":
+                    record["goal_seen_running"] = True
+                elif not record["goal_seen_running"] and nav_state == "READY":
+                    return  # Armed before Set Goal; do not learn idle poses.
+                elif nav_state != "SUCCEEDED":
+                    record["error"] = "GOAL_INTERRUPTED"
+                    return
             pose = self._pose()
             if pose is None:
                 return
@@ -232,8 +241,8 @@ class RecordedLoopApi:
         goals = self.store.snapshot(name, digest)["goals"]
         if payload["start"] not in goals:
             raise RecordedLoopError("GOAL_MISSING", "Register the start Goal first")
-        if source == "set_goal" and self.navigation.state_response().get("navigation_state") != "NAVIGATING":
-            raise RecordedLoopError("GOAL_NOT_RUNNING", "Set Goal must be navigating")
+        if source == "set_goal" and self.navigation.state_response().get("navigation_state") not in {"READY", "NAVIGATING"}:
+            raise RecordedLoopError("GOAL_NOT_READY", "Arm recording before Set Goal, or while navigating")
         pose = self._pose()
         if pose is None or math.hypot(pose["x"] - goals[payload["start"]]["x"],
                                       pose["y"] - goals[payload["start"]]["y"]) > 0.40:
@@ -246,6 +255,8 @@ class RecordedLoopApi:
                             "segment_id": payload["segment_id"],
                             "commands": [], "poses": [pose],
                             "last": None, "last_at": None, "stopped": True,
+                            "goal_seen_running": (source == "set_goal"
+                                and self.navigation.state_response().get("navigation_state") == "NAVIGATING"),
                             "error": None, "started_at": time.monotonic()}
         return {"ok": True, "recording": True, "segment_id": payload["segment_id"]}
 
@@ -258,6 +269,9 @@ class RecordedLoopApi:
             if record["error"]:
                 raise RecordedLoopError(record["error"], "Recording invalid: discard before retry")
             if record["source"] == "set_goal":
+                if not record["goal_seen_running"]:
+                    raise RecordedLoopError("GOAL_NOT_STARTED",
+                                            "Set Goal did not begin after arming the recording")
                 with self.navigation._lock:
                     stop_proven = self.navigation._stop_confirmed_locked(time.time())
                 if self.navigation.state_response().get("navigation_state") == "SUCCEEDED" and stop_proven:
@@ -296,7 +310,8 @@ class RecordedLoopApi:
             active = self._record
             snapshot = ({"active": True, "segment_id": active["segment_id"],
                          "source": active["source"], "pose_count": len(active["poses"]),
-                         "command_count": len(active["commands"]), "error": active["error"]}
+                         "command_count": len(active["commands"]), "error": active["error"],
+                         "armed": active["source"] == "set_goal" and not active["goal_seen_running"]}
                         if active else {"active": False})
         return {"ok": True, "recording": snapshot}
 
