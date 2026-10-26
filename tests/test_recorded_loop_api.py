@@ -18,6 +18,9 @@ class FakeNav:
                       "active_map": {"map_name": "testmap"},
                       "robot_mode": "manual", "emergency_stop": False,
                       "navigation_state": "READY"}
+        self._state = self.state
+        self._robot_mode = "manual"
+        self._lock = threading.RLock()
 
     def state_response(self):
         return dict(self.state)
@@ -87,6 +90,7 @@ class RecordedLoopApiTests(unittest.TestCase):
     def test_source_or_mode_change_invalidates_trace(self):
         self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})
         self.nav.state["robot_mode"] = "auto"
+        self.nav._robot_mode = "auto"
         self.api._sample()
         with self.assertRaises(RecordedLoopError):
             self.api.finish()
