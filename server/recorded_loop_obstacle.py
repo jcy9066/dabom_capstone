@@ -29,9 +29,20 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
         or not 0 <= now - received <= 0.35 or not isinstance(ranges, list)):
         return None
     # 360-degree LiDAR may have a rear blind zone from chassis occlusion.
-    target = math.pi if direction.startswith("backward") else 0.0
-    half_angle = (math.pi if direction.startswith("rotate_")
-                  else math.radians(36.0))
+    # Turning sweeps more of the robot footprint than straight travel.
+    # Retain the straight forward/rear sectors while extending coverage
+    # to the outside of the commanded curve.
+    if direction.startswith("rotate_"):
+        target, half_angle = 0.0, math.pi
+    elif direction in {"forward_left", "forward_right"}:
+        target = math.radians(30.0 if direction.endswith("_left") else -30.0)
+        half_angle = math.radians(66.0)
+    elif direction in {"backward_left", "backward_right"}:
+        target = math.radians(150.0 if direction.endswith("_left") else -150.0)
+        half_angle = math.radians(66.0)
+    else:
+        target = math.pi if direction.startswith("backward") else 0.0
+        half_angle = math.radians(36.0)
     values = []
     dangerously_close = 0
     for i, raw in enumerate(ranges):
