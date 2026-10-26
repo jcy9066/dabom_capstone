@@ -751,11 +751,14 @@ class NavigationControlApi:
         with self._lock:
             active = self._recorded_motor_active or self._recorded_nav2_active
             handler = self._recorded_cancel_callback
-        if not active:
-            return
         if handler is None:
-            raise NavigationControlError(
-                "RECORDED_STOP_UNAVAILABLE", "Recorded Loop cannot be safely stopped")
+            if active:
+                raise NavigationControlError(
+                    "RECORDED_STOP_UNAVAILABLE", "Recorded Loop cannot be safely stopped")
+            return
+        # Even without a motor-owner bit, a replay Task may be STOPPING
+        # between a Nav2 return and its physical encoder proof. Always ask
+        # its idempotent stop handler before changing legacy control modes.
         result = await handler()
         with self._lock:
             if (not isinstance(result, dict) or result.get("ok") is not True
