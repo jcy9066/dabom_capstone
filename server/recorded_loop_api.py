@@ -431,12 +431,18 @@ class RecordedLoopApi:
                 if executor.cancelled:
                     raise ReplayFailure("REPLAY_CANCELLED")
             replans = 0
+            # The recorded Set Goal follows the regular reverse-capable
+            # controller; a newly replanned forward-only detour uses LoopFollowPath.
+            recorded_auto = goal is None
             overall_deadline = time.monotonic() + 110.0
             final_pose = path[-1]
             while time.monotonic() < overall_deadline:
                 if executor.cancelled or not self.navigation.recorded_nav2_health():
                     raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
-                accepted = await asyncio.to_thread(ros.follow_loop_path, path)
+                if recorded_auto and hasattr(ros, "follow_recorded_auto_path"):
+                    accepted = await asyncio.to_thread(ros.follow_recorded_auto_path, path)
+                else:
+                    accepted = await asyncio.to_thread(ros.follow_loop_path, path)
                 if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
                     raise ReplayFailure("NAV2_FOLLOW_REJECTED")
                 next_check = time.monotonic() + 0.5
@@ -500,6 +506,7 @@ class RecordedLoopApi:
                                 replans += 1
                                 path = self._nav_path(await asyncio.to_thread(
                                     ros.compute_path, final_pose, loop_forward=True))
+                                recorded_auto = False
                                 if not await asyncio.to_thread(ros.loop_path_valid, path):
                                     raise ReplayFailure("NAV2_REPLAN_BLOCKED")
                                 executor.playback.status = ReplayStatus.RUNNING
