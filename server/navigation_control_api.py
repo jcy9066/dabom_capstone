@@ -1707,6 +1707,9 @@ class NavigationControlApi:
                     "INVALID_LOOP", "A and B must be at least 1.20m apart to avoid overlapping arrival regions.", 400,
                 )
         with self._lock:
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDED_REPLAY_ACTIVE",
+                                             "Stop Recorded Loop before setting a new Goal", 409)
             self._expire_pending_cancel_locked(time.time())
             if self._pending_goal_cancel is not None:
                 raise NavigationControlError("CANCEL_IN_PROGRESS", "Wait for the encoder-confirmed Goal cancel.", 409)
@@ -1781,6 +1784,9 @@ class NavigationControlApi:
 
     async def start_navigation(self) -> dict[str, Any]:
         with self._lock:
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDED_REPLAY_ACTIVE",
+                                             "Stop Recorded Loop before starting Nav2", 409)
             goal = dict(self._state["active_goal"] or {})
             waypoints = [dict(p) for p in self._state["waypoints"]]
             loop_goals = [dict(p) for p in self._loop_goals]
