@@ -36,7 +36,8 @@
         $("recorded-goals").textContent = goals.join(", ") || "없음";
         $("recorded-segments").textContent = segments.join(", ") || "없음";
         $("recorded-status").textContent = data.recording?.active
-            ? "기록 중: " + data.recording.segment_id +
+            ? (data.recording.armed ? "Set Goal 시작 대기: " : "기록 중: ") +
+              data.recording.segment_id +
               (data.recording.error ? " / 오류: " + data.recording.error : "")
             : "기록 대기";
         $("recorded-position").textContent = data.current_pose
