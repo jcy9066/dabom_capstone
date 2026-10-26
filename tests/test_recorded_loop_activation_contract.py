@@ -74,3 +74,10 @@ def test_single_path_and_loop_ui_are_both_wired():
     assert 'one_shot = payload.get("kind") == "path"' in api
     assert 'if one_shot:' in api
     assert 'segment_count < 1' in runtime
+
+
+def test_manual_recording_requires_explicit_auto_mode_to_play():
+    api = (ROOT / "server/recorded_loop_api.py").read_text(encoding="utf-8")
+    assert '"AUTO_MODE_REQUIRED"' in api
+    assert 'self.navigation._pi_navigation_mode != "DRIVING"' in api
+    assert "Switch from Manual to AUTO in DRIVING before recorded playback" in api
