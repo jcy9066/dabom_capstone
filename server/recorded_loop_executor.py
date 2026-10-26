@@ -172,7 +172,8 @@ class RecordedMotorExecutor:
                             break
                     if not await self.drive(command):
                         raise ReplayFailure("PI_COMMAND_ACK_FAILED")
-                    await asyncio.sleep(self.TICK_SEC)
+                    remaining_sec = max(0.005, command["duration"] - self.playback.command_elapsed)
+                    await asyncio.sleep(min(self.TICK_SEC, remaining_sec))
                     elapsed = time.monotonic() - last_tick
                     last_tick = time.monotonic()
                     if elapsed > 0.5:
