@@ -30,7 +30,7 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             nonlocal driver_calls
             driver_calls += 1
             # The test simulates motion, NEVER a real motor.
-            where["x"] = 1. if driver_calls < 3 else 0.
+            where["x"] = 1. if where["x"] < .5 else 0.
             return True
 
         async def stop():
