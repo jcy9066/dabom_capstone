@@ -101,8 +101,10 @@ class RecordedLoopApi:
             if record["source"] == "set_goal":
                 if nav_state == "NAVIGATING":
                     record["goal_seen_running"] = True
-                elif not record["goal_seen_running"] and nav_state == "READY":
-                    return  # Armed before Set Goal; do not learn idle poses.
+                elif not record["goal_seen_running"] and nav_state in {"READY", "PATH_READY"}:
+                    # Normal #93 flow: READY -> PATH_READY -> NAVIGATING.
+                    # A pre-armed recorder must not fail during ComputePath.
+                    return
                 elif nav_state != "SUCCEEDED":
                     record["error"] = "GOAL_INTERRUPTED"
                     return
