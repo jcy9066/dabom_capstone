@@ -766,6 +766,7 @@ class NavigationRosControl:
     def follow_loop_path(
         self, poses: list[dict[str, float]], *, preempt: bool = False,
         recorded_auto: bool = False,
+        recorded_preflight: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Controller-server FollowPath executes stored, verified map poses."""
         self._require_started()
@@ -782,6 +783,11 @@ class NavigationRosControl:
                 "FOLLOW_PATH_UNAVAILABLE", "Nav2 FollowPath action unavailable.", 503,
             )
         with self._cancel_lock:
+            # Recorded-only guard: reject invalidated sessions before sending
+            # any Nav2 goal. PR93 callers retain identical default behavior.
+            if recorded_preflight is not None and not recorded_preflight():
+                raise NavigationRosError(
+                    "RECORDED_OWNER_LOST", "Recorded Loop canceled before FollowPath.", 409)
             with self._lock:
                 previous = self._navigate_goal_handle
                 allowed = (
@@ -800,6 +806,12 @@ class NavigationRosControl:
             )
             if not handle.accepted:
                 raise NavigationRosError("FOLLOW_PATH_REJECTED", "FollowPath rejected.", 422)
+            if recorded_preflight is not None and not recorded_preflight():
+                # Revocation happened while send_goal_async was in flight.
+                # Do not install or run this late accepted action.
+                handle.cancel_goal_async()
+                raise NavigationRosError(
+                    "RECORDED_OWNER_LOST", "Late FollowPath acceptance was canceled.", 409)
             future = handle.get_result_async()
             with self._lock:
                 if preempt and (
@@ -822,9 +834,13 @@ class NavigationRosControl:
             )
             return {"accepted": True, "action": "/follow_path", "cached": True}
 
-    def follow_recorded_auto_path(self, poses: list[dict[str, float]]) -> dict[str, Any]:
-        """Replay successful Set Goal traces using the ordinary Nav2 controller."""
-        return self.follow_loop_path(poses, recorded_auto=True)
+    def follow_recorded_auto_path(
+        self, poses: list[dict[str, float]],
+        *, recorded_preflight: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Replay actual Set Goal path with normal controller and recorded ownership."""
+        return self.follow_loop_path(
+            poses, recorded_auto=True, recorded_preflight=recorded_preflight)
 
     def begin_loop_trace(self) -> None:
         """Record *physical* map-frame AMCL positions, not planned geometry."""
