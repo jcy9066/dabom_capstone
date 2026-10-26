@@ -47,6 +47,7 @@ class RecordedLoopApi:
         self._play_status: dict[str, Any] = {"state": "IDLE", "label": "준비",
                                              "policy": None, "lap": 0, "reason": None}
         self._play_map: tuple[str, str] | None = None
+        self._play_map_verified_at = 0.0
         self._lock = threading.RLock()
         self._record: dict[str, Any] | None = None
         self._record_task: asyncio.Task | None = None
@@ -334,6 +335,18 @@ class RecordedLoopApi:
             active = self.navigation._state.get("active_map")
             if not isinstance(active, dict) or active.get("map_name") != self._play_map[0]:
                 return False
+        # The same map name can refer to changed YAML/PGM bytes. Bound every
+        # long-running replay to the hash verified at Start, not just its name.
+        now = time.monotonic()
+        if now - self._play_map_verified_at >= 2.0:
+            try:
+                selected = self.map_api.resolve_map(self._play_map[0])
+                actual = await asyncio.to_thread(map_digest, Path(selected.yaml_path))
+            except Exception:
+                return False
+            if actual != self._play_map[1]:
+                return False
+            self._play_map_verified_at = now
         return True
 
     async def _play_drive(self, candidate: dict[str, Any]) -> bool:
@@ -660,6 +673,7 @@ class RecordedLoopApi:
             raise RecordedLoopError("START_POSE_MISMATCH", "Move robot to recorded start")
         self.navigation.activate_recorded_motion()
         self._play_map = (name, digest)
+        self._play_map_verified_at = time.monotonic()
         self._executor = RecordedMotorExecutor(
             authorize=self._play_authorize, drive=self._play_drive,
             stop=self._play_stop, pose=self._play_pose,
