@@ -1075,6 +1075,10 @@ recorded_loop_api = RecordedLoopApi(
     map_api=navigation_map_api,
     csrf_failure=csrf_failure,
     store_path=ROOT_DIR / "data" / "runtime" / "recorded_loops.json",
+    send_robot_command=connections.send_command_wait_ack,
+    get_live_scan=current_navigation_scan_snapshot,
+    max_wheel_mps=MAX_WHEEL_MPS,
+    calibration_check=robot_speed_calibration_error,
 )
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 connections.command_transport_observer = (
