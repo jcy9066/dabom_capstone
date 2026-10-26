@@ -24,6 +24,14 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(p.status, ReplayStatus.REPLANNING)
         self.assertIsNone(p.step(.2, [{"duration": .3}]))
 
+    def test_single_recorded_path_completes_one_lap(self):
+        p = Playback()
+        p.start("WAIT")
+        p.finish_segment(1, True)
+        self.assertEqual(p.lap, 1)
+        self.assertEqual(p.segment_index, 0)
+        self.assertEqual(p.status, ReplayStatus.RUNNING)
+
     def test_endpoint_proof_required(self):
         p = Playback()
         p.start("WAIT")
