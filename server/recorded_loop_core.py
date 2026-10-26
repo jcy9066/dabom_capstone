@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+_MAP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _DIRECTIONS = frozenset({"forward", "backward", "left", "right", "forward_left",
                          "forward_right", "backward_left", "backward_right", "rotate_left", "rotate_right"})
 MAX_COMMANDS = 6000
@@ -29,6 +30,13 @@ class RecordedLoopError(ValueError):
 def identifier(value: Any, field: str = "id") -> str:
     if not isinstance(value, str) or not _ID.fullmatch(value):
         raise RecordedLoopError("INVALID_ID", f"Invalid {field}")
+    return value
+
+
+def map_identifier(value: Any) -> str:
+    """Match NavigationMapService's existing 1-64 character map naming rule."""
+    if not isinstance(value, str) or not _MAP_NAME.fullmatch(value):
+        raise RecordedLoopError("INVALID_MAP_NAME", "Invalid saved map name")
     return value
 
 
@@ -125,12 +133,12 @@ class RecordedRouteStore:
         return entry
 
     def snapshot(self, name: str, digest: str) -> dict[str, Any]:
-        identifier(name, "map_name")
+        map_identifier(name)
         with self._lock:
             return json.loads(json.dumps(self._map(self._load(), name, digest, False)))
 
     def put_goal(self, name: str, digest: str, goal_id: str, pose: dict) -> dict:
-        identifier(name, "map_name")
+        map_identifier(name)
         identifier(goal_id, "goal_id")
         validated = pose_dict(pose)
         with self._lock:
@@ -149,7 +157,7 @@ class RecordedRouteStore:
 
     def put_segment(self, name: str, digest: str, segment_id: str, source: str,
                     start: str, end: str, commands: list[dict], poses: list[dict]) -> dict:
-        identifier(name, "map_name")
+        map_identifier(name)
         for key, val in (("segment_id", segment_id), ("start", start), ("end", end)):
             identifier(val, key)
         if start == end or source not in {"manual", "set_goal"}:
@@ -187,7 +195,7 @@ class RecordedRouteStore:
         return saved
 
     def put_route(self, name: str, digest: str, route_id: str, segment_ids: list[str]) -> dict:
-        identifier(name, "map_name")
+        map_identifier(name)
         identifier(route_id, "route_id")
         if not isinstance(segment_ids, list) or not 2 <= len(segment_ids) <= 32:
             raise RecordedLoopError("INVALID_ROUTE", "Requires 2-32 segments")
@@ -210,7 +218,7 @@ class RecordedRouteStore:
         return saved
 
     def delete(self, name: str, digest: str, kind: str, item_id: str) -> None:
-        identifier(name, "map_name")
+        map_identifier(name)
         identifier(item_id)
         if kind not in {"goals", "segments", "routes"}:
             raise RecordedLoopError("INVALID_KIND", "Unknown kind")
