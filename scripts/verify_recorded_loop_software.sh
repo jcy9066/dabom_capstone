@@ -7,7 +7,8 @@ PYTHON="${PYTHON:-python3}"
   server/recorded_loop_api.py server/recorded_loop_core.py \
   server/recorded_loop_runtime.py server/recorded_loop_executor.py \
   server/recorded_loop_motor_math.py server/recorded_loop_obstacle.py \
-  server/navigation_control_api.py server/navigation_ros_control.py server/app.py
+  server/navigation_control_api.py server/navigation_ros_control.py server/app.py \
+  raspberry/controllers/motor_controller.py raspberry/robot_command_client.py
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PYTHON" -m pytest -q \
   tests/test_recorded_loop_core.py tests/test_recorded_loop_runtime.py \
   tests/test_recorded_loop_api.py tests/test_recorded_loop_executor.py \
