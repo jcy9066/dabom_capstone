@@ -765,13 +765,17 @@ class NavigationRosControl:
 
     def follow_loop_path(
         self, poses: list[dict[str, float]], *, preempt: bool = False,
+        recorded_auto: bool = False,
     ) -> dict[str, Any]:
         """Controller-server FollowPath executes stored, verified map poses."""
         self._require_started()
         request = FollowPath.Goal()
         request.path = self._path_stamped(poses)
-        request.controller_id = "LoopFollowPath"
-        request.goal_checker_id = "loop_cached_goal_checker"
+        # Existing PR #93 callers retain the original loop-specific
+        # forward-only controller. Saved Set Goal traces may contain
+        # legitimate reverse stages, so use the original general controller.
+        request.controller_id = "FollowPath" if recorded_auto else "LoopFollowPath"
+        request.goal_checker_id = "general_goal_checker" if recorded_auto else "loop_cached_goal_checker"
         client = self._follow_path_client
         if client is None or not client.wait_for_server(timeout_sec=2.5):
             raise NavigationRosError(
@@ -817,6 +821,10 @@ class NavigationRosControl:
                 lambda resolved, current=handle: self._on_navigation_result(current, resolved)
             )
             return {"accepted": True, "action": "/follow_path", "cached": True}
+
+    def follow_recorded_auto_path(self, poses: list[dict[str, float]]) -> dict[str, Any]:
+        """Replay successful Set Goal traces using the ordinary Nav2 controller."""
+        return self.follow_loop_path(poses, recorded_auto=True)
 
     def begin_loop_trace(self) -> None:
         """Record *physical* map-frame AMCL positions, not planned geometry."""
