@@ -38,6 +38,7 @@ class RecordedLoopApi:
         self.max_wheel_mps = max_wheel_mps
         self.calibration_check = calibration_check
         self._play_task: asyncio.Task | None = None
+        self._stop_lock = asyncio.Lock()
         self._executor: RecordedMotorExecutor | None = None
         self._play_status: dict[str, Any] = {"state": "IDLE", "label": "준비",
                                              "policy": None, "lap": 0, "reason": None}
@@ -313,26 +314,27 @@ class RecordedLoopApi:
         return self.navigation.recorded_motion_delivered(context)
 
     async def _play_stop(self) -> bool:
-        self.navigation.recorded_stop_begin()
-        if self.send_robot_command is None:
+        async with self._stop_lock:
+            self.navigation.recorded_stop_begin()
+            if self.send_robot_command is None:
+                return False
+            try:
+                result = await self.send_robot_command(
+                    self.navigation._robot_id,
+                    {"type": "stop", "reason": "recorded_loop_stop"})
+            except Exception:
+                return False
+            delivered = self.navigation._pi_command_delivered(result)
+            self.navigation.recorded_stop_acknowledged(delivered)
+            if not delivered:
+                return False
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if self.navigation.recorded_stop_proven():
+                    return True
+                await asyncio.sleep(0.05)
             return False
-        try:
-            result = await self.send_robot_command(
-                self.navigation._robot_id,
-                {"type": "stop", "reason": "recorded_loop_stop"})
-        except Exception:
-            return False
-        delivered = self.navigation._pi_command_delivered(result)
-        self.navigation.recorded_stop_acknowledged(delivered)
-        if not delivered:
-            return False
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if self.navigation.recorded_stop_proven():
-                return True
-            await asyncio.sleep(0.05)
-        return False
-
+    
     async def _play_pose(self) -> dict[str, float] | None:
         return self._pose()
 
