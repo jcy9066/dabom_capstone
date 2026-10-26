@@ -35,10 +35,12 @@ class RecordedMotorExecutor:
         blocked: Callable[[dict], Awaitable[bool | None]],
         replan: Callable[[dict, list[dict]], Awaitable[bool]],
         on_status: Callable[[dict], None] | None = None,
+        follow_recorded_path: Callable[[list[dict], str], Awaitable[bool]] | None = None,
     ):
         self.authorize, self.drive, self.stop = authorize, drive, stop
         self.pose, self.blocked, self.replan = pose, blocked, replan
         self.on_status = on_status or (lambda state: None)
+        self.follow_recorded_path = follow_recorded_path
         self.playback = Playback()
         self.cancelled = False
 
@@ -114,6 +116,23 @@ class RecordedMotorExecutor:
                 await self._health()
                 segment = segments[self.playback.segment_index]
                 commands = segment.get("commands")
+                if not commands and segment.get("source") == "set_goal":
+                    if self.follow_recorded_path is None:
+                        raise ReplayFailure("NAV2_FOLLOW_PATH_UNAVAILABLE")
+                    await self._verified_stop()
+                    await self._health()
+                    followed = await asyncio.wait_for(
+                        self.follow_recorded_path(segment["poses"], self.playback.policy.value),
+                        timeout=120.0)
+                    if not followed:
+                        raise ReplayFailure("NAV2_FOLLOW_PATH_FAILED")
+                    await self._verified_stop()
+                    position = await self._current()
+                    if self._distance(position, segment["poses"][-1]) > self.GOAL_TOLERANCE_M:
+                        raise ReplayFailure("NAV2_END_POSE_MISMATCH")
+                    self.playback.finish_segment(len(segments), True)
+                    self._emit()
+                    continue
                 if not commands:
                     raise ReplayFailure("MANUAL_COMMANDS_REQUIRED")
                 commands = [motor_command(c) for c in commands]
@@ -140,7 +159,7 @@ class RecordedMotorExecutor:
                             last_tick = time.monotonic()
                             continue
                         if self.playback.status == ReplayStatus.REPLANNING:
-                            await self._replan(segment, segment["poses"][i:])
+                            await self._replan(segment, segment["poses"])
                             # Nav2 has reached this segment's recorded Goal,
                             # so never replay its now-obsolete motor tail.
                             position = await self._current()
