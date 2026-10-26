@@ -25,6 +25,7 @@ from server.recorded_loop_motor_math import recorded_to_auto_drive
 from server.recorded_loop_obstacle import path_blocked
 from server.navigation_control_api import NavigationControlError
 from server.navigation_ros_control import NavigationRosError
+from server.navigation_map_service import NavigationMapError
 
 
 class RecordedLoopApi:
@@ -723,6 +724,9 @@ class RecordedLoopApi:
                 return JSONResponse({"ok": False, "error_code": exc.error_code,
                                      "error": str(exc)}, status_code=exc.status_code)
             except NavigationRosError as exc:
+                return JSONResponse({"ok": False, "error_code": exc.error_code,
+                                     "error": str(exc)}, status_code=exc.status_code)
+            except NavigationMapError as exc:
                 return JSONResponse({"ok": False, "error_code": exc.error_code,
                                      "error": str(exc)}, status_code=exc.status_code)
             except (KeyError, TypeError, ValueError) as exc:
