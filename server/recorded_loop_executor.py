@@ -99,7 +99,7 @@ class RecordedMotorExecutor:
         await self._verified_stop()
         await self._health()
         try:
-            ok = await asyncio.wait_for(self.replan(segment, remaining), timeout=15.0)
+            ok = await asyncio.wait_for(self.replan(segment, remaining), timeout=120.0)
         except (asyncio.TimeoutError, OSError) as exc:
             raise ReplayFailure("REPLAN_FAILED") from exc
         if not ok:
