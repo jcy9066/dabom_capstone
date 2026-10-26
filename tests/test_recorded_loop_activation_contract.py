@@ -61,3 +61,16 @@ def test_inflight_recorded_stop_blocks_all_legacy_mode_changes():
                    "async def switch_patrol_mode"):
         region = nav.split(method, 1)[1].split("\n    async def ", 1)[0]
         assert "await self._stop_recorded_before_transition()" in region
+
+
+def test_single_path_and_loop_ui_are_both_wired():
+    html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
+    api = (ROOT / "server/recorded_loop_api.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "server/recorded_loop_runtime.py").read_text(encoding="utf-8")
+    assert '<option value="path">' in html
+    assert '<option value="loop">' in html
+    assert 'kind === "path" ? 1 : null' in js
+    assert 'one_shot = payload.get("kind") == "path"' in api
+    assert 'if one_shot:' in api
+    assert 'segment_count < 1' in runtime
