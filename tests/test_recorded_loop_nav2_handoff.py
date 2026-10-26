@@ -104,6 +104,18 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ros.events, ["validate", "follow"])
         self.assertEqual(self.nav.events, ["takeover", "revoke", "stop_proven", "resume_replay"])
 
+    async def test_auto_trace_uses_reverse_capable_controller(self):
+        def general(path):
+            self.ros.events.append("general_follow")
+            self.ros.state = "SUCCEEDED"
+            return {"accepted": True}
+        self.ros.follow_recorded_auto_path = general
+        path = [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                {"x": 1.0, "y": 0.0, "yaw": 0.0}]
+        self.assertTrue(await self.api._play_follow(path, "WAIT"))
+        self.assertEqual(self.ros.events, ["validate", "general_follow"])
+        self.assertNotIn("compute", self.ros.events)
+
     async def test_obstacle_replan_plans_once_only(self):
         segment = {"poses": [{"x": 0.0, "y": 0.0, "yaw": 0.0},
                              {"x": 1.0, "y": 0.0, "yaw": 0.0}]}
