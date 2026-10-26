@@ -211,6 +211,17 @@ class RecordedRouteStore:
             for prev, nxt in zip(segments, segments[1:] + segments[:1]):
                 if prev["end"] != nxt["start"]:
                     raise RecordedLoopError("ROUTE_DISCONNECTED", "Segments must form a closed loop")
+                # The next motor command starts exactly where the previous
+                # one stopped. A missing recorded pivot at B must be caught
+                # at SAVE time, not when the live RC car tries its next leg.
+                tail, head = prev["poses"][-1], nxt["poses"][0]
+                xy_gap = math.hypot(tail["x"] - head["x"], tail["y"] - head["y"])
+                delta = tail["yaw"] - head["yaw"]
+                yaw_gap = abs(math.atan2(math.sin(delta), math.cos(delta)))
+                if xy_gap > 0.40 or yaw_gap > 0.70:
+                    raise RecordedLoopError(
+                        "ROUTE_POSE_DISCONNECTED",
+                        "Record the required turnaround and alignment as part of the next segment")
             entry = self._map(db, name, digest, True)
             saved = {"id": route_id, "segments": ids, "saved_at": time.time()}
             entry["routes"][route_id] = saved
