@@ -130,6 +130,57 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(labels, ["WAITING", "RUNNING"])
         self.assertEqual(self.ros.events[-1], "follow")
 
+    async def test_new_obstacle_during_follow_waits_and_resumes(self):
+        self.api._executor.playback = Playback()
+        self.api._executor.playback.start("WAIT")
+        states = []
+        self.api._executor._emit = lambda: states.append(
+            self.api._executor.playback.viewer_state()["label"])
+        validity = {"count": 0}
+        def validate(path):
+            self.ros.events.append("validate")
+            validity["count"] += 1
+            return validity["count"] != 2
+        starts = {"count": 0}
+        def start_follow(path):
+            self.ros.events.append("follow")
+            starts["count"] += 1
+            self.ros.state = "NAVIGATING" if starts["count"] == 1 else "SUCCEEDED"
+            return {"accepted": True}
+        self.ros.loop_path_valid = validate
+        self.ros.follow_loop_path = start_follow
+        path = [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                {"x": 1.0, "y": 0.0, "yaw": 0.0}]
+        self.assertTrue(await self.api._play_follow(path, "WAIT"))
+        self.assertEqual(starts["count"], 2)
+        self.assertIn("cancel", self.ros.events)
+        self.assertIn("대기 중", states)
+        self.assertTrue(self.nav.replay_owned)
+
+    async def test_new_obstacle_during_follow_replans(self):
+        self.api._executor.playback = Playback()
+        self.api._executor.playback.start("REPLAN")
+        self.api._executor._emit = lambda: None
+        validity = {"count": 0}
+        def validate(path):
+            self.ros.events.append("validate")
+            validity["count"] += 1
+            return validity["count"] != 2
+        starts = {"count": 0}
+        def start_follow(path):
+            self.ros.events.append("follow")
+            starts["count"] += 1
+            self.ros.state = "NAVIGATING" if starts["count"] == 1 else "SUCCEEDED"
+            return {"accepted": True}
+        self.ros.loop_path_valid = validate
+        self.ros.follow_loop_path = start_follow
+        path = [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                {"x": 1.0, "y": 0.0, "yaw": 0.0}]
+        self.assertTrue(await self.api._play_follow(path, "REPLAN"))
+        self.assertEqual(self.ros.events.count("compute"), 1)
+        self.assertEqual(starts["count"], 2)
+        self.assertTrue(self.nav.replay_owned)
+
     async def test_invalid_path_cannot_restart_motors(self):
         self.ros.valid = False
         with self.assertRaises(ReplayFailure):
