@@ -83,6 +83,20 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             await engine.run(route(), "WAIT", max_laps=1)
         self.assertNotIn("motor_sent", events)
 
+    async def test_final_stop_failure_prevents_false_success(self):
+        engine, events, _ = await self.build()
+        stopped = 0
+
+        async def stop_then_fail():
+            nonlocal stopped
+            stopped += 1
+            return stopped < 4
+
+        engine.stop = stop_then_fail
+        with self.assertRaisesRegex(ReplayFailure, "STOP_NOT_CONFIRMED"):
+            await engine.run(route(), "WAIT", max_laps=1)
+        self.assertEqual(engine.playback.status, ReplayStatus.FAILED)
+
     async def test_unacknowledged_stop_is_fatal(self):
         engine, events, _ = await self.build(stop_ok=False)
         with self.assertRaises(ReplayFailure):
