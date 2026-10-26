@@ -1,0 +1,59 @@
+/* Recorded Path UI is namespaced and does not modify PR #93 controls. */
+.recorded-loop-panel {
+    margin-top: 6px;
+    width: min(580px, 88vw);
+    color: var(--text-color, #dbe6f3);
+    border: 1px solid rgba(120, 153, 181, .38);
+    border-radius: 7px;
+    background: rgba(12, 22, 36, .94);
+    font: 12px/1.5 inherit;
+}
+.recorded-loop-panel summary {
+    cursor: pointer;
+    padding: 6px 10px;
+    font-weight: 600;
+    letter-spacing: .035em;
+}
+.recorded-loop-panel .recorded-loop-body {
+    display: grid;
+    gap: 8px;
+    max-height: 45vh;
+    padding: 9px;
+    overflow-y: auto;
+}
+.recorded-loop-panel .recorded-loop-form,
+.recorded-loop-panel .recorded-loop-buttons {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+.recorded-loop-panel input,
+.recorded-loop-panel select,
+.recorded-loop-panel button {
+    min-width: 0;
+    box-sizing: border-box;
+    border: 1px solid rgba(145, 170, 190, .48);
+    border-radius: 5px;
+    padding: 5px 7px;
+    background: rgba(26, 48, 69, .85);
+    color: #f4f8fb;
+    font-size: 12px;
+}
+.recorded-loop-panel input {
+    flex: 1 1 85px;
+}
+.recorded-loop-panel button {
+    cursor: pointer;
+}
+.recorded-loop-panel button:disabled {
+    opacity: .42;
+    cursor: not-allowed;
+}
+.recorded-loop-panel .recorded-loop-info {
+    overflow-wrap: anywhere;
+}
+#recorded-feedback { color: #efcb81; }
+@media(max-width: 650px) {
+    .recorded-loop-panel { width: 88vw; }
+}
