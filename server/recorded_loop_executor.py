@@ -141,10 +141,16 @@ class RecordedMotorExecutor:
                             continue
                         if self.playback.status == ReplayStatus.REPLANNING:
                             await self._replan(segment, segment["poses"][i:])
-                            # A replanned motion is NOT a motor-replay timeline.
-                            # Restarting the old command tail after displacement
-                            # could hit a wall. Require a new route recording.
-                            raise ReplayFailure("REPLAN_REJOIN_REQUIRES_VERIFICATION")
+                            # Nav2 has reached this segment's recorded Goal,
+                            # so never replay its now-obsolete motor tail.
+                            position = await self._current()
+                            if self._distance(position, segment["poses"][-1]) > self.GOAL_TOLERANCE_M:
+                                raise ReplayFailure("REPLAN_END_POSE_MISMATCH")
+                            self.playback.status = ReplayStatus.RUNNING
+                            self.playback.reason = None
+                            self.playback.command_index = len(commands)
+                            self._emit()
+                            break
                     if not await self.drive(command):
                         raise ReplayFailure("PI_COMMAND_ACK_FAILED")
                     await asyncio.sleep(self.TICK_SEC)
@@ -165,6 +171,7 @@ class RecordedMotorExecutor:
                 self._emit()
             if self.cancelled:
                 raise ReplayFailure("REPLAY_CANCELLED")
+            await self._verified_stop()
             return {"ok": True, "laps": self.playback.lap}
         except (ReplayFailure, ValueError, RuntimeError) as exc:
             self.playback.fail(str(exc))
