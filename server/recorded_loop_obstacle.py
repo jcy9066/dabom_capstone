@@ -33,15 +33,25 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
     half_angle = (math.pi if direction.startswith("rotate_")
                   else math.radians(36.0))
     values = []
+    dangerously_close = 0
     for i, raw in enumerate(ranges):
         if type(raw) not in (int, float) or not math.isfinite(raw):
             continue
-        if not minimum <= raw <= maximum:
-            continue
         theta = amin + i * increment - target
         theta = math.atan2(math.sin(theta), math.cos(theta))
-        if abs(theta) <= half_angle:
-            values.append(float(raw))
+        if abs(theta) > half_angle:
+            continue
+        # Positive returns inside LaserScan.range_min indicate a nearby
+        # object OR an invalid/occluded reading. Treat repeated ones as
+        # blocked, never as evidence that the sector is clear.
+        if 0 < raw < minimum:
+            dangerously_close += 1
+            continue
+        if not minimum <= raw <= maximum:
+            continue
+        values.append(float(raw))
+    if dangerously_close >= 2:
+        return True
     if len(values) < 8:
         return None
     # A tenth-percentile rule can miss a narrow physical obstacle:
