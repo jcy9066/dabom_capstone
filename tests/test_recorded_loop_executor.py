@@ -73,6 +73,13 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             await engine.run(route(), "WAIT", max_laps=1)
         self.assertNotIn("motor_sent", events)
 
+    async def test_one_shot_path_does_not_repeat(self):
+        engine, events, _ = await self.build()
+        result = await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertEqual(result["laps"], 1)
+        self.assertEqual(engine.playback.lap, 1)
+        self.assertEqual(events.count("motor_sent"), 2)
+
     async def test_two_leg_recorded_loop(self):
         engine, events, _ = await self.build()
         result = await engine.run(route(), "WAIT", max_laps=1)
