@@ -49,3 +49,15 @@ def test_completed_legacy_goal_permits_safe_recorded_replay():
     assert 'stale_success_only = (' in nav
     executor = (ROOT / "server/recorded_loop_executor.py").read_text(encoding="utf-8")
     assert 'await self._verified_stop()\n            await self._health()' in executor
+
+
+def test_inflight_recorded_stop_blocks_all_legacy_mode_changes():
+    nav = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+    app = (ROOT / "server/app.py").read_text(encoding="utf-8")
+    assert "set_recorded_cancel_callback(recorded_loop_api.stop_playback)" in app
+    assert "Even without a motor-owner bit, a replay Task may be STOPPING" in nav
+    assert "result = await handler()" in nav
+    for method in ("async def cancel_goal", "async def switch_mode",
+                   "async def switch_patrol_mode"):
+        region = nav.split(method, 1)[1].split("\n    async def ", 1)[0]
+        assert "await self._stop_recorded_before_transition()" in region
