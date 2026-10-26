@@ -81,3 +81,14 @@ def test_manual_recording_requires_explicit_auto_mode_to_play():
     assert '"AUTO_MODE_REQUIRED"' in api
     assert 'self.navigation._pi_navigation_mode != "DRIVING"' in api
     assert "Switch from Manual to AUTO in DRIVING before recorded playback" in api
+
+
+def test_recorded_pwm_is_not_boosted_by_nav2_minimum():
+    driver = (ROOT / "raspberry/controllers/motor_controller.py").read_text(encoding="utf-8")
+    pi = (ROOT / "raspberry/robot_command_client.py").read_text(encoding="utf-8")
+    server = (ROOT / "server/recorded_loop_motor_math.py").read_text(encoding="utf-8")
+    assert "preserve_recorded_pwm: bool = False" in driver
+    assert "not preserve_recorded_pwm and 0.0 < peak < MIN_AUTO_DRIVE_PWM" in driver
+    assert 'message.get("source") == "recorded_loop"' in pi
+    assert '"source": "recorded_loop"' in server
+    assert "cap_motor_pwm_pair(" in driver
