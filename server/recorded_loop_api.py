@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import threading
 import time
 from pathlib import Path
@@ -37,6 +38,9 @@ class RecordedLoopApi:
         self.get_live_scan = get_live_scan or (lambda: None)
         self.max_wheel_mps = max_wheel_mps
         self.calibration_check = calibration_check
+        # OFF by default until physical Nav2 motor ownership tests pass.
+        self.nav2_replay_enabled = os.getenv(
+            "RECORDED_NAV2_REPLAY_ENABLE", "0").strip().lower() in {"1", "true", "yes"}
         self._play_task: asyncio.Task | None = None
         self._stop_lock = asyncio.Lock()
         self._executor: RecordedMotorExecutor | None = None
@@ -491,18 +495,18 @@ class RecordedLoopApi:
         policy = payload.get("policy", "WAIT")
         if policy not in {"WAIT", "REPLAN"}:
             raise RecordedLoopError("INVALID_POLICY", "Select WAIT or REPLAN before Start")
-        if policy == "REPLAN":
+        if policy == "REPLAN" and not self.nav2_replay_enabled:
             raise RecordedLoopError("REPLAN_NOT_READY",
-                                    "Nav2 takeover/rejoin is not yet validated for recorded motor replay")
+                                    "RECORDED_NAV2_REPLAY_ENABLE is disabled pending validation")
         max_laps = payload.get("max_laps")
         if max_laps is not None and (type(max_laps) is not int or not 1 <= max_laps <= 100):
             raise RecordedLoopError("INVALID_LAPS", "max_laps must be 1..100 or null")
         segments = [selected["segments"][key] for key in route["segments"]]
-        # No algorithm substitution: manual routes use physical motor replay.
-        # Planned routes must await their own Nav2 FollowPath ownership wiring.
-        if any(segment.get("source") != "manual" for segment in segments):
+        # Manual recordings replay motors; successful automatic recordings
+        # use the stored trajectory and Nav2 FollowPath without ComputePath.
+        if any(segment.get("source") != "manual" for segment in segments) and not self.nav2_replay_enabled:
             raise RecordedLoopError("NAV2_RECORDED_ROUTE_UNAVAILABLE",
-                                    "Auto-recorded routes are not yet replay-enabled")
+                                    "RECORDED_NAV2_REPLAY_ENABLE is disabled pending validation")
         if self.calibration_check is not None:
             issue = self.calibration_check(self.navigation._robot_id)
             if issue:
@@ -576,7 +580,8 @@ class RecordedLoopApi:
             def action(_):
                 name, digest = self._active()
                 return {"ok": True, "map_name": name, "data": self.store.snapshot(name, digest),
-                        "current_pose": self._pose(), **self.status(), **self._play_snapshot()}
+                        "current_pose": self._pose(), "nav2_replay_enabled": self.nav2_replay_enabled,
+                        **self.status(), **self._play_snapshot()}
             return await process(request, action, False)
 
         @app.post("/api/navigation/recorded/goal")
