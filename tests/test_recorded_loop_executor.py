@@ -75,6 +75,13 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         await engine.run(route(), "REPLAN", max_laps=1)
         self.assertIn("replan", events)
 
+    async def test_heading_mismatch_blocks_motor_output(self):
+        engine, events, where = await self.build()
+        where["yaw"] = 3.141592653589793
+        with self.assertRaisesRegex(ReplayFailure, "SEGMENT_START_MISMATCH"):
+            await engine.run(route(), "WAIT", max_laps=1)
+        self.assertNotIn("순찰 중", [e for e in events if e == "motor_sent"])
+
     async def test_unacknowledged_stop_is_fatal(self):
         engine, events, _ = await self.build(stop_ok=False)
         with self.assertRaises(ReplayFailure):
