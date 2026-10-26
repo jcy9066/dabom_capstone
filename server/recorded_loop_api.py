@@ -20,6 +20,7 @@ from server.recorded_loop_core import (
     pose_dict,
 )
 from server.recorded_loop_executor import RecordedMotorExecutor, ReplayFailure
+from server.recorded_loop_runtime import ReplayStatus
 from server.recorded_loop_motor_math import recorded_to_auto_drive
 from server.recorded_loop_obstacle import path_blocked
 from server.navigation_control_api import NavigationControlError
@@ -367,6 +368,20 @@ class RecordedLoopApi:
         return [pose_dict(poses[(i * (len(poses) - 1)) // (count - 1)])
                 for i in range(count)]
 
+    @staticmethod
+    def _nav_remaining_path(path: list[dict], current: dict) -> list[dict]:
+        """Never restart a recorded Nav2 route from points far behind the robot."""
+        if len(path) < 2:
+            raise ReplayFailure("INVALID_NAV2_PATH")
+        nearest = min(range(len(path)), key=lambda i: math.hypot(
+            path[i]["x"] - current["x"], path[i]["y"] - current["y"]))
+        distance = math.hypot(path[nearest]["x"] - current["x"],
+                              path[nearest]["y"] - current["y"])
+        if distance > 0.55:
+            raise ReplayFailure("NAV2_ROUTE_DEVIATION")
+        start = min(max(0, nearest - 1), len(path) - 2)
+        return path[start:]
+
     async def _nav_action(self, *, poses: list[dict] | None,
                           goal: dict | None, policy: str = "WAIT") -> bool:
         """Exclusive ROS takeover. No PR93 Goal or Loop data is overwritten."""
@@ -415,20 +430,82 @@ class RecordedLoopApi:
                     await asyncio.sleep(0.25)
                 if executor.cancelled:
                     raise ReplayFailure("REPLAY_CANCELLED")
-            accepted = await asyncio.to_thread(ros.follow_loop_path, path)
-            if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
-                raise ReplayFailure("NAV2_FOLLOW_REJECTED")
-            deadline = time.monotonic() + 110.0
-            while time.monotonic() < deadline:
+            replans = 0
+            overall_deadline = time.monotonic() + 110.0
+            final_pose = path[-1]
+            while time.monotonic() < overall_deadline:
                 if executor.cancelled or not self.navigation.recorded_nav2_health():
                     raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
-                state = str(ros.navigation_status().get("state") or "").upper()
-                if state in {"SUCCEEDED", "FAILED", "CANCELED"}:
-                    if state != "SUCCEEDED":
-                        raise ReplayFailure("NAV2_" + state)
-                    succeeded = True
+                accepted = await asyncio.to_thread(ros.follow_loop_path, path)
+                if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
+                    raise ReplayFailure("NAV2_FOLLOW_REJECTED")
+                next_check = time.monotonic() + 0.5
+                restarting = False
+                while time.monotonic() < overall_deadline:
+                    if executor.cancelled or not self.navigation.recorded_nav2_health():
+                        raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
+                    state = str(ros.navigation_status().get("state") or "").upper()
+                    if state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                        if state != "SUCCEEDED":
+                            raise ReplayFailure("NAV2_" + state)
+                        succeeded = True
+                        break
+                    now = time.monotonic()
+                    if now >= next_check:
+                        current = await self._play_pose()
+                        if current is None:
+                            raise ReplayFailure("NAV2_LOCALIZATION_LOST")
+                        suffix = self._nav_remaining_path(path, current)
+                        valid = await asyncio.to_thread(ros.loop_path_valid, suffix)
+                        if not valid:
+                            # Stop Nav2 controller before any waiting or new plan.
+                            cancelled = await asyncio.to_thread(ros.cancel_navigation)
+                            if (not isinstance(cancelled, dict)
+                                or cancelled.get("confirmed") is not True):
+                                raise ReplayFailure("NAV2_CANCEL_UNCONFIRMED")
+                            if not await self._play_stop():
+                                raise ReplayFailure("STOP_NOT_CONFIRMED")
+                            executor.playback.obstacle(True)
+                            executor._emit()
+                            if policy == "WAIT":
+                                clear_since = None
+                                while not executor.cancelled:
+                                    if not self.navigation.recorded_nav2_health():
+                                        raise ReplayFailure("NAV2_WAIT_HEALTH_LOST")
+                                    valid = await asyncio.to_thread(ros.loop_path_valid, suffix)
+                                    now = time.monotonic()
+                                    if valid:
+                                        if clear_since is None:
+                                            clear_since = now
+                                        if now - clear_since >= 1.0:
+                                            break
+                                    else:
+                                        clear_since = None
+                                    await asyncio.sleep(0.2)
+                                if executor.cancelled:
+                                    raise ReplayFailure("REPLAY_CANCELLED")
+                                path = suffix
+                                executor.playback.obstacle(False)
+                                executor._emit()
+                            else:
+                                if replans >= 2:
+                                    raise ReplayFailure("NAV2_REPLAN_LIMIT")
+                                replans += 1
+                                path = self._nav_path(await asyncio.to_thread(
+                                    ros.compute_path, final_pose, loop_forward=True))
+                                if not await asyncio.to_thread(ros.loop_path_valid, path):
+                                    raise ReplayFailure("NAV2_REPLAN_BLOCKED")
+                                executor.playback.status = ReplayStatus.RUNNING
+                                executor.playback.reason = None
+                                executor._emit()
+                            restarting = True
+                            break
+                        next_check = now + 0.5
+                    await asyncio.sleep(0.1)
+                if succeeded:
                     break
-                await asyncio.sleep(0.1)
+                if not restarting:
+                    raise ReplayFailure("NAV2_FOLLOW_TIMEOUT")
             if not succeeded:
                 raise ReplayFailure("NAV2_FOLLOW_TIMEOUT")
         finally:
