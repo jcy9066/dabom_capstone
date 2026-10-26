@@ -5812,8 +5812,12 @@ async def send_robot_command(
         delivered = await connections.send_command(robot_id, command)
     if delivered and controlled_motion:
         delivered = navigation_control_api.note_authorized_motion(motion_context)
-    # Observation only: no effect on legacy motor authorization or ACKs.
-    recorded_loop_api.note_motion_ack(command, bool(delivered))
+    # Observation only: recorder failures must never change legacy Pi ACK
+    # responses after physical motor execution.
+    try:
+        recorded_loop_api.note_motion_ack(command, bool(delivered))
+    except Exception:
+        logging.getLogger(__name__).exception("recorded motor observer failed")
 
     status_code = (
         200 if delivered else 409
