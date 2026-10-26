@@ -200,6 +200,7 @@ class NavigationControlApi:
         self._post_resume_motion_ready = False
         # Opt-in, mutually exclusive recorded replay; inert in PR #93 flows.
         self._recorded_motor_active = False
+        self._recorded_nav2_active = False
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -707,9 +708,59 @@ class NavigationControlApi:
             self._goal_motion_generation += 1
             self._recorded_motor_active = True
 
+    def recorded_nav2_takeover(self) -> None:
+        """Transfer exclusive replay control to Nav2 after physical STOP."""
+        with self._lock:
+            if (not self._recorded_motor_active or self._recorded_nav2_active
+                or not self._stop_confirmed_locked(time.time())
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_HANDOFF_DENIED",
+                                             "Nav2 handoff requires confirmed STOP")
+            self._recorded_motor_active = False
+            self._recorded_nav2_active = True
+            self._goal_motion_generation += 1
+
+    def recorded_nav2_return(self) -> None:
+        with self._lock:
+            if (not self._recorded_nav2_active
+                or not self._stop_confirmed_locked(time.time())
+                or self._state["emergency_stop"]
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_REJOIN_DENIED",
+                                             "Nav2 return requires confirmed STOP")
+            self._recorded_nav2_active = False
+            self._recorded_motor_active = True
+            self._goal_motion_generation += 1
+
+    def suspend_recorded_motion(self) -> bool:
+        """Revoke any in-flight recorded motion generation immediately."""
+        with self._lock:
+            active = bool(self._recorded_motor_active or self._recorded_nav2_active)
+            self._recorded_motor_active = False
+            self._recorded_nav2_active = False
+            if active:
+                self._goal_motion_generation += 1
+            return active
+
+    def recorded_nav2_health(self) -> bool:
+        with self._lock:
+            return bool(
+                self._recorded_nav2_active
+                and self._robot_mode == "auto"
+                and self._pi_navigation_mode == "DRIVING"
+                and self._state["navigation_mode"] == "DRIVING"
+                and not self._state["emergency_stop"]
+                and self._state["navigation_state"] == "READY"
+                and self._state["active_goal"] is None
+                and not self._loop_goals
+                and self._watchdog_issue_locked(time.time()) is None
+                and self._connected and self._pi_estop_latched is False
+            )
+
     def release_recorded_motion(self) -> None:
         with self._lock:
             self._recorded_motor_active = False
+            self._recorded_nav2_active = False
             self._goal_motion_generation += 1
 
     def recorded_safety_context(self) -> dict[str, Any] | None:
@@ -771,6 +822,7 @@ class NavigationControlApi:
             if (
                 self._robot_mode == "auto"
                 and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                and not self.recorded_nav2_health()
             ):
                 return None
             if not self._connected:
@@ -805,6 +857,7 @@ class NavigationControlApi:
             if (
                 self._robot_mode == "auto"
                 and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                and not self.recorded_nav2_health()
             ):
                 return False
             if expected_safety is not None and (
