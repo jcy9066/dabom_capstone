@@ -19,15 +19,29 @@ from server.recorded_loop_core import (
     RecordedLoopError, RecordedRouteStore, identifier, map_digest,
     pose_dict,
 )
+from server.recorded_loop_executor import RecordedMotorExecutor, ReplayFailure
+from server.recorded_loop_motor_math import recorded_to_auto_drive
+from server.recorded_loop_obstacle import path_blocked
 
 
 class RecordedLoopApi:
     def __init__(self, app: FastAPI, navigation: Any, map_api: Any,
-                 csrf_failure: Any, store_path: Path):
+                 csrf_failure: Any, store_path: Path,
+                 send_robot_command: Any = None, get_live_scan: Any = None,
+                 max_wheel_mps: float | None = None, calibration_check: Any = None):
         self.navigation = navigation
         self.map_api = map_api
         self.csrf_failure = csrf_failure
         self.store = RecordedRouteStore(store_path)
+        self.send_robot_command = send_robot_command
+        self.get_live_scan = get_live_scan or (lambda: None)
+        self.max_wheel_mps = max_wheel_mps
+        self.calibration_check = calibration_check
+        self._play_task: asyncio.Task | None = None
+        self._executor: RecordedMotorExecutor | None = None
+        self._play_status: dict[str, Any] = {"state": "IDLE", "label": "준비",
+                                             "policy": None, "lap": 0, "reason": None}
+        self._play_map: tuple[str, str] | None = None
         self._lock = threading.RLock()
         self._record: dict[str, Any] | None = None
         self._record_task: asyncio.Task | None = None
@@ -116,6 +130,16 @@ class RecordedLoopApi:
                 await task
             except asyncio.CancelledError:
                 pass
+        if self._executor is not None:
+            self._executor.cancel()
+        if self._play_task is not None and not self._play_task.done():
+            try:
+                await asyncio.wait_for(self._play_task, timeout=5.0)
+            except (asyncio.TimeoutError, ReplayFailure, RuntimeError):
+                pass
+            if not self._play_task.done():
+                self._play_task.cancel()
+        self.navigation.release_recorded_motion()
         with self._lock:
             self._record = None
 
@@ -252,6 +276,158 @@ class RecordedLoopApi:
                         if active else {"active": False})
         return {"ok": True, "recording": snapshot}
 
+    def _play_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {"playback": dict(self._play_status),
+                    "play_active": self._play_task is not None and not self._play_task.done()}
+
+    def _play_update(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            self._play_status = dict(state)
+
+    async def _play_authorize(self) -> bool:
+        if self.navigation.recorded_safety_context() is None:
+            return False
+        if self._play_map is None:
+            return False
+        with self.navigation._lock:
+            active = self.navigation._state.get("active_map")
+            if not isinstance(active, dict) or active.get("map_name") != self._play_map[0]:
+                return False
+        return True
+
+    async def _play_drive(self, candidate: dict[str, Any]) -> bool:
+        context = self.navigation.recorded_safety_context()
+        if context is None or self.send_robot_command is None:
+            return False
+        payload = recorded_to_auto_drive(candidate, self.max_wheel_mps)
+        payload["replay_generation"] = context["goal_generation"]
+        # Every motor packet must pass a last-moment safety identity check.
+        response = await self.send_robot_command(
+            self.navigation._robot_id, payload,
+            preflight=lambda: self.navigation.recorded_safety_context() == context)
+        if not self.navigation._pi_command_delivered(response):
+            return False
+        return self.navigation.recorded_motion_delivered(context)
+
+    async def _play_stop(self) -> bool:
+        self.navigation.recorded_stop_begin()
+        if self.send_robot_command is None:
+            return False
+        try:
+            result = await self.send_robot_command(
+                self.navigation._robot_id,
+                {"type": "stop", "reason": "recorded_loop_stop"})
+        except Exception:
+            return False
+        delivered = self.navigation._pi_command_delivered(result)
+        self.navigation.recorded_stop_acknowledged(delivered)
+        if not delivered:
+            return False
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if self.navigation.recorded_stop_proven():
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def _play_pose(self) -> dict[str, float] | None:
+        return self._pose()
+
+    async def _play_blocked(self, command: dict) -> bool | None:
+        try:
+            return path_blocked(self.get_live_scan(), command.get("direction", ""))
+        except Exception:
+            return None
+
+    async def _play_replan(self, segment: dict, remaining: list[dict]) -> bool:
+        # No unsafe fallback: a Nav2 takeover must first have exclusive
+        # action/motor ownership and verified map-frame rejoin. Until that
+        # ownership handoff is integrated, reject REPLAN and stay stopped.
+        return False
+
+    async def _play_follow(self, path: list[dict], policy: str) -> bool:
+        # Distinct FollowPath authority is not yet integrated.
+        return False
+
+    async def _run_playback(self, segments: list[dict], policy: str,
+                            max_laps: int | None) -> None:
+        executor = self._executor
+        assert executor is not None
+        try:
+            await executor.run(segments, policy=policy, max_laps=max_laps)
+        except Exception as exc:
+            self._play_update({"state": "FAILED", "label": "주행 중지",
+                               "policy": policy, "lap": executor.playback.lap,
+                               "reason": str(exc)[:140]})
+        finally:
+            self.navigation.release_recorded_motion()
+            self._play_map = None
+
+    def begin_playback(self, payload: dict) -> dict:
+        if self._play_task is not None and not self._play_task.done():
+            raise RecordedLoopError("REPLAY_ACTIVE", "Stop existing playback first")
+        if self._record is not None:
+            raise RecordedLoopError("RECORDING_ACTIVE", "Finish recording before playback")
+        if self.send_robot_command is None:
+            raise RecordedLoopError("REPLAY_UNAVAILABLE", "Pi command transport not configured")
+        name, digest = self._active()
+        route_id = identifier(payload.get("route_id"), "route_id")
+        selected = self.store.snapshot(name, digest)
+        route = selected["routes"].get(route_id)
+        if route is None:
+            raise RecordedLoopError("ROUTE_MISSING", "Selected route not found")
+        policy = payload.get("policy", "WAIT")
+        if policy not in {"WAIT", "REPLAN"}:
+            raise RecordedLoopError("INVALID_POLICY", "Select WAIT or REPLAN before Start")
+        max_laps = payload.get("max_laps")
+        if max_laps is not None and (type(max_laps) is not int or not 1 <= max_laps <= 100):
+            raise RecordedLoopError("INVALID_LAPS", "max_laps must be 1..100 or null")
+        segments = [selected["segments"][key] for key in route["segments"]]
+        # No algorithm substitution: manual routes use physical motor replay.
+        # Planned routes must await their own Nav2 FollowPath ownership wiring.
+        if any(segment.get("source") != "manual" for segment in segments):
+            raise RecordedLoopError("NAV2_RECORDED_ROUTE_UNAVAILABLE",
+                                    "Auto-recorded routes are not yet replay-enabled")
+        if self.calibration_check is not None:
+            issue = self.calibration_check(self.navigation._robot_id)
+            if issue:
+                raise RecordedLoopError("CALIBRATION_INVALID", str(issue))
+        # Both map identity and physical proximity must be proven before
+        # the first motor command; no pose-based correction is applied.
+        pose = self._pose()
+        if (pose is None or math.hypot(pose["x"] - segments[0]["poses"][0]["x"],
+                                      pose["y"] - segments[0]["poses"][0]["y"]) > 0.40):
+            raise RecordedLoopError("START_POSE_MISMATCH", "Move robot to recorded start")
+        self.navigation.activate_recorded_motion()
+        self._play_map = (name, digest)
+        self._executor = RecordedMotorExecutor(
+            authorize=self._play_authorize, drive=self._play_drive,
+            stop=self._play_stop, pose=self._play_pose,
+            blocked=self._play_blocked, replan=self._play_replan,
+            follow_recorded_path=self._play_follow,
+            on_status=self._play_update)
+        self._play_task = asyncio.create_task(
+            self._run_playback(segments, policy, max_laps), name="recorded-loop-replay")
+        return {"ok": True, "started": True, "route_id": route_id, "policy": policy}
+
+    async def stop_playback(self) -> dict:
+        task, executor = self._play_task, self._executor
+        if task is None or task.done():
+            return {"ok": True, **self._play_snapshot()}
+        if executor is not None:
+            executor.cancel()
+        # Physical STOP takes priority over asynchronous worker completion.
+        confirmed = await self._play_stop()
+        if not confirmed:
+            task.cancel()
+            raise RecordedLoopError("STOP_UNCONFIRMED", "Pi STOP/Encoder not confirmed")
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except (asyncio.TimeoutError, ReplayFailure, RuntimeError):
+            task.cancel()
+        return {"ok": True, "stopped": True, **self._play_snapshot()}
+
     def _register(self, app: FastAPI) -> None:
         async def process(request: Request, operation: Any, mutating: bool) -> Any:
             if not request.session.get("user"):
@@ -276,7 +452,7 @@ class RecordedLoopApi:
             def action(_):
                 name, digest = self._active()
                 return {"ok": True, "map_name": name, "data": self.store.snapshot(name, digest),
-                        "current_pose": self._pose(), **self.status()}
+                        "current_pose": self._pose(), **self.status(), **self._play_snapshot()}
             return await process(request, action, False)
 
         @app.post("/api/navigation/recorded/goal")
@@ -314,3 +490,20 @@ class RecordedLoopApi:
         @app.post("/api/navigation/recorded/record/discard")
         async def recorded_discard(request: Request):
             return await process(request, lambda _: self.discard(), True)
+
+        @app.post("/api/navigation/recorded/replay/start")
+        async def recorded_replay_start(request: Request):
+            return await process(request, self.begin_playback, True)
+
+        @app.post("/api/navigation/recorded/replay/stop")
+        async def recorded_replay_stop(request: Request):
+            if not request.session.get("user"):
+                return JSONResponse({"ok": False, "error_code": "AUTH_REQUIRED"}, status_code=401)
+            if (csrf := self.csrf_failure(request)):
+                return csrf
+            try:
+                return await self.stop_playback()
+            except RecordedLoopError as exc:
+                return JSONResponse({"ok": False, "error_code": exc.code,
+                                     "error": str(exc)}, status_code=409)
+
