@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server.recorded_loop_core import RecordedRouteStore, RecordedLoopError, map_digest
+from server.recorded_loop_core import RecordedRouteStore, RecordedLoopError, map_digest, map_identifier
 
 
 class RecordedLoopStoreTests(unittest.TestCase):
@@ -29,6 +29,14 @@ class RecordedLoopStoreTests(unittest.TestCase):
         self.assertEqual(data["routes"]["roundtrip"]["segments"], ["ab", "ba"])
         with self.assertRaises(RecordedLoopError):
             self.store.delete("m", self.digest, "segments", "ab")
+
+    def test_map_names_match_existing_navigation_registry(self):
+        name = "lab.floor_2026-" + "x" * 35
+        self.assertEqual(map_identifier(name), name)
+        self.store.put_goal(name, self.digest, "A", {"x": 0, "y": 0, "yaw": 0})
+        self.assertIn("A", self.store.snapshot(name, self.digest)["goals"])
+        with self.assertRaises(RecordedLoopError):
+            map_identifier("invalid/path")
 
     def test_reject_changed_map(self):
         (self.root / "m.pgm").write_bytes(b"changed")
