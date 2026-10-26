@@ -21,9 +21,21 @@ class FakeNav:
         self._state = self.state
         self._robot_mode = "manual"
         self._lock = threading.RLock()
+        self.stop_started = False
+        self.stop_proven = False
 
     def state_response(self):
         return dict(self.state)
+
+    def recorded_stop_begin(self):
+        self.stop_started = True
+
+    def recorded_stop_acknowledged(self, delivered):
+        if delivered:
+            self.stop_started = True
+
+    def recorded_stop_proven(self):
+        return self.stop_started and self.stop_proven
 
 
 class FakeRos:
@@ -75,11 +87,25 @@ class RecordedLoopApiTests(unittest.TestCase):
             self.api.note_motion_ack(
                 {"type": "move", "direction": "forward", "speed": 0.2}, True)
         self.api.note_motion_ack({"type": "stop"}, True)
+        self.nav.stop_proven = True
         saved = self.api.finish()
         self.assertEqual(saved["segment"]["end"], "B")
         snapshot = self.api.store.snapshot("testmap", self.digest)
         self.assertIn("B", snapshot["goals"])
         self.assertGreater(len(snapshot["segments"]["ab"]["commands"]), 0)
+
+    def test_manual_record_refuses_ack_only_stop_without_encoder(self):
+        self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})
+        self.api.note_motion_ack(
+            {"type": "move", "direction": "forward", "speed": .2}, True)
+        self.maps.ros_control._amcl.x = .3
+        self.maps.ros_control._amcl.received_at = time.monotonic()
+        self.api._sample()
+        self.api.note_motion_ack({"type": "stop"}, True)
+        self.assertTrue(self.nav.stop_started)
+        with self.assertRaisesRegex(RecordedLoopError, "stable wheel encoder"):
+            self.api.finish()
+        self.assertNotIn("ab", self.api.store.snapshot("testmap", self.digest)["segments"])
 
     def test_no_record_on_unacknowledged_drive(self):
         self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})
