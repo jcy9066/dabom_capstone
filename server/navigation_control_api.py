@@ -691,20 +691,36 @@ class NavigationControlApi:
             and response.get("delivered") is True
         )
 
+    def _recorded_idle_locked(self) -> bool:
+        """Recorded playback may start after a completed PR93 Set Goal.
+
+        Preserve the legacy SUCCEEDED state; do not overwrite it with READY.
+        Never treat an unfinished Goal, cancel, or pending STOP as idle.
+        """
+        return bool(
+            self._state["navigation_state"] in {"READY", "SUCCEEDED"}
+            and self._state["active_goal"] is None
+            and self._pending_nav_success is None
+            and self._pending_terminal_stop is None
+            and self._pending_goal_cancel is None
+        )
+
     def activate_recorded_motion(self) -> None:
         """Reserve motor ownership without mutating the normal Nav2 Goal state."""
         with self._lock:
             if self._recorded_motor_active or self._recorded_nav2_active:
                 raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay or Nav2 already owns motors")
             self._assert_resume_safety_locked(require_estop=False)
-            if (not self._motor_output_enabled or self._state["navigation_state"] != "READY"
+            if (not self._motor_output_enabled or not self._recorded_idle_locked()
                 or self._state["active_goal"] is not None or self._loop_goals
                 or self._pending_goal_cancel is not None or self._patrol_transition is not None
                 or self._watchdog_issue_locked(time.time()) is not None):
                 raise NavigationControlError("RECORDED_NOT_READY", "Recorded replay requires idle healthy Nav2")
             if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING"}:
                 raise NavigationControlError("NAV2_BUSY", "Stop all Nav2 actions first")
-            if not self._motion_allowed_locked(time.time()):
+            if (not self._motion_allowed_locked(time.time())
+                or (self._state["navigation_state"] == "SUCCEEDED"
+                    and not self._stop_confirmed_locked(time.time()))):
                 raise NavigationControlError("STOP_NOT_CONFIRMED", "Previous motor stop not confirmed")
             self._goal_motion_generation += 1
             self._recorded_motor_active = True
@@ -775,7 +791,7 @@ class NavigationControlApi:
                 and self._pi_navigation_mode == "DRIVING"
                 and self._state["navigation_mode"] == "DRIVING"
                 and not self._state["emergency_stop"]
-                and self._state["navigation_state"] == "READY"
+                and self._recorded_idle_locked()
                 and self._state["active_goal"] is None
                 and not self._loop_goals
                 and self._watchdog_issue_locked(time.time()) is None
@@ -795,7 +811,7 @@ class NavigationControlApi:
             if (not self._recorded_motor_active or not self._motor_output_enabled
                 or self._robot_mode != "auto" or self._pi_navigation_mode != "DRIVING"
                 or self._state["navigation_mode"] != "DRIVING"
-                or self._state["navigation_state"] != "READY"
+                or not self._recorded_idle_locked()
                 or self._state["emergency_stop"] or self._loop_goals
                 or self._state["active_goal"] is not None
                 or not self._connected or self._pi_estop_latched is not False
