@@ -60,15 +60,19 @@ class RecordedLoopApi:
             record = self._record
             if record is None or record["error"]:
                 return
-            state = self.navigation.state_response()
-            active = state.get("active_map")
-            if (state.get("navigation_mode") != "DRIVING" or not isinstance(active, dict)
+            # Passive state snapshot: do not advance #93 Nav2 result state
+            # from the recorder's 10-Hz task.
+            with self.navigation._lock:
+                active = self.navigation._state.get("active_map")
+                nav_mode = self.navigation._state.get("navigation_mode")
+                robot_mode = self.navigation._robot_mode
+                estopped = self.navigation._state.get("emergency_stop")
+            if (nav_mode != "DRIVING" or not isinstance(active, dict)
                 or active.get("map_name") != record["map"]):
                 record["error"] = "MAP_CHANGED"
                 return
             expected_mode = "manual" if record["source"] == "manual" else "auto"
-            if (str(state.get("robot_mode", "")).lower() != expected_mode
-                or state.get("emergency_stop") is True):
+            if str(robot_mode).lower() != expected_mode or estopped is True:
                 record["error"] = "MODE_OR_SAFETY_CHANGED"
                 return
             pose = self._pose()
