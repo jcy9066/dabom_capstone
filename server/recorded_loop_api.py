@@ -445,11 +445,16 @@ class RecordedLoopApi:
                     if executor.cancelled or not self.navigation.recorded_nav2_health():
                         raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
                     state = str(ros.navigation_status().get("state") or "").upper()
-                    if state in {"SUCCEEDED", "FAILED", "CANCELED"}:
-                        if state != "SUCCEEDED":
-                            raise ReplayFailure("NAV2_" + state)
+                    if state == "SUCCEEDED":
                         succeeded = True
                         break
+                    if state == "CANCELED":
+                        raise ReplayFailure("NAV2_CANCELED")
+                    if state == "FAILED":
+                        # A controller may abort on collision before the
+                        # scheduled IsPathValid poll. Classify that failure
+                        # using current costmap, not by blindly restarting.
+                        next_check = 0.0
                     now = time.monotonic()
                     if now >= next_check:
                         current = await self._play_pose()
@@ -457,6 +462,8 @@ class RecordedLoopApi:
                             raise ReplayFailure("NAV2_LOCALIZATION_LOST")
                         suffix = self._nav_remaining_path(path, current)
                         valid = await asyncio.to_thread(ros.loop_path_valid, suffix)
+                        if state == "FAILED" and valid:
+                            raise ReplayFailure("NAV2_FAILED")
                         if not valid:
                             # Stop Nav2 controller before any waiting or new plan.
                             cancelled = await asyncio.to_thread(ros.cancel_navigation)
