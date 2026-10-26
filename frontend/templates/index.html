@@ -310,6 +310,16 @@
                                                 <div class="recorded-loop-buttons">
                                                     <button type="button" id="recorded-play-start">Loop 시작</button>
                                                     <button type="button" id="recorded-play-stop">Loop 정지</button>
+                                                    <button type="button" id="recorded-play-reset">Reset</button>
+                                                </div>
+                                                <div class="recorded-loop-form">
+                                                    <select id="recorded-delete-kind" aria-label="Delete item type">
+                                                        <option value="routes">Loop</option>
+                                                        <option value="segments">Path</option>
+                                                        <option value="goals">Goal</option>
+                                                    </select>
+                                                    <input id="recorded-delete-id" placeholder="삭제할 ID" aria-label="Item ID to delete">
+                                                    <button type="button" id="recorded-delete">삭제</button>
                                                 </div>
                                                 <div class="recorded-loop-info" id="recorded-playback-state" role="status">재생 준비</div>
                                                 <div class="recorded-loop-info" id="recorded-feedback" role="status"></div>
@@ -852,7 +862,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261024-loop-ab-v2"></script>
-    <script src="static/recorded_loop_ui.js?v=20261026-v2"></script>
+    <script src="static/recorded_loop_ui.js?v=20261026-v3"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
