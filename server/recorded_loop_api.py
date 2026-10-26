@@ -451,7 +451,9 @@ class RecordedLoopApi:
         end = self._nav_path(poses)[-1]
         reached = await self._play_pose()
         if (reached is None or
-            math.hypot(reached["x"] - end["x"], reached["y"] - end["y"]) > 0.40):
+            math.hypot(reached["x"] - end["x"], reached["y"] - end["y"]) > 0.40
+            or abs(math.atan2(math.sin(reached["yaw"] - end["yaw"]),
+                              math.cos(reached["yaw"] - end["yaw"]))) > 0.70):
             raise ReplayFailure("NAV2_END_POSE_MISMATCH")
         # Nav2 action has finished, physical STOP was confirmed, and the
         # preceding map-frame Goal was reached. Motor replay can reacquire.
@@ -536,7 +538,9 @@ class RecordedLoopApi:
         # the first motor command; no pose-based correction is applied.
         pose = self._pose()
         if (pose is None or math.hypot(pose["x"] - segments[0]["poses"][0]["x"],
-                                      pose["y"] - segments[0]["poses"][0]["y"]) > 0.40):
+                                      pose["y"] - segments[0]["poses"][0]["y"]) > 0.40
+            or abs(math.atan2(math.sin(pose["yaw"] - segments[0]["poses"][0]["yaw"]),
+                               math.cos(pose["yaw"] - segments[0]["poses"][0]["yaw"]))) > 0.70):
             raise RecordedLoopError("START_POSE_MISMATCH", "Move robot to recorded start")
         self.navigation.activate_recorded_motion()
         self._play_map = (name, digest)
