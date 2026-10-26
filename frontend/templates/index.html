@@ -300,7 +300,12 @@
                                                     <button type="button" id="recorded-save-route">Loop 구성 저장</button>
                                                 </div>
                                                 <div class="recorded-loop-form">
-                                                    <input id="recorded-play-route" placeholder="실행할 Loop ID" aria-label="Recorded loop ID">
+                                                    <label for="recorded-play-kind">실행:</label>
+                                                    <select id="recorded-play-kind" aria-label="Recorded playback type">
+                                                        <option value="loop">Loop 반복</option>
+                                                        <option value="path">Path 1회</option>
+                                                    </select>
+                                                    <input id="recorded-play-route" placeholder="Loop 또는 Path ID" aria-label="Recorded loop or path ID">
                                                     <label for="recorded-policy">장애물:</label>
                                                     <select id="recorded-policy" aria-label="Obstacle policy">
                                                         <option value="WAIT">대기 후 재개</option>
@@ -308,7 +313,7 @@
                                                     </select>
                                                 </div>
                                                 <div class="recorded-loop-buttons">
-                                                    <button type="button" id="recorded-play-start">Loop 시작</button>
+                                                    <button type="button" id="recorded-play-start">기록 주행 시작</button>
                                                     <button type="button" id="recorded-play-stop">Loop 정지</button>
                                                     <button type="button" id="recorded-play-reset">Reset</button>
                                                 </div>
@@ -862,7 +867,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261024-loop-ab-v2"></script>
-    <script src="static/recorded_loop_ui.js?v=20261026-v6"></script>
+    <script src="static/recorded_loop_ui.js?v=20261026-v7"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
