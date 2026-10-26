@@ -198,6 +198,8 @@ class NavigationControlApi:
         self._stop_confirmation_samples = 0
         self._stop_confirmation_episode = 0
         self._post_resume_motion_ready = False
+        # Opt-in, mutually exclusive recorded replay; inert in PR #93 flows.
+        self._recorded_motor_active = False
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -686,6 +688,77 @@ class NavigationControlApi:
             response.get("ok") is True
             and response.get("delivered") is True
         )
+
+    def activate_recorded_motion(self) -> None:
+        """Reserve motor ownership without mutating the normal Nav2 Goal state."""
+        with self._lock:
+            if self._recorded_motor_active:
+                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay already owns motors")
+            self._assert_resume_safety_locked(require_estop=False)
+            if (not self._motor_output_enabled or self._state["navigation_state"] != "READY"
+                or self._state["active_goal"] is not None or self._loop_goals
+                or self._pending_goal_cancel is not None or self._patrol_transition is not None
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_NOT_READY", "Recorded replay requires idle healthy Nav2")
+            if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING"}:
+                raise NavigationControlError("NAV2_BUSY", "Stop all Nav2 actions first")
+            if not self._motion_allowed_locked(time.time()):
+                raise NavigationControlError("STOP_NOT_CONFIRMED", "Previous motor stop not confirmed")
+            self._goal_motion_generation += 1
+            self._recorded_motor_active = True
+
+    def release_recorded_motion(self) -> None:
+        with self._lock:
+            self._recorded_motor_active = False
+            self._goal_motion_generation += 1
+
+    def recorded_safety_context(self) -> dict[str, Any] | None:
+        """Separate, opt-in auto-drive permit; existing motion API remains unchanged."""
+        with self._lock:
+            now = time.time()
+            if (not self._recorded_motor_active or not self._motor_output_enabled
+                or self._robot_mode != "auto" or self._pi_navigation_mode != "DRIVING"
+                or self._state["navigation_mode"] != "DRIVING"
+                or self._state["navigation_state"] != "READY"
+                or self._state["emergency_stop"] or self._loop_goals
+                or self._state["active_goal"] is not None
+                or not self._connected or self._pi_estop_latched is not False
+                or not self._pi_safety_session or type(self._pi_safety_epoch) is not int
+                or self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec
+                or not self._motion_allowed_locked(now)
+                or self._watchdog_issue_locked(now) is not None):
+                return None
+            return {"safety_session": self._pi_safety_session,
+                    "safety_epoch": self._pi_safety_epoch,
+                    "goal_generation": self._goal_motion_generation,
+                    "estop_generation": self._estop_generation}
+
+    def recorded_motion_delivered(self, expected: dict[str, Any]) -> bool:
+        with self._lock:
+            if self.recorded_safety_context() != expected:
+                return False
+            self._stop_commanded_at = None
+            self._stop_encoder_ticks = None
+            self._stop_confirmation_after_sequence = None
+            self._post_resume_motion_ready = False
+            return True
+
+    def recorded_stop_begin(self) -> None:
+        with self._lock:
+            self._arm_pending_stop_locked()
+
+    def recorded_stop_acknowledged(self, accepted: bool) -> None:
+        with self._lock:
+            if accepted and not self._state["emergency_stop"]:
+                self._stop_confirmation_after_sequence = self._encoder_sequence
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
+
+    def recorded_stop_proven(self) -> bool:
+        with self._lock:
+            return self._stop_confirmed_locked(time.time())
 
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
