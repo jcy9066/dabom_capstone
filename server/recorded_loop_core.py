@@ -14,7 +14,7 @@ from typing import Any
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
 _DIRECTIONS = frozenset({"forward", "backward", "left", "right", "forward_left",
-                         "forward_right", "backward_left", "backward_right"})
+                         "forward_right", "backward_left", "backward_right", "rotate_left", "rotate_right"})
 MAX_COMMANDS = 6000
 MAX_POSES = 10000
 MAX_DURATION = 0.45
