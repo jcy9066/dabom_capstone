@@ -346,15 +346,92 @@ class RecordedLoopApi:
         except Exception:
             return None
 
+    @staticmethod
+    def _nav_path(poses: list[dict]) -> list[dict]:
+        """Bound Nav2 message to 2000 points without losing endpoints."""
+        if not isinstance(poses, list) or len(poses) < 2:
+            raise ReplayFailure("INVALID_RECORDED_PATH")
+        if len(poses) <= 2000:
+            return [pose_dict(p) for p in poses]
+        count = 2000
+        return [pose_dict(poses[(i * (len(poses) - 1)) // (count - 1)])
+                for i in range(count)]
+
+    async def _nav_action(self, *, poses: list[dict] | None,
+                          goal: dict | None) -> bool:
+        """Exclusive ROS takeover. No PR93 Goal or Loop data is overwritten."""
+        ros = self.map_api.ros_control
+        executor = self._executor
+        if executor is None or executor.cancelled:
+            raise ReplayFailure("REPLAY_CANCELLED")
+        if not await self._play_authorize():
+            raise ReplayFailure("REPLAY_AUTHORIZATION_LOST")
+        # The executor stops the robot before this callback.
+        if not self.navigation.recorded_stop_proven():
+            raise ReplayFailure("STOP_NOT_CONFIRMED")
+        self.navigation.recorded_nav2_takeover()
+        succeeded = False
+        try:
+            if goal is not None:
+                # This branch alone invokes ComputePath; ordinary recorded
+                # motor replay and saved FollowPath never invoke the planner.
+                poses = await asyncio.to_thread(ros.compute_path, pose_dict(goal),
+                                                loop_forward=True)
+            path = self._nav_path(poses)
+            if executor.cancelled or not self.navigation.recorded_nav2_health():
+                raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
+            # Refuse to follow a path that is already invalid on the costmap.
+            valid = await asyncio.to_thread(ros.loop_path_valid, path)
+            if not valid:
+                raise ReplayFailure("NAV2_PATH_BLOCKED")
+            accepted = await asyncio.to_thread(ros.follow_loop_path, path)
+            if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
+                raise ReplayFailure("NAV2_FOLLOW_REJECTED")
+            deadline = time.monotonic() + 110.0
+            while time.monotonic() < deadline:
+                if executor.cancelled or not self.navigation.recorded_nav2_health():
+                    raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
+                state = str(ros.navigation_status().get("state") or "").upper()
+                if state in {"SUCCEEDED", "FAILED", "CANCELED"}:
+                    if state != "SUCCEEDED":
+                        raise ReplayFailure("NAV2_" + state)
+                    succeeded = True
+                    break
+                await asyncio.sleep(0.1)
+            if not succeeded:
+                raise ReplayFailure("NAV2_FOLLOW_TIMEOUT")
+        finally:
+            # Never allow a Nav2 command to re-accelerate after STOP.
+            self.navigation.suspend_recorded_motion()
+            state = str(ros.navigation_status().get("state") or "").upper()
+            if state not in {"SUCCEEDED", "FAILED", "CANCELED", "IDLE"}:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(ros.cancel_navigation), timeout=4.0)
+                except Exception:
+                    succeeded = False
+            stopped = await self._play_stop()
+            if not stopped:
+                raise ReplayFailure("STOP_NOT_CONFIRMED")
+        if not succeeded or executor.cancelled:
+            raise ReplayFailure("NAV2_HANDOFF_FAILED")
+        end = self._nav_path(poses)[-1]
+        reached = await self._play_pose()
+        if (reached is None or
+            math.hypot(reached["x"] - end["x"], reached["y"] - end["y"]) > 0.40):
+            raise ReplayFailure("NAV2_END_POSE_MISMATCH")
+        # Nav2 action has finished, physical STOP was confirmed, and the
+        # preceding map-frame Goal was reached. Motor replay can reacquire.
+        self.navigation.activate_recorded_motion()
+        return True
+
     async def _play_replan(self, segment: dict, remaining: list[dict]) -> bool:
-        # No unsafe fallback: a Nav2 takeover must first have exclusive
-        # action/motor ownership and verified map-frame rejoin. Until that
-        # ownership handoff is integrated, reject REPLAN and stay stopped.
-        return False
+        """One bounded Nav2 detour from the current pose to the recorded Goal."""
+        return await self._nav_action(poses=None, goal=segment["poses"][-1])
 
     async def _play_follow(self, path: list[dict], policy: str) -> bool:
-        # Distinct FollowPath authority is not yet integrated.
-        return False
+        """Follow a successful Set Goal's recorded trajectory, no planner."""
+        return await self._nav_action(poses=path, goal=None)
 
     async def _run_playback(self, segments: list[dict], policy: str,
                             max_laps: int | None) -> None:
@@ -446,6 +523,16 @@ class RecordedLoopApi:
             return {"ok": True, **self._play_snapshot()}
         if executor is not None:
             executor.cancel()
+        # Revoke Nav2 and open-loop output BEFORE sending STOP.
+        nav_owned = bool(self.navigation._recorded_nav2_active)
+        self.navigation.suspend_recorded_motion()
+        if nav_owned:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.map_api.ros_control.cancel_navigation),
+                    timeout=4.0)
+            except Exception:
+                pass
         # Physical STOP takes priority over asynchronous worker completion.
         confirmed = await self._play_stop()
         if not confirmed:
