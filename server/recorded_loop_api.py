@@ -60,6 +60,8 @@ class RecordedLoopApi:
 
     def _pose(self) -> dict[str, float] | None:
         ros = self.map_api.ros_control
+        if hasattr(ros, "recorded_map_pose"):
+            return ros.recorded_map_pose()
         try:
             with ros._lock:
                 p = ros._amcl
