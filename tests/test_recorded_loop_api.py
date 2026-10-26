@@ -118,6 +118,10 @@ class RecordedLoopApiTests(unittest.TestCase):
         self.assertTrue(self.api.status()["recording"]["armed"])
         self.api._sample()
         self.assertEqual(self.api.status()["recording"]["pose_count"], 1)
+        self.nav.state["navigation_state"] = "PATH_READY"
+        self.api._sample()
+        self.assertIsNone(self.api.status()["recording"]["error"])
+        self.assertTrue(self.api.status()["recording"]["armed"])
         self.nav.state["navigation_state"] = "NAVIGATING"
         for x in (.3, .6, .9):
             self.maps.ros_control._amcl.x = x
