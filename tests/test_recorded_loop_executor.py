@@ -46,6 +46,8 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             return obstacle and blocked_calls == 1
 
         async def replan(segment, remaining):
+            nonlocal driver_calls
+            driver_calls = 2  # Replan completed A→B without replay motor commands.
             where["x"] = segment["poses"][-1]["x"]
             events.append("replan")
             return True
