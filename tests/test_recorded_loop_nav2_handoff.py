@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from server.recorded_loop_api import RecordedLoopApi
 from server.recorded_loop_executor import ReplayFailure
+from server.recorded_loop_runtime import Playback
 
 
 class FakeROS:
@@ -119,6 +120,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             return samples["n"] >= 3
         self.ros.loop_path_valid = delayed_valid
         labels = []
+        self.api._executor.playback = Playback()
         self.api._executor.playback.start("WAIT")
         self.api._executor.playback.obstacle = lambda blocked: labels.append("WAITING" if blocked else "RUNNING")
         self.api._executor._emit = lambda: None
@@ -133,7 +135,7 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ReplayFailure):
             await self.api._play_follow([
                 {"x": 0.0, "y": 0.0, "yaw": 0.0},
-                {"x": 1.0, "y": 0.0, "yaw": 0.0}], "WAIT")
+                {"x": 1.0, "y": 0.0, "yaw": 0.0}], "REPLAN")
         self.assertNotIn("resume_replay", self.nav.events)
         self.assertIn("stop_proven", self.nav.events)
 
