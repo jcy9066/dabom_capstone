@@ -51,6 +51,7 @@
             (replay.reason ? " / " + replay.reason : "");
         $("recorded-policy").disabled = busy || active;
         $("recorded-play-route").disabled = busy || active;
+        $("recorded-play-kind").disabled = busy || active;
         $("recorded-play-start").disabled = busy || active;
         $("recorded-play-stop").disabled = busy || !active;
         $("recorded-play-reset").disabled = busy || active;
@@ -129,11 +130,13 @@
         }, "반복 경로 구성을 저장했습니다.");
     });
     $("recorded-play-start").addEventListener("click", () => {
+        const kind = $("recorded-play-kind").value;
         void mutate("replay/start", {
+            kind,
             route_id: $("recorded-play-route").value.trim(),
             policy: $("recorded-policy").value,
-            max_laps: null
-        }, "반복 주행을 시작했습니다.");
+            max_laps: kind === "path" ? 1 : null
+        }, kind === "path" ? "기록된 Path 1회 주행을 시작했습니다." : "반복 주행을 시작했습니다.");
     });
     $("recorded-play-stop").addEventListener("click", () =>
         void mutate("replay/stop", {}, "반복 주행 정지 요청 완료"));
