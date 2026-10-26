@@ -467,7 +467,8 @@ class RobotCommandClient:
                     self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
-                    *([True] if message.get("rear_blind_limited") is True else []),
+                    message.get("rear_blind_limited") is True,
+                    message.get("source") == "recorded_loop",
                 )
 
             elif command_type == "stop":
