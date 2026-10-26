@@ -1078,7 +1078,7 @@ recorded_loop_api = RecordedLoopApi(
     send_robot_command=connections.send_command_wait_ack,
     get_live_scan=current_navigation_scan_snapshot,
     max_wheel_mps=MAX_WHEEL_MPS,
-    calibration_check=robot_speed_calibration_error,
+    calibration_check=lambda robot_id: robot_speed_calibration_error(robot_id),
 )
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 connections.command_transport_observer = (
