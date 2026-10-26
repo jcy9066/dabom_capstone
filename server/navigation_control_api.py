@@ -718,10 +718,24 @@ class NavigationControlApi:
                 raise NavigationControlError("RECORDED_NOT_READY", "Recorded replay requires idle healthy Nav2")
             if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING"}:
                 raise NavigationControlError("NAV2_BUSY", "Stop all Nav2 actions first")
-            if (not self._motion_allowed_locked(time.time())
-                or (self._state["navigation_state"] == "SUCCEEDED"
-                    and not self._stop_confirmed_locked(time.time()))):
-                raise NavigationControlError("STOP_NOT_CONFIRMED", "Previous motor stop not confirmed")
+            now = time.time()
+            if not self._motion_allowed_locked(now):
+                # A prior successfully completed PR93 Goal can have expired
+                # encoder STOP proof. Reserve ownership only; the Recorded
+                # executor MUST issue fresh Pi STOP and await stable encoder
+                # evidence before its first motor packet.
+                stale_success_only = (
+                    self._state["navigation_state"] == "SUCCEEDED"
+                    and self._stop_commanded_at is not None
+                    and self._sensor_recovery is None
+                    and self._patrol_transition_error is None
+                    and not self._encoder_stop_violation
+                    and not self._state["emergency_stop"]
+                    and self._recorded_idle_locked()
+                )
+                if not stale_success_only:
+                    raise NavigationControlError(
+                        "STOP_NOT_CONFIRMED", "Previous motor stop not confirmed")
             self._goal_motion_generation += 1
             self._recorded_motor_active = True
 
