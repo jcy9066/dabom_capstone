@@ -110,6 +110,24 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ros.events, ["compute", "validate", "follow"])
         self.assertTrue(self.nav.replay_owned)
 
+    async def test_wait_status_prevents_nav2_start_until_clear(self):
+        self.ros.valid = False
+        samples = {"n": 0}
+        def delayed_valid(path):
+            self.ros.events.append("validate")
+            samples["n"] += 1
+            return samples["n"] >= 3
+        self.ros.loop_path_valid = delayed_valid
+        labels = []
+        self.api._executor.playback.start("WAIT")
+        self.api._executor.playback.obstacle = lambda blocked: labels.append("WAITING" if blocked else "RUNNING")
+        self.api._executor._emit = lambda: None
+        path = [{"x": 0.0, "y": 0.0, "yaw": 0.0},
+                {"x": 1.0, "y": 0.0, "yaw": 0.0}]
+        self.assertTrue(await self.api._play_follow(path, "WAIT"))
+        self.assertEqual(labels, ["WAITING", "RUNNING"])
+        self.assertEqual(self.ros.events[-1], "follow")
+
     async def test_invalid_path_cannot_restart_motors(self):
         self.ros.valid = False
         with self.assertRaises(ReplayFailure):
