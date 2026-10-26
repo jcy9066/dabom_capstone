@@ -690,6 +690,16 @@ class RecordedLoopApi:
                 raise RecordedLoopError("INVALID_LAPS", "Recorded Path is one-shot only")
             max_laps = 1
         segments = [selected["segments"][key] for key in segment_ids]
+        # Recorded playback sends auto_drive commands. A user who just
+        # recorded a manual Path must explicitly switch to AUTO first;
+        # returning "started" and then failing on the first motor tick
+        # is both confusing and harder to stop safely.
+        with self.navigation._lock:
+            if (str(self.navigation._robot_mode).lower() != "auto"
+                or self.navigation._pi_navigation_mode != "DRIVING"):
+                raise RecordedLoopError(
+                    "AUTO_MODE_REQUIRED",
+                    "Switch from Manual to AUTO in DRIVING before recorded playback")
         # Manual recordings replay motors; successful automatic recordings
         # use the stored trajectory and Nav2 FollowPath without ComputePath.
         if self.calibration_check is not None:
