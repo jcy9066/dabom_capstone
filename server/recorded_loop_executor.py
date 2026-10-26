@@ -212,12 +212,15 @@ class RecordedMotorExecutor:
             self._emit()
             raise
         finally:
-            # Independent STOP, including cancellation and unexpected failures.
+            # A failed final physical STOP MUST override successful lap
+            # completion. Reporting success while wheels may still be moving
+            # would defeat the E-STOP escalation in the API owner.
             try:
                 await self._verified_stop()
-            except Exception:
+            except Exception as exc:
                 self.playback.fail("STOP_NOT_CONFIRMED")
                 self._emit()
+                raise ReplayFailure("STOP_NOT_CONFIRMED") from exc
 
     def cancel(self):
         self.cancelled = True
