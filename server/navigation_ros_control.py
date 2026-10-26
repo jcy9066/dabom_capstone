@@ -810,19 +810,15 @@ class NavigationRosControl:
                 # Revocation happened while send_goal_async was in flight.
                 # Keep the original action handle for a bounded cancel ACK;
                 # a fire-and-forget cancel could let Nav2 resume after STOP.
-                try:
-                    cancel_response = self._wait_future(
-                        handle.cancel_goal_async(), timeout_sec=3.0,
-                        error_code="RECORDED_LATE_CANCEL_TIMEOUT",
-                        message="Late recorded Nav2 action cancel was not acknowledged.",
-                    )
-                    if not getattr(cancel_response, "goals_canceling", []):
-                        raise NavigationRosError(
-                            "RECORDED_LATE_CANCEL_REJECTED",
-                            "Nav2 refused to cancel a revoked recorded action.", 502)
-                finally:
-                    # Never register this handle as a runnable Nav2 action.
-                    pass
+                cancel_response = self._wait_future(
+                    handle.cancel_goal_async(), timeout_sec=3.0,
+                    error_code="RECORDED_LATE_CANCEL_TIMEOUT",
+                    message="Late recorded Nav2 action cancel was not acknowledged.",
+                )
+                if not getattr(cancel_response, "goals_canceling", []):
+                    raise NavigationRosError(
+                        "RECORDED_LATE_CANCEL_REJECTED",
+                        "Nav2 refused to cancel a revoked recorded action.", 502)
                 raise NavigationRosError(
                     "RECORDED_OWNER_LOST", "Late FollowPath acceptance was canceled.", 409)
             future = handle.get_result_async()
