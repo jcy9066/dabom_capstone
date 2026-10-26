@@ -60,6 +60,12 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         engine.CLEAR_CONFIRM_SEC = .02
         return engine, events, where
 
+    async def test_first_stop_must_be_confirmed_before_motor(self):
+        engine, events, _ = await self.build(stop_ok=False)
+        with self.assertRaisesRegex(ReplayFailure, "STOP_NOT_CONFIRMED"):
+            await engine.run(route(), "WAIT", max_laps=1)
+        self.assertNotIn("motor_sent", events)
+
     async def test_two_leg_recorded_loop(self):
         engine, events, _ = await self.build()
         result = await engine.run(route(), "WAIT", max_laps=1)
@@ -90,7 +96,7 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         async def stop_then_fail():
             nonlocal stopped
             stopped += 1
-            return stopped < 4
+            return stopped < 5
 
         engine.stop = stop_then_fail
         with self.assertRaisesRegex(ReplayFailure, "STOP_NOT_CONFIRMED"):
