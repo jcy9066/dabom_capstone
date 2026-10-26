@@ -23,6 +23,7 @@ class RecordedMotorExecutor:
     TICK_SEC = 0.08
     ROUTE_TOLERANCE_M = 0.55
     GOAL_TOLERANCE_M = 0.40
+    HEADING_TOLERANCE_RAD = 0.70
     CLEAR_CONFIRM_SEC = 1.0
 
     def __init__(
@@ -54,6 +55,11 @@ class RecordedMotorExecutor:
     @staticmethod
     def _distance(a: dict, b: dict) -> float:
         return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
+
+    @staticmethod
+    def _heading_error(a: dict, b: dict) -> float:
+        delta = a["yaw"] - b["yaw"]
+        return abs(math.atan2(math.sin(delta), math.cos(delta)))
 
     async def _current(self) -> dict:
         pose = await self.pose()
@@ -137,7 +143,8 @@ class RecordedMotorExecutor:
                     raise ReplayFailure("MANUAL_COMMANDS_REQUIRED")
                 commands = [motor_command(c) for c in commands]
                 position = await self._current()
-                if self._distance(position, segment["poses"][0]) > self.GOAL_TOLERANCE_M:
+                if (self._distance(position, segment["poses"][0]) > self.GOAL_TOLERANCE_M
+                    or self._heading_error(position, segment["poses"][0]) > self.HEADING_TOLERANCE_RAD):
                     raise ReplayFailure("SEGMENT_START_MISMATCH")
                 last_tick = time.monotonic()
                 while self.playback.command_index < len(commands):
@@ -184,7 +191,10 @@ class RecordedMotorExecutor:
                     self._emit()
                 await self._verified_stop()
                 position = await self._current()
-                reached = self._distance(position, segment["poses"][-1]) <= self.GOAL_TOLERANCE_M
+                reached = (
+                    self._distance(position, segment["poses"][-1]) <= self.GOAL_TOLERANCE_M
+                    and self._heading_error(position, segment["poses"][-1]) <= self.HEADING_TOLERANCE_RAD
+                )
                 self.playback.finish_segment(len(segments), reached)
                 if self.playback.status == ReplayStatus.FAILED:
                     raise ReplayFailure(self.playback.reason or "ENDPOINT_MISMATCH")
