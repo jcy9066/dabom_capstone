@@ -49,7 +49,9 @@ class RecordedMotorExecutor:
         self.on_status(self.playback.viewer_state())
 
     async def _health(self) -> None:
-        if self.cancelled or not await self.authorize():
+        if self.cancelled:
+            raise ReplayFailure("REPLAY_CANCELLED")
+        if not await self.authorize():
             raise ReplayFailure("MOTOR_AUTHORIZATION_REVOKED")
 
     @staticmethod
