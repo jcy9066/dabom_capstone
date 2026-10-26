@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261026-v1">
+    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261026-v2">
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261020-dark-technical-v1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
@@ -237,6 +237,8 @@
                             class="lidar-3d-canvas"
                             tabindex="0"
                         ></canvas>
+                        <div id="recordedLoopViewerStatus" class="recorded-loop-viewer-status"
+                             role="status" aria-live="polite" hidden></div>
 
                         <div
                             class="lidar-control-drawer"
@@ -297,6 +299,19 @@
                                                     <input id="recorded-route-segments" placeholder="구간 순서: A_to_B,B_to_A" aria-label="Ordered segments">
                                                     <button type="button" id="recorded-save-route">Loop 구성 저장</button>
                                                 </div>
+                                                <div class="recorded-loop-form">
+                                                    <input id="recorded-play-route" placeholder="실행할 Loop ID" aria-label="Recorded loop ID">
+                                                    <label for="recorded-policy">장애물:</label>
+                                                    <select id="recorded-policy" aria-label="Obstacle policy">
+                                                        <option value="WAIT">대기 후 재개</option>
+                                                        <option value="REPLAN">경로 재탐색</option>
+                                                    </select>
+                                                </div>
+                                                <div class="recorded-loop-buttons">
+                                                    <button type="button" id="recorded-play-start">Loop 시작</button>
+                                                    <button type="button" id="recorded-play-stop">Loop 정지</button>
+                                                </div>
+                                                <div class="recorded-loop-info" id="recorded-playback-state" role="status">재생 준비</div>
                                                 <div class="recorded-loop-info" id="recorded-feedback" role="status"></div>
                                             </div>
                                         </details>
@@ -837,7 +852,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261024-loop-ab-v2"></script>
-    <script src="static/recorded_loop_ui.js?v=20261026-v1"></script>
+    <script src="static/recorded_loop_ui.js?v=20261026-v2"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
