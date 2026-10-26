@@ -120,6 +120,11 @@ class RecordedMotorExecutor:
         self.cancelled = False
         self._emit()
         try:
+            # Mandatory physical STOP baseline for EVERY Recorded Loop start.
+            # A stale historical stop or an old Pi ACK is not enough.
+            # This runs before the first recorded motor command or Nav2 action.
+            await self._verified_stop()
+            await self._health()
             while not self.cancelled and (max_laps is None or self.playback.lap < max_laps):
                 await self._health()
                 segment = segments[self.playback.segment_index]
