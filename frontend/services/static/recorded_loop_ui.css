@@ -59,3 +59,28 @@
 @media(max-width: 650px) {
     .recorded-loop-panel { width: 88vw; }
 }
+
+.recorded-loop-viewer-status {
+    position: absolute;
+    z-index: 20;
+    top: 22%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 9px 18px;
+    border-radius: 8px;
+    background: rgba(11, 25, 41, .92);
+    border: 1px solid rgba(242, 189, 98, .7);
+    color: #f6d898;
+    font: 700 19px/1.35 "Noto Sans KR", sans-serif;
+    text-align: center;
+    pointer-events: none;
+}
+.recorded-loop-viewer-status[data-state="FAILED"] {
+    border-color: #f87171;
+    color: #fecaca;
+}
+.recorded-loop-viewer-status[data-state="REPLANNING"] {
+    border-color: #7dd3fc;
+    color: #bae6fd;
+}
+.recorded-loop-viewer-status[hidden] { display: none; }
