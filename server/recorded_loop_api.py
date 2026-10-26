@@ -304,6 +304,8 @@ class RecordedLoopApi:
         if context is None or self.send_robot_command is None:
             return False
         payload = recorded_to_auto_drive(candidate, self.max_wheel_mps)
+        payload["safety_session"] = context["safety_session"]
+        payload["safety_epoch"] = context["safety_epoch"]
         payload["replay_generation"] = context["goal_generation"]
         # Every motor packet must pass a last-moment safety identity check.
         response = await self.send_robot_command(
