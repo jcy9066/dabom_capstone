@@ -36,3 +36,13 @@ def test_replan_and_follow_path_have_real_callbacks():
     assert "async def _nav_action" in api
     assert "async def _play_stop" in api
     assert "STOP_NOT_CONFIRMED" in api
+
+
+def test_completed_legacy_goal_permits_safe_recorded_replay():
+    nav = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+    assert 'def _recorded_idle_locked' in nav
+    assert 'in {"READY", "SUCCEEDED"}' in nav
+    assert 'self._pending_nav_success is None' in nav
+    assert 'self._pending_terminal_stop is None' in nav
+    assert 'self._stop_confirmed_locked(time.time())' in nav
+    assert 'or not self._recorded_idle_locked()' in nav
