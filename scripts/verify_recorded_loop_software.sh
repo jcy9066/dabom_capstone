@@ -19,6 +19,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PYTHON" -m pytest -q \
 if command -v node >/dev/null 2>&1; then
   node --check frontend/services/static/recorded_loop_ui.js
   node --check frontend/services/static/navigation_control.js
+  node tests/js/test_recorded_loop_ui.js
   node --input-type=module --check < frontend/services/static/lidar_3d_viewer.js
 else
   echo "Node.js unavailable: JS verification incomplete" >&2
