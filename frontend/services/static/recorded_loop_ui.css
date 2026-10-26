@@ -6,7 +6,9 @@
     border: 1px solid rgba(120, 153, 181, .38);
     border-radius: 7px;
     background: rgba(12, 22, 36, .94);
-    font: 12px/1.5 inherit;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
 }
 .recorded-loop-panel summary {
     cursor: pointer;
