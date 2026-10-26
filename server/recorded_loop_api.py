@@ -370,7 +370,7 @@ class RecordedLoopApi:
                 for i in range(count)]
 
     async def _nav_action(self, *, poses: list[dict] | None,
-                          goal: dict | None) -> bool:
+                          goal: dict | None, policy: str = "WAIT") -> bool:
         """Exclusive ROS takeover. No PR93 Goal or Loop data is overwritten."""
         ros = self.map_api.ros_control
         executor = self._executor
@@ -392,10 +392,31 @@ class RecordedLoopApi:
             path = self._nav_path(poses)
             if executor.cancelled or not self.navigation.recorded_nav2_health():
                 raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
-            # Refuse to follow a path that is already invalid on the costmap.
+            # WAIT: a blocked saved route must be clear before Nav2 acts.
             valid = await asyncio.to_thread(ros.loop_path_valid, path)
             if not valid:
-                raise ReplayFailure("NAV2_PATH_BLOCKED")
+                if policy != "WAIT" or goal is not None:
+                    raise ReplayFailure("NAV2_PATH_BLOCKED")
+                executor.playback.obstacle(True)
+                executor._emit()
+                clear_since = None
+                while not executor.cancelled:
+                    if not self.navigation.recorded_nav2_health():
+                        raise ReplayFailure("NAV2_WAIT_HEALTH_LOST")
+                    valid = await asyncio.to_thread(ros.loop_path_valid, path)
+                    now = time.monotonic()
+                    if valid:
+                        if clear_since is None:
+                            clear_since = now
+                        if now - clear_since >= 1.0:
+                            executor.playback.obstacle(False)
+                            executor._emit()
+                            break
+                    else:
+                        clear_since = None
+                    await asyncio.sleep(0.25)
+                if executor.cancelled:
+                    raise ReplayFailure("REPLAY_CANCELLED")
             accepted = await asyncio.to_thread(ros.follow_loop_path, path)
             if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
                 raise ReplayFailure("NAV2_FOLLOW_REJECTED")
@@ -439,11 +460,11 @@ class RecordedLoopApi:
 
     async def _play_replan(self, segment: dict, remaining: list[dict]) -> bool:
         """One bounded Nav2 detour from the current pose to the recorded Goal."""
-        return await self._nav_action(poses=None, goal=segment["poses"][-1])
+        return await self._nav_action(poses=None, goal=segment["poses"][-1], policy="REPLAN")
 
     async def _play_follow(self, path: list[dict], policy: str) -> bool:
         """Follow a successful Set Goal's recorded trajectory, no planner."""
-        return await self._nav_action(poses=path, goal=None)
+        return await self._nav_action(poses=path, goal=None, policy=policy)
 
     async def _run_playback(self, segments: list[dict], policy: str,
                             max_laps: int | None) -> None:
