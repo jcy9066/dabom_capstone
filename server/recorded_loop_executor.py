@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
 from server.recorded_loop_core import motor_command, pose_dict
@@ -31,7 +32,7 @@ class RecordedMotorExecutor:
         self,
         *,
         authorize: Callable[[], Awaitable[bool]],
-        drive: Callable[[dict], Awaitable[bool | None]],
+        drive: Callable[[dict], Awaitable[bool | dict | None]],
         stop: Callable[[], Awaitable[bool]],
         pose: Callable[[], Awaitable[dict | None]],
         blocked: Callable[[dict], Awaitable[bool | None]],
@@ -155,6 +156,7 @@ class RecordedMotorExecutor:
                 if not commands:
                     raise ReplayFailure("MANUAL_COMMANDS_REQUIRED")
                 commands = [motor_command(c) for c in commands]
+                command_ids = [uuid4().hex for _ in commands]
                 position = await self._current()
                 if (self._distance(position, segment["poses"][0]) > self.GOAL_TOLERANCE_M
                     or self._heading_error(position, segment["poses"][0]) > self.HEADING_TOLERANCE_RAD):
@@ -193,22 +195,41 @@ class RecordedMotorExecutor:
                             self.playback.command_index = len(commands)
                             self._emit()
                             break
-                    tick_started = time.monotonic() if active_tick is None else active_tick
+                    now = time.monotonic()
                     if time.monotonic() - iteration_started > 0.5:
                         raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
                     remaining_sec = max(0.0, command["duration"] - self.playback.command_elapsed)
-                    preflight_elapsed = time.monotonic() - tick_started
+                    preflight_elapsed = 0.0 if active_tick is None else now - active_tick
                     if preflight_elapsed > 0.5:
                         raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
-                    if active_tick is not None and preflight_elapsed >= remaining_sec:
+                    if active_tick is not None and preflight_elapsed > 0:
                         # The last DRIVE remained active during health/TF/scan
                         # reads. Credit that interval to its command before
                         # sending anything, and never consume an unsent tail.
-                        self.playback.step(remaining_sec, commands)
-                        active_tick = None
+                        self.playback.step(min(preflight_elapsed, remaining_sec), commands)
+                        if self.playback.command_index != i:
+                            active_tick = None
+                            self._emit()
+                            continue
+                        remaining_sec = max(0.0, command["duration"] - self.playback.command_elapsed)
+                    tick_started = time.monotonic()
+                    applied = await self.drive({**command, "replay_command_id": command_ids[i]})
+                    if isinstance(applied, dict):
+                        progress = applied.get("elapsed")
+                        if (type(progress) not in (int, float) or not math.isfinite(progress)
+                            or not self.playback.command_elapsed <= progress <= command["duration"]):
+                            raise ReplayFailure("INVALID_PI_REPLAY_PROGRESS")
+                        if progress > self.playback.command_elapsed:
+                            pending_since = None
+                        elif pending_since is None:
+                            pending_since = time.monotonic()
+                        elif time.monotonic() - pending_since > self.DIRECTION_HANDOFF_TIMEOUT_SEC:
+                            raise ReplayFailure("DIRECTION_HANDOFF_TIMEOUT")
+                        self.playback.step(progress - self.playback.command_elapsed, commands)
+                        active_tick = None  # Pi exposure is authoritative, never server RTT.
                         self._emit()
+                        await asyncio.sleep(self.TICK_SEC)
                         continue
-                    applied = await self.drive(command)
                     if applied is False:
                         raise ReplayFailure("PI_COMMAND_ACK_FAILED")
                     if applied is None:
@@ -233,6 +254,8 @@ class RecordedMotorExecutor:
                         raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
                     # Delayed ACKs belong to this command, never to a later
                     # command that has not yet been physically submitted.
+                    # Generic test adapters retain the original clock; the
+                    # real Pi adapter returns authoritative elapsed above.
                     self.playback.step(min(elapsed, remaining_sec), commands)
                     active_tick = (time.monotonic()
                                    if self.playback.command_index == i else None)

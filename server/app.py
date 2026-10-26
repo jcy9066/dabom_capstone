@@ -854,7 +854,8 @@ class RobotConnectionManager:
                     applied = (motion.startswith("drive:") if isinstance(motion, str)
                                and (motion == "stop" or motion.startswith("drive:")) else None)
                     return {"ok": delivered, "delivered": delivered,
-                            "motion_applied": applied}
+                            "motion_applied": applied,
+                            "recorded_drive": ack.get("recorded_drive") if isinstance(ack, dict) else None}
                 return delivered
             return isinstance(ack, dict) and ack.get("ok") is True
         except Exception as exc:

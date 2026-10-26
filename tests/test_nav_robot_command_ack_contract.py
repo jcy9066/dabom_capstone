@@ -179,13 +179,24 @@ def test_recorded_motion_ack_distinguishes_direction_hold(motion, applied):
     result, _ = asyncio.run(_round_trip(command, {
         "ok": True, "safety_session": "pi-session-1", "safety_epoch": 12,
         "motion": motion}, motion_ack=True))
-    assert result == {"ok": True, "delivered": True, "motion_applied": applied}
+    assert result == {"ok": True, "delivered": True, "motion_applied": applied,
+                      "recorded_drive": None}
     result, _ = asyncio.run(_round_trip(command, {
         "ok": True, "safety_session": "wrong", "safety_epoch": 12,
         "motion": motion}, motion_ack=True))
     assert result["delivered"] is False
     legacy, _ = asyncio.run(_round_trip(command, {"ok": False, "motion": motion}))
     assert legacy is False
+
+
+def test_recorded_ack_returns_actual_pwm_from_the_matching_command():
+    command = {"type": "auto_drive", "source": "recorded_loop",
+               "safety_session": "pi-session-1", "safety_epoch": 12}
+    pwm = {"left_pwm": .033, "right_pwm": .094}
+    result, _ = asyncio.run(_round_trip(command, {
+        "ok": True, "safety_session": "pi-session-1", "safety_epoch": 12,
+        "motion": "drive:0.022,0.064", "recorded_drive": pwm}, motion_ack=True))
+    assert result["recorded_drive"] == pwm
 
 
 def test_server_endpoint_requires_ack_for_all_physical_commands():

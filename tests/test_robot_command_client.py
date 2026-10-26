@@ -106,6 +106,20 @@ class RobotCommandClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(socket.messages[-1]["emergency_stop"])
         client.motor.clear_direction_fault_after_safety_resume.assert_called_once_with()
 
+    async def test_recorded_ack_carries_only_this_commands_applied_pwm(self):
+        client = self.make_client()
+        client.current_mode = "auto"
+        client.motor.current_motion = "drive:0.022,0.064"
+        client.motor.drive_recorded.return_value = {"command_id": "pulse-1", "elapsed": .02, "duration": .08}
+        socket = FakeWebSocket()
+        await client.handle_command(socket, {"type": "auto_drive", "source": "recorded_loop",
+            "replay_command_id": "pulse-1", "replay_duration": .08,
+            "command_id": "recorded-pwm", "left_mps": .022, "right_mps": .064,
+            "safety_session": "test-pi", "safety_epoch": 0})
+        self.assertTrue(socket.messages[-1]["ok"])
+        self.assertEqual(socket.messages[-1]["recorded_drive"], {"command_id": "pulse-1", "elapsed": .02, "duration": .08})
+        self.assertEqual(socket.messages[-1]["command_id"], "recorded-pwm")
+
     async def test_inflight_motion_invalidated_by_safety_epoch_change(self):
         import asyncio
         import threading

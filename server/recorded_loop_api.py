@@ -102,7 +102,7 @@ class RecordedLoopApi:
             if record["source"] == "set_goal":
                 if nav_state == "NAVIGATING":
                     record["goal_seen_running"] = True
-                elif not record["goal_seen_running"] and nav_state in {"READY", "PATH_READY"}:
+                elif not record["goal_seen_running"] and nav_state in {"READY", "PATH_READY", "SUCCEEDED"}:
                     # Normal #93 flow: READY -> PATH_READY -> NAVIGATING.
                     # A pre-armed recorder must not fail during ComputePath.
                     return
@@ -246,8 +246,14 @@ class RecordedLoopApi:
         goals = self.store.snapshot(name, digest)["goals"]
         if payload["start"] not in goals:
             raise RecordedLoopError("GOAL_MISSING", "Register the start Goal first")
-        if source == "set_goal" and self.navigation.state_response().get("navigation_state") not in {"READY", "NAVIGATING"}:
+        nav_state = self.navigation.state_response().get("navigation_state")
+        if source == "set_goal" and nav_state not in {"READY", "NAVIGATING", "SUCCEEDED"}:
             raise RecordedLoopError("GOAL_NOT_READY", "Arm recording before Set Goal, or while navigating")
+        if source == "set_goal" and nav_state == "SUCCEEDED":
+            with self.navigation._lock:
+                if (not self.navigation._recorded_idle_locked()
+                    or not self.navigation.recorded_stop_proven()):
+                    raise RecordedLoopError("GOAL_NOT_READY", "Previous Goal must finish with confirmed STOP")
         pose = self._pose()
         if pose is None or math.hypot(pose["x"] - goals[payload["start"]]["x"],
                                       pose["y"] - goals[payload["start"]]["y"]) > 0.40:
@@ -353,11 +359,13 @@ class RecordedLoopApi:
             self._play_map_verified_at = now
         return True
 
-    async def _play_drive(self, candidate: dict[str, Any]) -> bool | None:
+    async def _play_drive(self, candidate: dict[str, Any]) -> bool | dict:
         context = self.navigation.recorded_safety_context()
         if context is None or self.send_robot_command is None:
             return False
         payload = recorded_to_auto_drive(candidate, self.max_wheel_mps)
+        payload["replay_command_id"] = candidate.get("replay_command_id")
+        payload["replay_duration"] = candidate["duration"]
         payload["safety_session"] = context["safety_session"]
         payload["safety_epoch"] = context["safety_epoch"]
         payload["replay_generation"] = context["goal_generation"]
@@ -372,9 +380,22 @@ class RecordedLoopApi:
         # receipt while holding STOP; that time is not recorded movement.
         if not isinstance(response, dict) or type(response.get("motion_applied")) is not bool:
             return False
-        if response["motion_applied"] is False:
-            return None
-        return self.navigation.recorded_motion_delivered(context)
+        applied = response.get("recorded_drive")
+        if not isinstance(applied, dict):
+            return False
+        try:
+            elapsed = applied["elapsed"]
+            if (not isinstance(payload["replay_command_id"], str)
+                or applied.get("command_id") != payload["replay_command_id"]
+                or applied.get("duration") != candidate["duration"]
+                or type(elapsed) not in (int, float) or not math.isfinite(elapsed)
+                or not 0 <= elapsed <= candidate["duration"]):
+                return False
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return False
+        if not self.navigation.recorded_motion_delivered(context):
+            return False
+        return {"elapsed": elapsed}
 
     async def _play_stop(self) -> bool:
         async with self._stop_lock:

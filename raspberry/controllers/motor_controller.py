@@ -678,6 +678,7 @@ class MotorController:
             self._ensure_connected_locked()
             # Manual MOVE remains independent from the autonomous velocity
             # profile. Resume auto drive from zero after manual takeover.
+            self._pause_recorded_budget()
             self._jerk_limiter.reset()
             self._exchange_locked(
                 f"MOVE,{direction},{normalized_speed:.3f}"
@@ -721,7 +722,7 @@ class MotorController:
         right_mps: float,
         rear_blind_limited: bool = False,
         preserve_recorded_pwm: bool = False,
-    ) -> None:
+    ) -> dict[str, float] | None:
         """
         좌우 바퀴 목표 속도(m/s)를 Pico의
         -1.0~1.0 정규화 PWM 명령으로 변환한다.
@@ -746,7 +747,7 @@ class MotorController:
 
         if abs(left) < 1e-6 and abs(right) < 1e-6:
             self.stop(reason="zero_drive")
-            return
+            return {"left_pwm": 0.0, "right_pwm": 0.0} if preserve_recorded_pwm else None
 
         left_normalized = left / self.max_wheel_mps
         right_normalized = right / self.max_wheel_mps
@@ -799,6 +800,11 @@ class MotorController:
                 "age_sec": None if updated_at is None else now - updated_at,
             }
             mode = segment_mode(left_normalized, right_normalized)
+            if preserve_recorded_pwm:
+                # A new curve needs a physical STOP before changing the fixed
+                # wheel ratio. Ordinary Nav2 keeps its existing interlock.
+                peak = max(abs(left_normalized), abs(right_normalized))
+                mode = f"recorded:{mode}:{left_normalized / peak:.6f}:{right_normalized / peak:.6f}"
             decision = self._direction_interlock.request(mode, now, snapshot)
             if decision == "stop":
                 # One STOP per transition. Only a successful UART reply
@@ -817,10 +823,10 @@ class MotorController:
                     time.monotonic(), sequence,
                 )
                 self._trace_motor_output("interlock_stop", detail=mode)
-                return
+                return {"left_pwm": 0.0, "right_pwm": 0.0} if preserve_recorded_pwm else None
             if decision == "hold":
                 self._trace_motor_output("interlock_hold", detail=mode)
-                return
+                return {"left_pwm": 0.0, "right_pwm": 0.0} if preserve_recorded_pwm else None
             if decision == "timeout":
                 self._jerk_limiter.reset()
                 self._direction_fault_latched = True
@@ -833,9 +839,21 @@ class MotorController:
                     "direction change STOP not encoder-confirmed within 3s"
                 )
 
-            limited_left, limited_right = self._jerk_limiter.step(
-                left_normalized, right_normalized, time.monotonic(),
-            )
+            if preserve_recorded_pwm:
+                # One shared jerk profile preserves curvature even during a
+                # short ramp. Independent profiles can turn a curve straight.
+                limited_peak, _ = self._jerk_limiter.step(peak, peak, time.monotonic())
+                if limited_peak < 0:
+                    # A small-target overshoot must never reverse a recorded
+                    # wheel outside its encoder-confirmed direction change.
+                    self._jerk_limiter.reset()
+                    limited_peak = 0.0
+                limited_left = limited_peak * left_normalized / peak
+                limited_right = limited_peak * right_normalized / peak
+            else:
+                limited_left, limited_right = self._jerk_limiter.step(
+                    left_normalized, right_normalized, time.monotonic(),
+                )
             # The jerk limiter can overshoot a new target during a sharp
             # reversal. Apply the physical ceiling *again* before UART.
             final_peak = max(abs(limited_left), abs(limited_right))
@@ -864,6 +882,70 @@ class MotorController:
                 self.current_motion = (
                     f"drive:{left:.3f},{right:.3f}"
                 )
+            if preserve_recorded_pwm:
+                # Exactly the quantized pair acknowledged by the Pico for
+                # this command, not the unfiltered target in current_motion.
+                return {"left_pwm": round(limited_left, 3),
+                        "right_pwm": round(limited_right, 3)}
+
+    def _pause_recorded_budget(self):
+        budget = getattr(self, "_recorded_budget", None)
+        if budget is not None:
+            now = time.monotonic()
+            budget["elapsed"] = min(budget["duration"], budget["elapsed"] +
+                max(0., now - budget["at"]) * budget["rate"])
+            budget["at"], budget["rate"] = now, 0.
+            if budget["timer"] is not None:
+                budget["timer"].cancel()
+                budget["timer"] = None
+
+    def drive_recorded(self, left, right, rear_limited, command_id, duration):
+        """Pi-owned exposure budget; network delay never extends a pulse.
+
+        Ordinary MOVE/DRIVE contracts are unchanged. Each pulse expires locally
+        within 120ms, independently of the server and the normal watchdog.
+        """
+        if (not isinstance(command_id, str) or not 1 <= len(command_id) <= 64
+            or type(duration) not in (int, float) or not math.isfinite(duration)
+            or not 0 < duration <= .45):
+            raise MotorControllerError("invalid recorded command budget")
+        with self._command_lock:
+            previous = getattr(self, "_recorded_budget", None)
+            if previous is not None and previous["id"] != command_id and previous["rate"]:
+                raise MotorControllerError("previous recorded output is still active")
+            self._pause_recorded_budget()
+            if previous is None or previous["id"] != command_id:
+                previous = self._recorded_budget = dict(id=command_id, duration=duration,
+                    target=(left, right), elapsed=0., at=time.monotonic(), rate=0., timer=None)
+            budget = previous
+            if budget["duration"] != duration or budget["target"] != (left, right):
+                raise MotorControllerError("recorded command identity changed")
+            if budget["elapsed"] < duration - 1e-9:
+                applied = self.drive(left, right, rear_limited, True)
+                target = (left / self.max_wheel_mps, right / self.max_wheel_mps)
+                denominator = sum(v*v for v in target)
+                if denominator <= 0:
+                    raise MotorControllerError("zero recorded target")
+                rate = sum(applied[key]*v for key, v in zip(("left_pwm", "right_pwm"), target)) / denominator
+                budget["rate"], budget["at"] = max(0., rate), time.monotonic()
+                if rate > 0:
+                    def expire():
+                        with self._command_lock:
+                            if (getattr(self, "_recorded_budget", None) is budget
+                                and budget["timer"] is timer):
+                                self.stop("recorded_pulse_expired", suppress_errors=True)
+                    timer = threading.Timer(min(.12, (duration-budget["elapsed"])/rate), expire)
+                    timer.daemon = True
+                    budget["timer"] = timer
+                    timer.start()
+            if budget["elapsed"] >= duration - 1e-9:
+                # A poll can beat the timer to the command lock after its
+                # deadline. Accounting/canceling is not a physical STOP.
+                if self.current_motion.startswith("drive:"):
+                    self.stop("recorded_budget_complete")
+                budget["elapsed"] = duration
+            return {"command_id": command_id, "elapsed": budget["elapsed"],
+                    "duration": duration}
 
     def stop(
         self,
@@ -874,6 +956,7 @@ class MotorController:
 
         with self._command_lock:
             # STOP, failsafe and E-STOP have no acceleration/jerk delay.
+            self._pause_recorded_budget()
             self._jerk_limiter.reset()
             self._direction_interlock.abort_pending()
             with self._state_lock:
