@@ -123,6 +123,10 @@ class RecordedMotorExecutor:
                 segment = segments[self.playback.segment_index]
                 commands = segment.get("commands")
                 if not commands and segment.get("source") == "set_goal":
+                    position = await self._current()
+                    if (self._distance(position, segment["poses"][0]) > self.GOAL_TOLERANCE_M
+                        or self._heading_error(position, segment["poses"][0]) > self.HEADING_TOLERANCE_RAD):
+                        raise ReplayFailure("SEGMENT_START_MISMATCH")
                     if self.follow_recorded_path is None:
                         raise ReplayFailure("NAV2_FOLLOW_PATH_UNAVAILABLE")
                     await self._verified_stop()
