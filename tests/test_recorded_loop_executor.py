@@ -132,6 +132,102 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             await engine.run(route(), "WAIT", max_laps=1)
         self.assertEqual(engine.playback.status, ReplayStatus.FAILED)
 
+    async def test_interlock_hold_does_not_consume_recorded_command(self):
+        engine, events, where = await self.build()
+        calls = 0
+        elapsed_during_hold = []
+        async def drive(command):
+            nonlocal calls
+            calls += 1
+            if calls <= 3:
+                elapsed_during_hold.append(engine.playback.command_elapsed)
+                return None
+            where["x"] = 1.
+            return True
+        engine.drive = drive
+        result = await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertEqual(elapsed_during_hold, [0., 0., 0.])
+        self.assertGreaterEqual(calls, 5)
+        self.assertEqual(result["laps"], 1)
+
+    async def test_slow_ack_never_skips_unsubmitted_commands(self):
+        engine, events, where = await self.build()
+        segment = route()[0]
+        segment["commands"] = [
+            {"direction": direction, "speed": .2, "duration": .01}
+            for direction in ("forward", "rotate_left", "backward")]
+        submitted = []
+        async def drive(command):
+            submitted.append(command["direction"])
+            await asyncio.sleep(.04)
+            where["x"] = 1.
+            return True
+        engine.drive = drive
+        await engine.run([segment], "WAIT", max_laps=1)
+        self.assertEqual(submitted, ["forward", "rotate_left", "backward"])
+
+    async def test_obstacle_wait_starts_a_fresh_interlock_window(self):
+        engine, events, where = await self.build()
+        engine.DIRECTION_HANDOFF_TIMEOUT_SEC = .025
+        engine.TICK_SEC = .01
+        calls = 0
+        waited = False
+        async def drive(command):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                return None
+            where["x"] = 1.
+            return True
+        async def blocked(command):
+            return calls == 1 and not waited
+        async def wait_clear(command):
+            nonlocal waited
+            # Physical STOP clears Pi's pending interlock during this WAIT.
+            await asyncio.sleep(.04)
+            waited = True
+            engine.playback.obstacle(False)
+        engine.drive = drive
+        engine.blocked = blocked
+        engine._wait_clear = wait_clear
+        result = await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertEqual(result["laps"], 1)
+
+    async def test_permanent_interlock_hold_fails_and_stops(self):
+        engine, events, _ = await self.build()
+        engine.DIRECTION_HANDOFF_TIMEOUT_SEC = .025
+        engine.TICK_SEC = .01
+        async def held(command):
+            return None
+        engine.drive = held
+        with self.assertRaisesRegex(ReplayFailure, "DIRECTION_HANDOFF_TIMEOUT"):
+            await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertIn("stop", events)
+
+    async def test_slow_health_pose_and_scan_reads_count_existing_motor_time(self):
+        for callback in ("authorize", "pose", "blocked"):
+            with self.subTest(callback=callback):
+                engine, events, where = await self.build()
+                segment = route()[0]
+                segment["commands"][0]["duration"] = .05
+                engine.TICK_SEC = .02
+                sent = []
+                original = getattr(engine, callback)
+                async def slow(*args):
+                    if sent:
+                        await asyncio.sleep(.06)
+                    return await original(*args)
+                setattr(engine, callback, slow)
+                async def drive(command):
+                    sent.append(command["direction"])
+                    where["x"] = 1.
+                    return True
+                engine.drive = drive
+                await engine.run([segment], "WAIT", max_laps=1)
+                # The second preflight consumed the remaining applied motor
+                # interval; it must not resend the already-complete command.
+                self.assertEqual(sent, ["forward"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,11 +11,13 @@ from typing import Any
 
 def path_blocked(scan: dict[str, Any] | None, direction: str,
                  *, now: float | None = None,
-                 stop_m: float = 0.60) -> bool | None:
+                 stop_m: float = 0.60, mount_x: float = 0.0,
+                 mount_y: float = 0.0, mount_yaw: float = 0.0) -> bool | None:
     if not isinstance(scan, dict) or not isinstance(direction, str):
         return None
-    now = time.time() if now is None else float(now)
     try:
+        now = time.time() if now is None else float(now)
+        mount_x, mount_y, mount_yaw = map(float, (mount_x, mount_y, mount_yaw))
         received = float(scan["received_at"])
         amin = float(scan["angle_min"])
         increment = float(scan["angle_increment"])
@@ -24,7 +26,8 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
         ranges = scan["ranges"]
     except (TypeError, ValueError, KeyError, OverflowError):
         return None
-    if (not all(math.isfinite(x) for x in (received, amin, increment, minimum, maximum, now))
+    if (not all(math.isfinite(x) for x in (received, amin, increment, minimum, maximum, now,
+                                         mount_x, mount_y, mount_yaw, stop_m))
         or increment == 0 or minimum < 0 or maximum <= minimum
         or not 0 <= now - received <= 0.35 or not isinstance(ranges, list)):
         return None
@@ -32,7 +35,7 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
     # Turning sweeps more of the robot footprint than straight travel.
     # Retain the straight forward/rear sectors while extending coverage
     # to the outside of the commanded curve.
-    if direction.startswith("rotate_"):
+    if direction in {"left", "right", "rotate_left", "rotate_right"}:
         target, half_angle = 0.0, math.pi
     elif direction in {"forward_left", "forward_right"}:
         target = math.radians(30.0 if direction.endswith("_left") else -30.0)
@@ -48,7 +51,10 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
     for i, raw in enumerate(ranges):
         if type(raw) not in (int, float) or not math.isfinite(raw):
             continue
-        theta = amin + i * increment - target
+        beam = amin + i * increment + mount_yaw
+        x = mount_x + raw * math.cos(beam)
+        y = mount_y + raw * math.sin(beam)
+        theta = math.atan2(y, x) - target
         theta = math.atan2(math.sin(theta), math.cos(theta))
         if abs(theta) > half_angle:
             continue
@@ -60,7 +66,7 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
             continue
         if not minimum <= raw <= maximum:
             continue
-        values.append(float(raw))
+        values.append(math.hypot(x, y))
     if dangerously_close >= 2:
         return True
     if len(values) < 8:

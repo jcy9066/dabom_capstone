@@ -25,12 +25,13 @@ class RecordedMotorExecutor:
     GOAL_TOLERANCE_M = 0.40
     HEADING_TOLERANCE_RAD = 0.70
     CLEAR_CONFIRM_SEC = 1.0
+    DIRECTION_HANDOFF_TIMEOUT_SEC = 3.5
 
     def __init__(
         self,
         *,
         authorize: Callable[[], Awaitable[bool]],
-        drive: Callable[[dict], Awaitable[bool]],
+        drive: Callable[[dict], Awaitable[bool | None]],
         stop: Callable[[], Awaitable[bool]],
         pose: Callable[[], Awaitable[dict | None]],
         blocked: Callable[[dict], Awaitable[bool | None]],
@@ -158,8 +159,10 @@ class RecordedMotorExecutor:
                 if (self._distance(position, segment["poses"][0]) > self.GOAL_TOLERANCE_M
                     or self._heading_error(position, segment["poses"][0]) > self.HEADING_TOLERANCE_RAD):
                     raise ReplayFailure("SEGMENT_START_MISMATCH")
-                last_tick = time.monotonic()
+                pending_since = None
+                active_tick = None
                 while self.playback.command_index < len(commands):
+                    iteration_started = time.monotonic()
                     await self._health()
                     i = self.playback.command_index
                     command = commands[i]
@@ -175,7 +178,8 @@ class RecordedMotorExecutor:
                         self._emit()
                         if self.playback.status == ReplayStatus.WAITING:
                             await self._wait_clear(command)
-                            last_tick = time.monotonic()
+                            pending_since = None
+                            active_tick = None
                             continue
                         if self.playback.status == ReplayStatus.REPLANNING:
                             await self._replan(segment, segment["poses"])
@@ -189,15 +193,49 @@ class RecordedMotorExecutor:
                             self.playback.command_index = len(commands)
                             self._emit()
                             break
-                    if not await self.drive(command):
+                    tick_started = time.monotonic() if active_tick is None else active_tick
+                    if time.monotonic() - iteration_started > 0.5:
+                        raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
+                    remaining_sec = max(0.0, command["duration"] - self.playback.command_elapsed)
+                    preflight_elapsed = time.monotonic() - tick_started
+                    if preflight_elapsed > 0.5:
+                        raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
+                    if active_tick is not None and preflight_elapsed >= remaining_sec:
+                        # The last DRIVE remained active during health/TF/scan
+                        # reads. Credit that interval to its command before
+                        # sending anything, and never consume an unsent tail.
+                        self.playback.step(remaining_sec, commands)
+                        active_tick = None
+                        self._emit()
+                        continue
+                    applied = await self.drive(command)
+                    if applied is False:
                         raise ReplayFailure("PI_COMMAND_ACK_FAILED")
-                    remaining_sec = max(0.005, command["duration"] - self.playback.command_elapsed)
-                    await asyncio.sleep(min(self.TICK_SEC, remaining_sec))
-                    elapsed = time.monotonic() - last_tick
-                    last_tick = time.monotonic()
+                    if applied is None:
+                        # Interlock STOP/hold is acknowledged but applies no
+                        # motion. Retry this command without consuming time.
+                        if pending_since is None:
+                            pending_since = time.monotonic()
+                        active_tick = None
+                        if time.monotonic() - pending_since > self.DIRECTION_HANDOFF_TIMEOUT_SEC:
+                            raise ReplayFailure("DIRECTION_HANDOFF_TIMEOUT")
+                        await asyncio.sleep(self.TICK_SEC)
+                        continue
+                    if applied is not True:
+                        raise ReplayFailure("PI_COMMAND_ACK_FAILED")
+                    pending_since = None
+                    # Motor output starts before its ACK returns. Include
+                    # that round trip in this command's allotted interval.
+                    ack_elapsed = time.monotonic() - tick_started
+                    await asyncio.sleep(max(0.0, min(self.TICK_SEC, remaining_sec) - ack_elapsed))
+                    elapsed = time.monotonic() - tick_started
                     if elapsed > 0.5:
                         raise ReplayFailure("REPLAY_SCHEDULER_STALLED")
-                    self.playback.step(elapsed, commands)
+                    # Delayed ACKs belong to this command, never to a later
+                    # command that has not yet been physically submitted.
+                    self.playback.step(min(elapsed, remaining_sec), commands)
+                    active_tick = (time.monotonic()
+                                   if self.playback.command_index == i else None)
                     if self.playback.status == ReplayStatus.FAILED:
                         raise ReplayFailure(self.playback.reason or "REPLAY_FAILED")
                     self._emit()

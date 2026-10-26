@@ -144,6 +144,7 @@ class NavigationRosControl:
         self._loop_recording = False
         self._loop_trace: list[dict[str, float]] = []
         self._navigate_goal_handle = None
+        self._recorded_follow_pending = None
         self._navigate_result_future = None
         self._route_poses_remaining: int | None = None
         self._route_feedback_epoch = 0
@@ -574,7 +575,7 @@ class NavigationRosControl:
                 "WAYPOINTS_REQUIRED", "An ordered waypoint route is required.", 400,
             )
         with self._lock:
-            if self._navigate_goal_handle is not None:
+            if self._navigate_goal_handle is not None or self._recorded_follow_pending is not None:
                 raise NavigationRosError(
                     "NAVIGATION_ALREADY_ACTIVE",
                     "Cancel the active Nav2 action before starting the route.",
@@ -692,7 +693,7 @@ class NavigationRosControl:
     ) -> dict[str, Any]:
         self._require_started()
         with self._lock:
-            if self._navigate_goal_handle is not None:
+            if self._navigate_goal_handle is not None or self._recorded_follow_pending is not None:
                 raise NavigationRosError(
                     "NAVIGATION_ALREADY_ACTIVE",
                     "Cancel the active Nav2 goal before starting another goal.",
@@ -775,8 +776,11 @@ class NavigationRosControl:
         # Existing PR #93 callers retain the original loop-specific
         # forward-only controller. Saved Set Goal traces may contain
         # legitimate reverse stages, so use the original general controller.
-        request.controller_id = "FollowPath" if recorded_auto else "LoopFollowPath"
-        request.goal_checker_id = "general_goal_checker" if recorded_auto else "loop_cached_goal_checker"
+        request.controller_id = "LoopFollowPath"
+        request.goal_checker_id = "loop_cached_goal_checker"
+        if recorded_auto:
+            request.controller_id = "FollowPath"
+            request.goal_checker_id = "general_goal_checker"
         client = self._follow_path_client
         if client is None or not client.wait_for_server(timeout_sec=2.5):
             raise NavigationRosError(
@@ -795,32 +799,28 @@ class NavigationRosControl:
                     and self._navigate_action_kind == "follow_path"
                     and self._navigation_state == "NAVIGATING"
                 )
-                if (previous is not None and not allowed) or (preempt and not allowed):
+                if (self._recorded_follow_pending is not None
+                    or (previous is not None and not allowed) or (preempt and not allowed)):
                     raise NavigationRosError(
                         "FOLLOW_PATH_BUSY", "No matching cached loop path to update.", 409,
                     )
-            handle = self._wait_future(
-                client.send_goal_async(request), timeout_sec=3.0,
-                error_code="FOLLOW_PATH_START_TIMEOUT",
-                message="Timed out requesting cached FollowPath.",
-            )
+            submitted = client.send_goal_async(request)
+            try:
+                handle = self._wait_future(
+                    submitted, timeout_sec=3.0,
+                    error_code="FOLLOW_PATH_START_TIMEOUT",
+                    message="Timed out requesting cached FollowPath.",
+                )
+            except NavigationRosError:
+                if recorded_preflight is not None:
+                    self._discard_recorded_follow(submitted)
+                raise
             if not handle.accepted:
                 raise NavigationRosError("FOLLOW_PATH_REJECTED", "FollowPath rejected.", 422)
             if recorded_preflight is not None and not recorded_preflight():
-                # Revocation happened while send_goal_async was in flight.
-                # Keep the original action handle for a bounded cancel ACK;
-                # a fire-and-forget cancel could let Nav2 resume after STOP.
-                cancel_response = self._wait_future(
-                    handle.cancel_goal_async(), timeout_sec=3.0,
-                    error_code="RECORDED_LATE_CANCEL_TIMEOUT",
-                    message="Late recorded Nav2 action cancel was not acknowledged.",
-                )
-                if not getattr(cancel_response, "goals_canceling", []):
-                    raise NavigationRosError(
-                        "RECORDED_LATE_CANCEL_REJECTED",
-                        "Nav2 refused to cancel a revoked recorded action.", 502)
+                self._discard_recorded_follow(submitted)
                 raise NavigationRosError(
-                    "RECORDED_OWNER_LOST", "Late FollowPath acceptance was canceled.", 409)
+                    "RECORDED_OWNER_LOST", "Late FollowPath acceptance is being canceled.", 409)
             future = handle.get_result_async()
             with self._lock:
                 if preempt and (
@@ -842,6 +842,40 @@ class NavigationRosControl:
                 lambda resolved, current=handle: self._on_navigation_result(current, resolved)
             )
             return {"accepted": True, "action": "/follow_path", "cached": True}
+
+    def _discard_recorded_follow(self, submitted: Any) -> None:
+        """Retain an uncertain goal until rejection or a proven terminal result.
+
+        Callbacks never block the ROS executor waiting for another ROS future.
+        An unresponsive action keeps subsequent motion fail-closed.
+        """
+        with self._lock:
+            self._recorded_follow_pending = submitted
+
+        def clear() -> None:
+            with self._lock:
+                if self._recorded_follow_pending is submitted:
+                    self._recorded_follow_pending = None
+
+        def terminal(resolved: Any) -> None:
+            try:
+                if int(resolved.result().status) in {4, 5, 6}:
+                    clear()
+            except Exception:
+                pass  # Unknown goal state must continue to block motion.
+
+        def accepted(resolved: Any) -> None:
+            try:
+                handle = resolved.result()
+                if not handle.accepted:
+                    clear()
+                    return
+                handle.get_result_async().add_done_callback(terminal)
+                handle.cancel_goal_async()
+            except Exception:
+                pass  # Retain the unresolved ownership fence on any error.
+
+        submitted.add_done_callback(accepted)
 
     def follow_recorded_auto_path(
         self, poses: list[dict[str, float]],
@@ -880,7 +914,7 @@ class NavigationRosControl:
         self._require_started()
         with self._cancel_lock:
             with self._lock:
-                if self._navigate_goal_handle is not None:
+                if self._navigate_goal_handle is not None or self._recorded_follow_pending is not None:
                     raise NavigationRosError(
                         "NAVIGATION_ALREADY_ACTIVE", "Another Nav2 action is active.", 409,
                     )
@@ -966,6 +1000,9 @@ class NavigationRosControl:
         # cancellation so only one request reaches a given Nav2 goal handle.
         with self._cancel_lock:
             with self._lock:
+                if self._recorded_follow_pending is not None:
+                    raise NavigationRosError(
+                        "RECORDED_CANCEL_PENDING", "Waiting for late FollowPath termination.", 409)
                 goal_handle = self._navigate_goal_handle
                 result_future = self._navigate_result_future
                 terminal_state = self._navigation_state
@@ -1067,7 +1104,8 @@ class NavigationRosControl:
     def navigation_status(self) -> dict[str, Any]:
         with self._lock:
             return {
-                "state": self._navigation_state,
+                "state": ("CANCELING" if self._recorded_follow_pending is not None
+                          else self._navigation_state),
                 "error": self._navigation_error,
                 "action": self._navigate_action_kind,
                 "number_of_poses_remaining": self._route_poses_remaining,

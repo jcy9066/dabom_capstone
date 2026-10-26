@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 
@@ -129,6 +130,7 @@ class RecordedLoopApiTests(unittest.TestCase):
             self.api._sample()
         self.assertFalse(self.api.status()["recording"]["armed"])
         self.nav.state["navigation_state"] = "SUCCEEDED"
+        self.nav.stop_started = True
         self.nav.stop_proven = True
         result = self.api.finish()
         self.assertEqual(result["segment"]["source"], "set_goal")
@@ -147,6 +149,37 @@ class RecordedLoopApiTests(unittest.TestCase):
         self.api._sample()
         with self.assertRaises(RecordedLoopError):
             self.api.finish()
+
+
+class PlaybackPermitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recorded_drive_counts_only_actual_pi_motion(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            context = {"safety_session": "pi-test", "safety_epoch": 2,
+                       "goal_generation": 3}
+            marked = []
+            nav = SimpleNamespace(
+                _robot_id="pi-01", recorded_safety_context=lambda: dict(context),
+                _pi_command_delivered=lambda ack: isinstance(ack, dict)
+                    and ack.get("ok") is True and ack.get("delivered") is True,
+                recorded_motion_delivered=lambda permit: marked.append(permit) or True)
+            sender = AsyncMock()
+            api = RecordedLoopApi(
+                app=FastAPI(), navigation=nav, map_api=None,
+                csrf_failure=lambda _: None, store_path=Path(dirname)/"routes.json",
+                send_robot_command=sender, max_wheel_mps=.212)
+            command = {"direction": "forward", "speed": .2, "duration": .1}
+            sender.return_value = {"ok": True, "delivered": True, "motion_applied": False}
+            self.assertIsNone(await api._play_drive(command))
+            self.assertEqual(marked, [])
+            sender.return_value = {"ok": True, "delivered": True}
+            self.assertIs(await api._play_drive(command), False)
+            sender.return_value["motion_applied"] = True
+            self.assertIs(await api._play_drive(command), True)
+            self.assertEqual(marked, [context])
+            self.assertIs(sender.call_args.kwargs["motion_ack"], True)
+            self.assertTrue(sender.call_args.kwargs["preflight"]())
+            context["safety_epoch"] += 1
+            self.assertFalse(sender.call_args.kwargs["preflight"]())
 
 
 if __name__ == "__main__":

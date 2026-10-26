@@ -26,6 +26,7 @@ from server.recorded_loop_obstacle import path_blocked
 from server.navigation_control_api import NavigationControlError
 from server.navigation_ros_control import NavigationRosError
 from server.navigation_map_service import NavigationMapError
+from server.env_config import env_float
 
 
 class RecordedLoopApi:
@@ -329,7 +330,8 @@ class RecordedLoopApi:
             self._play_status = dict(state)
 
     async def _play_authorize(self) -> bool:
-        if self.navigation.recorded_safety_context() is None:
+        if (self.navigation.recorded_safety_context() is None
+            and not self.navigation.recorded_nav2_health()):
             return False
         if self._play_map is None:
             return False
@@ -351,7 +353,7 @@ class RecordedLoopApi:
             self._play_map_verified_at = now
         return True
 
-    async def _play_drive(self, candidate: dict[str, Any]) -> bool:
+    async def _play_drive(self, candidate: dict[str, Any]) -> bool | None:
         context = self.navigation.recorded_safety_context()
         if context is None or self.send_robot_command is None:
             return False
@@ -362,9 +364,16 @@ class RecordedLoopApi:
         # Every motor packet must pass a last-moment safety identity check.
         response = await self.send_robot_command(
             self.navigation._robot_id, payload,
+            motion_ack=True,
             preflight=lambda: self.navigation.recorded_safety_context() == context)
         if not self.navigation._pi_command_delivered(response):
             return False
+        # Pi ACK includes actual motor state. A direction interlock ACKs
+        # receipt while holding STOP; that time is not recorded movement.
+        if not isinstance(response, dict) or type(response.get("motion_applied")) is not bool:
+            return False
+        if response["motion_applied"] is False:
+            return None
         return self.navigation.recorded_motion_delivered(context)
 
     async def _play_stop(self) -> bool:
@@ -394,7 +403,10 @@ class RecordedLoopApi:
 
     async def _play_blocked(self, command: dict) -> bool | None:
         try:
-            return path_blocked(self.get_live_scan(), command.get("direction", ""))
+            return path_blocked(
+                self.get_live_scan(), command.get("direction", ""),
+                mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"))
         except Exception:
             return None
 
@@ -444,48 +456,54 @@ class RecordedLoopApi:
                 poses = await asyncio.to_thread(ros.compute_path, pose_dict(goal),
                                                 loop_forward=True)
             path = self._nav_path(poses)
-            if executor.cancelled or not self.navigation.recorded_nav2_health():
+            if executor.cancelled or not await self._play_authorize():
                 raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
             # WAIT: a blocked saved route must be clear before Nav2 acts.
             valid = await asyncio.to_thread(ros.loop_path_valid, path)
             if not valid:
-                if policy != "WAIT" or goal is not None:
-                    raise ReplayFailure("NAV2_PATH_BLOCKED")
                 executor.playback.obstacle(True)
                 executor._emit()
-                clear_since = None
-                while not executor.cancelled:
-                    if not self.navigation.recorded_nav2_health():
-                        raise ReplayFailure("NAV2_WAIT_HEALTH_LOST")
-                    valid = await asyncio.to_thread(ros.loop_path_valid, path)
-                    now = time.monotonic()
-                    if valid:
-                        if clear_since is None:
-                            clear_since = now
-                        if now - clear_since >= 1.0:
-                            executor.playback.obstacle(False)
-                            executor._emit()
-                            break
-                    else:
-                        clear_since = None
-                    await asyncio.sleep(0.25)
-                if executor.cancelled:
-                    raise ReplayFailure("REPLAY_CANCELLED")
+                if policy == "REPLAN":
+                    path = self._nav_path(await asyncio.to_thread(
+                        ros.compute_path, path[-1], loop_forward=True))
+                    if not await asyncio.to_thread(ros.loop_path_valid, path):
+                        raise ReplayFailure("NAV2_REPLAN_BLOCKED")
+                    executor.playback.status = ReplayStatus.RUNNING
+                    executor.playback.reason = None
+                    executor._emit()
+                else:
+                    clear_since = None
+                    while not executor.cancelled:
+                        if not await self._play_authorize():
+                            raise ReplayFailure("NAV2_WAIT_HEALTH_LOST")
+                        valid = await asyncio.to_thread(ros.loop_path_valid, path)
+                        now = time.monotonic()
+                        if valid:
+                            if clear_since is None:
+                                clear_since = now
+                            if now - clear_since >= 1.0:
+                                executor.playback.obstacle(False)
+                                executor._emit()
+                                break
+                        else:
+                            clear_since = None
+                        await asyncio.sleep(0.25)
+                    if executor.cancelled:
+                        raise ReplayFailure("REPLAY_CANCELLED")
             replans = 0
-            # The recorded Set Goal follows the regular reverse-capable
-            # controller; a newly replanned forward-only detour uses LoopFollowPath.
-            recorded_auto = goal is None
+            # Both recorded traces and forward-planned detours require the
+            # general controller's final yaw alignment before motor replay.
             overall_deadline = time.monotonic() + 110.0
             final_pose = path[-1]
             while time.monotonic() < overall_deadline:
-                if executor.cancelled or not self.navigation.recorded_nav2_health():
+                if executor.cancelled or not await self._play_authorize():
                     raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
                 # The callback runs inside the ROS synchronous action-send
                 # lock as well as just after acceptance; it fences late Nav2
                 # goal handles after STOP, Manual or E-STOP invalidation.
                 owner_guard = lambda: (
                     not executor.cancelled and self.navigation.recorded_nav2_health())
-                if recorded_auto and hasattr(ros, "follow_recorded_auto_path"):
+                if hasattr(ros, "follow_recorded_auto_path"):
                     accepted = await asyncio.to_thread(
                         ros.follow_recorded_auto_path, path,
                         recorded_preflight=owner_guard)
@@ -498,7 +516,7 @@ class RecordedLoopApi:
                 next_check = time.monotonic() + 0.5
                 restarting = False
                 while time.monotonic() < overall_deadline:
-                    if executor.cancelled or not self.navigation.recorded_nav2_health():
+                    if executor.cancelled or not await self._play_authorize():
                         raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
                     state = str(ros.navigation_status().get("state") or "").upper()
                     if state == "SUCCEEDED":
@@ -541,7 +559,7 @@ class RecordedLoopApi:
                             if policy == "WAIT":
                                 clear_since = None
                                 while not executor.cancelled:
-                                    if not self.navigation.recorded_nav2_health():
+                                    if not await self._play_authorize():
                                         raise ReplayFailure("NAV2_WAIT_HEALTH_LOST")
                                     valid = await asyncio.to_thread(ros.loop_path_valid, suffix)
                                     now = time.monotonic()
@@ -564,7 +582,6 @@ class RecordedLoopApi:
                                 replans += 1
                                 path = self._nav_path(await asyncio.to_thread(
                                     ros.compute_path, final_pose, loop_forward=True))
-                                recorded_auto = False
                                 if not await asyncio.to_thread(ros.loop_path_valid, path):
                                     raise ReplayFailure("NAV2_REPLAN_BLOCKED")
                                 executor.playback.status = ReplayStatus.RUNNING

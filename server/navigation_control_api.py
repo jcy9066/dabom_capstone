@@ -716,7 +716,7 @@ class NavigationControlApi:
                 or self._pending_goal_cancel is not None or self._patrol_transition is not None
                 or self._watchdog_issue_locked(time.time()) is not None):
                 raise NavigationControlError("RECORDED_NOT_READY", "Recorded replay requires idle healthy Nav2")
-            if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING"}:
+            if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING", "CANCELING"}:
                 raise NavigationControlError("NAV2_BUSY", "Stop all Nav2 actions first")
             now = time.time()
             if not self._motion_allowed_locked(now):

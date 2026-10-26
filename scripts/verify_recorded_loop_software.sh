@@ -15,6 +15,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PYTHON" -m pytest -q \
   tests/test_recorded_loop_safety_gates.py tests/test_recorded_loop_nav2_handoff.py \
   tests/test_recorded_loop_activation_contract.py tests/test_recorded_loop_integrity.py \
   tests/test_recorded_loop_late_nav2_action.py \
+  tests/test_nav_robot_command_ack_contract.py \
   tests/test_navigation_control_api.py tests/test_ab_loop_contract.py --tb=short
 if command -v node >/dev/null 2>&1; then
   node --check frontend/services/static/recorded_loop_ui.js

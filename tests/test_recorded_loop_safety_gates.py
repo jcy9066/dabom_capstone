@@ -63,6 +63,19 @@ class RecordedObstaclesTests(unittest.TestCase):
 
     def test_pivot_checks_sides(self):
         self.assertTrue(path_blocked(scan(side=0.3), "rotate_left"))
+        self.assertTrue(path_blocked(scan(side=0.3), "left"))
+        self.assertTrue(path_blocked(scan(side=0.3), "right"))
+
+    def test_reversed_lidar_mount_checks_robot_front(self):
+        data = scan(front=2.0, rear=0.3)
+        self.assertTrue(path_blocked(data, "forward", mount_yaw=math.pi))
+        self.assertFalse(path_blocked(data, "backward", mount_yaw=math.pi))
+
+    def test_lidar_translation_uses_base_frame_distance(self):
+        data = scan(front=0.65)
+        self.assertFalse(path_blocked(data, "forward"))
+        self.assertTrue(path_blocked(data, "forward", mount_x=-0.15))
+        self.assertIsNone(path_blocked(data, "forward", mount_yaw=float("nan")))
 
     def test_unknown_or_stale_sensor_fails_closed(self):
         self.assertIsNone(path_blocked(scan(age=5.0), "forward"))

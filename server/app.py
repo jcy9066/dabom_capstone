@@ -761,7 +761,7 @@ class RobotConnectionManager:
         except Exception:
             return False
 
-    async def send_command_wait_ack(self, robot_id, command, *, preflight=None):
+    async def send_command_wait_ack(self, robot_id, command, *, preflight=None, motion_ack=False):
         command = dict(command)
         command_id = str(command.get("command_id") or uuid4())
         command["command_id"] = command_id
@@ -841,13 +841,21 @@ class RobotConnectionManager:
             if command.get("type") in ("move", "auto_drive") and (
                 "safety_session" in command or "safety_epoch" in command
             ):
-                return (
+                delivered = (
                     isinstance(ack, dict)
                     and ack.get("ok") is True
                     and ack.get("safety_session") == command.get("safety_session")
                     and type(ack.get("safety_epoch")) is int
                     and ack["safety_epoch"] == command.get("safety_epoch")
                 )
+                if (motion_ack and command.get("type") == "auto_drive"
+                    and command.get("source") == "recorded_loop"):
+                    motion = ack.get("motion") if isinstance(ack, dict) else None
+                    applied = (motion.startswith("drive:") if isinstance(motion, str)
+                               and (motion == "stop" or motion.startswith("drive:")) else None)
+                    return {"ok": delivered, "delivered": delivered,
+                            "motion_applied": applied}
+                return delivered
             return isinstance(ack, dict) and ack.get("ok") is True
         except Exception as exc:
             reporter = getattr(self, "command_transport_observer", None)

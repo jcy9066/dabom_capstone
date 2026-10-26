@@ -83,6 +83,9 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             csrf_failure=lambda _: None,
             store_path=Path(self.temp.name) / "records.json")
         self.api._executor = SimpleNamespace(cancelled=False)
+        self.api._executor.playback = Playback()
+        self.api._executor.playback.start("WAIT")
+        self.api._executor._emit = lambda: None
 
         async def authorize():
             return True
@@ -205,6 +208,44 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
                 {"x": 1.0, "y": 0.0, "yaw": 0.0}], "REPLAN")
         self.assertNotIn("resume_replay", self.nav.events)
         self.assertIn("stop_proven", self.nav.events)
+
+    async def test_initial_obstacle_replans_before_start_and_aligns_with_general_controller(self):
+        self.api._executor.playback = Playback()
+        self.api._executor.playback.start("REPLAN")
+        def valid(path):
+            return "compute" in self.ros.events
+        self.ros.loop_path_valid = valid
+        def general(path, *, recorded_preflight=None):
+            assert recorded_preflight()
+            self.ros.events.append("general_follow")
+            self.ros.state = "SUCCEEDED"
+            return {"accepted": True}
+        self.ros.follow_recorded_auto_path = general
+        path = [{"x": 0., "y": 0., "yaw": 0.},
+                {"x": 1., "y": 0., "yaw": 0.}]
+        self.assertTrue(await self.api._play_follow(path, "REPLAN"))
+        self.assertEqual(self.ros.events, ["compute", "general_follow"])
+        self.assertEqual(self.api._executor.playback.status.value, "RUNNING")
+
+    async def test_map_authorization_loss_during_nav2_stops_without_resuming(self):
+        checks = 0
+        async def authorize():
+            nonlocal checks
+            checks += 1
+            return checks < 4
+        self.api._play_authorize = authorize
+        def follow(path, *, recorded_preflight=None):
+            self.ros.events.append("follow")
+            self.ros.state = "NAVIGATING"
+            return {"accepted": True}
+        self.ros.follow_loop_path = follow
+        with self.assertRaisesRegex(ReplayFailure, "NAV2_TAKEOVER_INTERRUPTED"):
+            await self.api._play_follow([
+                {"x": 0., "y": 0., "yaw": 0.},
+                {"x": 1., "y": 0., "yaw": 0.}], "WAIT")
+        self.assertIn("cancel", self.ros.events)
+        self.assertIn("stop_proven", self.nav.events)
+        self.assertNotIn("resume_replay", self.nav.events)
 
 
 if __name__ == "__main__":
