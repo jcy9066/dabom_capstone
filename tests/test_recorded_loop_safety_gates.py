@@ -52,6 +52,15 @@ class RecordedObstaclesTests(unittest.TestCase):
         data["ranges"][180] = 0.05
         self.assertTrue(path_blocked(data, "forward"))
 
+    def test_curved_motion_checks_outside_swept_sector(self):
+        data = scan(front=1.0, rear=1.0, side=1.0)
+        # 75 degrees left of travel: outside straight-ahead cone,
+        # but inside the left-turn swept footprint.
+        data["ranges"][254] = .3
+        data["ranges"][255] = .3
+        self.assertFalse(path_blocked(data, "forward"))
+        self.assertTrue(path_blocked(data, "forward_left"))
+
     def test_pivot_checks_sides(self):
         self.assertTrue(path_blocked(scan(side=0.3), "rotate_left"))
 
