@@ -42,6 +42,23 @@
         $("recorded-position").textContent = data.current_pose
             ? data.current_pose.x.toFixed(2) + ", " +
               data.current_pose.y.toFixed(2) : "위치 없음";
+        const active = data.play_active === true;
+        const replay = data.playback || {};
+        const status = replay.label || "재생 준비";
+        $("recorded-playback-state").textContent =
+            status + (replay.lap ? " / " + replay.lap + "회 반복" : "") +
+            (replay.reason ? " / " + replay.reason : "");
+        $("recorded-policy").disabled = busy || active;
+        $("recorded-play-route").disabled = busy || active;
+        $("recorded-play-start").disabled = busy || active;
+        $("recorded-play-stop").disabled = busy || !active;
+        const viewer = document.getElementById("recordedLoopViewerStatus");
+        if (viewer) {
+            const visible = ["WAITING", "REPLANNING", "FAILED"].includes(replay.state);
+            viewer.hidden = !visible;
+            viewer.textContent = visible ? status : "";
+            viewer.dataset.state = String(replay.state || "IDLE");
+        }
         for (const id of ["recorded-add-goal", "recorded-start", "recorded-save",
                           "recorded-discard", "recorded-save-route"]) {
             const button = $(id);
@@ -108,6 +125,15 @@
             segments: ids
         }, "반복 경로 구성을 저장했습니다.");
     });
+    $("recorded-play-start").addEventListener("click", () => {
+        void mutate("replay/start", {
+            route_id: $("recorded-play-route").value.trim(),
+            policy: $("recorded-policy").value,
+            max_laps: null
+        }, "반복 주행을 시작했습니다.");
+    });
+    $("recorded-play-stop").addEventListener("click", () =>
+        void mutate("replay/stop", {}, "반복 주행 정지 요청 완료"));
     refresh(true);
     setInterval(() => { if (!document.hidden && !busy) void refresh(true); }, 1000);
 })();
