@@ -116,8 +116,9 @@ class RecordedMotorExecutor:
             raise ReplayFailure("INVALID_RECORDED_ROUTE")
         if max_laps is not None and (type(max_laps) is not int or max_laps < 1):
             raise ReplayFailure("INVALID_LAPS")
+        # A STOP arriving between task creation and run() must remain
+        # effective; only __init__ initializes a new session's cancel flag.
         self.playback.start(policy)
-        self.cancelled = False
         self._emit()
         try:
             # Mandatory physical STOP baseline for EVERY Recorded Loop start.
