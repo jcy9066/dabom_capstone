@@ -155,14 +155,9 @@ class RecordedLoopApi:
         if elapsed > 0.45:
             record["error"] = "UNCONFIRMED_MOTOR_INTERVAL"
             return
-        remaining = elapsed
-        while remaining > 0.001:
-            duration = min(0.2, remaining)
-            record["commands"].append({**last, "duration": round(duration, 5)})
-            remaining -= duration
-            if len(record["commands"]) > 6000:
-                record["error"] = "COMMAND_LIMIT"
-                return
+        record["commands"].append({**last, "duration": round(elapsed, 5)})
+        if len(record["commands"]) > 6000:
+            record["error"] = "COMMAND_LIMIT"
 
     def note_motion_ack(self, command: dict, delivered: bool) -> None:
         """Called only AFTER current-Pi command-id ACK, never at enqueue time."""
