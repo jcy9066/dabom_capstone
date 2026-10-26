@@ -212,6 +212,7 @@ class RecordedLoopApi:
                 record["last"] = None
 
     def begin(self, payload: dict) -> dict:
+        self._assert_store_editable()
         name, digest = self._active()
         source = payload.get("source")
         if source not in {"manual", "set_goal"}:
@@ -581,6 +582,13 @@ class RecordedLoopApi:
             self.navigation.release_recorded_motion()
             self._play_map = None
 
+    def _assert_store_editable(self) -> None:
+        """Block data mutation during physical replay, regardless of UI state."""
+        with self._lock:
+            if self._play_task is not None and not self._play_task.done():
+                raise RecordedLoopError(
+                    "REPLAY_ACTIVE", "Stop Recorded Loop before editing stored paths")
+
     def reset_playback(self) -> dict:
         if self._play_task is not None and not self._play_task.done():
             raise RecordedLoopError("REPLAY_ACTIVE", "Stop replay before reset")
@@ -708,6 +716,7 @@ class RecordedLoopApi:
         @app.post("/api/navigation/recorded/goal")
         async def recorded_goal(request: Request):
             def action(data):
+                self._assert_store_editable()
                 name, digest = self._active()
                 return {"ok": True, "goal": self.store.put_goal(name, digest, data["id"], data["pose"])}
             return await process(request, action, True)
@@ -715,6 +724,7 @@ class RecordedLoopApi:
         @app.post("/api/navigation/recorded/route")
         async def recorded_route(request: Request):
             def action(data):
+                self._assert_store_editable()
                 name, digest = self._active()
                 return {"ok": True, "route": self.store.put_route(name, digest, data["id"], data["segments"])}
             return await process(request, action, True)
@@ -722,6 +732,7 @@ class RecordedLoopApi:
         @app.post("/api/navigation/recorded/delete")
         async def recorded_delete(request: Request):
             def action(data):
+                self._assert_store_editable()
                 if self.status()["recording"]["active"]:
                     raise RecordedLoopError("RECORDING_ACTIVE", "Stop recording first")
                 name, digest = self._active()
