@@ -514,8 +514,16 @@ class RecordedLoopApi:
                         if not valid:
                             # Stop Nav2 controller before any waiting or new plan.
                             cancelled = await asyncio.to_thread(ros.cancel_navigation)
+                            # A Nav2 goal can SUCCEED while its cancel is in
+                            # flight. The ROS adapter reports this terminal race
+                            # with confirmed=False/completed=True; no goal is
+                            # left running, so it is safe to proceed to STOP.
+                            terminal_success = (isinstance(cancelled, dict)
+                                and cancelled.get("completed") is True
+                                and cancelled.get("terminal") == "SUCCEEDED")
                             if (not isinstance(cancelled, dict)
-                                or cancelled.get("confirmed") is not True):
+                                or (cancelled.get("confirmed") is not True
+                                    and not terminal_success)):
                                 raise ReplayFailure("NAV2_CANCEL_UNCONFIRMED")
                             if not await self._play_stop():
                                 raise ReplayFailure("STOP_NOT_CONFIRMED")
