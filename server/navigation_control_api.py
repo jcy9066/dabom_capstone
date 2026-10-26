@@ -693,8 +693,8 @@ class NavigationControlApi:
     def activate_recorded_motion(self) -> None:
         """Reserve motor ownership without mutating the normal Nav2 Goal state."""
         with self._lock:
-            if self._recorded_motor_active:
-                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay already owns motors")
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay or Nav2 already owns motors")
             self._assert_resume_safety_locked(require_estop=False)
             if (not self._motor_output_enabled or self._state["navigation_state"] != "READY"
                 or self._state["active_goal"] is not None or self._loop_goals
