@@ -187,8 +187,8 @@ class RecordedLoopApi:
         if payload["start"] == payload["end"]:
             raise RecordedLoopError("SAME_GOAL", "Start and end Goals must differ")
         goals = self.store.snapshot(name, digest)["goals"]
-        if payload["start"] not in goals or payload["end"] not in goals:
-            raise RecordedLoopError("GOAL_MISSING", "Register both Goals first")
+        if payload["start"] not in goals:
+            raise RecordedLoopError("GOAL_MISSING", "Register the start Goal first")
         if source == "set_goal" and self.navigation.state_response().get("navigation_state") != "NAVIGATING":
             raise RecordedLoopError("GOAL_NOT_RUNNING", "Set Goal must be navigating")
         pose = self._pose()
@@ -222,6 +222,11 @@ class RecordedLoopApi:
             if record["source"] == "set_goal":
                 if self.navigation.state_response().get("navigation_state") != "SUCCEEDED":
                     raise RecordedLoopError("GOAL_NOT_SUCCEEDED", "Only successful Set Goal traces can be saved")
+            goals = self.store.snapshot(name, digest)["goals"]
+            if record["end"] not in goals:
+                if not record["poses"]:
+                    raise RecordedLoopError("EMPTY_RECORDING", "Missing end pose")
+                self.store.put_goal(name, digest, record["end"], record["poses"][-1])
             recorded = self.store.put_segment(
                 record["map"], record["digest"], record["segment_id"],
                 record["source"], record["start"], record["end"],
@@ -267,7 +272,7 @@ class RecordedLoopApi:
             def action(_):
                 name, digest = self._active()
                 return {"ok": True, "map_name": name, "data": self.store.snapshot(name, digest),
-                        **self.status()}
+                        "current_pose": self._pose(), **self.status()}
             return await process(request, action, False)
 
         @app.post("/api/navigation/recorded/goal")
