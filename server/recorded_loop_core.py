@@ -135,7 +135,15 @@ class RecordedRouteStore:
         validated = pose_dict(pose)
         with self._lock:
             db = self._load()
-            self._map(db, name, digest, True)["goals"][goal_id] = validated
+            entry = self._map(db, name, digest, True)
+            existing = entry["goals"].get(goal_id)
+            if existing is not None and any(
+                s["start"] == goal_id or s["end"] == goal_id
+                for s in entry["segments"].values()
+            ) and existing != validated:
+                raise RecordedLoopError("GOAL_IN_USE",
+                                        "Delete attached segments before editing this Goal")
+            entry["goals"][goal_id] = validated
             self._save(db)
         return validated
 
@@ -162,6 +170,11 @@ class RecordedRouteStore:
             entry = self._map(db, name, digest, True)
             if start not in entry["goals"] or end not in entry["goals"]:
                 raise RecordedLoopError("GOAL_MISSING", "Save both Goals before a Segment")
+            if segment_id in entry["segments"] and any(
+                segment_id in route["segments"] for route in entry["routes"].values()
+            ):
+                raise RecordedLoopError("SEGMENT_IN_USE",
+                                        "Delete dependent routes before replacing a Segment")
             for goal_id, p in ((start, clean_poses[0]), (end, clean_poses[-1])):
                 g = entry["goals"][goal_id]
                 if math.hypot(p["x"] - g["x"], p["y"] - g["y"]) > 0.40:
