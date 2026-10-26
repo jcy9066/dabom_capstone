@@ -245,6 +245,11 @@ class RecordedLoopApi:
                 raise RecordedLoopError("NOT_RECORDING", "No recording active")
             if record["error"]:
                 raise RecordedLoopError(record["error"], "Recording invalid: discard before retry")
+            if record["source"] == "set_goal":
+                with self.navigation._lock:
+                    stop_proven = self.navigation._stop_confirmed_locked(time.time())
+                if self.navigation.state_response().get("navigation_state") == "SUCCEEDED" and stop_proven:
+                    record["stopped"] = True
             if not record["stopped"]:
                 raise RecordedLoopError("MOTOR_STILL_ACTIVE", "Release motor control and confirm STOP")
             name, digest = self._active()
@@ -364,9 +369,25 @@ class RecordedLoopApi:
             self._play_update({"state": "FAILED", "label": "주행 중지",
                                "policy": policy, "lap": executor.playback.lap,
                                "reason": str(exc)[:140]})
+            if executor.playback.reason == "STOP_NOT_CONFIRMED":
+                try:
+                    await self.navigation.emergency_stop(
+                        "RECORDED_STOP_NOT_CONFIRMED", automatic=True, force=True)
+                except Exception:
+                    pass
         finally:
             self.navigation.release_recorded_motion()
             self._play_map = None
+
+    def reset_playback(self) -> dict:
+        if self._play_task is not None and not self._play_task.done():
+            raise RecordedLoopError("REPLAY_ACTIVE", "Stop replay before reset")
+        with self._lock:
+            self._play_status = {"state": "IDLE", "label": "준비",
+                                 "policy": None, "lap": 0, "reason": None}
+            if self._executor is not None:
+                self._executor.playback.reset()
+        return {"ok": True, **self._play_snapshot()}
 
     def begin_playback(self, payload: dict) -> dict:
         if self._play_task is not None and not self._play_task.done():
@@ -498,6 +519,10 @@ class RecordedLoopApi:
         @app.post("/api/navigation/recorded/replay/start")
         async def recorded_replay_start(request: Request):
             return await process(request, self.begin_playback, True)
+
+        @app.post("/api/navigation/recorded/replay/reset")
+        async def recorded_replay_reset(request: Request):
+            return await process(request, lambda _: self.reset_playback(), True)
 
         @app.post("/api/navigation/recorded/replay/stop")
         async def recorded_replay_stop(request: Request):
