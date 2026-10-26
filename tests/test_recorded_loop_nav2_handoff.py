@@ -27,7 +27,8 @@ class FakeROS:
         self.events.append("validate")
         return self.valid
 
-    def follow_loop_path(self, path):
+    def follow_loop_path(self, path, *, recorded_preflight=None):
+        assert recorded_preflight is None or recorded_preflight()
         self.events.append("follow")
         self.state = "SUCCEEDED"
         return {"accepted": True}
@@ -105,7 +106,8 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.nav.events, ["takeover", "revoke", "stop_proven", "resume_replay"])
 
     async def test_auto_trace_uses_reverse_capable_controller(self):
-        def general(path):
+        def general(path, *, recorded_preflight=None):
+            assert recorded_preflight is None or recorded_preflight()
             self.ros.events.append("general_follow")
             self.ros.state = "SUCCEEDED"
             return {"accepted": True}
@@ -154,7 +156,8 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             validity["count"] += 1
             return validity["count"] != 2
         starts = {"count": 0}
-        def start_follow(path):
+        def start_follow(path, *, recorded_preflight=None):
+            assert recorded_preflight is None or recorded_preflight()
             self.ros.events.append("follow")
             starts["count"] += 1
             self.ros.state = "NAVIGATING" if starts["count"] == 1 else "SUCCEEDED"
@@ -179,7 +182,8 @@ class HandoffTests(unittest.IsolatedAsyncioTestCase):
             validity["count"] += 1
             return validity["count"] != 2
         starts = {"count": 0}
-        def start_follow(path):
+        def start_follow(path, *, recorded_preflight=None):
+            assert recorded_preflight is None or recorded_preflight()
             self.ros.events.append("follow")
             starts["count"] += 1
             self.ros.state = "NAVIGATING" if starts["count"] == 1 else "SUCCEEDED"
