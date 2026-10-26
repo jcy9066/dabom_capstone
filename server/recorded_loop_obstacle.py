@@ -44,10 +44,9 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
             values.append(float(raw))
     if len(values) < 8:
         return None
-    # Low quantile rejects isolated noisy near returns but responds to
-    # spatially supported obstacles spanning several rays.
-    values.sort()
-    observation = values[max(0, int(len(values) * 0.10) - 1)]
-    if not math.isfinite(observation):
-        return None
-    return observation < stop_m
+    # A tenth-percentile rule can miss a narrow physical obstacle:
+    # two or three adjacent LiDAR rays at 0.3 m must stop the robot,
+    # even when the other 350 rays show free space. Prefer a safe pause
+    # over disregarding a small person/object during replay.
+    near = sum(distance < stop_m for distance in values)
+    return near >= 2
