@@ -720,6 +720,7 @@ class MotorController:
         left_mps: float,
         right_mps: float,
         rear_blind_limited: bool = False,
+        preserve_recorded_pwm: bool = False,
     ) -> None:
         """
         좌우 바퀴 목표 속도(m/s)를 Pico의
@@ -768,7 +769,11 @@ class MotorController:
             abs(right_normalized),
         )
 
-        if not rear_blind_limited and 0.0 < peak < MIN_AUTO_DRIVE_PWM:
+        # Recorded Replay already stores the user's manually applied PWM.
+        # Boosting it to MIN_AUTO_DRIVE_PWM changes the physical recording,
+        # so bypass only that optional min-output boost. All safety ceilings,
+        # reversal interlocks and jerk/acceleration limits still apply.
+        if not rear_blind_limited and not preserve_recorded_pwm and 0.0 < peak < MIN_AUTO_DRIVE_PWM:
             pwm_scale = MIN_AUTO_DRIVE_PWM / peak
             left_normalized *= pwm_scale
             right_normalized *= pwm_scale
