@@ -1061,6 +1061,33 @@ class NavigationRosControl:
             and self._navigate_client.wait_for_server(timeout_sec=0.05)
         )
 
+    def recorded_map_pose(self) -> dict[str, float] | None:
+        """Fresh map->base_link TF for recorded-loop sampling, read-only."""
+        if ROS_IMPORT_ERROR is not None or not self._started or self._tf_buffer is None:
+            return None
+        with self._lock:
+            if self._amcl.received_at is None:
+                return None
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                "map", "base_link", Time(), timeout=Duration(seconds=0.05))
+            stamp = transform.header.stamp
+            stamp_ns = int(stamp.sec) * 1000000000 + int(stamp.nanosec)
+            clock_ns = int(self._node.get_clock().now().nanoseconds)
+            age = (clock_ns - stamp_ns) / 1e9
+            maximum = env_float("NAV_WATCHDOG_TF_SOURCE_MAX_AGE_SEC", minimum=0.05)
+            if stamp_ns <= 0 or not 0 <= age <= maximum:
+                return None
+            p = transform.transform.translation
+            q = transform.transform.rotation
+            coords = {"x": float(p.x), "y": float(p.y),
+                      "yaw": self._yaw_from_orientation(q)}
+            if not all(math.isfinite(v) for v in coords.values()):
+                return None
+            return coords
+        except Exception:
+            return None
+
     def watchdog_status(self, now: float | None = None) -> dict[str, Any]:
         if ROS_IMPORT_ERROR is not None or not self._started:
             return {
