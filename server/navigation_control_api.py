@@ -201,6 +201,7 @@ class NavigationControlApi:
         # Opt-in, mutually exclusive recorded replay; inert in PR #93 flows.
         self._recorded_motor_active = False
         self._recorded_nav2_active = False
+        self._recorded_cancel_callback: Callable[[], Awaitable[dict[str, Any]]] | None = None
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -708,6 +709,30 @@ class NavigationControlApi:
             self._goal_motion_generation += 1
             self._recorded_motor_active = True
 
+    def set_recorded_cancel_callback(
+        self, callback: Callable[[], Awaitable[dict[str, Any]]]
+    ) -> None:
+        """Register the recorded-loop STOP handler after both APIs initialize."""
+        with self._lock:
+            self._recorded_cancel_callback = callback
+
+    async def _stop_recorded_before_transition(self) -> None:
+        """Physical STOP and complete ownership release precede mode changes."""
+        with self._lock:
+            active = self._recorded_motor_active or self._recorded_nav2_active
+            handler = self._recorded_cancel_callback
+        if not active:
+            return
+        if handler is None:
+            raise NavigationControlError(
+                "RECORDED_STOP_UNAVAILABLE", "Recorded Loop cannot be safely stopped")
+        result = await handler()
+        with self._lock:
+            if (not isinstance(result, dict) or result.get("ok") is not True
+                or self._recorded_motor_active or self._recorded_nav2_active):
+                raise NavigationControlError(
+                    "RECORDED_STOP_UNCONFIRMED", "Stop Recorded Loop before changing controls")
+
     def recorded_nav2_takeover(self) -> None:
         """Transfer exclusive replay control to Nav2 after physical STOP."""
         with self._lock:
@@ -1204,6 +1229,7 @@ class NavigationControlApi:
         target = str(payload.get("mode") or "").strip().lower()
         if target not in {"auto", "manual"}:
             raise NavigationControlError("INVALID_PATROL_MODE", "mode must be auto or manual.", 400)
+        await self._stop_recorded_before_transition()
         if target == "manual":
             with self._lock:
                 self._clear_loop_locked()
@@ -1309,6 +1335,7 @@ class NavigationControlApi:
             raise NavigationControlError("INVALID_MODE", "mode must be MAPPING or DRIVING.", 400)
 
         if mode == "MAPPING":
+            await self._stop_recorded_before_transition()
             with self._lock:
                 self._clear_loop_locked()
                 navigation_in_progress = self._state["navigation_state"] in {
@@ -1874,6 +1901,7 @@ class NavigationControlApi:
         return {**self.state_response(), "navigation": result}
 
     async def cancel_goal(self) -> dict[str, Any]:
+        await self._stop_recorded_before_transition()
         with self._lock:
             self._clear_loop_locked()
             # The preceding leg already completed a physical STOP; no
