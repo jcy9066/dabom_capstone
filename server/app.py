@@ -1080,6 +1080,9 @@ recorded_loop_api = RecordedLoopApi(
     max_wheel_mps=MAX_WHEEL_MPS,
     calibration_check=lambda robot_id: robot_speed_calibration_error(robot_id),
 )
+# Existing Set Goal / Set Loop Cancel, AUTO->MANUAL and DRIVING->MAPPING
+# first confirm the new Recorded Loop's physical STOP when it owns motors.
+navigation_control_api.set_recorded_cancel_callback(recorded_loop_api.stop_playback)
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 connections.command_transport_observer = (
     lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
