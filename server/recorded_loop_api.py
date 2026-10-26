@@ -22,6 +22,8 @@ from server.recorded_loop_core import (
 from server.recorded_loop_executor import RecordedMotorExecutor, ReplayFailure
 from server.recorded_loop_motor_math import recorded_to_auto_drive
 from server.recorded_loop_obstacle import path_blocked
+from server.navigation_control_api import NavigationControlError
+from server.navigation_ros_control import NavigationRosError
 
 
 class RecordedLoopApi:
@@ -564,6 +566,13 @@ class RecordedLoopApi:
         confirmed = await self._play_stop()
         if not confirmed:
             task.cancel()
+            # Stop command may have been lost; latch a real Pi emergency stop.
+            # Returning a 409 alone must never leave unconfirmed motion active.
+            try:
+                await self.navigation.emergency_stop(
+                    "RECORDED_STOP_NOT_CONFIRMED", automatic=True, force=True)
+            except Exception:
+                pass
             raise RecordedLoopError("STOP_UNCONFIRMED", "Pi STOP/Encoder not confirmed")
         try:
             await asyncio.wait_for(task, timeout=5.0)
@@ -587,6 +596,12 @@ class RecordedLoopApi:
                 return result
             except RecordedLoopError as exc:
                 return JSONResponse({"ok": False, "error_code": exc.code, "error": str(exc)}, status_code=409)
+            except NavigationControlError as exc:
+                return JSONResponse({"ok": False, "error_code": exc.error_code,
+                                     "error": str(exc)}, status_code=exc.status_code)
+            except NavigationRosError as exc:
+                return JSONResponse({"ok": False, "error_code": exc.error_code,
+                                     "error": str(exc)}, status_code=exc.status_code)
             except (KeyError, TypeError, ValueError) as exc:
                 return JSONResponse({"ok": False, "error_code": "INVALID_REQUEST", "error": str(exc)}, status_code=400)
 
