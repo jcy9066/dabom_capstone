@@ -480,10 +480,19 @@ class RecordedLoopApi:
             while time.monotonic() < overall_deadline:
                 if executor.cancelled or not self.navigation.recorded_nav2_health():
                     raise ReplayFailure("NAV2_TAKEOVER_INTERRUPTED")
+                # The callback runs inside the ROS synchronous action-send
+                # lock as well as just after acceptance; it fences late Nav2
+                # goal handles after STOP, Manual or E-STOP invalidation.
+                owner_guard = lambda: (
+                    not executor.cancelled and self.navigation.recorded_nav2_health())
                 if recorded_auto and hasattr(ros, "follow_recorded_auto_path"):
-                    accepted = await asyncio.to_thread(ros.follow_recorded_auto_path, path)
+                    accepted = await asyncio.to_thread(
+                        ros.follow_recorded_auto_path, path,
+                        recorded_preflight=owner_guard)
                 else:
-                    accepted = await asyncio.to_thread(ros.follow_loop_path, path)
+                    accepted = await asyncio.to_thread(
+                        ros.follow_loop_path, path,
+                        recorded_preflight=owner_guard)
                 if not isinstance(accepted, dict) or accepted.get("accepted") is not True:
                     raise ReplayFailure("NAV2_FOLLOW_REJECTED")
                 next_check = time.monotonic() + 0.5
