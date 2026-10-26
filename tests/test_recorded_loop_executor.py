@@ -29,6 +29,7 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         async def drive(command):
             nonlocal driver_calls
             driver_calls += 1
+            events.append("motor_sent")
             # The test simulates motion, NEVER a real motor.
             where["x"] = 1. if driver_calls <= 2 else 0.
             return True
@@ -80,7 +81,7 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         where["yaw"] = 3.141592653589793
         with self.assertRaisesRegex(ReplayFailure, "SEGMENT_START_MISMATCH"):
             await engine.run(route(), "WAIT", max_laps=1)
-        self.assertNotIn("순찰 중", [e for e in events if e == "motor_sent"])
+        self.assertNotIn("motor_sent", events)
 
     async def test_unacknowledged_stop_is_fatal(self):
         engine, events, _ = await self.build(stop_ok=False)
