@@ -68,10 +68,12 @@ class Playback:
     def finish_segment(self, segment_count: int, at_endpoint: bool) -> None:
         if self.status != ReplayStatus.RUNNING:
             raise RuntimeError("Not running")
-        if not at_endpoint or segment_count < 2:
+        if not at_endpoint or segment_count < 1:
             self.fail("ENDPOINT_MISMATCH")
             return
         self.segment_index = (self.segment_index + 1) % segment_count
+        # One recorded Path runs exactly once; multi-segment closed Loops
+        # retain their existing completed-lap accounting.
         self.lap += int(self.segment_index == 0)
         self.command_index = 0
         self.command_elapsed = 0.0
