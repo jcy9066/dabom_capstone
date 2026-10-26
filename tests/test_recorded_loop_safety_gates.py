@@ -45,6 +45,13 @@ class RecordedObstaclesTests(unittest.TestCase):
         self.assertFalse(path_blocked(scan(front=0.2, rear=1.0), "backward"))
         self.assertTrue(path_blocked(scan(front=1.0, rear=0.2), "backward"))
 
+    def test_below_sensor_minimum_is_not_considered_clear(self):
+        data = scan(front=1.0)
+        data["range_min"] = 0.15
+        data["ranges"][179] = 0.04
+        data["ranges"][180] = 0.05
+        self.assertTrue(path_blocked(data, "forward"))
+
     def test_pivot_checks_sides(self):
         self.assertTrue(path_blocked(scan(side=0.3), "rotate_left"))
 
