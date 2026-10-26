@@ -182,6 +182,11 @@ class RecordedLoopApi:
                 record["stopped"] = True
                 if kind == "emergency_stop":
                     record["error"] = "EMERGENCY_STOP"
+                elif record["source"] == "manual":
+                    # Pi STOP ACK is NOT wheel standstill. Start a fresh
+                    # encoder proof window before accepting this recording.
+                    self.navigation.recorded_stop_begin()
+                    self.navigation.recorded_stop_acknowledged(True)
                 return
             if (record["source"] == "manual" and kind != "move"
                 or record["source"] == "set_goal" and kind != "auto_drive"):
@@ -259,6 +264,10 @@ class RecordedLoopApi:
                     record["stopped"] = True
             if not record["stopped"]:
                 raise RecordedLoopError("MOTOR_STILL_ACTIVE", "Release motor control and confirm STOP")
+            if not self.navigation.recorded_stop_proven():
+                raise RecordedLoopError(
+                    "STOP_NOT_CONFIRMED",
+                    "Wait for fresh, stable wheel encoder STOP evidence before saving")
             name, digest = self._active()
             if name != record["map"] or digest != record["digest"]:
                 raise RecordedLoopError("MAP_CHANGED", "Selected map changed since recording began")
