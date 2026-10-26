@@ -49,6 +49,13 @@
             status + (replay.lap ? " / " + replay.lap + "회 반복" : "") +
             (replay.reason ? " / " + replay.reason : "");
         $("recorded-policy").disabled = busy || active;
+        const replan = $("recorded-policy").querySelector('[value="REPLAN"]');
+        if (replan) {
+            replan.disabled = data.nav2_replay_enabled !== true;
+            if (replan.disabled && $("recorded-policy").value === "REPLAN") {
+                $("recorded-policy").value = "WAIT";
+            }
+        }
         $("recorded-play-route").disabled = busy || active;
         $("recorded-play-start").disabled = busy || active;
         $("recorded-play-stop").disabled = busy || !active;
