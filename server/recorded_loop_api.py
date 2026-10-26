@@ -364,11 +364,15 @@ class RecordedLoopApi:
         executor = self._executor
         assert executor is not None
         try:
-            await executor.run(segments, policy=policy, max_laps=max_laps)
+            completed = await executor.run(segments, policy=policy, max_laps=max_laps)
+            self._play_update({"state": "COMPLETED", "label": "주행 완료",
+                               "policy": policy, "lap": completed["laps"], "reason": None})
         except Exception as exc:
-            self._play_update({"state": "FAILED", "label": "주행 중지",
+            cancelled = isinstance(exc, ReplayFailure) and str(exc) == "REPLAY_CANCELLED"
+            self._play_update({"state": "STOPPED" if cancelled else "FAILED",
+                               "label": "주행 정지" if cancelled else "주행 중지",
                                "policy": policy, "lap": executor.playback.lap,
-                               "reason": str(exc)[:140]})
+                               "reason": None if cancelled else str(exc)[:140]})
             if executor.playback.reason == "STOP_NOT_CONFIRMED":
                 try:
                     await self.navigation.emergency_stop(
@@ -405,6 +409,9 @@ class RecordedLoopApi:
         policy = payload.get("policy", "WAIT")
         if policy not in {"WAIT", "REPLAN"}:
             raise RecordedLoopError("INVALID_POLICY", "Select WAIT or REPLAN before Start")
+        if policy == "REPLAN":
+            raise RecordedLoopError("REPLAN_NOT_READY",
+                                    "Nav2 takeover/rejoin is not yet validated for recorded motor replay")
         max_laps = payload.get("max_laps")
         if max_laps is not None and (type(max_laps) is not int or not 1 <= max_laps <= 100):
             raise RecordedLoopError("INVALID_LAPS", "max_laps must be 1..100 or null")
