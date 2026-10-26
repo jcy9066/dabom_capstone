@@ -37,6 +37,9 @@ class FakeNav:
     def recorded_stop_proven(self):
         return self.stop_started and self.stop_proven
 
+    def _stop_confirmed_locked(self, now):
+        return self.stop_proven
+
 
 class FakeRos:
     def __init__(self):
@@ -106,6 +109,26 @@ class RecordedLoopApiTests(unittest.TestCase):
         with self.assertRaisesRegex(RecordedLoopError, "stable wheel encoder"):
             self.api.finish()
         self.assertNotIn("ab", self.api.store.snapshot("testmap", self.digest)["segments"])
+
+    def test_set_goal_can_be_armed_before_movement(self):
+        self.nav._robot_mode = "auto"
+        self.nav.state["robot_mode"] = "auto"
+        self.api.begin({"segment_id": "ab", "source": "set_goal",
+                        "start": "A", "end": "B"})
+        self.assertTrue(self.api.status()["recording"]["armed"])
+        self.api._sample()
+        self.assertEqual(self.api.status()["recording"]["pose_count"], 1)
+        self.nav.state["navigation_state"] = "NAVIGATING"
+        for x in (.3, .6, .9):
+            self.maps.ros_control._amcl.x = x
+            self.maps.ros_control._amcl.received_at = time.monotonic()
+            self.api._sample()
+        self.assertFalse(self.api.status()["recording"]["armed"])
+        self.nav.state["navigation_state"] = "SUCCEEDED"
+        self.nav.stop_proven = True
+        result = self.api.finish()
+        self.assertEqual(result["segment"]["source"], "set_goal")
+        self.assertGreater(len(result["segment"]["poses"]), 2)
 
     def test_no_record_on_unacknowledged_drive(self):
         self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})
