@@ -194,7 +194,15 @@ class RecordedLoopApi:
                 except (ValueError, TypeError, KeyError):
                     record["error"] = "INVALID_MOTION_ACK"
                     return
-                record["last"] = {"direction": direction, "speed": speed}
+                if not math.isfinite(speed):
+                    record["error"] = "INVALID_MOTION_ACK"
+                    return
+                # Pi's physical MOVE clamps the requested input to 30% PWM.
+                # Save the ACTUALLY applied target, not a dashboard's 1.0.
+                speed = max(0.0, min(speed, 0.30))
+                record["last"] = {"direction": direction, "speed": speed} if speed > 0 else None
+                if speed == 0:
+                    record["stopped"] = True
             else:
                 # Set Goal is stored as physical pose trace and uses FollowPath
                 # on replay; do not fake manual MOVE from Nav2 wheel speeds.
