@@ -67,6 +67,7 @@ from server.media_service import (
     UnsafeMediaPathError,
 )
 from server.navigation_control_api import NavigationControlApi
+from server.recorded_loop_api import RecordedLoopApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
 from server.location_security_api import LocationSecurityApi
@@ -1068,6 +1069,13 @@ navigation_control_api = NavigationControlApi(
 )
 # A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
 # This observer only accepts command_id-matched ACKs from the current socket.
+recorded_loop_api = RecordedLoopApi(
+    app=app,
+    navigation=navigation_control_api,
+    map_api=navigation_map_api,
+    csrf_failure=csrf_failure,
+    store_path=ROOT_DIR / "data" / "runtime" / "recorded_loops.json",
+)
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 connections.command_transport_observer = (
     lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
@@ -2971,12 +2979,14 @@ async def startup():
             "Navigation ROS control is unavailable; map loading will remain disabled."
         )
     await navigation_control_api.start()
+    recorded_loop_api.start_service()
 
 
 @app.on_event("shutdown")
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
     try :
+        await recorded_loop_api.close()
         await navigation_control_api.close()
     finally :
         await asyncio.to_thread(stop_persistence_workers)
@@ -5798,6 +5808,8 @@ async def send_robot_command(
         delivered = await connections.send_command(robot_id, command)
     if delivered and controlled_motion:
         delivered = navigation_control_api.note_authorized_motion(motion_context)
+    # Observation only: no effect on legacy motor authorization or ACKs.
+    recorded_loop_api.note_motion_ack(command, bool(delivered))
 
     status_code = (
         200 if delivered else 409
