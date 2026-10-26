@@ -46,3 +46,6 @@ def test_completed_legacy_goal_permits_safe_recorded_replay():
     assert 'self._pending_terminal_stop is None' in nav
     assert 'self._stop_confirmed_locked(time.time())' in nav
     assert 'or not self._recorded_idle_locked()' in nav
+    assert 'stale_success_only = (' in nav
+    executor = (ROOT / "server/recorded_loop_executor.py").read_text(encoding="utf-8")
+    assert 'await self._verified_stop()\n            await self._health()' in executor
