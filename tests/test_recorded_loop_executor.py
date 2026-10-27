@@ -96,6 +96,65 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
         await engine.run(route(), "REPLAN", max_laps=1)
         self.assertIn("replan", events)
 
+    async def test_wait_never_resumes_with_unknown_scan(self):
+        engine, events, _ = await self.build()
+        calls = 0
+
+        async def blocked(command):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return True
+            if calls >= 4:
+                engine.cancel()
+            return None
+
+        engine.blocked = blocked
+
+        with self.assertRaisesRegex(ReplayFailure, "REPLAY_CANCELLED"):
+            await engine.run(route()[:1], "WAIT", max_laps=1)
+
+        self.assertGreaterEqual(calls, 4)
+        self.assertIn("대기 중", events)
+        self.assertNotIn("motor_sent", events)
+        self.assertIn("stop", events)
+        self.assertEqual(engine.playback.lap, 0)
+
+    async def test_failed_replan_never_sends_recorded_motor_commands(self):
+        engine, events, _ = await self.build(obstacle=True)
+
+        async def failed_replan(segment, remaining):
+            events.append("replan_failed")
+            return False
+
+        engine.replan = failed_replan
+
+        with self.assertRaisesRegex(ReplayFailure, "REPLAN_FAILED"):
+            await engine.run(route()[:1], "REPLAN", max_laps=1)
+
+        self.assertIn("replan_failed", events)
+        self.assertNotIn("motor_sent", events)
+        self.assertIn("stop", events)
+        self.assertEqual(engine.playback.lap, 0)
+
+    async def test_cancel_during_replan_never_resumes_recorded_commands(self):
+        engine, events, _ = await self.build(obstacle=True)
+
+        async def cancelled_replan(segment, remaining):
+            events.append("replan_cancelled")
+            engine.cancel()
+            return True
+
+        engine.replan = cancelled_replan
+
+        with self.assertRaisesRegex(ReplayFailure, "REPLAY_CANCELLED"):
+            await engine.run(route()[:1], "REPLAN", max_laps=1)
+
+        self.assertIn("replan_cancelled", events)
+        self.assertNotIn("motor_sent", events)
+        self.assertIn("stop", events)
+        self.assertEqual(engine.playback.lap, 0)
+
     async def test_heading_mismatch_blocks_motor_output(self):
         engine, events, where = await self.build()
         where["yaw"] = 3.141592653589793
