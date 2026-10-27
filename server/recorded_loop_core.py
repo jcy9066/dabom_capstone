@@ -156,7 +156,8 @@ class RecordedRouteStore:
         return validated
 
     def put_segment(self, name: str, digest: str, segment_id: str, source: str,
-                    start: str, end: str, commands: list[dict], poses: list[dict]) -> dict:
+                    start: str, end: str, commands: list[dict], poses: list[dict],
+                    *, auto_create_end: bool = False) -> dict:
         map_identifier(name)
         for key, val in (("segment_id", segment_id), ("start", start), ("end", end)):
             identifier(val, key)
@@ -176,8 +177,14 @@ class RecordedRouteStore:
         with self._lock:
             db = self._load()
             entry = self._map(db, name, digest, True)
-            if start not in entry["goals"] or end not in entry["goals"]:
+            if start not in entry["goals"]:
                 raise RecordedLoopError("GOAL_MISSING", "Save both Goals before a Segment")
+            if end not in entry["goals"]:
+                if not auto_create_end:
+                    raise RecordedLoopError("GOAL_MISSING", "Save both Goals before a Segment")
+                # This stays in the in-memory snapshot until all Segment
+                # validation succeeds and the combined snapshot is saved.
+                entry["goals"][end] = clean_poses[-1]
             if segment_id in entry["segments"] and any(
                 segment_id in route["segments"] for route in entry["routes"].values()
             ):

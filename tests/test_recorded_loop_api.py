@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 
@@ -81,6 +81,54 @@ class RecordedLoopApiTests(unittest.TestCase):
         self.digest = map_digest(yaml)
         self.api.store.put_goal("testmap", self.digest, "A",
                                 {"x": 0.0, "y": 0.0, "yaw": 0.0})
+
+    def test_failed_recording_does_not_leave_destination_goal(self):
+        self.api.begin({
+            "segment_id": "ab", "source": "manual",
+            "start": "A", "end": "B",
+        })
+        self.nav.stop_started = True
+        self.nav.stop_proven = True
+
+        with self.assertRaises(RecordedLoopError) as raised:
+            self.api.finish()
+
+        self.assertEqual(raised.exception.code, "INVALID_SEGMENT")
+        snapshot = self.api.store.snapshot("testmap", self.digest)
+        self.assertNotIn("B", snapshot["goals"])
+        self.assertNotIn("ab", snapshot["segments"])
+        self.assertTrue(self.api.status()["recording"]["active"])
+
+    def test_new_destination_not_saved_if_endpoint_validation_fails(self):
+        with self.assertRaises(RecordedLoopError) as raised:
+            self.api.store.put_segment(
+                "testmap", self.digest, "ab", "set_goal", "A", "B",
+                [], [
+                    {"x": 0.41, "y": 0.0, "yaw": 0.0},
+                    {"x": 0.50, "y": 0.0, "yaw": 0.0},
+                ], auto_create_end=True,
+            )
+
+        self.assertEqual(raised.exception.code, "ENDPOINT_MISMATCH")
+        snapshot = self.api.store.snapshot("testmap", self.digest)
+        self.assertNotIn("B", snapshot["goals"])
+        self.assertNotIn("ab", snapshot["segments"])
+
+    def test_new_destination_not_saved_if_store_write_fails(self):
+        before = self.api.store.snapshot("testmap", self.digest)
+
+        with patch.object(self.api.store, "_save", side_effect=OSError("mock disk error")):
+            with self.assertRaisesRegex(OSError, "mock disk error"):
+                self.api.store.put_segment(
+                    "testmap", self.digest, "ab", "set_goal", "A", "B",
+                    [], [
+                        {"x": 0.0, "y": 0.0, "yaw": 0.0},
+                        {"x": 0.2, "y": 0.0, "yaw": 0.0},
+                    ], auto_create_end=True,
+                )
+
+        after = self.api.store.snapshot("testmap", self.digest)
+        self.assertEqual(before, after)
 
     def test_manual_record_with_auto_destination(self):
         self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})

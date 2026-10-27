@@ -299,15 +299,10 @@ class RecordedLoopApi:
             if record["source"] == "set_goal":
                 if self.navigation.state_response().get("navigation_state") != "SUCCEEDED":
                     raise RecordedLoopError("GOAL_NOT_SUCCEEDED", "Only successful Set Goal traces can be saved")
-            goals = self.store.snapshot(name, digest)["goals"]
-            if record["end"] not in goals:
-                if not record["poses"]:
-                    raise RecordedLoopError("EMPTY_RECORDING", "Missing end pose")
-                self.store.put_goal(name, digest, record["end"], record["poses"][-1])
             recorded = self.store.put_segment(
                 record["map"], record["digest"], record["segment_id"],
                 record["source"], record["start"], record["end"],
-                record["commands"], record["poses"])
+                record["commands"], record["poses"], auto_create_end=True)
             self._record = None
             return {"ok": True, "segment": recorded}
 
