@@ -60,10 +60,12 @@ def test_goal_pose_freshness_rejects_stale_future_and_pre_stop_evidence():
 def test_live_motor_goal_success_requires_original_pose_evidence():
     source = NAV.read_text(encoding="utf-8")
     assert 'if self._stop_confirmed_locked(time.time()):' in source
-    assert 'if self._motor_output_enabled and not self._original_goal_pose_confirmed(' in source
+    assert 'pose_ok = self._original_goal_pose_confirmed(' in source
+    assert 'if self._motor_output_enabled and not pose_ok:' in source
     assert 'max_age_sec=min(0.5, self._watchdog.odometry_timeout_sec)' in source
     assert 'min_received_at=self._stop_commanded_at' in source
-    assert 'self._state["last_error"] = "ORIGINAL_GOAL_NOT_REACHED"' in source
+    assert 'self._state["navigation_state"] = "FAILED"' in source
+    assert 'else "ORIGINAL_GOAL_NOT_REACHED"' in source
     assert source.index('"ORIGINAL_GOAL_NOT_REACHED"') < source.index(
         'self._state["navigation_state"] = "SUCCEEDED"',
         source.index('async def _resolve_pending_nav_success(')

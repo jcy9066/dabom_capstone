@@ -396,12 +396,30 @@ def collect_used_env_vars(root: Path) -> set[str]:
             used.update(ENV_INDEX_RE.findall(source))
             used.update(ENV_HELPER_RE.findall(source))
 
-    for path in root.rglob("*.sh"):
+    # A validation fixture can be a directory outside a Git repository.
+    if (root / ".git").exists():
+        tracked_shells = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "*.sh"], cwd=root
+        ).decode("utf-8")
+        shell_paths = [
+            root / relative
+            for relative in tracked_shells.split("\0")
+            if relative
+        ]
+    else:
+        shell_paths = list(root.rglob("*.sh"))
+    for path in shell_paths:
+        if not path.is_file():
+            continue
         source = read_text(path)
         used.update(SHELL_REQUIRED_ENV_RE.findall(source))
         used.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
+            - {
+                "XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON",
+                "PYTHON",  # Verification interpreter override.
+                "ODOM_DISCOVERY_PENDING",  # Launcher-internal state.
+            }
         )
         # Runtime launchers also validate indirectly via required_env arrays.
         for block in re.findall(r"required_env\s*=\s*\((.*?)\)", source, re.DOTALL):

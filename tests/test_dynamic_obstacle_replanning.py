@@ -42,7 +42,7 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         self.assertIn('"terminal": "SUCCEEDED"', ros)
         self.assertIn('terminal_state in {"SUCCEEDED", "FAILED", "CANCELED"}', ros)
         self.assertIn('if event_type == "global_path":', app)
-        self.assertIn("navigation_control_api.note_nav2_replan_signal()", app)
+        self.assertNotIn("navigation_control_api.note_nav2_replan_signal()", app)
         self.assertNotIn("navigation_control_api.note_replanned_path(normalized)", app)
         navigation = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
         self.assertIn("def _refresh_approved_replan(", navigation)
@@ -63,12 +63,14 @@ class DynamicObstacleReplanningContractTests(unittest.TestCase):
         # Only Goal-scoped, server-authorized paths may be rendered.
         # Unowned late /plan packets must not resurrect a canceled Goal.
         self.assertIn("control?.active_goal", viewer)
-        self.assertIn("['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING']", viewer)
+        self.assertIn("['NAVIGATING', 'RESUMING'].includes(navState)", viewer)
+        self.assertIn("const appliedPath = control.executed_path;", viewer)
+        self.assertIn("['PATH_READY', 'READY'].includes(navState)", viewer)
         self.assertIn("const authorizedPath = control.planned_path;", viewer)
         self.assertIn("Array.isArray(authorizedPath)", viewer)
-        self.assertIn(
-            'static/script.js?v=20261022-pr90-owned-goal-v1',
+        self.assertRegex(
             template,
+            r'static/script\.js\?v=[A-Za-z0-9._-]+',
         )
 
 if __name__ == "__main__":

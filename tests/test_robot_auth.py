@@ -93,7 +93,10 @@ def test_robot_command_allows_authenticated_user_with_csrf():
     assert login.status_code == 200
 
     csrf = browser.get("/api/auth/csrf").json()["csrf_token"]
-    with patch.object(server.connections, "send_command", AsyncMock(return_value=True)):
+    with patch.object(
+        server.connections, "send_command_wait_ack", new_callable=AsyncMock
+    ) as sender:
+        sender.return_value = True
         response = browser.post(
             "/api/robots/pi-01/command",
             headers={"X-CSRF-Token": csrf},
@@ -101,6 +104,9 @@ def test_robot_command_allows_authenticated_user_with_csrf():
         )
     assert response.status_code == 200
     assert response.json()["delivered"] is True
+    sender.assert_awaited_once()
+    assert sender.await_args.args[0] == "pi-01"
+    assert sender.await_args.args[1]["type"] == "stop"
 
 
 def test_lidar_websocket_requires_matching_header_token(monkeypatch):

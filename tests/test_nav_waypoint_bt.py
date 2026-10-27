@@ -55,8 +55,8 @@ def test_final_goal_yaw_checker_and_launch_nav2_bt():
     params = yaml.safe_load((NAV / "config/nav2_params.yaml").read_text())
     controller = params["controller_server"]["ros__parameters"]
     checker = controller["general_goal_checker"]
-    assert checker["xy_goal_tolerance"] == 0.50
-    assert checker["yaw_goal_tolerance"] == 0.20
+    assert checker["xy_goal_tolerance"] == 0.25
+    assert checker["yaw_goal_tolerance"] == 0.12
     plugins = params["bt_navigator"]["ros__parameters"]["plugin_lib_names"]
     assert "nav2_remove_passed_goals_action_bt_node" in plugins
     assert "nav2_compute_path_through_poses_action_bt_node" in plugins
