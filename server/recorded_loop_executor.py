@@ -214,6 +214,9 @@ class RecordedMotorExecutor:
                         remaining_sec = max(0.0, command["duration"] - self.playback.command_elapsed)
                     tick_started = time.monotonic()
                     applied = await self.drive({**command, "replay_command_id": command_ids[i]})
+                    # STOP may revoke the motion permit while this ACK is in flight.
+                    if self.cancelled:
+                        raise ReplayFailure("REPLAY_CANCELLED")
                     if isinstance(applied, dict):
                         progress = applied.get("elapsed")
                         if (type(progress) not in (int, float) or not math.isfinite(progress)

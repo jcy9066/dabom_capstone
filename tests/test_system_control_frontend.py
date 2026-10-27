@@ -177,7 +177,9 @@ def test_estop_during_direct_motion_ack_must_fail():
         api._connected = True
         api._pi_updated_at = time.time()
 
-    async def ack_after_estop(robot_id, command):
+    async def ack_after_estop(robot_id, command, *, preflight=None):
+        assert preflight is not None
+        assert preflight()
         with api._lock:
             api._state["emergency_stop"] = True
             api._post_resume_motion_ready = False
@@ -267,23 +269,38 @@ def test_resume_ack_requires_matching_pi_safety_epoch():
 
 
 def test_settings_guide_uses_dashboard_actions_and_modal_manager():
+    import re
+
+    script = re.sub(
+        r"\\u([0-9a-fA-F]{4})",
+        lambda match: chr(int(match.group(1), 16)),
+        SCRIPT,
+    )
     for label in (
-        r"\ub300\uc2dc\ubcf4\ub4dc \uc0ac\uc6a9 \uc548\ub0b4",
-        r"[Mapping] \uc120\ud0dd",
-        r"[Driving] \uc120\ud0dd",
-        r"[\uc21c\ucc30 \uae30\ub85d \uc870\ud68c]",
-        r"[\uc774\ubbf8\uc9c0 \uac24\ub7ec\ub9ac]",
-        r"[\ud604\uc7ac \uc0c1\ud669 \uc791\uc131]",
-        r"[\uad00\ub9ac\uc790 \uc870\uce58 \uc870\ud68c]",
-        r"[\uae30\uae30 \uc0c1\ud0dc \uc870\ud68c]",
+        "대시보드 사용 안내",
+        "1. 연결 확인",
+        "2. 새 지도 만들기",
+        "3. 저장 지도에서 주행",
+        "4. 위험 알림 대응",
+        "5. 기록 확인",
+        "6. 장비 제어",
+        "Mapping을 선택하고 Manual 모드로 전환하세요.",
+        "Driving을 선택하고 저장 지도를 불러오세요.",
+        "순찰 내역·갤러리에서 탐지 내용과 이미지를 확인하세요.",
+        "상황 기록을 작성하고 조치 내역에서 처리 결과를 확인하세요.",
+        "기기 상태 내역에서 시작·종료 기간을 지정해 조회하세요.",
+        "긴급 상황이면 STOP을 누르세요.",
+        "프로세스 시작 순서: ",
     ):
-        assert label in SCRIPT
+        assert label in script, label
+
     assert "DabomDashboardComponents?.modal" in SCRIPT
+    assert "manager.register(guideViewName" in SCRIPT
+    assert "manager.open(guideViewName" in SCRIPT
     assert "processGuideItems()" in SCRIPT
     assert "state.status.gpu" in SCRIPT
     assert "state.status.pi" in SCRIPT
-    assert "component.id !== 'map_bridge'" in SCRIPT
-    assert r"SLAM Mapping\uc740 ${label}\ub97c \ud568\uaed8 \uc2dc\uc791" in SCRIPT
+    assert "!SETTINGS_HIDDEN_COMPONENT_IDS.has(component.id)" in SCRIPT
 
 
 def test_disconnected_status_does_not_become_process_guide_source():
@@ -313,3 +330,163 @@ def test_pending_and_unavailable_cursors_are_distinct():
     assert ".is-unavailable:disabled" in STYLE
     assert "cursor: not-allowed" in STYLE
     assert "system-control-normalize:disabled { cursor: wait" not in STYLE
+
+
+def test_dashboard_recording_observes_only_confirmed_commands():
+    from unittest.mock import Mock
+
+    cases = [
+        ("move", True, True, False),
+        ("auto_drive", True, True, False),
+        ("stop", True, True, False),
+        ("emergency_stop", True, True, False),
+        ("move", False, True, False),
+        ("stop", False, True, False),
+        ("move", True, False, False),
+        ("move", True, True, True),
+    ]
+    for kind, ack_ok, safety_ok, observer_error in cases:
+        app = FastAPI()
+
+        @app.middleware("http")
+        async def test_session(request, call_next):
+            request.scope["session"] = {"user": {"user_id": "tester"}}
+            return await call_next(request)
+
+        observer = Mock()
+        if observer_error:
+            observer.side_effect = RuntimeError("test recorder failure")
+
+        async def ack_sender(*args, **kwargs):
+            observer.assert_not_called()
+            return ack_ok
+
+        sender = AsyncMock(side_effect=ack_sender)
+        context = {"safety_session": "test-pi", "safety_epoch": 1}
+        navigation = SimpleNamespace(
+            motion_safety_context=Mock(return_value=context),
+            note_authorized_motion=Mock(return_value=safety_ok),
+        )
+        server = SimpleNamespace(
+            csrf_failure=lambda request: None,
+            connections=SimpleNamespace(send_command_wait_ack=sender),
+            SERVER_ROBOT_ID="pi-01",
+            robot_status_snapshot=lambda: {"mode": "manual"},
+            navigation_control_api=navigation,
+            recorded_loop_api=SimpleNamespace(note_motion_ack=observer),
+        )
+
+        with patch.dict(sys.modules, {"server.app": server}):
+            attach_system_control_routes(app)
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/dashboard-control/command",
+                    json={"type": kind, "direction": "forward", "speed": 0.2},
+                    headers={"X-Dashboard-Client-Id": "recording-test"},
+                )
+
+        accepted = ack_ok and (
+            kind not in {"move", "auto_drive"} or safety_ok
+        )
+        assert response.status_code == (200 if accepted else 409), response.text
+        assert response.json()["delivered"] is accepted
+        sender.assert_awaited_once()
+
+        if accepted:
+            observer.assert_called_once()
+            observed, delivered = observer.call_args.args
+            assert delivered is True
+            assert observed == sender.await_args.args[1]
+        else:
+            observer.assert_not_called()
+
+
+def test_dashboard_motion_preflight_rejects_changed_safety_context():
+    from unittest.mock import Mock
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def test_session(request, call_next):
+        request.scope["session"] = {"user": {"user_id": "tester"}}
+        return await call_next(request)
+
+    context = {"safety_session": "test-pi", "safety_epoch": 1}
+    navigation = SimpleNamespace(
+        motion_safety_context=Mock(side_effect=[context, None]),
+        note_authorized_motion=Mock(),
+    )
+    observer = Mock()
+    sent = []
+
+    async def send_after_safety_change(robot_id, command, *, preflight=None):
+        assert preflight is not None
+        if not preflight():
+            return False
+        sent.append(command)
+        return True
+
+    server = SimpleNamespace(
+        csrf_failure=lambda request: None,
+        connections=SimpleNamespace(
+            send_command_wait_ack=AsyncMock(side_effect=send_after_safety_change)
+        ),
+        SERVER_ROBOT_ID="pi-01",
+        robot_status_snapshot=lambda: {"mode": "manual"},
+        navigation_control_api=navigation,
+        recorded_loop_api=SimpleNamespace(note_motion_ack=observer),
+    )
+
+    with patch.dict(sys.modules, {"server.app": server}):
+        attach_system_control_routes(app)
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard-control/command",
+                json={"type": "move", "direction": "forward", "speed": 0.2},
+                headers={"X-Dashboard-Client-Id": "preflight-test"},
+            )
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "COMMAND_DELIVERY_FAILED"
+    assert sent == []
+    observer.assert_not_called()
+    navigation.note_authorized_motion.assert_not_called()
+
+
+def test_stop_ack_epoch_rejects_delayed_motion_authorization():
+    import threading
+    import time
+    from server.navigation_control_api import NavigationControlApi
+
+    api = NavigationControlApi.__new__(NavigationControlApi)
+    api._lock = threading.RLock()
+    api._robot_id = "pi-01"
+    api._connected = True
+    api._pi_updated_at = time.time()
+    api._watchdog = SimpleNamespace(pi_timeout_sec=3.0)
+    api._pi_estop_latched = False
+    api._pi_safety_session = "test-session"
+    api._pi_safety_epoch = 10
+    api._estop_generation = 2
+    api._goal_motion_generation = 3
+    api._robot_mode = "manual"
+    api._pi_navigation_mode = "DRIVING"
+    api._motion_allowed_locked = lambda now: True
+
+    old_context = {
+        "safety_session": "test-session",
+        "safety_epoch": 10,
+        "estop_generation": 2,
+        "goal_generation": 3,
+        "robot_mode": "manual",
+        "pi_navigation_mode": "DRIVING",
+    }
+
+    api.note_pi_command_ack(
+        "pi-01",
+        {"type": "stop"},
+        {"ok": True, "safety_session": "test-session", "safety_epoch": 11},
+    )
+
+    assert api._pi_safety_epoch == 11
+    assert api.note_authorized_motion(old_context) is False

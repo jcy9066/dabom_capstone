@@ -492,6 +492,7 @@ class NavigationRosControl:
         request = ComputePathToPose.Goal()
         request.goal = self._pose_stamped(goal)
         request.use_start = False
+        request.planner_id = "GridBased"
         if loop_forward:
             request.planner_id = "LoopGridBased"
         goal_handle = self._wait_future(
@@ -531,6 +532,7 @@ class NavigationRosControl:
                 "ComputePathThroughPoses is unavailable.", 503,
             )
         request = ComputePathThroughPoses.Goal()
+        request.planner_id = "GridBased"
         request.goals = [self._pose_stamped(item) for item in poses]
         request.use_start = False
         handle = self._wait_future(

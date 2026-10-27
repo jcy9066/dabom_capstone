@@ -176,6 +176,59 @@ class ExecutorTests(unittest.IsolatedAsyncioTestCase):
             await engine.run(route(), "WAIT", max_laps=1)
         self.assertEqual(engine.playback.status, ReplayStatus.FAILED)
 
+    async def test_cancel_during_drive_ack_stops_without_sending_another_command(self):
+        engine, events, _ = await self.build()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def drive(command):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return False
+
+        engine.drive = drive
+        task = asyncio.create_task(engine.run(route()[:1], "WAIT", max_laps=1))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        engine.cancel()
+        release.set()
+        with self.assertRaisesRegex(ReplayFailure, "REPLAY_CANCELLED"):
+            await asyncio.wait_for(task, timeout=2)
+        self.assertEqual(calls, 1)
+        self.assertGreaterEqual(events.count("stop"), 2)
+
+    async def test_drive_ack_failure_without_cancel_remains_failure(self):
+        engine, events, _ = await self.build()
+
+        async def drive(command):
+            return False
+
+        engine.drive = drive
+        with self.assertRaisesRegex(ReplayFailure, "PI_COMMAND_ACK_FAILED"):
+            await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertGreaterEqual(events.count("stop"), 2)
+
+    async def test_cancel_does_not_hide_final_stop_failure(self):
+        engine, _, _ = await self.build()
+        stops = 0
+
+        async def stop():
+            nonlocal stops
+            stops += 1
+            return stops == 1
+
+        async def drive(command):
+            engine.cancel()
+            return False
+
+        engine.stop = stop
+        engine.drive = drive
+        with self.assertRaisesRegex(ReplayFailure, "STOP_NOT_CONFIRMED"):
+            await engine.run(route()[:1], "WAIT", max_laps=1)
+        self.assertEqual(engine.playback.reason, "STOP_NOT_CONFIRMED")
+
     async def test_operator_cancel_is_distinct_from_safety_failure(self):
         engine, events, _ = await self.build()
         engine.cancel()

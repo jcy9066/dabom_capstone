@@ -556,6 +556,16 @@ class NavigationControlApi:
                 ) >= self._watchdog.stop_encoder_tick_threshold
             ):
                 if not self._encoder_stop_violation:
+                    # Record evidence without changing the stop decision.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "encoder stop violation: baseline=%s current=%s "
+                        "elapsed=%.3f threshold=%s grace=%.3f sequence=%s",
+                        self._stop_encoder_ticks, ticks,
+                        received_at - self._stop_commanded_at,
+                        self._watchdog.stop_encoder_tick_threshold,
+                        self._watchdog.stop_encoder_grace_sec, sequence,
+                    )
                     self._encoder_stop_violation = True
                     self._estop_generation += 1
             # A delayed encoder sample after the cancel deadline is not success.

@@ -149,6 +149,32 @@ class RecordedLoopApiTests(unittest.TestCase):
         self.assertIn("B", snapshot["goals"])
         self.assertGreater(len(snapshot["segments"]["ab"]["commands"]), 0)
 
+    def test_manual_record_rejects_unconfirmed_long_ack_interval(self):
+        self.api.begin({
+            "segment_id": "ab", "source": "manual",
+            "start": "A", "end": "B",
+        })
+
+        with patch("server.recorded_loop_api.time.monotonic", side_effect=[10.0, 10.6]):
+            self.api.note_motion_ack(
+                {"type": "move", "direction": "forward", "speed": 0.2},
+                True,
+            )
+            self.api.note_motion_ack({"type": "stop"}, True)
+
+        self.nav.stop_proven = True
+        self.assertEqual(
+            self.api.status()["recording"]["error"],
+            "UNCONFIRMED_MOTOR_INTERVAL",
+        )
+        with self.assertRaises(RecordedLoopError) as raised:
+            self.api.finish()
+        self.assertEqual(raised.exception.code, "UNCONFIRMED_MOTOR_INTERVAL")
+
+        snapshot = self.api.store.snapshot("testmap", self.digest)
+        self.assertNotIn("ab", snapshot["segments"])
+        self.assertNotIn("B", snapshot["goals"])
+
     def test_manual_record_refuses_ack_only_stop_without_encoder(self):
         self.api.begin({"segment_id": "ab", "source": "manual", "start": "A", "end": "B"})
         self.api.note_motion_ack(

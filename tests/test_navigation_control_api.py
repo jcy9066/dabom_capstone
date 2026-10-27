@@ -5213,6 +5213,7 @@ class NavigationRosPlanningTimeoutTests(unittest.TestCase):
             return True
 
         def send_goal_async(self, request):
+            self.last_request = request
             return NavigationRosPlanningTimeoutTests.Future(result=self.handle)
 
     def test_pose_plan_timeout_cancels_original_goal(self):
@@ -5229,6 +5230,23 @@ class NavigationRosPlanningTimeoutTests(unittest.TestCase):
         self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
         self.assertEqual(504, raised.exception.status_code)
         self.assertEqual(1, handle.cancel_calls)
+        self.assertEqual("GridBased", control._compute_path_client.last_request.planner_id)
+
+    def test_loop_plan_timeout_preserves_loop_planner(self):
+        from server import navigation_ros_control as ros_module
+        control = NavigationRosControl()
+        handle = self.Handle()
+        control._compute_path_client = self.Client(handle)
+        with patch.dict(os.environ, {"NAV_COMPUTE_PATH_TIMEOUT_SEC": "0.1"}), \
+             patch.object(control, "_require_started"), \
+             patch.object(control, "_pose_stamped", return_value=object()), \
+             patch.object(ros_module, "ComputePathToPose", SimpleNamespace(Goal=SimpleNamespace)):
+            with self.assertRaises(ros_module.NavigationRosError) as raised:
+                control.compute_path({"x": 1.0, "y": 1.0, "yaw": 0.0}, loop_forward=True)
+        self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
+        self.assertEqual(504, raised.exception.status_code)
+        self.assertEqual(1, handle.cancel_calls)
+        self.assertEqual("LoopGridBased", control._compute_path_client.last_request.planner_id)
 
     def test_waypoint_plan_timeout_cancels_original_goal(self):
         from server import navigation_ros_control as ros_module
@@ -5243,6 +5261,7 @@ class NavigationRosPlanningTimeoutTests(unittest.TestCase):
                 control.compute_path_through_poses([{"x": 1.0, "y": 1.0, "yaw": 0.0}])
         self.assertEqual("PATH_PLAN_TIMEOUT", raised.exception.error_code)
         self.assertEqual(1, handle.cancel_calls)
+        self.assertEqual("GridBased", control._compute_through_client.last_request.planner_id)
 
 
 if __name__ == "__main__":
