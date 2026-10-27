@@ -8,6 +8,9 @@
     let state = null;
     let busy = false;
     let csrf = null;
+    let refreshGeneration = 0;
+    let refreshApplied = 0;
+    let refreshBarrier = 0;
     const show = message => { if (feedback) feedback.textContent = message; };
     async function api(path, data) {
         const options = { credentials: "same-origin" };
@@ -73,17 +76,37 @@
         $("recorded-discard").disabled = busy || !data.recording?.active;
     }
     async function refresh(silent = false) {
+        const generation = ++refreshGeneration;
         try {
             const data = await api("state");
+            if (generation < refreshApplied || generation <= refreshBarrier || busy) return;
+            refreshApplied = generation;
             render(data);
         } catch (e) {
+            if (generation < refreshApplied || generation <= refreshBarrier || busy) return;
+            refreshApplied = generation;
             if (!silent) show(e.message);
             $("recorded-status").textContent = "연결 확인 필요";
+            $("recorded-playback-state").textContent = "상태 확인 불가";
+            // Playback may have started even if its state cannot be read.
+            // Block changes, but let the operator attempt a STOP.
+            for (const id of [
+                "recorded-policy", "recorded-play-route", "recorded-play-kind",
+                "recorded-play-start", "recorded-play-reset", "recorded-delete",
+                "recorded-add-goal", "recorded-start", "recorded-save",
+                "recorded-discard", "recorded-save-route"
+            ]) {
+                $(id).disabled = true;
+            }
+            $("recorded-play-stop").disabled = false;
         }
     }
     async function mutate(operation, payload, okText) {
         if (busy) return;
         busy = true;
+        // Invalidate state requests started before this mutation.
+        refreshBarrier = ++refreshGeneration;
+        if (state) render(state);
         try {
             await api(operation, payload);
             show(okText);
