@@ -2037,3 +2037,70 @@ async function logout() {
         if (button) button.disabled = false;
     }
 }
+// Tracking list is initialized after the existing camera/status polling code.
+// Display only live tracker IDs, never model labels burned into video.
+const OBJECT_LIST_POLL_MS = 2000;
+let objectListTimer = null;
+let objectListController = null;
+
+function renderTrackedPeople(detections) {
+    const container = document.getElementById('detection-data');
+    if (!container) return;
+    container.querySelectorAll('.detection-tag').forEach(node => node.remove());
+    const ids = [...new Set((Array.isArray(detections) ? detections : [])
+        .filter(item => item && item.cls === 0 && Number.isInteger(item.id) && item.id >= 0)
+        .map(item => item.id))].sort((a, b) => a - b);
+    for (const id of ids) {
+        const tag = document.createElement('span');
+        tag.className = 'detection-tag';
+        tag.textContent = 'Person #' + id;
+        container.appendChild(tag);
+    }
+}
+
+async function refreshTrackedPeople() {
+    if (!isDashboardDocumentVisible()) return;
+    objectListController?.abort();
+    const controller = new AbortController();
+    objectListController = controller;
+    try {
+        const response = await fetch('/api/latest_result', { signal: controller.signal });
+        if (!response.ok) throw new Error('tracker request failed');
+        const payload = await response.json();
+        // A fetch can finish parsing after its signal was aborted.
+        if (controller !== objectListController || controller.signal.aborted
+            || !isDashboardDocumentVisible()) return;
+        const age = Date.now() / 1000 - Number(payload.processed_at);
+        const fresh = payload.ok !== false && payload.processed_at
+            && Number.isFinite(age) && age >= 0 && age <= 3;
+        renderTrackedPeople(fresh ? payload.detections : []);
+    } catch (error) {
+        if (controller === objectListController && !controller.signal.aborted
+            && isDashboardDocumentVisible() && error.name !== 'AbortError') {
+            renderTrackedPeople([]);
+        }
+    } finally {
+        if (objectListController === controller) objectListController = null;
+    }
+}
+
+function stopTrackedPeoplePoll() {
+    clearInterval(objectListTimer);
+    objectListTimer = null;
+    objectListController?.abort();
+    objectListController = null;
+    renderTrackedPeople([]);
+}
+function startTrackedPeoplePoll() {
+    if (!isDashboardDocumentVisible() || objectListTimer !== null) return;
+    refreshTrackedPeople();
+    objectListTimer = setInterval(refreshTrackedPeople, OBJECT_LIST_POLL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+    if (isDashboardDocumentVisible()) startTrackedPeoplePoll();
+    else stopTrackedPeoplePoll();
+});
+startTrackedPeoplePoll();
+
+// ===================================================
+// END TRACKED PEOPLE LIST

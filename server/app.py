@@ -57,7 +57,7 @@ from server.database import (
     DatabaseConfigurationError,
     DatabaseOperationError,
 )
-from server.env_config import env_bool, env_float, env_int, env_text
+from server.env_config import EnvConfigurationError, env_bool, env_float, env_int, env_text
 from server.scan_pose_fusion import select_independent_encoder_scans
 from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
 from server.media_service import (
@@ -393,7 +393,7 @@ TRIGGER_SUSPICIOUS_VISUAL_ENABLED = env_bool("TRIGGER_SUSPICIOUS_VISUAL_ENABLED"
 INFERENCE_MAX_RESULT_AGE_SEC = env_float("INFERENCE_MAX_RESULT_AGE_SEC", minimum=0.0)
 INFERENCE_DROP_OLDER_THAN_SEC = env_float("INFERENCE_DROP_OLDER_THAN_SEC", minimum=0.0)
 CUDA_DEVICE_INDEX = env_text("CUDA_DEVICE_INDEX")
-DEVICE = env_text("DEVICE").lower()
+DEVICE = env_text("DEVICE", default=f"cuda:{CUDA_DEVICE_INDEX}").lower()
 GPU_REQUIRED_FOR_INFERENCE = env_bool("GPU_REQUIRED_FOR_INFERENCE")
 ENV_RELOAD_CHECK_INTERVAL_SEC = env_float("ENV_RELOAD_CHECK_INTERVAL_SEC", minimum=0.1)
 CAMERA_TIMEOUT_SEC = env_float("CAMERA_TIMEOUT_SEC", minimum=0.1)
@@ -1182,7 +1182,7 @@ RUNTIME_MODEL_ENV_KEYS = (
 
 def read_runtime_model_config():
     cuda_device_index = env_text("CUDA_DEVICE_INDEX")
-    device = env_text("DEVICE").lower()
+    device = env_text("DEVICE", default=f"cuda:{cuda_device_index}").lower()
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
     pipeline = env_text("PIPELINE")
@@ -2124,11 +2124,11 @@ def draw_skeleton_points(frame, skeleton, color):
             cv2.line(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
-def draw_detection_overlay(frame, detection):
+def draw_detection_overlay(frame, detection, scene_danger=False):
     height, width = frame.shape[:2]
     x1, y1, x2, y2 = clamp_box(detection["box"], width, height)
     is_person = detection.get("cls", 0) == 0
-    is_danger = bool(detection.get("danger"))
+    is_danger = bool(detection.get("danger")) or (scene_danger and is_person)
     has_action_label = bool(detection.get("label"))
     confidence_level = detection.get("confidence_level")
     is_suspicious = bool(
@@ -2204,7 +2204,8 @@ def render_latest_overlay(frame, now=None):
     if pose_overlay_fresh:
         for detection in detections:
             if detection.get("box"):
-                draw_detection_overlay(display_frame, detection)
+                draw_detection_overlay(display_frame, detection, scene_danger=bool(
+                    scene and scene.get("status") == "ok" and scene.get("danger")))
         draw_interaction_overlays(
             display_frame,
             detections,
@@ -2512,7 +2513,9 @@ def process_frame_for_dashboard(frame):
 
     for detection in detections:
         if detection.get("box"):
-            draw_detection_overlay(display_frame, detection)
+            draw_detection_overlay(display_frame, detection, scene_danger=bool(
+                scene_level and scene_result and scene_result.get("status") == "ok"
+                and scene_result.get("danger")))
 
     if not scene_level:
         resolved_pair_overlays = interaction_pair_overlays(
@@ -5263,7 +5266,13 @@ async def set_model_pipeline_state(request: Request):
             status_code=400,
         )
 
-    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    try:
+        success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    except (EnvConfigurationError, ValueError) as exc:
+        detail = f"Invalid model runtime configuration: {exc}"
+        return JSONResponse({"ok": False,
+            "enabled": bool(MODEL_ACTIVE and frame_processor is not None),
+            "model_error": detail, "detail": detail}, status_code=400)
     actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
 
     if not success:
