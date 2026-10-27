@@ -2058,6 +2058,24 @@ function renderTrackedPeople(detections) {
     }
 }
 
+function renderSceneAnalysisStatus(payload, fresh) {
+    const element = document.getElementById('scene-analysis-status');
+    if (!element) return;
+
+    const scene = payload?.scene;
+    if (payload?.model_error) {
+        element.textContent = '분석 오류';
+    } else if (!fresh || !scene) {
+        element.textContent = '분석 상태 확인 불가';
+    } else if (scene.status === 'warming_up') {
+        element.textContent = '분석 준비 중';
+    } else if (scene.status !== 'ok' || scene.available === false) {
+        element.textContent = '분석 오류';
+    } else {
+        element.textContent = scene.danger ? '위험 감지' : '분석 정상';
+    }
+}
+
 async function refreshTrackedPeople() {
     if (!isDashboardDocumentVisible()) return;
     objectListController?.abort();
@@ -2074,10 +2092,12 @@ async function refreshTrackedPeople() {
         const fresh = payload.ok !== false && payload.processed_at
             && Number.isFinite(age) && age >= 0 && age <= 3;
         renderTrackedPeople(fresh ? payload.detections : []);
+        renderSceneAnalysisStatus(payload, fresh);
     } catch (error) {
         if (controller === objectListController && !controller.signal.aborted
             && isDashboardDocumentVisible() && error.name !== 'AbortError') {
             renderTrackedPeople([]);
+            renderSceneAnalysisStatus(null, false);
         }
     } finally {
         if (objectListController === controller) objectListController = null;
@@ -2090,6 +2110,7 @@ function stopTrackedPeoplePoll() {
     objectListController?.abort();
     objectListController = null;
     renderTrackedPeople([]);
+    renderSceneAnalysisStatus(null, false);
 }
 function startTrackedPeoplePoll() {
     if (!isDashboardDocumentVisible() || objectListTimer !== null) return;

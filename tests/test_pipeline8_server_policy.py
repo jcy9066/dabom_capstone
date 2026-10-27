@@ -74,8 +74,19 @@ def test_scene_error_and_person_ids_are_visible_without_false_normal():
     )
 
     assert 'detection.get("track_label")' in source
-    assert "SCENE AI  |  UNAVAILABLE" in scene
-    assert "SCENE AI  |  WARMING UP" in scene
+    dashboard = (ROOT_DIR / "frontend" / "services" / "static" / "script.js").read_text(
+        encoding="utf-8"
+    )
+    template = (ROOT_DIR / "frontend" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert '"status": "warming_up"' in scene
+    assert '"status": "inference_error"' in scene
+    assert 'id="scene-analysis-status"' in template
+    assert "renderSceneAnalysisStatus(payload, fresh)" in dashboard
+    assert "분석 준비 중" in dashboard
+    assert "분석 오류" in dashboard
+    assert "분석 상태 확인 불가" in dashboard
 
 
 def test_stale_person_pose_overlay_expires_before_scene_status():

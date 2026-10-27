@@ -149,6 +149,8 @@
                     실시간 카메라 (RTMO-M + BotSORT + X3D-M)
                 </h2>
                 <div class="camera-header-actions">
+                    <span id="scene-analysis-status" role="status"
+                          aria-live="polite">분석 상태 확인 중</span>
                     <div class="speaker-volume-control" id="speaker-volume-control"
                          data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
                         <label class="speaker-volume-slider">
@@ -862,7 +864,7 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261024-loop-ab-v1"></script>
-    <script src="static/script.js?v=20261027-vision-tracker-scroll-v1"></script>
+    <script src="static/script.js?v=20261028-scene-status-v1"></script>
     <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
