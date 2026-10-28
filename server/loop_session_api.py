@@ -325,7 +325,13 @@ class LoopSessionApi:
             return
         # N>=3: use the existing single-goal Nav2 safety and completion
         # handshake for each leg. No independent motor-output implementation.
+        # If already at the first registered Goal, start toward the next;
+        # Nav2 must not be asked to plan a zero-length A-to-A route.
         index = 0
+        pose = self.recorded._pose()
+        if pose is not None and math.hypot(
+            pose["x"] - goals[0]["x"], pose["y"] - goals[0]["y"]) <= 0.35:
+            index = 1
         while not self._cancelled:
             if self._active() != key:
                 raise RuntimeError("MAP_CHANGED")
