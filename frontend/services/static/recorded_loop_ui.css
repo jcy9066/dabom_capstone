@@ -17,7 +17,8 @@
   top: 50%; right: 0; z-index: 39;
   display: flex; align-items: stretch;
   transform: translateY(-50%);
-  opacity: 0; pointer-events: none;
+  /* Hit target remains interactive in the expanded 3D viewer. */
+  opacity: 1; pointer-events: auto;
   height: min(580px, calc(100% - 104px));
   max-height: calc(100% - 32px);
   min-height: 115px;
@@ -26,6 +27,10 @@
 .minimap-overlay:fullscreen .loop-side-drawer,
 .minimap-overlay:-webkit-full-screen .loop-side-drawer {
   opacity: 1; pointer-events: auto;
+}
+/* Mirror LAYERS: only show edge handles when the 3D viewer is expanded. */
+.minimap-overlay:not(.expanded):not(:fullscreen):not(:-webkit-full-screen) .loop-side-drawer {
+  visibility: hidden; pointer-events: none;
 }
 .loop-side-drawer-handle {
   position: relative;
@@ -85,10 +90,22 @@
   color: #67e8f9; font: 700 10px var(--mono);
   letter-spacing: .45px;
 }
-.loop-drawer-content {
-  min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
-  display: flex; flex-direction: column; gap: 12px;
-  padding: 12px; scrollbar-width: thin;
+/* Keep wheel, touch and trackpad scrolling; hide every visual scrollbar. */
+.loop-side-drawer-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  gap: 12px;
+  padding: 12px;
+}
+.loop-side-drawer-content::-webkit-scrollbar,
+.loop-goal-list::-webkit-scrollbar {
+  display: none !important;
+  width: 0;
+  height: 0;
 }
 .loop-modal-info {
   display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap;
