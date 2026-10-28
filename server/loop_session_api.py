@@ -145,6 +145,10 @@ class LoopSessionApi:
         kind = command.get("type")
         if kind not in {"move", "stop", "emergency_stop"}:
             return
+        # Dashboard STOP/E-STOP is an external operator interrupt. The
+        # replay engine's own STOPs bypass the dashboard observer.
+        if kind in {"stop", "emergency_stop"} and self.manual_playing:
+            self._cancelled = True
         with self._lock:
             recording = self._record
             if recording is None or recording["error"]:
@@ -359,6 +363,18 @@ class LoopSessionApi:
             self._status = "FAILED"
             self._error = str(exc)[:180]
         finally:
+            if kind == "AUTO" and self._status == "FAILED":
+                # Never leave an active Nav2 Goal moving after a worker fault.
+                # cancel_goal() re-enters the registered stop callback; the
+                # callback's from_navigation path detects current_task below.
+                try:
+                    await self.navigation.cancel_goal()
+                except Exception:
+                    try:
+                        await self.navigation.emergency_stop(
+                            "LOOP_AUTO_ABORT_FAILED", automatic=True, force=True)
+                    except Exception:
+                        pass
             if kind == "MANUAL":
                 try:
                     await self._verified_stop()
@@ -422,6 +438,10 @@ class LoopSessionApi:
         if task is None or task.done():
             return {"ok": True, "stopped": True}
         self._cancelled = True
+        if from_navigation and task is asyncio.current_task():
+            # Called re-entrantly while the AUTO task performs a fault STOP.
+            # Awaiting itself would deadlock; cancel_goal owns the STOP.
+            return {"ok": True, "stopped": True}
         if self._running_kind == "AUTO" and not from_navigation:
             try:
                 await self.navigation.cancel_goal()
