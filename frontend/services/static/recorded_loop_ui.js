@@ -41,8 +41,7 @@ function layout() {
     '</div></section>',
     '<section class="loop-modal-section"><h3>OBSTACLE</h3>',
     '<div class="loop-policy" role="group" aria-label="Obstacle policy">',
-    '<button type="button" id="loop-policy-wait" data-control-button="view" aria-pressed="true">Wait</button>',
-    '<button type="button" id="loop-policy-replan" data-control-button="view" aria-pressed="false">Replan</button></div>',
+    '<button type="button" id="loop-policy-toggle" data-control-button="view">Wait</button></div>',
     '<div class="loop-modal-buttons">',
     '<button type="button" id="loop-start" data-control-button="accent">Start</button>',
     '<button type="button" id="loop-stop" data-control-button="danger">Stop</button>',
@@ -106,8 +105,7 @@ function render() {
   $("loop-stop").disabled = busy || !playing;
   $("loop-status").textContent = (latest.status || "IDLE") +
       (latest.lap ? " / Lap " + latest.lap : "") + (latest.error ? " / " + latest.error : "");
-  $("loop-policy-wait").setAttribute("aria-pressed", String(policy === "WAIT"));
-  $("loop-policy-replan").setAttribute("aria-pressed", String(policy === "REPLAN"));
+  $("loop-policy-toggle").textContent = policy === "WAIT" ? "Wait" : "Replan";
   window.DabomDashboardComponents?.controls?.controlButton?.enhanceAll?.(manager.body);
 }
 async function refresh() {
@@ -147,14 +145,17 @@ function bind() {
     if (label && window.confirm(label + "을 삭제하시겠습니까?"))
       void mutate("delete", { name: chosenBag }, "Delete 완료");
   });
-  for (const [id, value] of [["loop-policy-wait", "WAIT"], ["loop-policy-replan", "REPLAN"]]) {
-    $(id).addEventListener("click", () => {
+  const Cycle = window.DabomDashboardComponents?.controls?.CycleFilterButton;
+  if (typeof Cycle !== "function") throw Error("CycleFilterButton unavailable");
+  new Cycle($("loop-policy-toggle"), {
+    options: [{value:"WAIT",label:"Wait"},{value:"REPLAN",label:"Replan"}],
+    index: policy === "REPLAN" ? 1 : 0,
+    onChange(value) {
       policy = value;
-      feedback(value === "REPLAN" && latest?.mode === "MANUAL"
-          ? "MANUAL Bag에는 Replan 목적지가 없습니다. Wait를 선택하세요." : "");
+      feedback(value === "REPLAN" && latest?.mode === "MANUAL" ? "MANUAL에서는 Wait만 지원합니다." : "");
       render();
-    });
-  }
+    }
+  });
   $("loop-start").addEventListener("click", () => void mutate("start", {
     policy, name: chosenBag, goals: order.filter(name => selected.has(name))
   }, "Loop 시작"));
