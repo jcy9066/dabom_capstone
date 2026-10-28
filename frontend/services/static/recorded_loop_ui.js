@@ -31,10 +31,9 @@ function controls() { return window.DabomDashboardComponents?.controls; }
 function isOpen() { return drawer.dataset.open === "true"; }
 function setDrawerOpen(open) {
   const component = controls()?.drawerToggle;
-  if (component?.setOpen("loop-side-drawer", open) !== false) return;
-  // No alternate drawer implementation: if the component failed, keep the
-  // original state and report it rather than producing an inaccessible panel.
-  feedback("DrawerToggle component unavailable");
+  if (!component?.setOpen || component.setOpen("loop-side-drawer", open) === false) {
+    feedback("DrawerToggle component unavailable");
+  }
 }
 function syncNames(goals) {
   const names = goals.map(goal => goal.name);

@@ -24,8 +24,10 @@ def test_wait_replan_modal_policy_toggle():
     assert 'id="loop-modal-trigger"' in html
     assert 'id="loop-goal-toggle"' in html
     assert 'id="recordedLoopPanel"' not in html
-    assert 'id="loop-policy-toggle"' in ui
-    assert 'CycleFilterButton' in ui
+    assert 'id="loop-obstacle-toggle-mount"' in html
+    assert 'controls()?.mountNavigationMode?.(' in ui
+    assert 'isolated: true' in ui
+    assert 'CycleFilterButton' not in ui
 
 
 def test_replan_and_follow_path_have_real_callbacks():
@@ -70,7 +72,9 @@ def test_single_loop_execution_and_trajectory_only():
     ui = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
     module = (ROOT / "server/loop_session_api.py").read_text(encoding="utf-8")
     assert 'id="loop-modal-trigger"' in html
-    assert 'manager.register("loopModal"' in ui
+    assert 'data-drawer-target="loop-side-drawer"' in html
+    assert 'drawerToggle?.enhance?.(trigger)' in ui
+    assert 'manager.register("loopModal"' not in ui
     assert 'async def _manual_bag' in module
     assert 'async def _auto_goals' in module
     assert 'self._maps' in module
