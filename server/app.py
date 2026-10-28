@@ -68,6 +68,7 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.recorded_loop_api import RecordedLoopApi
+from server.loop_session_api import LoopSessionApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
 from server.location_security_api import LocationSecurityApi
@@ -1091,7 +1092,21 @@ recorded_loop_api = RecordedLoopApi(
 )
 # Existing Set Goal / Set Loop Cancel, AUTO->MANUAL and DRIVING->MAPPING
 # first confirm the new Recorded Loop's physical STOP when it owns motors.
-navigation_control_api.set_recorded_cancel_callback(recorded_loop_api.stop_playback)
+loop_session_api = LoopSessionApi(
+    app=app,
+    navigation=navigation_control_api,
+    recorded=recorded_loop_api,
+    csrf_failure=csrf_failure,
+    send_robot_command=connections.send_command_wait_ack,
+)
+
+async def stop_recorded_loop_owners():
+    # Navigation transitions must revoke both replay systems before changing
+    # the Pi mode. from_navigation avoids recursive cancel_goal callbacks.
+    await loop_session_api.stop(from_navigation=True)
+    return await recorded_loop_api.stop_playback()
+
+navigation_control_api.set_recorded_cancel_callback(stop_recorded_loop_owners)
 connections.command_ack_observer = navigation_control_api.note_pi_command_ack
 connections.command_transport_observer = (
     lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
@@ -3005,6 +3020,7 @@ async def startup():
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
     try :
+        await loop_session_api.close()
         await recorded_loop_api.close()
         await navigation_control_api.close()
     finally :
@@ -5803,6 +5819,12 @@ async def send_robot_command(
             status_code=200,
         )
 
+    if (robot_id == SERVER_ROBOT_ID and command_type == "move"
+            and loop_session_api.manual_playing):
+        return JSONResponse(
+            {"ok": False, "delivered": False, "error": "Manual Loop replay owns motor control"},
+            status_code=409,
+        )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
     motion_context = None
     if controlled_motion:
@@ -5837,6 +5859,7 @@ async def send_robot_command(
     # responses after physical motor execution.
     try:
         recorded_loop_api.note_motion_ack(command, bool(delivered))
+        loop_session_api.note_motion_ack(command, bool(delivered))
     except Exception:
         logging.getLogger(__name__).exception("recorded motor observer failed")
 

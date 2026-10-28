@@ -177,6 +177,12 @@ class LoopSessionApi:
         # Saving is a physical STOP operation; no start/end pose check.
         await self._verified_stop()
         with self._lock:
+            # Include Save's verified STOP as the final bag event, even when
+            # no dashboard Stop button was pressed.
+            record["events"].append({
+                "at": round(time.monotonic() - record["start"], 5),
+                "type": "stop",
+            })
             if self._record is not record:
                 raise RecordedLoopError("RECORDING_CHANGED", "Recording changed while saving")
             events = list(record["events"])
@@ -251,11 +257,13 @@ class LoopSessionApi:
 
     async def _manual_bag(self, key: tuple[str, str], events: list[dict]) -> None:
         await self._verified_stop()
+        self._status = "RUNNING"
         while not self._cancelled:
             if self._active() != key:
                 raise RuntimeError("MAP_CHANGED")
             lap_start = time.monotonic()
             paused = 0.0
+            next_map_check = time.monotonic() + 2.0
             for event in events:
                 while not self._cancelled:
                     remaining = lap_start + event["at"] + paused - time.monotonic()
@@ -264,8 +272,10 @@ class LoopSessionApi:
                     await asyncio.sleep(min(0.05, remaining))
                 if self._cancelled:
                     break
-                if self._active() != key:
-                    raise RuntimeError("MAP_CHANGED")
+                if time.monotonic() >= next_map_check:
+                    if self._active() != key:
+                        raise RuntimeError("MAP_CHANGED")
+                    next_map_check = time.monotonic() + 2.0
                 if event["type"] == "move":
                     if event["speed"] > 0:
                         paused += await self._wait_obstacle_clear(event["direction"])
@@ -393,12 +403,12 @@ class LoopSessionApi:
             self._run(key, mode, events, goals), name="loop-session-replay")
         return {"ok": True, "started": True, "mode": mode}
 
-    async def stop(self) -> dict:
+    async def stop(self, from_navigation: bool = False) -> dict:
         task = self._task
         if task is None or task.done():
             return {"ok": True, "stopped": True}
         self._cancelled = True
-        if self._running_kind == "AUTO":
+        if self._running_kind == "AUTO" and not from_navigation:
             try:
                 await self.navigation.cancel_goal()
             except Exception:
