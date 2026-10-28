@@ -45,18 +45,20 @@ class LoopSessionApi:
         self._running_kind: str | None = None
         self._register(app)
 
-    def _active(self) -> tuple[str, str]:
-        # Goal display and manual bag recording must not require AMCL/Nav2.
-        # Both are still strictly bound to the active DRIVING map contents.
-        state = self.navigation.state_response()
-        if state.get("navigation_mode") != "DRIVING":
-            raise RecordedLoopError("DRIVING_REQUIRED", "Load a map in DRIVING mode")
-        active = state.get("active_map")
+    def _selected_map(self) -> tuple[str, str]:
+        """Resolve map data without requiring the robot or Pi to be online."""
+        active = self.navigation.state_response().get("active_map")
         if not isinstance(active, dict):
             raise RecordedLoopError("MAP_REQUIRED", "No active map")
         name = map_identifier(active.get("map_name"))
         selected = self.recorded.map_api.resolve_map(name)
         return name, map_digest(Path(selected.yaml_path))
+
+    def _active(self) -> tuple[str, str]:
+        # Write operations retain their existing DRIVING / map requirements.
+        if self.navigation.state_response().get("navigation_mode") != "DRIVING":
+            raise RecordedLoopError("DRIVING_REQUIRED", "Load a map in DRIVING mode")
+        return self._selected_map()
 
     def _entry(self, key: tuple[str, str]) -> dict:
         with self._lock:
@@ -80,16 +82,32 @@ class LoopSessionApi:
         return str(self.navigation.state_response().get("robot_mode", "")).upper()
 
     def snapshot(self) -> dict:
-        key = self._active()
-        entry = self._entry(key)
+        """Read-only modal state must work with Pi disconnected or no map."""
+        state = self.navigation.state_response()
+        active_map = state.get("active_map")
+        try:
+            key = self._selected_map()
+        except (RecordedLoopError, OSError, ValueError, TypeError):
+            key = None
+        # Never create a cache entry for a nonexistent map. An existing map's
+        # goals and bags remain visible even after a Pi disconnect.
+        entry = self._entry(key) if key is not None else None
         with self._lock:
+            goals = entry["goals"] if entry else {}
+            bags = entry["bags"] if entry else {}
             return {
-                "ok": True, "map_name": key[0], "mode": self._mode(),
+                "ok": True,
+                "map_name": key[0] if key else (
+                    str(active_map.get("map_name") or "") if isinstance(active_map, dict) else None
+                ),
+                "mode": str(state.get("robot_mode") or "UNKNOWN").upper(),
+                "connected": state.get("connected") is True,
+                "navigation_mode": state.get("navigation_mode"),
                 "goals": [{"name": name, "pose": dict(pose)}
-                          for name, pose in entry["goals"].items()],
+                          for name, pose in goals.items()],
                 "recordings": [{"name": name, "events": len(bag["events"]),
                                 "seconds": bag["seconds"]}
-                               for name, bag in entry["bags"].items()],
+                               for name, bag in bags.items()],
                 "recording": self._record is not None,
                 "playing": self.playing, "running_kind": self._running_kind,
                 "policy": self._policy, "status": self._status,
