@@ -174,15 +174,39 @@ function bind() {
   $("loop-stop").addEventListener("click", () => void mutate("stop", {}, "Stop 요청"));
   render();
 }
-function init() {
-  manager = window.DabomDashboardComponents?.modal?.getDefault?.();
-  if (!manager) { trigger.disabled = true; return; }
-  // Viewing LOOP has no dependency on Pi connectivity or active map.
-  trigger.disabled = false;
-  trigger.removeAttribute("aria-disabled");
+let modalRegistered = false;
+function ensureLoopModal() {
+  if (modalRegistered && manager) return manager;
+  const component = window.DabomDashboardComponents?.modal;
+  manager = component?.getDefault?.() || null;
+  if (!manager && document.getElementById("commonModal")) {
+    // Dashboard initialization may fail for unrelated Pi/runtime reasons.
+    // The shared modal is still available and can be mounted independently.
+    manager = component?.mount?.({
+      root: "#commonModal", title: "#modalTitle", body: "#modalBody"
+    }) || null;
+  }
+  if (!manager) return null;
   manager.register("loopModal", { title: "LOOP", render: layout,
     onOpen: async () => { bind(); await refresh(); } });
-  trigger.addEventListener("click", () => void manager.open("loopModal", {}, { replace: true }));
+  modalRegistered = true;
+  return manager;
+}
+function init() {
+  // A missing Pi, map or an unrelated dashboard init failure must never
+  // disable the LOOP entry point. Retry mounting on the actual user click.
+  trigger.disabled = false;
+  trigger.removeAttribute("aria-disabled");
+  trigger.classList.remove("disabled");
+  ensureLoopModal();
+  trigger.addEventListener("click", async () => {
+    const modal = ensureLoopModal();
+    if (!modal) {
+      window.alert("LOOP Modal 컴포넌트를 초기화하지 못했습니다. 페이지를 새로고침해주세요.");
+      return;
+    }
+    await modal.open("loopModal", {}, { replace: true });
+  });
   document.addEventListener("dabom:loop-goal-picked", event => {
     if (event.detail?.pose) void mutate("goal", { pose: event.detail.pose }, "Goal 업데이트");
   });

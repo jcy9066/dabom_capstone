@@ -12,10 +12,10 @@ assert.ok(html.includes('id="loop-goal-toggle"'));
 assert.ok(!html.includes('id="recordedLoopPanel"'));
 assert.ok(!html.includes('data-lidar-interaction="set-loop"'));
 const events = {}, trigger = {
-  disabled: true,
-  events: {},
+  disabled: true, events: {}, classesRemoved: [],
   addEventListener(n, f) { this.events[n] = f; },
   removeAttribute(name) { assert.equal(name, "aria-disabled"); },
+  classList: { remove(name) { assert.equal(name, "disabled"); } },
 };
 let registered, opened=false;
 const manager = {register(name, descriptor) {registered={name,descriptor};},
