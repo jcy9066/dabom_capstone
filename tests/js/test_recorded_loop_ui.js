@@ -52,5 +52,9 @@ assert.ok(html.indexOf('id="loop-side-drawer"') < html.indexOf('id="lidarMapSele
 assert.ok(css.includes('#loop-bags[hidden]'));
 assert.ok(ui.includes('bagList.hidden = !showBagList;'));
 assert.ok(ui.includes('bagList.disabled = !showBagList'));
-assert.ok(html.includes("recorded_loop_ui.js?v=20261028-viewer-right-drawer-v5"));
+assert.ok(html.includes("recorded_loop_ui.js?v=20261028-right-drawer-interaction-v6"));
+assert.ok(html.includes("recorded_loop_ui.css?v=20261028-right-drawer-interaction-v6"));
+assert.ok(css.includes(".loop-side-drawer-content::-webkit-scrollbar"));
+assert.ok(css.includes("scrollbar-width: none"));
+assert.ok(css.includes("overflow-y: auto"));
 process.stdout.write("Shared drawer and obstacle toggle component contract PASS\n");
