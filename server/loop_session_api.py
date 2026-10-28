@@ -309,6 +309,8 @@ class LoopSessionApi:
         # actual position. Never require a pose match or Nav2 correction.
 
     async def _auto_goals(self, key: tuple[str, str], goals: list[dict]) -> None:
+        if self._cancelled:
+            return
         if len(goals) == 2:
             await self.navigation.plan_goal({"goal": goals[0], "loop_goals": goals})
             if self._cancelled:
