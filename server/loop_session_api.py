@@ -378,6 +378,9 @@ class LoopSessionApi:
                             "LOOP_AUTO_ABORT_FAILED", automatic=True, force=True)
                     except Exception:
                         pass
+            if kind == "AUTO":
+                if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
+                    self.navigation._loop_session_owner = None
             if kind == "MANUAL":
                 try:
                     await self._verified_stop()
@@ -438,6 +441,8 @@ class LoopSessionApi:
         self._running_kind = mode
         self._task = asyncio.create_task(
             self._run(key, mode, events, goals), name="loop-session-replay")
+        if mode == "AUTO":
+            self.navigation._loop_session_owner = self._task
         return {"ok": True, "started": True, "mode": mode}
 
     async def stop(self, from_navigation: bool = False) -> dict:

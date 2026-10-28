@@ -202,6 +202,9 @@ class NavigationControlApi:
         self._recorded_motor_active = False
         self._recorded_nav2_active = False
         self._recorded_cancel_callback: Callable[[], Awaitable[dict[str, Any]]] | None = None
+        # Only the owner task may start or replace Nav2 Goals during a
+        # multi-Goal LOOP. External Goal requests remain cancellable via Stop.
+        self._loop_session_owner: asyncio.Task | None = None
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -1759,6 +1762,10 @@ class NavigationControlApi:
         )
 
     async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        owner = self._loop_session_owner
+        if owner is not None and not owner.done() and owner is not asyncio.current_task():
+            raise NavigationControlError(
+                "LOOP_ACTIVE", "Stop active LOOP before replacing a Goal", 409)
         goal = self._validated_goal(payload.get("goal", payload))
         waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         raw_loop = payload.get("loop_goals")
@@ -1853,6 +1860,10 @@ class NavigationControlApi:
         return self.state_response()
 
     async def start_navigation(self) -> dict[str, Any]:
+        owner = self._loop_session_owner
+        if owner is not None and not owner.done() and owner is not asyncio.current_task():
+            raise NavigationControlError(
+                "LOOP_ACTIVE", "Stop active LOOP before starting another Goal", 409)
         with self._lock:
             if self._recorded_motor_active or self._recorded_nav2_active:
                 raise NavigationControlError("RECORDED_REPLAY_ACTIVE",
