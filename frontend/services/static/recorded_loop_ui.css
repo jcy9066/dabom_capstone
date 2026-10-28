@@ -60,6 +60,24 @@
   width: 0; max-width: 0;
   border-width: 0; opacity: 0; pointer-events: none;
 }
+
+/* Same high-contrast LiDAR palette as the left LAYERS drawer, independent
+   of the page's light/dark dashboard theme. */
+.loop-side-drawer .loop-modal-section h3,
+.loop-side-drawer .loop-modal-info strong,
+.loop-side-drawer .loop-modal-status {
+  color: #dbeafe;
+}
+.loop-side-drawer .loop-modal-hint,
+.loop-side-drawer .loop-modal-subtitle,
+.loop-side-drawer .loop-modal-feedback,
+.loop-side-drawer .loop-goal-list {
+  color: #94a3b8;
+}
+.loop-side-drawer .loop-obstacle-toggle-mount .navigation-mode-toggle {
+  color: #cbd5e1;
+}
+
  .loop-drawer-header {
   flex: 0 0 auto;
   padding: 10px 12px;
