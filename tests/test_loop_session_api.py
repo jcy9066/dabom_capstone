@@ -80,7 +80,16 @@ def fixture(tmp_path):
         return True
 
     recorded = SimpleNamespace(
-        map_api=SimpleNamespace(resolve_map=lambda name: SimpleNamespace(yaml_path=yaml)),
+        map_api=SimpleNamespace(
+            resolve_map=lambda name: SimpleNamespace(yaml_path=yaml),
+            ros_control=SimpleNamespace(
+                loop_path_valid=lambda path: True,
+                finish_loop_trace=lambda: [],
+                cancel_navigation=lambda: {
+                    "confirmed": True, "requested": True, "completed": True,
+                },
+            ),
+        ),
         _play_stop=stop,
         get_live_scan=lambda: None,
         _pose=lambda: None,
