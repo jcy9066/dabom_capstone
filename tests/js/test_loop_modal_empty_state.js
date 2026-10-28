@@ -36,7 +36,7 @@ async function main() {
   const nodes = Object.fromEntries(ids.map(id => [id, element(id === "loop-bags" ? "select" : "button")]));
   const drawer = nodes["loop-side-drawer"];
   const panel = nodes["loop-side-drawer-content"];
-  drawer.dataset.open = "false";
+  drawer.dataset.open = "true"; // Simulate a stale restored state.
   panel.inert = true;
   const listeners = {};
   let polling = null, enhanced = 0, isolated = false, toggleController = null;
