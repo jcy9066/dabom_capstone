@@ -24,9 +24,8 @@ def test_wait_replan_modal_policy_toggle():
     assert 'id="loop-modal-trigger"' in html
     assert 'id="loop-goal-toggle"' in html
     assert 'id="recordedLoopPanel"' not in html
-    assert 'id="loop-policy-wait"' in ui
-    assert 'id="loop-policy-replan"' in ui
-    assert 'aria-pressed' in ui
+    assert 'id="loop-policy-toggle"' in ui
+    assert 'CycleFilterButton' in ui
 
 
 def test_replan_and_follow_path_have_real_callbacks():

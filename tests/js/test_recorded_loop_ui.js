@@ -25,8 +25,7 @@ events.DOMContentLoaded();
 assert.equal(registered.name,"loopModal");
 const body=registered.descriptor.render();
 for(const id of ["loop-map","loop-mode","loop-goals","loop-bags","loop-record",
- "loop-save","loop-delete","loop-start","loop-stop","loop-policy-wait",
- "loop-policy-replan"]) assert.ok(body.includes('id="'+id+'"'),id);
+ "loop-save","loop-delete","loop-start","loop-stop","loop-policy-toggle"]) assert.ok(body.includes('id="'+id+'"'),id);
 trigger.events.click();
 assert.equal(opened,true);
 assert.ok(js.includes("dabom:loop-goal-picked"));

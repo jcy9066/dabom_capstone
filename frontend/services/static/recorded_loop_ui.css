@@ -15,7 +15,7 @@
 .loop-modal-buttons{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .loop-modal-buttons button{min-height:30px;min-width:65px}
 .loop-policy{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--border-color);border-radius:7px}
-.loop-policy button[aria-pressed="true"]{color:var(--accent);background:rgba(8,145,178,.2);border-color:var(--accent)}
+#loop-policy-toggle[data-value="REPLAN"]{color:var(--accent);background:rgba(8,145,178,.2);border-color:var(--accent)}
 .loop-modal select{width:100%;padding:7px;border-radius:5px;background:var(--card-bg2);color:var(--text-color);border:1px solid var(--border-color)}
 .loop-modal-feedback{min-height:20px;color:var(--text-muted);overflow-wrap:anywhere}
 .loop-modal-hint{margin:0;font-size:11px;color:var(--text-muted)}
