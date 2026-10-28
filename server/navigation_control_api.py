@@ -206,6 +206,7 @@ class NavigationControlApi:
         # multi-Goal LOOP. External Goal requests remain cancellable via Stop.
         self._loop_session_owner: asyncio.Task | None = None
         self._loop_session_path: list[dict[str, float]] | None = None
+        self._loop_session_cancel_token = 0
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -1904,6 +1905,7 @@ class NavigationControlApi:
                 if self._loop_session_path is not None else None
             )
             session_owner = self._loop_session_owner
+            session_token = self._loop_session_cancel_token
             loop_epoch = self._loop_epoch
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
@@ -1943,6 +1945,7 @@ class NavigationControlApi:
                 with self._lock:
                     return (
                         self._loop_session_owner is session_owner
+                        and self._loop_session_cancel_token == session_token
                         and session_owner is not None and not session_owner.done()
                         and self._estop_generation == estop_generation
                         and not self._state["emergency_stop"]

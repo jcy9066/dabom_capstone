@@ -559,6 +559,9 @@ class LoopSessionApi:
         if task is None or task.done():
             return {"ok": True, "stopped": True}
         self._cancelled = True
+        if self._running_kind == "AUTO":
+            with self.navigation._lock:
+                self.navigation._loop_session_cancel_token += 1
         if from_navigation and task is asyncio.current_task():
             # Called re-entrantly while the AUTO task performs a fault STOP.
             # Awaiting itself would deadlock; cancel_goal owns the STOP.
