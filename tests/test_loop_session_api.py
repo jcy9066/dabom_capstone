@@ -202,3 +202,40 @@ def test_manual_operator_stop_cancels_replay(tmp_path):
         assert api._cancelled is True
         await api.stop()
     asyncio.run(scenario())
+
+
+def test_legacy_replay_owner_blocks_session_start(tmp_path):
+    api, _, _ = fixture(tmp_path)
+    old_task = SimpleNamespace(done=lambda: False)
+    api.recorded._play_task = old_task
+    with pytest.raises(RecordedLoopError, match="Stop legacy replay"):
+        api.record()
+    with pytest.raises(RecordedLoopError, match="Stop legacy recorded playback"):
+        api.start({"name": "Loop 1", "policy": "WAIT"})
+
+
+def test_auto_mode_transition_confirms_ros_cancel_and_physical_stop(tmp_path):
+    api, nav, _ = fixture(tmp_path)
+    nav.mode = "auto"
+    nav.localization_ready = True
+    nav.nav2_ready = True
+    for i in range(3):
+        api.toggle_goal({"pose": pose(i * 2.0)})
+    checks = {"cancel": 0, "stop": 0}
+    def cancel_navigation():
+        checks["cancel"] += 1
+        return {"confirmed": True, "requested": True, "completed": True}
+    async def physical_stop():
+        checks["stop"] += 1
+        return True
+    api.recorded.map_api.ros_control = SimpleNamespace(cancel_navigation=cancel_navigation)
+    api.recorded._play_stop = physical_stop
+
+    async def scenario():
+        api.start({"policy": "REPLAN", "goals": ["A", "B", "C"]})
+        await asyncio.sleep(0.02)
+        result = await api.stop(from_navigation=True)
+        assert result["stopped"] is True
+    asyncio.run(scenario())
+    assert checks["cancel"] >= 1
+    assert checks["stop"] >= 1
