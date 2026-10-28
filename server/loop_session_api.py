@@ -454,15 +454,36 @@ class LoopSessionApi:
             # Called re-entrantly while the AUTO task performs a fault STOP.
             # Awaiting itself would deadlock; cancel_goal owns the STOP.
             return {"ok": True, "stopped": True}
-        if self._running_kind == "AUTO" and not from_navigation:
-            try:
-                await self.navigation.cancel_goal()
-            except Exception:
+        if self._running_kind == "AUTO":
+            if from_navigation:
+                # NavigationControlApi calls this BEFORE switching Pi mode.
+                # Cancel the active ROS action and physically STOP before
+                # releasing the transition. This path must not call
+                # navigation.cancel_goal(), which would recurse into the
+                # registered stop callback.
                 try:
-                    await self.navigation.emergency_stop(
-                        "AUTO_LOOP_STOP_FAILED", automatic=True, force=True)
-                except Exception:
-                    pass
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.recorded.map_api.ros_control.cancel_navigation),
+                        timeout=4.0)
+                    if not isinstance(result, dict) or (
+                        result.get("confirmed") is not True
+                        and result.get("requested") is not False
+                    ):
+                        raise RuntimeError("NAV2_CANCEL_UNCONFIRMED")
+                    await self._verified_stop()
+                except Exception as exc:
+                    try:
+                        await self.navigation.emergency_stop(
+                            "AUTO_LOOP_STOP_UNCONFIRMED", automatic=True, force=True)
+                    except Exception:
+                        pass
+                    raise RecordedLoopError(
+                        "AUTO_STOP_UNCONFIRMED", "Nav2 cancel/Pi STOP not confirmed") from exc
+            else:
+                # cancel_goal itself will re-enter the callback in the
+                # guarded from_navigation path above.
+                await self.navigation.cancel_goal()
         elif self._running_kind == "MANUAL":
             await self._verified_stop()
         try:
