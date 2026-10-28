@@ -75,7 +75,8 @@ def test_single_loop_execution_and_trajectory_only():
     assert 'id="loopDrawerToggle"' in html
     assert 'id="loop-modal-trigger"' not in html
     assert 'data-drawer-target="loop-side-drawer"' in html
-    assert 'drawerToggle?.enhance?.(trigger)' in ui
+    assert 'const drawerComponent = controls()?.drawerToggle;' in ui
+    assert 'drawerComponent?.enhance?.(trigger)' in ui
     assert 'id="loop-side-drawer-content" aria-hidden="true" inert' in html
     assert 'manager.register("loopModal"' not in ui
     assert 'async def _manual_bag' in module

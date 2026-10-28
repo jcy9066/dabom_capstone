@@ -536,14 +536,25 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
 
         # Observe only commands confirmed by Pi and accepted by motion safety.
         # Recorder errors must not change an already executed command's response.
+        observed_command = {**command, "type": command_type}
         try:
             module.recorded_loop_api.note_motion_ack(
-                {**command, "type": command_type}, True,
+                observed_command, True,
             )
         except Exception:
             import logging
             logging.getLogger(__name__).exception(
                 "dashboard recorded motor observer failed"
+            )
+
+        try:
+            module.loop_session_api.note_motion_ack(
+                observed_command, True,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "dashboard loop session observer failed"
             )
 
         apply_dashboard_command(command, client_id, user_id)

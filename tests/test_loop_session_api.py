@@ -17,6 +17,9 @@ class NavigationStub:
     _robot_id = "test-robot"
 
     def __init__(self):
+        import threading
+        self._lock = threading.RLock()
+        self._loop_session_cancel_token = 0
         self.mode = "manual"
         self.navigation_state = "READY"
         self.localization_ready = False

@@ -56,7 +56,7 @@ assert.ok(css.includes('#loop-bags[hidden]'));
 assert.ok(ui.includes('bagList.hidden = !showBagList;'));
 assert.ok(ui.includes('bagList.disabled = !showBagList'));
 assert.ok(html.includes("recorded_loop_ui.js?v=20261028-drawer-close-v8"));
-assert.ok(html.includes("recorded_loop_ui.css?v=20261028-drawer-close-v8"));
+assert.ok(html.includes("recorded_loop_ui.css?v=20261028-visible-set-loop-v9"));
 assert.ok(css.includes(".loop-side-drawer-content::-webkit-scrollbar"));
 assert.ok(css.includes("scrollbar-width: none"));
 assert.ok(css.includes("overflow-y: auto"));

@@ -346,59 +346,77 @@ def test_dashboard_recording_observes_only_confirmed_commands():
         ("move", True, True, True),
     ]
     for kind, ack_ok, safety_ok, observer_error in cases:
-        app = FastAPI()
+        # Run every scenario with and without an error in the new recorder.
+        for loop_observer_error in (False, True):
+            run_dashboard_recording_case(
+                kind, ack_ok, safety_ok, observer_error, loop_observer_error
+            )
 
-        @app.middleware("http")
-        async def test_session(request, call_next):
-            request.scope["session"] = {"user": {"user_id": "tester"}}
-            return await call_next(request)
 
-        observer = Mock()
-        if observer_error:
-            observer.side_effect = RuntimeError("test recorder failure")
+def run_dashboard_recording_case(
+    kind, ack_ok, safety_ok, observer_error, loop_observer_error
+):
+    from unittest.mock import Mock
+    app = FastAPI()
 
-        async def ack_sender(*args, **kwargs):
-            observer.assert_not_called()
-            return ack_ok
+    @app.middleware("http")
+    async def test_session(request, call_next):
+        request.scope["session"] = {"user": {"user_id": "tester"}}
+        return await call_next(request)
 
-        sender = AsyncMock(side_effect=ack_sender)
-        context = {"safety_session": "test-pi", "safety_epoch": 1}
-        navigation = SimpleNamespace(
-            motion_safety_context=Mock(return_value=context),
-            note_authorized_motion=Mock(return_value=safety_ok),
-        )
-        server = SimpleNamespace(
-            csrf_failure=lambda request: None,
-            connections=SimpleNamespace(send_command_wait_ack=sender),
-            SERVER_ROBOT_ID="pi-01",
-            robot_status_snapshot=lambda: {"mode": "manual"},
-            navigation_control_api=navigation,
-            recorded_loop_api=SimpleNamespace(note_motion_ack=observer),
-        )
+    observer = Mock()
+    loop_observer = Mock()
+    if observer_error:
+        observer.side_effect = RuntimeError("test recorder failure")
+    if loop_observer_error:
+        loop_observer.side_effect = RuntimeError("test loop recorder failure")
 
-        with patch.dict(sys.modules, {"server.app": server}):
-            attach_system_control_routes(app)
-            with TestClient(app) as client:
-                response = client.post(
-                    "/api/dashboard-control/command",
-                    json={"type": kind, "direction": "forward", "speed": 0.2},
-                    headers={"X-Dashboard-Client-Id": "recording-test"},
-                )
+    async def ack_sender(*args, **kwargs):
+        observer.assert_not_called()
+        loop_observer.assert_not_called()
+        return ack_ok
 
-        accepted = ack_ok and (
-            kind not in {"move", "auto_drive"} or safety_ok
-        )
-        assert response.status_code == (200 if accepted else 409), response.text
-        assert response.json()["delivered"] is accepted
-        sender.assert_awaited_once()
+    sender = AsyncMock(side_effect=ack_sender)
+    context = {"safety_session": "test-pi", "safety_epoch": 1}
+    navigation = SimpleNamespace(
+        motion_safety_context=Mock(return_value=context),
+        note_authorized_motion=Mock(return_value=safety_ok),
+    )
+    server = SimpleNamespace(
+        csrf_failure=lambda request: None,
+        connections=SimpleNamespace(send_command_wait_ack=sender),
+        SERVER_ROBOT_ID="pi-01",
+        robot_status_snapshot=lambda: {"mode": "manual"},
+        navigation_control_api=navigation,
+        recorded_loop_api=SimpleNamespace(note_motion_ack=observer),
+        loop_session_api=SimpleNamespace(note_motion_ack=loop_observer),
+    )
 
-        if accepted:
-            observer.assert_called_once()
-            observed, delivered = observer.call_args.args
-            assert delivered is True
-            assert observed == sender.await_args.args[1]
-        else:
-            observer.assert_not_called()
+    with patch.dict(sys.modules, {"server.app": server}):
+        attach_system_control_routes(app)
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/dashboard-control/command",
+                json={"type": kind, "direction": "forward", "speed": 0.2},
+                headers={"X-Dashboard-Client-Id": "recording-test"},
+            )
+
+    accepted = ack_ok and (
+        kind not in {"move", "auto_drive"} or safety_ok
+    )
+    assert response.status_code == (200 if accepted else 409), response.text
+    assert response.json()["delivered"] is accepted
+    sender.assert_awaited_once()
+
+    if accepted:
+        observer.assert_called_once()
+        observed, delivered = observer.call_args.args
+        assert delivered is True
+        assert observed == sender.await_args.args[1]
+        loop_observer.assert_called_once_with(observed, True)
+    else:
+        observer.assert_not_called()
+        loop_observer.assert_not_called()
 
 
 def test_dashboard_motion_preflight_rejects_changed_safety_context():

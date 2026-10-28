@@ -248,11 +248,49 @@ class LoopSessionApi:
             del bags[name]
             return {"ok": True, "deleted": name}
 
+    def _log_manual_safety_diagnostic(self, stage: str) -> None:
+        """Log safety state without changing authorization decisions."""
+        try:
+            import logging
+            import time
+            nav = self.navigation
+            with nav._lock:
+                now = time.time()
+                last = nav._stop_confirmation_last_at
+                data = {
+                    "stage": stage,
+                    "connected": nav._connected,
+                    "robot_mode": nav._robot_mode,
+                    "navigation_state": nav._state.get("navigation_state"),
+                    "server_estop": nav._state.get("emergency_stop"),
+                    "pi_estop": nav._pi_estop_latched,
+                    "encoder_stop_violation": nav._encoder_stop_violation,
+                    "patrol_transition": nav._patrol_transition is not None,
+                    "patrol_transition_error": nav._patrol_transition_error is not None,
+                    "sensor_recovery": nav._sensor_recovery is not None,
+                    "pending_nav_success": nav._pending_nav_success is not None,
+                    "stop_requested": nav._stop_commanded_at is not None,
+                    "stop_sequence_present": nav._stop_confirmation_after_sequence is not None,
+                    "stop_samples": nav._stop_confirmation_samples,
+                    "stop_sample_age_sec": None if last is None else round(now - last, 3),
+                    "stop_confirmed": nav._stop_confirmed_locked(now),
+                    "pi_age_sec": nav._age(now, nav._pi_updated_at),
+                    "safety_session_present": bool(nav._pi_safety_session),
+                    "safety_epoch_valid": (
+                        type(nav._pi_safety_epoch) is int and nav._pi_safety_epoch >= 0
+                    ),
+                }
+            logging.getLogger(__name__).warning("manual safety diagnostic: %s", data)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("manual safety diagnostic failed")
+
     async def _manual_send(self, packet: dict) -> None:
         if self._cancelled or self._mode() != "MANUAL":
             raise RuntimeError("MANUAL_REPLAY_INTERRUPTED")
         context = self.navigation.motion_safety_context()
         if context is None:
+            self._log_manual_safety_diagnostic("before_manual_send")
             raise RuntimeError("MANUAL_SAFETY_REVOKED")
         command = {**packet, "safety_session": context["safety_session"],
                    "safety_epoch": context["safety_epoch"]}
@@ -279,6 +317,7 @@ class LoopSessionApi:
         stable_since = None
         while not self._cancelled:
             if self._mode() != "MANUAL" or self.navigation.motion_safety_context() is None:
+                self._log_manual_safety_diagnostic("waiting_for_obstacle")
                 raise RuntimeError("MANUAL_SAFETY_REVOKED")
             clear = obstacle()
             now = time.monotonic()
@@ -301,7 +340,7 @@ class LoopSessionApi:
             lap_start = time.monotonic()
             paused = 0.0
             next_map_check = time.monotonic() + 2.0
-            for event in events:
+            for event_index, event in enumerate(events):
                 while not self._cancelled:
                     remaining = lap_start + event["at"] + paused - time.monotonic()
                     if remaining <= 0:
@@ -316,9 +355,36 @@ class LoopSessionApi:
                 if event["type"] == "move":
                     if event["speed"] > 0:
                         paused += await self._wait_obstacle_clear(event["direction"])
-                    await self._manual_send({
-                        "type": "move", "direction": event["direction"],
-                        "speed": event["speed"]})
+                    # Never keep replaying old MOVE events after their
+                    # next recorded STOP deadline has passed.
+                    next_stop = next(
+                        (item["at"] for item in events[event_index + 1:]
+                         if item["type"] == "stop"),
+                        None,
+                    )
+                    if next_stop is None:
+                        raise RuntimeError("MANUAL_REPLAY_STOP_MISSING")
+
+                    deadline = lap_start + next_stop + paused
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        await self._verified_stop()
+                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
+
+                    try:
+                        await asyncio.wait_for(
+                            self._manual_send({
+                                "type": "move", "direction": event["direction"],
+                                "speed": event["speed"]}),
+                            timeout=remaining,
+                        )
+                    except asyncio.TimeoutError:
+                        await self._verified_stop()
+                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
+
+                    if time.monotonic() >= deadline:
+                        await self._verified_stop()
+                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
                 else:
                     await self._verified_stop()
             if not self._cancelled:
