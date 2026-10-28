@@ -205,6 +205,7 @@ class NavigationControlApi:
         # Only the owner task may start or replace Nav2 Goals during a
         # multi-Goal LOOP. External Goal requests remain cancellable via Stop.
         self._loop_session_owner: asyncio.Task | None = None
+        self._loop_session_path: list[dict[str, float]] | None = None
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -1761,7 +1762,9 @@ class NavigationControlApi:
             409,
         )
 
-    async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def plan_goal(self, payload: dict[str, Any], *,
+                        session_cached_path: list[dict[str, float]] | None = None
+                        ) -> dict[str, Any]:
         owner = self._loop_session_owner
         if owner is not None and not owner.done() and owner is not asyncio.current_task():
             raise NavigationControlError(
@@ -1812,13 +1815,34 @@ class NavigationControlApi:
                 # Destination validation occurred before cancel; confirm the
                 # live sensor and Pi health again after the physical STOP.
                 self._assert_watchdogs_healthy()
-            # Nav2's ComputePathToPose(use_start=False) starts at the latest
-            # robot pose, not the old Goal or the old planned path origin.
-            path = await asyncio.to_thread(
-                self._compute_path_for_route, goal, waypoints,
-                loop_forward=bool(loop_goals),
-            )
-            normalized_path = self._normalized_path(path)
+            if session_cached_path is not None:
+                # Private Python-only option: HTTP Goal requests cannot pass it.
+                if (self._loop_session_owner is not asyncio.current_task()
+                    or waypoints or loop_goals):
+                    raise NavigationControlError(
+                        "LOOP_PATH_OWNER", "Cached path requires active LOOP owner", 409)
+                normalized_path = self._normalized_path(session_cached_path)
+                if not 2 <= len(normalized_path) <= 2000:
+                    raise NavigationControlError(
+                        "LOOP_PATH_INVALID", "Invalid recorded path length", 422)
+                live = self._safe_live_pose()
+                if (not self._fresh_loop_pose(live)
+                    or math.hypot(live["x"] - normalized_path[0]["x"],
+                                  live["y"] - normalized_path[0]["y"]) > 0.35
+                    or math.hypot(goal["x"] - normalized_path[-1]["x"],
+                                  goal["y"] - normalized_path[-1]["y"]) > 0.40):
+                    raise NavigationControlError(
+                        "LOOP_PATH_MISMATCH", "Cached path endpoints not aligned", 409)
+                if not await asyncio.to_thread(self._ros.loop_path_valid, normalized_path):
+                    raise NavigationControlError(
+                        "LOOP_PATH_BLOCKED", "Cached path obstructed", 409)
+            else:
+                # Existing SET GOAL/#93 behavior remains unchanged.
+                path = await asyncio.to_thread(
+                    self._compute_path_for_route, goal, waypoints,
+                    loop_forward=bool(loop_goals),
+                )
+                normalized_path = self._normalized_path(path)
             if len(normalized_path) < 2:
                 raise NavigationControlError(
                     "PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422,
@@ -1854,6 +1878,10 @@ class NavigationControlApi:
             self._state["active_goal"] = goal
             self._state["waypoints"] = [dict(point) for point in waypoints]
             self._state["planned_path"] = normalized_path
+            self._loop_session_path = (
+                [dict(p) for p in normalized_path]
+                if session_cached_path is not None else None
+            )
             self._state["navigation_state"] = "PATH_READY"
             self._state["last_error"] = None
             self._touch_locked()
@@ -1871,6 +1899,11 @@ class NavigationControlApi:
             goal = dict(self._state["active_goal"] or {})
             waypoints = [dict(p) for p in self._state["waypoints"]]
             loop_goals = [dict(p) for p in self._loop_goals]
+            session_path = (
+                [dict(p) for p in self._loop_session_path]
+                if self._loop_session_path is not None else None
+            )
+            session_owner = self._loop_session_owner
             loop_epoch = self._loop_epoch
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
@@ -1901,13 +1934,29 @@ class NavigationControlApi:
                     or self._state["navigation_state"] != "PATH_READY"):
                     raise NavigationControlError("LOOP_INTERRUPTED", "Loop start interrupted.", 409)
         command_baseline = self._nonzero_command_sequence()
-        if loop_goals and hasattr(self._ros, "begin_loop_trace"):
+        if (loop_goals or session_owner is asyncio.current_task()) and hasattr(
+            self._ros, "begin_loop_trace"
+        ):
             await asyncio.to_thread(self._ros.begin_loop_trace)
-        result = (
-            await asyncio.to_thread(self._ros.navigate_to_pose, goal, loop_reapproach=True)
-            if loop_goals
-            else await asyncio.to_thread(self._navigate_route, goal, waypoints)
-        )
+        if session_path is not None:
+            def cached_preflight() -> bool:
+                with self._lock:
+                    return (
+                        self._loop_session_owner is session_owner
+                        and session_owner is not None and not session_owner.done()
+                        and self._estop_generation == estop_generation
+                        and not self._state["emergency_stop"]
+                    )
+            result = await asyncio.to_thread(
+                self._ros.follow_loop_path, session_path,
+                recorded_auto=True, recorded_preflight=cached_preflight,
+            )
+        else:
+            result = (
+                await asyncio.to_thread(self._ros.navigate_to_pose, goal, loop_reapproach=True)
+                if loop_goals
+                else await asyncio.to_thread(self._navigate_route, goal, waypoints)
+            )
         try:
             progress_pose = self._get_live_pose()
         except Exception:
