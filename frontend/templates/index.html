@@ -9,11 +9,11 @@
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-loop-drawer-v4">
+    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-viewer-right-drawer-v5">
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261020-dark-technical-v1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-flat-drawer-v4">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261028-right-drawer-v5">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261020-beep-raised-v12">
     <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-border-v2">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
@@ -271,10 +271,6 @@
                                             <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
                                             <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>goal 취소</button>
                                         </div>
-                                        <button type="button" id="loop-modal-trigger" data-control-button="secondary" class="loop-modal-trigger"
-                                                data-drawer-toggle data-drawer-target="loop-side-drawer"
-                                                data-drawer-open-label="LOOP 패널 닫기" data-drawer-closed-label="LOOP 패널 열기"
-                                                aria-expanded="false" aria-controls="loop-side-drawer">LOOP</button>
                                     </div>
 
                                     <span class="lidar-control-separator" aria-hidden="true"></span>
@@ -414,14 +410,21 @@
                         </div>
                     </div>
 
-                    <aside id="loop-side-drawer" class="loop-side-drawer" data-open="false"
-                           aria-label="LOOP 제어 패널" aria-hidden="true" inert>
-                        <div class="loop-drawer-header">
-                            <strong>LOOP</strong>
-                            <button type="button" id="loop-drawer-close" data-control-button="secondary"
-                                    aria-label="LOOP 패널 닫기">×</button>
-                        </div>
-                        <div class="loop-drawer-content">
+
+                        <div id="loop-side-drawer" class="loop-side-drawer" data-open="false"
+                             aria-label="LOOP 제어 패널">
+                            <button type="button"
+                                    class="dashboard-drawer-toggle dashboard-drawer-toggle--right loop-side-drawer-handle"
+                                    id="loopDrawerToggle" data-drawer-toggle data-drawer-target="loop-side-drawer"
+                                    data-drawer-open-label="LOOP 제어 패널 접기"
+                                    data-drawer-closed-label="LOOP 제어 패널 펼치기"
+                                    aria-expanded="false" aria-controls="loop-side-drawer-content"
+                                    aria-label="LOOP 제어 패널 펼치기"
+                                    title="LOOP 제어 패널 펼치기">
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
+                            </button>
+                        <div class="loop-drawer-content" id="loop-side-drawer-content" aria-hidden="true" inert>
+                            <div class="loop-drawer-header"><strong>LOOP</strong></div>
                             <div class="loop-modal-info">
                                 <span>Map <strong id="loop-map">--</strong></span>
                                 <span>Mode <strong id="loop-mode">--</strong></span>
@@ -469,7 +472,7 @@
                                 <div id="loop-feedback" class="loop-modal-feedback" role="status"></div>
                             </div>
                         </div>
-                    </aside>
+                        </div>
 
                     <button
                         class="lidar-map-select-btn"
@@ -869,7 +872,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261028-loop-modal-v1"></script>
-    <script src="static/recorded_loop_ui.js?v=20261028-loop-drawer-v4"></script>
+    <script src="static/recorded_loop_ui.js?v=20261028-viewer-right-drawer-v5"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
