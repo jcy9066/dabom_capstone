@@ -18,13 +18,15 @@ def test_no_nav2_replay_feature_flag():
         assert "nav2_replay_enabled" not in source
 
 
-def test_replan_is_selectable_only_until_loop_starts():
+def test_wait_replan_modal_policy_toggle():
     html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
-    match = re.search(r"<option\s+value=['\"]REPLAN['\"][^>]*>", html)
-    assert match and "disabled" not in match.group(0)
-    js = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
-    assert '$("recorded-policy").disabled = busy || active' in js
-    assert 'policy: $("recorded-policy").value' in js
+    ui = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
+    assert 'id="loop-modal-trigger"' in html
+    assert 'id="loop-goal-toggle"' in html
+    assert 'id="recordedLoopPanel"' not in html
+    assert 'id="loop-policy-wait"' in ui
+    assert 'id="loop-policy-replan"' in ui
+    assert 'aria-pressed' in ui
 
 
 def test_replan_and_follow_path_have_real_callbacks():
@@ -54,7 +56,8 @@ def test_completed_legacy_goal_permits_safe_recorded_replay():
 def test_inflight_recorded_stop_blocks_all_legacy_mode_changes():
     nav = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
     app = (ROOT / "server/app.py").read_text(encoding="utf-8")
-    assert "set_recorded_cancel_callback(recorded_loop_api.stop_playback)" in app
+    assert "set_recorded_cancel_callback(stop_recorded_loop_owners)" in app
+    assert "await loop_session_api.stop(from_navigation=True)" in app
     assert "Even without a motor-owner bit, a replay Task may be STOPPING" in nav
     assert "result = await handler()" in nav
     for method in ("async def cancel_goal", "async def switch_mode",
@@ -63,17 +66,16 @@ def test_inflight_recorded_stop_blocks_all_legacy_mode_changes():
         assert "await self._stop_recorded_before_transition()" in region
 
 
-def test_single_path_and_loop_ui_are_both_wired():
+def test_single_loop_execution_and_trajectory_only():
     html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
-    js = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
-    api = (ROOT / "server/recorded_loop_api.py").read_text(encoding="utf-8")
-    runtime = (ROOT / "server/recorded_loop_runtime.py").read_text(encoding="utf-8")
-    assert '<option value="path">' in html
-    assert '<option value="loop">' in html
-    assert 'kind === "path" ? 1 : null' in js
-    assert 'one_shot = payload.get("kind") == "path"' in api
-    assert 'if one_shot:' in api
-    assert 'segment_count < 1' in runtime
+    ui = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
+    module = (ROOT / "server/loop_session_api.py").read_text(encoding="utf-8")
+    assert 'id="loop-modal-trigger"' in html
+    assert 'manager.register("loopModal"' in ui
+    assert 'async def _manual_bag' in module
+    assert 'async def _auto_goals' in module
+    assert 'self._maps' in module
+    assert 'recorded_loops.json' not in module
 
 
 def test_manual_recording_requires_explicit_auto_mode_to_play():

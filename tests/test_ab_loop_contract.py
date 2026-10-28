@@ -45,7 +45,8 @@ def test_each_loop_leg_has_obstacle_replanning_but_no_passed_goal_culling():
 
 def test_loop_uses_single_leg_then_verified_spin_not_rolling_waypoint_action():
     assert 'data-lidar-interaction="set-goal"' in HTML
-    assert 'data-lidar-interaction="set-loop"' in HTML
+    assert 'id="loop-goal-toggle"' in HTML
+    assert 'data-lidar-interaction="set-loop"' not in HTML
     assert "loop_goals: loopGoals" in CONTROL
     assert "dabom:navigation-loop-draft" in VIEWER
     assert 'self._loop_stage = "drive"' in SERVER
