@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261026-v2">
+    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-loop-modal-v1">
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261020-dark-technical-v1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
@@ -271,64 +271,7 @@
                                             <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
                                             <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>goal 취소</button>
                                         </div>
-                                        <details id="recordedLoopPanel" class="recorded-loop-panel">
-                                            <summary>RECORDED PATH / LOOP</summary>
-                                            <div class="recorded-loop-body">
-                                                <div class="recorded-loop-form">
-                                                    <input id="recorded-goal-id" placeholder="Goal ID (A)" aria-label="Goal ID">
-                                                    <button type="button" id="recorded-add-goal">현재 위치 Goal 저장</button>
-                                                </div>
-                                                <div class="recorded-loop-form">
-                                                    <input id="recorded-segment-id" placeholder="Segment ID (A_to_B)" aria-label="Segment ID">
-                                                    <input id="recorded-from" placeholder="출발 A" aria-label="Start Goal">
-                                                    <input id="recorded-to" placeholder="도착 B" aria-label="End Goal">
-                                                    <select id="recorded-source" aria-label="Recording source">
-                                                        <option value="manual">Manual</option>
-                                                        <option value="set_goal">Set Goal</option>
-                                                    </select>
-                                                </div>
-                                                <div class="recorded-loop-info" id="recorded-status" role="status">기록 대기</div>
-                                                <div class="recorded-loop-buttons">
-                                                    <button type="button" id="recorded-start">기록 시작</button>
-                                                    <button type="button" id="recorded-save">정지 후 저장</button>
-                                                    <button type="button" id="recorded-discard">기록 폐기</button>
-                                                </div>
-                                                <div class="recorded-loop-form">
-                                                    <input id="recorded-route-id" placeholder="Loop ID" aria-label="Loop ID">
-                                                    <input id="recorded-route-segments" placeholder="구간 순서: A_to_B,B_to_A" aria-label="Ordered segments">
-                                                    <button type="button" id="recorded-save-route">Loop 구성 저장</button>
-                                                </div>
-                                                <div class="recorded-loop-form">
-                                                    <label for="recorded-play-kind">실행:</label>
-                                                    <select id="recorded-play-kind" aria-label="Recorded playback type">
-                                                        <option value="loop">Loop 반복</option>
-                                                        <option value="path">Path 1회</option>
-                                                    </select>
-                                                    <input id="recorded-play-route" placeholder="Loop 또는 Path ID" aria-label="Recorded loop or path ID">
-                                                    <label for="recorded-policy">장애물:</label>
-                                                    <select id="recorded-policy" aria-label="Obstacle policy">
-                                                        <option value="WAIT">대기 후 재개</option>
-                                                        <option value="REPLAN">장애물 우회 경로 재탐색</option>
-                                                    </select>
-                                                </div>
-                                                <div class="recorded-loop-buttons">
-                                                    <button type="button" id="recorded-play-start">기록 주행 시작</button>
-                                                    <button type="button" id="recorded-play-stop">Loop 정지</button>
-                                                    <button type="button" id="recorded-play-reset">Reset</button>
-                                                </div>
-                                                <div class="recorded-loop-form">
-                                                    <select id="recorded-delete-kind" aria-label="Delete item type">
-                                                        <option value="routes">Loop</option>
-                                                        <option value="segments">Path</option>
-                                                        <option value="goals">Goal</option>
-                                                    </select>
-                                                    <input id="recorded-delete-id" placeholder="삭제할 ID" aria-label="Item ID to delete">
-                                                    <button type="button" id="recorded-delete">삭제</button>
-                                                </div>
-                                                <div class="recorded-loop-info" id="recorded-playback-state" role="status">재생 준비</div>
-                                                <div class="recorded-loop-info" id="recorded-feedback" role="status"></div>
-                                            </div>
-                                        </details>
+                                        <button type="button" id="loop-modal-trigger" data-control-button="secondary" class="loop-modal-trigger" aria-haspopup="dialog" aria-controls="commonModal">LOOP</button>
                                     </div>
 
                                     <span class="lidar-control-separator" aria-hidden="true"></span>
@@ -340,7 +283,7 @@
                                         <span class="lidar-control-separator" aria-hidden="true"></span>
                                         <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
-                                        <button type="button" data-lidar-interaction="set-loop" data-control-button="goal">SET LOOP</button>
+                                        <label class="loop-map-radio"><input type="checkbox" id="loop-goal-toggle"><span>SET LOOP</span></label>
                                     </div>
 
                                     <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
@@ -860,13 +803,13 @@
             }
         }
     </script>
-    <script type="module" src="static/lidar_3d_viewer.js?v=20261024-loop-ab-v1"></script>
+    <script type="module" src="static/lidar_3d_viewer.js?v=20261028-loop-modal-v1"></script>
     <script src="static/script.js?v=20261028-scene-status-v1"></script>
     <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
-    <script src="static/navigation_control.js?v=20261024-loop-ab-v2"></script>
-    <script src="static/recorded_loop_ui.js?v=20261028-v9"></script>
+    <script src="static/navigation_control.js?v=20261028-loop-modal-v1"></script>
+    <script src="static/recorded_loop_ui.js?v=20261028-loop-modal-v1"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
