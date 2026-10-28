@@ -38,4 +38,47 @@ assert.equal(opened,true, "Offline backend response must not block opening the m
 assert.ok(body.includes('id="loop-start" disabled'), "Record/Start are disabled until state check");
 assert.ok(js.includes("dabom:loop-goal-picked"));
 assert.ok(js.includes('policy === "REPLAN"'));
-process.stdout.write("LOOP modal mock registration PASS\n");
+// Regression: Pi is offline and the shared modal was not mounted by
+// the main dashboard initializer. LOOP must mount it lazily on click.
+{
+  let mounted = 0, launched = 0, deferred = null;
+  const callbacks = {};
+  const lateTrigger = {
+    disabled: true, classList: { remove() {} },
+    removeAttribute() {},
+    addEventListener(name, callback) { callbacks[name] = callback; },
+  };
+  const delayedManager = {
+    register(name) { assert.equal(name, "loopModal"); },
+    open(name) { assert.equal(name, "loopModal"); launched++; },
+    body: {},
+  };
+  const delayedDocument = {
+    readyState: "complete", hidden: true,
+    getElementById(id) {
+      return id === "loop-modal-trigger" ? lateTrigger
+        : id === "commonModal" ? {} : null;
+    },
+    addEventListener() {},
+  };
+  vm.runInNewContext(js, {
+    document: delayedDocument,
+    window: {
+      DabomDashboardComponents: {
+        modal: {
+          getDefault: () => deferred,
+          mount: () => { mounted++; deferred = delayedManager; return deferred; },
+        },
+      },
+      alert: () => assert.fail("LOOP should open while Pi is offline"),
+    },
+    fetch: async () => { throw Error("offline"); },
+    setInterval() {},
+    CustomEvent: class {},
+  }, {filename: "recorded_loop_ui_offline.js"});
+  assert.equal(lateTrigger.disabled, false);
+  assert.equal(mounted, 1);
+  callbacks.click();
+  assert.equal(launched, 1);
+}
+process.stdout.write("LOOP modal mock registration + offline lazy mount PASS\n");
