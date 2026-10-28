@@ -471,6 +471,16 @@
         event.preventDefault();
         const goal = { ...state.draftGoal };
         const loopMode = window.navigationMapView?.interactionMode?.() === 'set-loop';
+        if ($('loop-goal-toggle')?.checked && !loopMode) {
+            state.draftGoal = null;
+            publishGoalDraft();
+            document.dispatchEvent(new CustomEvent('dabom:loop-goal-picked', {
+                detail: { pose: goal },
+            }));
+            setFeedback('LOOP Goal 추가/제거 요청 중...');
+            window.navigationMapView?.requestRender();
+            return;
+        }
         state.pointerId = null;
         state.pointerStart = null;
 
@@ -897,6 +907,15 @@
             state.hazardObserver = new MutationObserver(scheduleHazardReconcile);
             state.hazardObserver.observe(alertBox, { childList: true });
         }
+        $('loop-goal-toggle')?.addEventListener('change', event => {
+            if (event.target.checked) {
+                window.navigationMapView?.setInteractionMode?.('set-goal');
+                setFeedback('SET LOOP ON: Goal을 클릭하여 등록하고 다시 클릭하면 삭제합니다.');
+            } else {
+                window.navigationMapView?.setInteractionMode?.('view');
+                setFeedback('SET LOOP OFF');
+            }
+        });
         $('navigation-start')?.addEventListener('click', () => simpleAction('/api/navigation/control/start', 'NavigateToPose 시작 중...'));
         $('navigation-cancel')?.addEventListener('click', () => {
             if (state.loopDrafts.length && !state.control?.active_goal
