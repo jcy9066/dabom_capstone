@@ -61,7 +61,8 @@ class LoopSessionApi:
     def _entry(self, key: tuple[str, str]) -> dict:
         with self._lock:
             return self._maps.setdefault(
-                key, {"goals": OrderedDict(), "next": 0, "bags": OrderedDict(), "bag_next": 1})
+                key, {"goals": OrderedDict(), "next": 0, "bags": OrderedDict(), "bag_next": 1,
+                 "auto_paths": {}})
 
     def _idle(self) -> None:
         if self.playing:
@@ -306,10 +307,59 @@ class LoopSessionApi:
         # A non-closed manual bag is intentionally replayed from the next
         # actual position. Never require a pose match or Nav2 correction.
 
+    @staticmethod
+    def _certified_auto_trace(trace: Any, origin: dict, destination: dict) -> list[dict]:
+        """Certify recorded AMCL motion, never replace it with a planned path."""
+        if not isinstance(trace, list) or not 4 <= len(trace) <= 1500:
+            return []
+        try:
+            poses = [pose_dict(point) for point in trace]
+        except (ValueError, TypeError, KeyError):
+            return []
+        if (math.hypot(poses[0]["x"] - origin["x"],
+                       poses[0]["y"] - origin["y"]) > 0.40
+            or math.hypot(poses[-1]["x"] - destination["x"],
+                          poses[-1]["y"] - destination["y"]) > 0.40):
+            return []
+        distance = 0.0
+        for previous, current in zip(poses, poses[1:]):
+            step = math.hypot(current["x"] - previous["x"],
+                              current["y"] - previous["y"])
+            if step > 0.45:
+                return []
+            distance += step
+        return poses if distance >= 0.20 else []
+
+    async def _wait_for_cached_path(self, path: list[dict], key: tuple[str, str]) -> bool:
+        """WAIT preserves a blocked learned route; REPLAN discards it."""
+        ros = self.recorded.map_api.ros_control
+        if self._policy == "REPLAN":
+            return bool(await asyncio.to_thread(ros.loop_path_valid, path))
+        clear_since = None
+        self._status = "WAITING"
+        while not self._cancelled:
+            if self._active() != key or self._mode() != "AUTO":
+                raise RuntimeError("AUTO_LOOP_CONTEXT_LOST")
+            state = self.navigation.state_response()
+            if state.get("emergency_stop") or not state.get("nav2_ready"):
+                raise RuntimeError("AUTO_LOOP_SAFETY_LOST")
+            valid = await asyncio.to_thread(ros.loop_path_valid, path)
+            now = time.monotonic()
+            if valid:
+                clear_since = clear_since or now
+                if now - clear_since >= 1.0:
+                    self._status = "RUNNING"
+                    return True
+            else:
+                clear_since = None
+            await asyncio.sleep(0.20)
+        return False
+
     async def _auto_goals(self, key: tuple[str, str], goals: list[dict]) -> None:
         if self._cancelled:
             return
         if len(goals) == 2:
+            # PR #93's physical A<->B trace and pivot cache are unchanged.
             await self.navigation.plan_goal({"goal": goals[0], "loop_goals": goals})
             if self._cancelled:
                 return
@@ -323,20 +373,60 @@ class LoopSessionApi:
                 if not state.get("loop_goals") and state.get("navigation_state") in {"READY", "SUCCEEDED"}:
                     raise RuntimeError("AUTO_LOOP_STOPPED")
             return
-        # N>=3: use the existing single-goal Nav2 safety and completion
-        # handshake for each leg. No independent motor-output implementation.
-        # If already at the first registered Goal, start toward the next;
-        # Nav2 must not be asked to plan a zero-length A-to-A route.
+
+        # A complete multi-Goal lap consists of the learned physical segments
+        # A->B, B->C, ... last->A. The first unanchored approach is not cached.
+        ros = self.recorded.map_api.ros_control
+        cache_key = tuple((round(g["x"], 4), round(g["y"], 4),
+                           round(g["yaw"], 4)) for g in goals)
+        entry = self._entry(key)
+        with self._lock:
+            paths = entry["auto_paths"].setdefault(cache_key, {})
         index = 0
-        pose = self.recorded._pose()
-        if pose is not None and math.hypot(
-            pose["x"] - goals[0]["x"], pose["y"] - goals[0]["y"]) <= 0.35:
+        current_pose = self.recorded._pose()
+        if current_pose is not None and math.hypot(
+            current_pose["x"] - goals[0]["x"],
+            current_pose["y"] - goals[0]["y"]) <= 0.35:
             index = 1
+
         while not self._cancelled:
-            if self._active() != key:
-                raise RuntimeError("MAP_CHANGED")
-            goal = goals[index]
-            await self.navigation.plan_goal({"goal": goal})
+            if self._active() != key or self._mode() != "AUTO":
+                raise RuntimeError("AUTO_LOOP_CONTEXT_LOST")
+            destination = goals[index]
+            origin = goals[(index - 1) % len(goals)]
+            current_pose = self.recorded._pose()
+            anchored = (
+                current_pose is not None
+                and math.hypot(current_pose["x"] - origin["x"],
+                              current_pose["y"] - origin["y"]) <= 0.35
+            )
+            path = paths.get(index) if anchored else None
+            if path:
+                # WAIT waits for original trace to become usable; REPLAN
+                # computes a fresh Nav2 path when that trace is obstructed.
+                if not await self._wait_for_cached_path(path, key):
+                    return
+                if self._policy == "REPLAN":
+                    valid = await asyncio.to_thread(ros.loop_path_valid, path)
+                    if not valid:
+                        paths.pop(index, None)
+                        path = None
+            if self._cancelled:
+                return
+            try:
+                await self.navigation.plan_goal(
+                    {"goal": destination}, session_cached_path=path,
+                )
+            except Exception as exc:
+                code = getattr(exc, "error_code", "")
+                if self._policy == "REPLAN" and path and code in {
+                    "LOOP_PATH_BLOCKED", "LOOP_PATH_MISMATCH", "LOOP_PATH_INVALID",
+                }:
+                    paths.pop(index, None)
+                    path = None
+                    await self.navigation.plan_goal({"goal": destination})
+                else:
+                    raise
             if self._cancelled:
                 return
             await self.navigation.start_navigation()
@@ -354,6 +444,13 @@ class LoopSessionApi:
                     raise RuntimeError("AUTO_GOAL_TIMEOUT")
             if self._cancelled:
                 return
+            # Only physically driven, stationary-completed traces may become
+            # cache entries. No path is invented from planned geometry.
+            trace = await asyncio.to_thread(ros.finish_loop_trace)
+            if anchored and not path:
+                certified = self._certified_auto_trace(trace, origin, destination)
+                if certified:
+                    paths[index] = certified
             index = (index + 1) % len(goals)
             if index == 0:
                 self._laps += 1
