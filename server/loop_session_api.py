@@ -147,6 +147,8 @@ class LoopSessionApi:
 
     def record(self) -> dict:
         self._idle()
+        if self.navigation.state_response().get("connected") is not True:
+            raise RecordedLoopError("PI_OFFLINE", "Pi connection required to record motion")
         old_task = getattr(self.recorded, "_play_task", None)
         if old_task is not None and not old_task.done():
             raise RecordedLoopError("LOOP_BUSY", "Stop legacy replay before recording")
@@ -522,6 +524,8 @@ class LoopSessionApi:
 
     def start(self, data: dict) -> dict:
         self._idle()
+        if self.navigation.state_response().get("connected") is not True:
+            raise RecordedLoopError("PI_OFFLINE", "Pi connection required to start LOOP")
         old_task = getattr(self.recorded, "_play_task", None)
         if old_task is not None and not old_task.done():
             raise RecordedLoopError(

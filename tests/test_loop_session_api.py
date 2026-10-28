@@ -28,6 +28,7 @@ class NavigationStub:
     def state_response(self):
         return {
             "navigation_mode": "DRIVING",
+            "connected": True,
             "robot_mode": self.mode,
             "active_map": {"map_name": "map_one"},
             "localization_ready": self.localization_ready,
@@ -249,3 +250,41 @@ def test_auto_mode_transition_confirms_ros_cancel_and_physical_stop(tmp_path):
     asyncio.run(scenario())
     assert checks["cancel"] >= 1
     assert checks["stop"] >= 1
+
+
+def test_offline_modal_snapshot_without_active_map(tmp_path):
+    api, nav, _ = fixture(tmp_path)
+    state = nav.state_response
+    nav.state_response = lambda: {
+        **state(), "connected": False, "navigation_mode": "MAPPING",
+        "active_map": None,
+    }
+    snapshot = api.snapshot()
+    assert snapshot["ok"] is True
+    assert snapshot["connected"] is False
+    assert snapshot["map_name"] is None
+    assert snapshot["goals"] == []
+    assert snapshot["recordings"] == []
+    with pytest.raises(RecordedLoopError, match="Pi connection"):
+        api.record()
+    async def check():
+        with pytest.raises(RecordedLoopError, match="Pi connection"):
+            api.start({"policy": "WAIT"})
+    asyncio.run(check())
+
+
+def test_offline_modal_preserves_cached_goals_for_selected_map(tmp_path):
+    api, nav, _ = fixture(tmp_path)
+    api.toggle_goal({"pose": pose(2.0)})
+    state = nav.state_response
+    nav.state_response = lambda: {
+        **state(), "connected": False, "navigation_mode": "MAPPING",
+    }
+    snapshot = api.snapshot()
+    assert snapshot["ok"] is True
+    assert snapshot["map_name"] == "map_one"
+    assert snapshot["connected"] is False
+    assert [goal["name"] for goal in snapshot["goals"]] == ["A"]
+    assert snapshot["goals"][0]["pose"]["x"] == 2.0
+    with pytest.raises(RecordedLoopError, match="DRIVING"):
+        api.toggle_goal({"pose": pose(4.0)})
