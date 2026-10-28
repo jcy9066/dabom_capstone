@@ -418,11 +418,21 @@ body.dark-mode .no-camera-bg {
     border: 1px solid rgba(34, 211, 238, 0.2);
 }
 .detection-tag {
-    background-color: rgba(10, 14, 26, 0.75); border: 1px solid rgba(34, 211, 238, 0.2);
-    padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700;
-    font-family: var(--mono); color: var(--text-dark);
-    display: inline-flex; align-items: center; gap: 6px;
-    backdrop-filter: blur(4px);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 6px 11px;
+    border: 1px solid rgba(103, 232, 249, 0.42);
+    border-radius: 6px;
+    background: rgba(10, 19, 34, 0.94);
+    color: #f1f5f9;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.4;
+    backdrop-filter: blur(6px);
 }
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 .dot.detected { background-color: var(--success-color); box-shadow: 0 0 6px var(--success-color); }

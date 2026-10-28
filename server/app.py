@@ -5,6 +5,7 @@ import gc
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -592,6 +593,59 @@ def stop_persistence_workers():
     if event_log_worker is not None:
         event_log_worker.stop()
         event_log_worker = None
+
+
+def format_vision_alert(message, person_ids, *, scene_level=False):
+    """Add observed tracker IDs and a fresh robot location to a vision alert."""
+    ids = sorted({
+        value for value in person_ids
+        if type(value) is int and value >= 0
+    })
+    id_label = "화면 내 감지 ID" if scene_level else "관련 추적 ID"
+    id_text = ", ".join(str(value) for value in ids) if ids else "확인 불가"
+
+    location_text = "확인 불가"
+    try:
+        nav = navigation_control_api.state_response()
+        pose = current_navigation_pose_snapshot()
+        if nav.get("localization_ready") is True and isinstance(pose, dict):
+            received = float(pose.get("received_at", 0))
+            age = time.time() - received
+            x = float(pose["x"])
+            y = float(pose["y"])
+            if 0 <= age <= 2.0 and math.isfinite(x) and math.isfinite(y):
+                map_name = (nav.get("active_map") or {}).get("map_name")
+                map_text = f" ({map_name})" if map_name else ""
+                location_text = f"지도 X {x:.3f}m, Y {y:.3f}m{map_text}"
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    except Exception:
+        # Alert formatting must not block the underlying warning.
+        logging.getLogger(__name__).exception("Vision alert location unavailable")
+
+    if location_text == "확인 불가":
+        try:
+            status = robot_status_snapshot()
+            updated = float(status.get("gps_updated_at") or 0)
+            age = time.time() - updated
+            lat = float(status["gps_lat"])
+            lng = float(status["gps_lng"])
+            if (status.get("gps_fix") is True and 0 <= age <= 5.0
+                    and math.isfinite(lat) and math.isfinite(lng)
+                    and -90 <= lat <= 90 and -180 <= lng <= 180):
+                location_text = f"GPS 위도 {lat:.6f}, 경도 {lng:.6f}"
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+
+    id_caption = "화면 내 감지 ID" if scene_level else "관련 추적 ID"
+    lines = [
+        "🚨 위험 행동 감지",
+        "",
+        f"행동: {message}",
+        f"{id_caption}: {id_text}",
+        f"로봇 위치: {location_text}",
+    ]
+    return "\n".join(lines)
 
 
 def submit_automatic_event(
@@ -2507,12 +2561,16 @@ def process_frame_for_dashboard(frame):
                                     "VISION_AI",
                                     event_type,
                                     confidence=detection["score"],
-                                    message=f"위험 행동 감지: {action_label}",
+                                    message=format_vision_alert(
+                                        f"위험 행동 감지: {action_label}", [oid]
+                                    ),
                                     frame=frame,
                                 )
                             else:
                                 automatic_notifier.send_event_alert_async(
-                                    f"위험 행동 감지: {action_label}",
+                                    format_vision_alert(
+                                        f"위험 행동 감지: {action_label}", [oid]
+                                    ),
                                     robot_id=SERVER_ROBOT_ID,
                                     event_type=vision_alert_type(action_label),
                                 )
@@ -2557,7 +2615,10 @@ def process_frame_for_dashboard(frame):
                     "VISION_AI",
                     event_type,
                     confidence=source.get("score"),
-                    message=f"위험 상호작용 감지: {action_label}",
+                    message=format_vision_alert(
+                        f"위험 상호작용 감지: {action_label}",
+                        [first.get("id"), second.get("id")],
+                    ),
                     frame=frame,
                     cooldown_key=interaction_incident_key(
                         pair_key,
@@ -2597,9 +2658,12 @@ def process_frame_for_dashboard(frame):
                     confidence=float(
                         scene_result.get("score") or 0.0
                     ),
-                    message=(
+                    message=format_vision_alert(
                         "폭행 상황 감지: VIOLENCE "
-                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%"
+                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%",
+                        [item.get("id") for item in detections
+                         if item.get("cls") == 0],
+                        scene_level=True,
                     ),
                     frame=frame,
                 )
