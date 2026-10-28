@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-box-layout-v3">
+    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-loop-drawer-v4">
     <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261020-dark-technical-v1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
@@ -271,7 +271,10 @@
                                             <button id="navigation-start" type="button" data-control-button="accent" data-control-overflow-rank="85" hidden>주행 시작</button>
                                             <button id="navigation-cancel" type="button" data-control-button="secondary" data-control-overflow-rank="80" hidden>goal 취소</button>
                                         </div>
-                                        <button type="button" id="loop-modal-trigger" data-control-button="secondary" class="loop-modal-trigger" aria-haspopup="dialog" aria-controls="commonModal">LOOP</button>
+                                        <button type="button" id="loop-modal-trigger" data-control-button="secondary" class="loop-modal-trigger"
+                                                data-drawer-toggle data-drawer-target="loop-side-drawer"
+                                                data-drawer-open-label="LOOP 패널 닫기" data-drawer-closed-label="LOOP 패널 열기"
+                                                aria-expanded="false" aria-controls="loop-side-drawer">LOOP</button>
                                     </div>
 
                                     <span class="lidar-control-separator" aria-hidden="true"></span>
@@ -410,6 +413,63 @@
                             NO SCAN DATA
                         </div>
                     </div>
+
+                    <aside id="loop-side-drawer" class="loop-side-drawer" data-open="false"
+                           aria-label="LOOP 제어 패널" aria-hidden="true" inert>
+                        <div class="loop-drawer-header">
+                            <strong>LOOP</strong>
+                            <button type="button" id="loop-drawer-close" data-control-button="secondary"
+                                    aria-label="LOOP 패널 닫기">×</button>
+                        </div>
+                        <div class="loop-drawer-content">
+                            <div class="loop-modal-info">
+                                <span>Map <strong id="loop-map">--</strong></span>
+                                <span>Mode <strong id="loop-mode">--</strong></span>
+                                <span id="loop-connection" role="status">Pi: 확인 중</span>
+                            </div>
+                            <section class="loop-modal-section" aria-labelledby="loop-goals-heading">
+                                <h3 id="loop-goals-heading">GOALS <small>A–Z, a–z</small></h3>
+                                <p class="loop-modal-hint">SET LOOP에서 Goal을 선택합니다. 동일 위치를 다시 클릭하면 삭제합니다.</p>
+                                <div id="loop-goals" class="loop-goal-list" role="list"></div>
+                            </section>
+                            <section class="loop-modal-section" aria-labelledby="loop-record-heading">
+                                <h3 id="loop-record-heading">RECORD / PLAY</h3>
+                                <p class="loop-modal-hint" id="loop-help"></p>
+                                <select id="loop-bags" aria-label="Recorded manual loops" hidden disabled></select>
+                                <div class="loop-modal-buttons">
+                                    <button type="button" id="loop-record" disabled data-control-button="secondary">Record</button>
+                                    <button type="button" id="loop-save" disabled data-control-button="success">Save</button>
+                                    <button type="button" id="loop-delete" disabled data-control-button="danger">Delete</button>
+                                </div>
+                            </section>
+                            <section class="loop-modal-section" aria-labelledby="loop-control-heading">
+                                <h3 id="loop-control-heading">LOOP CONTROL</h3>
+                                <div class="loop-modal-subsection">
+                                    <span class="loop-modal-subtitle">OBSTACLE</span>
+                                    <div id="loop-obstacle-toggle-mount" class="loop-obstacle-toggle-mount"
+                                         aria-label="장애물 대응 정책">
+                                        <button type="button" class="navigation-mode-toggle loop-obstacle-toggle"
+                                                role="switch" aria-checked="false" aria-label="Obstacle: Wait">
+                                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Wait</span>
+                                            <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                                            <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Replan</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="loop-modal-subsection">
+                                    <span class="loop-modal-subtitle">EXECUTION</span>
+                                    <div class="loop-modal-buttons">
+                                        <button type="button" id="loop-start" disabled data-control-button="accent">Start</button>
+                                        <button type="button" id="loop-stop" disabled data-control-button="danger">Stop</button>
+                                    </div>
+                                </div>
+                            </section>
+                            <div class="loop-modal-footer">
+                                <div id="loop-status" class="loop-modal-status" role="status">IDLE</div>
+                                <div id="loop-feedback" class="loop-modal-feedback" role="status"></div>
+                            </div>
+                        </div>
+                    </aside>
 
                     <button
                         class="lidar-map-select-btn"
@@ -809,7 +869,7 @@
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
     <script src="static/navigation_control.js?v=20261028-loop-modal-v1"></script>
-    <script src="static/recorded_loop_ui.js?v=20261028-box-layout-v3"></script>
+    <script src="static/recorded_loop_ui.js?v=20261028-loop-drawer-v4"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
