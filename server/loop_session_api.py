@@ -192,15 +192,13 @@ class LoopSessionApi:
                 raise RecordedLoopError("NOT_RECORDING", "No active manual recording")
             if record["error"]:
                 raise RecordedLoopError(record["error"], "Discard invalid recording")
-        # Saving is a physical STOP operation; no start/end pose check.
+        # Capture the STOP request timestamp BEFORE waiting for encoder
+        # standstill. Encoder confirmation latency is not motor-on time.
+        stop_offset = round(time.monotonic() - record["start"], 5)
         await self._verified_stop()
         with self._lock:
-            # Include Save's verified STOP as the final bag event, even when
-            # no dashboard Stop button was pressed.
-            record["events"].append({
-                "at": round(time.monotonic() - record["start"], 5),
-                "type": "stop",
-            })
+            # The last bag command stops at the operator's Save request.
+            record["events"].append({"at": stop_offset, "type": "stop"})
             if self._record is not record:
                 raise RecordedLoopError("RECORDING_CHANGED", "Recording changed while saving")
             events = list(record["events"])
