@@ -217,6 +217,10 @@ function init() {
   trigger.disabled = false;
   trigger.removeAttribute("aria-disabled");
   trigger.classList.remove("disabled");
+  // Always start collapsed. In particular, a previous open state restored by
+  // another dashboard component must not expose the LOOP controls at startup.
+  drawer.dataset.open = "false";
+  trigger.setAttribute("aria-expanded", "false");
   drawerContent.inert = true;
   drawerContent.setAttribute("aria-hidden", "true");
   const drawerComponent = controls()?.drawerToggle;
