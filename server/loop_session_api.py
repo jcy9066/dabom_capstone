@@ -466,9 +466,13 @@ class LoopSessionApi:
                         asyncio.to_thread(
                             self.recorded.map_api.ros_control.cancel_navigation),
                         timeout=4.0)
-                    if not isinstance(result, dict) or (
-                        result.get("confirmed") is not True
-                        and result.get("requested") is not False
+                    safe_terminal = (
+                        isinstance(result, dict)
+                        and result.get("completed") is True
+                        and result.get("terminal") == "SUCCEEDED"
+                    )
+                    if not isinstance(result, dict) or not (
+                        result.get("confirmed") is True or safe_terminal
                     ):
                         raise RuntimeError("NAV2_CANCEL_UNCONFIRMED")
                     await self._verified_stop()
