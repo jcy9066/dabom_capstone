@@ -1,8 +1,4 @@
-/* LOOP viewer controls. Button behavior/styling remains owned by ControlButton. */
-.loop-modal-trigger {
-  height: 28px; max-height: 28px; min-width: 48px;
-  align-self: center; padding: 3px 10px;
-}
+/* LOOP viewer right drawer. Reuses shared DrawerToggle and ControlButton. */
 .loop-map-radio {
   display: inline-flex; align-items: center; gap: 5px; min-height: 27px;
   font-size: 10px; font-weight: 700; color: var(--text-dark);
@@ -15,57 +11,71 @@
 .loop-map-radio input:checked {
   border-color: #22d3ee; background: #22d3ee; box-shadow: inset 0 0 0 2px #0f172a;
 }
-#loop-modal-trigger[data-control-button] {
-  opacity: 1; color: #dff7ff; border-color: rgba(34,211,238,.68);
-  background: rgba(9,55,78,.82); cursor: pointer;
-}
-#loop-modal-trigger[data-control-button]:hover,
-#loop-modal-trigger[data-control-button]:focus-visible {
-  border-color: #67e8f9; color: #fff; background: rgba(8,92,124,.94);
-}
-#loop-modal-trigger[aria-expanded="true"] { border-color: #22d3ee; color: #fff; }
-
-/* Right-hand drawer belongs to the 3D viewer, including fullscreen mode.
-   Visibility and open/closed state are controlled by the shared DrawerToggle. */
+/* Mirror the existing left-side LAYERS drawer on the right edge. */
 .loop-side-drawer {
-  position: absolute; z-index: 90; inset: 0 0 0 auto;
+  position: absolute;
+  top: 50%; right: 0; z-index: 39;
+  display: flex; align-items: stretch;
+  transform: translateY(-50%);
+  opacity: 0; pointer-events: none;
+  height: min(580px, calc(100% - 104px));
+  max-height: calc(100% - 32px);
+  min-height: 115px;
+}
+.minimap-overlay.expanded .loop-side-drawer,
+.minimap-overlay:fullscreen .loop-side-drawer,
+.minimap-overlay:-webkit-full-screen .loop-side-drawer {
+  opacity: 1; pointer-events: auto;
+}
+.loop-side-drawer-handle {
+  position: relative;
+  align-self: stretch;
+  flex: 0 0 15.4px;
+}
+.loop-side-drawer-content {
   display: flex; flex-direction: column;
-  box-sizing: border-box; width: min(435px, 94%); min-width: 0;
-  background: var(--card-bg); color: var(--text-dark);
-  border-left: 1px solid var(--border-color);
-  box-shadow: -8px 0 26px rgba(0,0,0,.24);
-  transform: translateX(105%); opacity: 0; visibility: hidden;
-  pointer-events: none; transition: transform .2s ease, opacity .2s ease, visibility .2s;
+  box-sizing: border-box;
+  width: min(355px, 78vw);
+  max-width: min(355px, 78vw);
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(34,211,238,.24);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  background: rgba(8,15,29,.96);
+  backdrop-filter: blur(5px);
+  color: #cbd5e1;
+  opacity: 1;
+  transition: width .2s ease, max-width .2s ease,
+              opacity .16s ease, border-width .2s ease;
 }
-.loop-side-drawer[data-open="true"] {
-  transform: translateX(0); opacity: 1; visibility: visible;
-  pointer-events: auto; transition: transform .2s ease, opacity .2s ease;
+.loop-side-drawer[data-open="false"] .loop-side-drawer-content {
+  width: 0; max-width: 0;
+  border-width: 0; opacity: 0; pointer-events: none;
 }
-.minimap-overlay:not(.expanded):not(:fullscreen):not(:-webkit-full-screen) .loop-side-drawer {
-  visibility: hidden; pointer-events: none;
+ .loop-drawer-header {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(34,211,238,.24);
+  color: #67e8f9; font: 700 10px var(--mono);
+  letter-spacing: .45px;
 }
-.loop-drawer-header {
-  display: flex; align-items: center; justify-content: space-between;
-  flex: 0 0 auto; padding: 12px 15px;
-  border-bottom: 1px solid var(--border-color); background: var(--card-bg);
-  font-size: 13px; letter-spacing: .05em;
-}
-.loop-drawer-header .dashboard-control-button { min-width: 30px; font-size: 18px; }
 .loop-drawer-content {
   min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
   display: flex; flex-direction: column; gap: 12px;
-  padding: 13px; scrollbar-width: thin;
+  padding: 12px; scrollbar-width: thin;
 }
 .loop-modal-info {
   display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap;
   padding: 9px 10px; border-radius: 7px; border: 1px solid var(--border-color);
-  background: var(--card-bg2); font-size: 11px;
+  background: rgba(15,23,42,.65); font-size: 11px;
 }
 .loop-modal-info strong { padding-left: 3px; }
 .loop-modal-section {
   box-sizing: border-box; min-width: 0; display: flex; flex-direction: column;
   gap: 11px; padding: 12px; border: 1px solid var(--border-color);
-  border-radius: 8px; background: var(--card-bg2);
+  border-radius: 7px; background: rgba(15,23,42,.65);
 }
 .loop-modal-section h3 {
   margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--border-color);
@@ -86,7 +96,7 @@
 .loop-goal-row {
   display: flex; align-items: center; gap: 7px; padding: 5px 8px;
   border-radius: 5px; border: 1px solid var(--border-color);
-  background: var(--card-bg);
+  background: rgba(8,15,29,.75);
 }
 .loop-goal-row .loop-goal-label { flex: 1; font-size: 11px; font-weight: 700; }
 .loop-goal-row .dashboard-control-button { min-height: 24px; }
@@ -112,14 +122,14 @@
   opacity: 1; color: var(--accent);
 }
 .loop-modal select {
-  width: 100%; padding: 7px; color: var(--text-dark);
+  width: 100%; padding: 7px; color: #cbd5e1;
   background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 5px;
 }
 .loop-modal select[hidden], #loop-bags[hidden] { display: none !important; }
 .loop-modal-footer {
   display: grid; gap: 6px; padding: 10px 12px;
   border: 1px solid var(--border-color); border-radius: 7px;
-  background: var(--card-bg2);
+  background: rgba(15,23,42,.65);
 }
 .loop-modal-status { font-size: 11px; font-weight: 700; }
 .loop-modal-feedback { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
