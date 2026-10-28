@@ -31,9 +31,14 @@ function controls() { return window.DabomDashboardComponents?.controls; }
 function isOpen() { return drawer.dataset.open === "true"; }
 function setDrawerOpen(open) {
   const component = controls()?.drawerToggle;
-  if (!component?.setOpen || component.setOpen("loop-side-drawer", open) === false) {
+  if (!component?.setOpen) {
     feedback("DrawerToggle component unavailable");
+    return;
   }
+  component.setOpen("loop-side-drawer", open);
+  // DrawerToggle.setOpen() returns the requested open state; false is the
+  // correct result on close, not a failure.
+  if (isOpen() !== Boolean(open)) feedback("DrawerToggle component unavailable");
 }
 function syncNames(goals) {
   const names = goals.map(goal => goal.name);
