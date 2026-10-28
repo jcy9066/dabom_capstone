@@ -27,7 +27,7 @@ function feedback(msg) { if ($("loop-feedback")) $("loop-feedback").textContent 
 function layout() {
   return [
     '<div class="loop-modal">',
-    '<div class="loop-modal-info"><span>Map: <strong id="loop-map">--</strong></span><span>Mode: <strong id="loop-mode">--</strong></span></div>',
+    '<div class="loop-modal-info"><span>Map: <strong id="loop-map">--</strong></span><span>Mode: <strong id="loop-mode">--</strong></span><span id="loop-connection" role="status">Pi: 확인 중</span></div>',
     '<section class="loop-modal-section"><h3>GOALS (A–Z, a–z)</h3>',
     '<p class="loop-modal-hint">3D Viewer에서 SET LOOP을 켜고 SET GOAL로 위치를 선택합니다. 동일 위치를 다시 클릭하면 삭제합니다.</p>',
     '<div id="loop-goals" class="loop-goal-list" role="list"></div></section>',
@@ -35,16 +35,16 @@ function layout() {
     '<p class="loop-modal-hint" id="loop-help"></p>',
     '<select id="loop-bags" aria-label="Recorded manual loops"></select>',
     '<div class="loop-modal-buttons">',
-    '<button type="button" id="loop-record" data-control-button="secondary">Record</button>',
-    '<button type="button" id="loop-save" data-control-button="success">Save</button>',
-    '<button type="button" id="loop-delete" data-control-button="danger">Delete</button>',
+    '<button type="button" id="loop-record" disabled data-control-button="secondary">Record</button>',
+    '<button type="button" id="loop-save" disabled data-control-button="success">Save</button>',
+    '<button type="button" id="loop-delete" disabled data-control-button="danger">Delete</button>',
     '</div></section>',
     '<section class="loop-modal-section"><h3>OBSTACLE</h3>',
     '<div class="loop-policy" role="group" aria-label="Obstacle policy">',
     '<button type="button" id="loop-policy-toggle" data-control-button="view">Wait</button></div>',
     '<div class="loop-modal-buttons">',
-    '<button type="button" id="loop-start" data-control-button="accent">Start</button>',
-    '<button type="button" id="loop-stop" data-control-button="danger">Stop</button>',
+    '<button type="button" id="loop-start" disabled data-control-button="accent">Start</button>',
+    '<button type="button" id="loop-stop" disabled data-control-button="danger">Stop</button>',
     '</div></section>',
     '<div id="loop-status" class="loop-modal-status" role="status">IDLE</div>',
     '<div id="loop-feedback" class="loop-modal-feedback" role="status"></div></div>'
@@ -66,6 +66,10 @@ function render() {
   if (!latest || manager?.activeView?.name !== "loopModal") return;
   $("loop-map").textContent = latest.map_name || "--";
   $("loop-mode").textContent = latest.mode || "--";
+  const piConnected = latest.connected === true;
+  const mapReady = Boolean(latest.map_name) && latest.navigation_mode === "DRIVING";
+  $("loop-connection").textContent = piConnected
+    ? "Pi: 연결됨" : "Pi: 미연결 (Modal 조회 가능)";
   syncNames(latest.goals || []);
   const manual = latest.mode === "MANUAL";
   const playing = latest.playing === true, recording = latest.recording === true;
@@ -86,9 +90,13 @@ function render() {
     list.appendChild(row);
   }
   if (!order.length) list.textContent = "등록된 Goal 없음";
-  $("loop-help").textContent = manual
-    ? "MANUAL: 모터 명령과 시간을 기록·반복 재생합니다. Goal은 시각화 전용입니다."
-    : "AUTO: 선택한 Goal을 순서대로 Nav2로 순찰합니다.";
+  $("loop-help").textContent = !piConnected
+    ? "Pi 연결 전에는 Goal·기록 조회만 가능하며 Record/Start는 사용할 수 없습니다."
+    : !mapReady
+      ? "DRIVING Map이 준비되면 기록·주행할 수 있습니다."
+      : manual
+        ? "MANUAL: 모터 명령과 시간을 기록·반복 재생합니다. Goal은 시각화 전용입니다."
+        : "AUTO: 선택한 Goal을 순서대로 Nav2로 순찰합니다.";
   const bags = $("loop-bags"); bags.hidden = !manual; bags.replaceChildren();
   for (const bag of latest.recordings || []) {
     const option = document.createElement("option");
@@ -97,10 +105,10 @@ function render() {
   }
   if ([...bags.options].some(x => x.value === chosenBag)) bags.value = chosenBag;
   chosenBag = bags.value || ""; bags.disabled = playing || recording;
-  $("loop-record").disabled = busy || playing || recording || !manual;
-  $("loop-save").disabled = busy || !recording;
-  $("loop-delete").disabled = busy || playing || (!recording && !chosenBag);
-  $("loop-start").disabled = busy || playing || recording ||
+  $("loop-record").disabled = busy || playing || recording || !manual || !piConnected || !mapReady;
+  $("loop-save").disabled = busy || !recording || !piConnected;
+  $("loop-delete").disabled = busy || playing || !mapReady || (!recording && !chosenBag);
+  $("loop-start").disabled = busy || playing || recording || !piConnected || !mapReady ||
       (manual ? !chosenBag || policy === "REPLAN" : order.filter(n => selected.has(n)).length < 2);
   $("loop-stop").disabled = busy || !playing;
   $("loop-status").textContent = (latest.status || "IDLE") +
@@ -124,8 +132,12 @@ async function refresh() {
     }
     render();
   } catch (error) {
-    feedback(error.message);
+    feedback("LOOP 상태 조회 실패: " + error.message);
     if ($("loop-status")) $("loop-status").textContent = "상태 확인 불가";
+    if ($("loop-connection")) $("loop-connection").textContent = "Pi: 상태 확인 불가";
+    for (const id of ["loop-record", "loop-save", "loop-start"]) {
+      if ($(id)) $(id).disabled = true;
+    }
     if ($("loop-stop")) $("loop-stop").disabled = false;
   }
 }
@@ -165,6 +177,9 @@ function bind() {
 function init() {
   manager = window.DabomDashboardComponents?.modal?.getDefault?.();
   if (!manager) { trigger.disabled = true; return; }
+  // Viewing LOOP has no dependency on Pi connectivity or active map.
+  trigger.disabled = false;
+  trigger.removeAttribute("aria-disabled");
   manager.register("loopModal", { title: "LOOP", render: layout,
     onOpen: async () => { bind(); await refresh(); } });
   trigger.addEventListener("click", () => void manager.open("loopModal", {}, { replace: true }));
