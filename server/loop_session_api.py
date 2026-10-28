@@ -319,7 +319,11 @@ class LoopSessionApi:
         if (math.hypot(poses[0]["x"] - origin["x"],
                        poses[0]["y"] - origin["y"]) > 0.40
             or math.hypot(poses[-1]["x"] - destination["x"],
-                          poses[-1]["y"] - destination["y"]) > 0.40):
+                          poses[-1]["y"] - destination["y"]) > 0.40
+            or abs(math.atan2(
+                math.sin(poses[-1]["yaw"] - destination["yaw"]),
+                math.cos(poses[-1]["yaw"] - destination["yaw"]),
+            )) > 0.70):
             return []
         distance = 0.0
         for previous, current in zip(poses, poses[1:]):
@@ -402,15 +406,14 @@ class LoopSessionApi:
             )
             path = paths.get(index) if anchored else None
             if path:
-                # WAIT waits for original trace to become usable; REPLAN
-                # computes a fresh Nav2 path when that trace is obstructed.
-                if not await self._wait_for_cached_path(path, key):
+                # WAIT preserves the recorded path until unobstructed.
+                # REPLAN invalidates blocked cache before requesting a new path.
+                valid = await self._wait_for_cached_path(path, key)
+                if self._cancelled:
                     return
-                if self._policy == "REPLAN":
-                    valid = await asyncio.to_thread(ros.loop_path_valid, path)
-                    if not valid:
-                        paths.pop(index, None)
-                        path = None
+                if self._policy == "REPLAN" and not valid:
+                    paths.pop(index, None)
+                    path = None
             if self._cancelled:
                 return
             try:
