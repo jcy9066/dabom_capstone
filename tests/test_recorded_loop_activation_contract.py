@@ -21,7 +21,8 @@ def test_no_nav2_replay_feature_flag():
 def test_wait_replan_modal_policy_toggle():
     html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
     ui = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
-    assert 'id="loop-modal-trigger"' in html
+    assert 'id="loopDrawerToggle"' in html
+    assert 'id="loop-modal-trigger"' not in html
     assert 'id="loop-goal-toggle"' in html
     assert 'id="recordedLoopPanel"' not in html
     assert 'id="loop-obstacle-toggle-mount"' in html
@@ -71,9 +72,11 @@ def test_single_loop_execution_and_trajectory_only():
     html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
     ui = (ROOT / "frontend/services/static/recorded_loop_ui.js").read_text(encoding="utf-8")
     module = (ROOT / "server/loop_session_api.py").read_text(encoding="utf-8")
-    assert 'id="loop-modal-trigger"' in html
+    assert 'id="loopDrawerToggle"' in html
+    assert 'id="loop-modal-trigger"' not in html
     assert 'data-drawer-target="loop-side-drawer"' in html
     assert 'drawerToggle?.enhance?.(trigger)' in ui
+    assert 'id="loop-side-drawer-content" aria-hidden="true" inert' in html
     assert 'manager.register("loopModal"' not in ui
     assert 'async def _manual_bag' in module
     assert 'async def _auto_goals' in module

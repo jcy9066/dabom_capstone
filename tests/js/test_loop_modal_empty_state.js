@@ -29,14 +29,15 @@ function element(tag = "div") {
   return node;
 }
 async function main() {
-  const ids = ["loop-modal-trigger", "loop-side-drawer", "loop-drawer-close",
+  const ids = ["loopDrawerToggle", "loop-side-drawer", "loop-side-drawer-content",
     "loop-obstacle-toggle-mount", "loop-map", "loop-mode", "loop-connection",
     "loop-goals", "loop-help", "loop-bags", "loop-record", "loop-save",
     "loop-delete", "loop-start", "loop-stop", "loop-status", "loop-feedback"];
   const nodes = Object.fromEntries(ids.map(id => [id, element(id === "loop-bags" ? "select" : "button")]));
   const drawer = nodes["loop-side-drawer"];
+  const panel = nodes["loop-side-drawer-content"];
   drawer.dataset.open = "false";
-  drawer.inert = true;
+  panel.inert = true;
   const listeners = {};
   let polling = null, enhanced = 0, isolated = false, toggleController = null;
   let state = { ok: true, map_name: null, mode: "MANUAL", connected: false,
@@ -87,12 +88,13 @@ async function main() {
   };
   vm.runInNewContext(script, ctx);
   for (const fn of listeners.DOMContentLoaded || []) fn();
-  assert.equal(nodes["loop-modal-trigger"].disabled, false);
+  assert.equal(nodes["loopDrawerToggle"].disabled, false);
   assert.equal(drawer.dataset.open, "false");
   assert.equal(isolated, true);
-  nodes["loop-modal-trigger"].listeners.click();
+  nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "true", "LOOP opens without Pi");
-  assert.equal(drawer.inert, false);
+  assert.equal(panel.inert, false);
+  assert.equal(panel.attrs["aria-hidden"], "false");
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(enhanced >= 1, "Shared ControlButton applied");
   assert.equal(nodes["loop-bags"].hidden, true, "Empty list completely hidden");
@@ -116,10 +118,11 @@ async function main() {
   assert.equal(nodes["loop-bags"].hidden, true);
   assert.equal(nodes["loop-bags"].disabled, true);
 
-  nodes["loop-drawer-close"].listeners.click();
+  nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "false");
-  assert.equal(drawer.inert, true);
-  nodes["loop-modal-trigger"].listeners.click();
+  assert.equal(panel.inert, true);
+  assert.equal(panel.attrs["aria-hidden"], "true");
+  nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "true");
   for (const fn of listeners.keydown || []) fn({ key: "Escape", preventDefault() {} });
   assert.equal(drawer.dataset.open, "false", "Escape closes drawer");
