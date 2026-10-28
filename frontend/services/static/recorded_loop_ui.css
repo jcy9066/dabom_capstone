@@ -50,6 +50,12 @@
   transition: width .2s ease, max-width .2s ease,
               opacity .16s ease, border-width .2s ease;
 }
+.loop-side-drawer[data-open="true"] .loop-side-drawer-content {
+  width: min(355px, 78vw);
+  max-width: min(355px, 78vw);
+  opacity: 1;
+  pointer-events: auto;
+}
 .loop-side-drawer[data-open="false"] .loop-side-drawer-content {
   width: 0; max-width: 0;
   border-width: 0; opacity: 0; pointer-events: none;
