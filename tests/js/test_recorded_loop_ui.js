@@ -16,7 +16,7 @@ assert.ok(html.includes('dashboard-drawer-toggle--right'), "Matches existing edg
 assert.ok(html.includes('data-drawer-target="loop-side-drawer"'));
 assert.ok(html.includes('id="loop-side-drawer"'));
 assert.ok(html.includes('data-open="false"'), "Drawer should start closed");
-assert.ok(html.includes('id="loop-side-drawer-content" aria-hidden="true" inert'),
+assert.ok(html.includes('id="loop-side-drawer-content" aria-hidden="true" inert hidden'),
   "Closed drawer hides only contents, not the reopen handle");
 assert.ok(!html.includes('id="loop-drawer-close"'), "No extra close button");
 assert.ok(!html.includes('aria-controls="commonModal">LOOP'));
@@ -44,6 +44,8 @@ assert.ok(ui.includes("isolated: true"));
 assert.ok(sharedToggle.includes("settings.isolated === true"));
 assert.ok(sharedDrawer.includes("controls.drawerToggle"));
 assert.ok(css.includes('.loop-side-drawer[data-open="true"]'));
+assert.ok(css.includes('.loop-side-drawer-content[hidden]'));
+assert.ok(ui.includes('drawerContent.hidden = !opened;'));
 assert.ok(css.includes('right: 0;') && css.includes('z-index: 70;'),
   "LOOP drawer must remain above viewer overlays");
 assert.ok(css.includes('.loop-side-drawer-handle'));
@@ -53,8 +55,8 @@ assert.ok(html.indexOf('id="loop-side-drawer"') < html.indexOf('id="lidarMapSele
 assert.ok(css.includes('#loop-bags[hidden]'));
 assert.ok(ui.includes('bagList.hidden = !showBagList;'));
 assert.ok(ui.includes('bagList.disabled = !showBagList'));
-assert.ok(html.includes("recorded_loop_ui.js?v=20261028-drawer-compact-v7"));
-assert.ok(html.includes("recorded_loop_ui.css?v=20261028-drawer-compact-v7"));
+assert.ok(html.includes("recorded_loop_ui.js?v=20261028-drawer-close-v8"));
+assert.ok(html.includes("recorded_loop_ui.css?v=20261028-drawer-close-v8"));
 assert.ok(css.includes(".loop-side-drawer-content::-webkit-scrollbar"));
 assert.ok(css.includes("scrollbar-width: none"));
 assert.ok(css.includes("overflow-y: auto"));

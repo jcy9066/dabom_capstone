@@ -94,6 +94,7 @@ async function main() {
   nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "true", "LOOP opens without Pi");
   assert.equal(panel.inert, false);
+  assert.equal(panel.hidden, false);
   assert.equal(panel.attrs["aria-hidden"], "false");
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(enhanced >= 1, "Shared ControlButton applied");
@@ -121,6 +122,7 @@ async function main() {
   nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "false");
   assert.equal(panel.inert, true);
+  assert.equal(panel.hidden, true);
   assert.equal(panel.attrs["aria-hidden"], "true");
   nodes["loopDrawerToggle"].listeners.click();
   assert.equal(drawer.dataset.open, "true");

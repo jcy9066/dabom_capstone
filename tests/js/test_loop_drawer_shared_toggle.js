@@ -13,7 +13,7 @@ const css = fs.readFileSync(path.join(root, "frontend/services/static/recorded_l
 function mockElement() {
   const attrs = {}, callbacks = {};
   return {
-    attrs, callbacks, dataset: {}, disabled: false, inert: false,
+    attrs, callbacks, dataset: {}, disabled: false, inert: false, hidden: false,
     classList: { remove() {} },
     addEventListener(event, listener) { (callbacks[event] ||= []).push(listener); },
     setAttribute(name, value) { attrs[name] = String(value); },
@@ -64,6 +64,7 @@ async function run() {
   assert.equal(drawer.dataset.open, "false", "LOOP must initialize closed");
   assert.equal(handle.attrs["aria-expanded"], "false");
   assert.equal(panel.inert, true);
+  assert.equal(panel.hidden, true, "Closed LOOP content must be visually hidden");
   assert.equal(panel.attrs["aria-hidden"], "true");
 
   const click = () => {
@@ -73,6 +74,7 @@ async function run() {
   assert.equal(drawer.dataset.open, "true", "Shared component must open LOOP");
   assert.equal(handle.attrs["aria-expanded"], "true");
   assert.equal(panel.inert, false);
+  assert.equal(panel.hidden, false, "Open LOOP content must be visible");
   assert.equal(panel.attrs["aria-hidden"], "false");
   assert.match(css, /\.loop-side-drawer \.loop-side-drawer-handle\[aria-expanded="true"\][\s\S]*?\{\s*opacity:\s*1;/,
     "Handle must remain visible for close");
@@ -81,6 +83,7 @@ async function run() {
   assert.equal(drawer.dataset.open, "false", "The same handle must close LOOP");
   assert.equal(handle.attrs["aria-expanded"], "false");
   assert.equal(panel.inert, true);
+  assert.equal(panel.hidden, true, "Closed LOOP content must be visually hidden");
   assert.equal(panel.attrs["aria-hidden"], "true");
 
   click();
@@ -88,10 +91,12 @@ async function run() {
     callback({ key: "Escape", preventDefault() {} });
   }
   assert.equal(drawer.dataset.open, "false", "Escape uses the real shared DrawerToggle");
+  assert.equal(panel.hidden, true, "Escape must hide content");
 
   assert.match(css, /\.loop-side-drawer-content\s*\{[^}]*overflow-y:\s*auto;/);
   assert.match(css, /\.loop-side-drawer-content\s*\{[^}]*scrollbar-width:\s*none;/);
   assert.match(css, /\.loop-side-drawer-content::-webkit-scrollbar/);
+  assert.ok(css.includes(".loop-side-drawer-content[hidden]"));
   process.stdout.write("Real DrawerToggle: default closed, open, close, Escape, scrollbars PASS\n");
 }
 
