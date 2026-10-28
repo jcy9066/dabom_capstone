@@ -1,11 +1,25 @@
 /* LOOP viewer right drawer. Reuses shared DrawerToggle and ControlButton. */
 .loop-map-radio {
-  display: inline-flex; align-items: center; gap: 5px; min-height: 27px;
-  font-size: 10px; font-weight: 700; color: var(--text-dark);
-  white-space: nowrap; cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.loop-map-radio > span {
+  display: inline-block;
+  flex: 0 0 auto;
+  color: #cbd5e1;
+  opacity: 1;
+  white-space: nowrap;
 }
 .loop-map-radio input {
-  appearance: none; width: 13px; height: 13px; margin: 0; border-radius: 50%;
+  appearance: none; flex: 0 0 13px; width: 13px; height: 13px; margin: 0; border-radius: 50%;
   border: 2px solid #94a3b8; background: transparent; cursor: pointer;
 }
 .loop-map-radio input:checked {
