@@ -408,7 +408,7 @@
             view?.expanded
             && control?.navigation_mode === 'DRIVING'
             && control?.localization_ready
-            && control?.nav2_ready
+            && (control?.nav2_ready || $('loop-goal-toggle')?.checked === true)
             && !control?.emergency_stop
             && control?.connected === true
             && !state.drivePending

@@ -2012,7 +2012,7 @@ if (root && canvas) {
             viewerExpanded
             && String(control?.navigation_mode || '').toUpperCase() === 'DRIVING'
             && control?.localization_ready
-            && control?.nav2_ready
+            && (control?.nav2_ready || document.getElementById('loop-goal-toggle')?.checked === true)
             && !control?.emergency_stop
             && control?.connected === true
         );

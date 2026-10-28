@@ -16,7 +16,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from server.recorded_loop_core import RecordedLoopError, pose_dict
+from server.recorded_loop_core import RecordedLoopError, pose_dict, map_identifier, map_digest
+from pathlib import Path
 from server.recorded_loop_obstacle import path_blocked
 from server.env_config import env_float
 
@@ -45,7 +46,17 @@ class LoopSessionApi:
         self._register(app)
 
     def _active(self) -> tuple[str, str]:
-        return self.recorded._active()
+        # Goal display and manual bag recording must not require AMCL/Nav2.
+        # Both are still strictly bound to the active DRIVING map contents.
+        state = self.navigation.state_response()
+        if state.get("navigation_mode") != "DRIVING":
+            raise RecordedLoopError("DRIVING_REQUIRED", "Load a map in DRIVING mode")
+        active = state.get("active_map")
+        if not isinstance(active, dict):
+            raise RecordedLoopError("MAP_REQUIRED", "No active map")
+        name = map_identifier(active.get("map_name"))
+        selected = self.recorded.map_api.resolve_map(name)
+        return name, map_digest(Path(selected.yaml_path))
 
     def _entry(self, key: tuple[str, str]) -> dict:
         with self._lock:
@@ -381,6 +392,9 @@ class LoopSessionApi:
             events = [dict(event) for event in bag["events"]]
             goals = None
         elif mode == "AUTO":
+            state = self.navigation.state_response()
+            if not state.get("localization_ready") or not state.get("nav2_ready"):
+                raise RecordedLoopError("NAVIGATION_NOT_READY", "AUTO requires AMCL/Nav2 readiness")
             names = data.get("goals")
             if not isinstance(names, list) or not 2 <= len(names) <= 52:
                 raise RecordedLoopError("GOALS_REQUIRED", "Select at least two Goals")
@@ -417,7 +431,7 @@ class LoopSessionApi:
                         "AUTO_LOOP_STOP_FAILED", automatic=True, force=True)
                 except Exception:
                     pass
-        else:
+        elif self._running_kind == "MANUAL":
             await self._verified_stop()
         try:
             await asyncio.wait_for(task, timeout=5.0)
