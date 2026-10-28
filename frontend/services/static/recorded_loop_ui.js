@@ -221,6 +221,7 @@ function init() {
   // another dashboard component must not expose the LOOP controls at startup.
   drawer.dataset.open = "false";
   trigger.setAttribute("aria-expanded", "false");
+  drawerContent.hidden = true;
   drawerContent.inert = true;
   drawerContent.setAttribute("aria-hidden", "true");
   const drawerComponent = controls()?.drawerToggle;
@@ -231,6 +232,9 @@ function init() {
     const opened = event.detail.open === true;
     // The persistent right-edge handle must stay focusable while closed.
     // Only the content is hidden/inert, as in the existing LAYERS drawer.
+    // Hidden is the authoritative visual state; width/opacity transitions
+    // alone can leave contents on screen when dashboard CSS is overridden.
+    drawerContent.hidden = !opened;
     drawerContent.inert = !opened;
     drawerContent.setAttribute("aria-hidden", String(!opened));
     if (opened) {

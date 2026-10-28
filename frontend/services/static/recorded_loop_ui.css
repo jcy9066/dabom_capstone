@@ -296,3 +296,9 @@
 @media (prefers-reduced-motion: reduce) {
   .loop-side-drawer { transition: none; }
 }
+
+/* Author-level safeguard: UA [hidden] may lose to .loop-side-drawer-content display:flex.
+   Keep the right-edge handle outside the hidden subtree so it can reopen. */
+.loop-side-drawer-content[hidden] {
+  display: none !important;
+}
