@@ -38,3 +38,146 @@
     color: #ffffff;
     background: rgba(8, 92, 124, 0.94);
 }
+
+/* The shared dashboard control components own button appearance.
+   These rules control only the LOOP modal layout and its box grouping. */
+#commonModal[data-modal-view="loopModal"] .modal-content.modal-content {
+    box-sizing: border-box;
+    width: min(96vw, 1100px);
+    max-width: 96vw;
+    height: auto;
+    max-height: min(92vh, 740px);
+}
+#commonModal[data-modal-view="loopModal"] .modal-body {
+    min-width: 0;
+    overflow-x: hidden;
+}
+.loop-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    color: var(--text-dark);
+}
+.loop-modal-info {
+    display: flex;
+    align-items: center;
+    gap: 10px 20px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--card-bg2);
+    font-size: 12px;
+}
+.loop-modal-info strong { padding-left: 3px; color: var(--text-dark); }
+.loop-modal-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, .95fr);
+    align-items: stretch;
+    gap: 12px;
+}
+.loop-modal-section {
+    box-sizing: border-box;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 15px;
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    background: var(--card-bg2);
+}
+.loop-modal-section h3 {
+    margin: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 12px;
+    letter-spacing: .04em;
+    color: var(--text-dark);
+}
+.loop-modal-section h3 small {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+    letter-spacing: 0;
+}
+.loop-modal-hint {
+    margin: 0;
+    min-height: 38px;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--text-muted);
+}
+.loop-goal-list {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 45px;
+    max-height: 180px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.loop-goal-list::-webkit-scrollbar { display: none; }
+.loop-goal-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--card-bg);
+}
+.loop-goal-row .loop-goal-label { flex: 1 1 auto; font-weight: 700; }
+.loop-goal-row button.dashboard-control-button { min-height: 25px; }
+.loop-modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    margin-top: auto;
+}
+.loop-modal-buttons .dashboard-control-button { flex: 0 1 auto; min-width: 66px; }
+.loop-modal-subsection { display: flex; flex-direction: column; gap: 9px; }
+.loop-modal-subsection + .loop-modal-subsection {
+    border-top: 1px solid var(--border-color);
+    padding-top: 14px;
+    margin-top: 5px;
+}
+.loop-modal-subtitle { font-size: 10px; color: var(--text-muted); font-weight: 700; letter-spacing: .05em; }
+.loop-policy { display: flex; width: max-content; max-width: 100%; }
+.loop-modal select {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--card-bg);
+    color: var(--text-dark);
+}
+.loop-modal select[hidden] { display: none !important; }
+.loop-modal-footer {
+    display: grid;
+    gap: 5px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--card-bg2);
+}
+.loop-modal-status { padding: 0; background: transparent; font-weight: 700; font-size: 11px; }
+.loop-modal-feedback { min-height: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.loop-modal-feedback:empty { display: none; }
+@media (max-width: 920px) {
+    .loop-modal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .loop-modal-grid > :last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 610px) {
+    .loop-modal-grid { grid-template-columns: minmax(0, 1fr); }
+    .loop-modal-grid > :last-child { grid-column: auto; }
+    .loop-modal-section { padding: 12px; }
+    .loop-modal-hint { min-height: 0; }
+}

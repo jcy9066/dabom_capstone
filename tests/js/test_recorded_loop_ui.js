@@ -30,11 +30,20 @@ events.DOMContentLoaded();
 assert.equal(trigger.disabled, false, "Offline Pi must not disable LOOP modal trigger");
 assert.equal(registered.name,"loopModal");
 const body=registered.descriptor.render();
+assert.ok(body.includes('class="loop-modal-grid"'), "Box grid exists");
+assert.equal((body.match(/class="loop-modal-section"/g) || []).length, 3,
+  "GOALS, RECORD/PLAY and LOOP CONTROL occupy separate boxes");
+assert.ok(body.includes('id="loop-bags" aria-label="Recorded manual loops" hidden disabled'),
+  "Empty bag dropdown is hidden and disabled before state fetch");
 for(const id of ["loop-map","loop-mode","loop-goals","loop-bags","loop-record",
  "loop-save","loop-delete","loop-start","loop-stop","loop-policy-toggle",
  "loop-connection"]) assert.ok(body.includes('id="'+id+'"'),id);
 trigger.events.click();
 assert.equal(opened,true, "Offline backend response must not block opening the modal");
+for(const id of ["loop-record","loop-save","loop-delete","loop-start","loop-stop","loop-policy-toggle"]) {
+  assert.ok(body.includes('id="' + id + '"') && body.includes('data-control-button='),
+    "Existing shared button component used for " + id);
+}
 assert.ok(body.includes('id="loop-start" disabled'), "Record/Start are disabled until state check");
 assert.ok(js.includes("dabom:loop-goal-picked"));
 assert.ok(js.includes('policy === "REPLAN"'));

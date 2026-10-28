@@ -27,27 +27,46 @@ function feedback(msg) { if ($("loop-feedback")) $("loop-feedback").textContent 
 function layout() {
   return [
     '<div class="loop-modal">',
-    '<div class="loop-modal-info"><span>Map: <strong id="loop-map">--</strong></span><span>Mode: <strong id="loop-mode">--</strong></span><span id="loop-connection" role="status">Pi: 확인 중</span></div>',
-    '<section class="loop-modal-section"><h3>GOALS (A–Z, a–z)</h3>',
-    '<p class="loop-modal-hint">3D Viewer에서 SET LOOP을 켜고 SET GOAL로 위치를 선택합니다. 동일 위치를 다시 클릭하면 삭제합니다.</p>',
-    '<div id="loop-goals" class="loop-goal-list" role="list"></div></section>',
-    '<section class="loop-modal-section"><h3>RECORD / PLAY</h3>',
+    '<div class="loop-modal-info">',
+    '<span>Map <strong id="loop-map">--</strong></span>',
+    '<span>Mode <strong id="loop-mode">--</strong></span>',
+    '<span id="loop-connection" role="status">Pi: 확인 중</span>',
+    '</div>',
+    '<div class="loop-modal-grid">',
+    '<section class="loop-modal-section" aria-labelledby="loop-goals-heading">',
+    '<h3 id="loop-goals-heading">GOALS <small>A–Z, a–z</small></h3>',
+    '<p class="loop-modal-hint">3D Viewer의 SET LOOP에서 위치를 지정합니다. 같은 위치를 다시 클릭하면 제거됩니다.</p>',
+    '<div id="loop-goals" class="loop-goal-list" role="list"></div>',
+    '</section>',
+    '<section class="loop-modal-section" aria-labelledby="loop-record-heading">',
+    '<h3 id="loop-record-heading">RECORD / PLAY</h3>',
     '<p class="loop-modal-hint" id="loop-help"></p>',
-    '<select id="loop-bags" aria-label="Recorded manual loops"></select>',
+    '<select id="loop-bags" aria-label="Recorded manual loops" hidden disabled></select>',
     '<div class="loop-modal-buttons">',
     '<button type="button" id="loop-record" disabled data-control-button="secondary">Record</button>',
     '<button type="button" id="loop-save" disabled data-control-button="success">Save</button>',
     '<button type="button" id="loop-delete" disabled data-control-button="danger">Delete</button>',
-    '</div></section>',
-    '<section class="loop-modal-section"><h3>OBSTACLE</h3>',
+    '</div>',
+    '</section>',
+    '<section class="loop-modal-section" aria-labelledby="loop-control-heading">',
+    '<h3 id="loop-control-heading">LOOP CONTROL</h3>',
+    '<div class="loop-modal-subsection">',
+    '<span class="loop-modal-subtitle">OBSTACLE</span>',
     '<div class="loop-policy" role="group" aria-label="Obstacle policy">',
-    '<button type="button" id="loop-policy-toggle" data-control-button="view">Wait</button></div>',
+    '<button type="button" id="loop-policy-toggle" data-control-button="view">Wait</button>',
+    '</div></div>',
+    '<div class="loop-modal-subsection">',
+    '<span class="loop-modal-subtitle">EXECUTION</span>',
     '<div class="loop-modal-buttons">',
     '<button type="button" id="loop-start" disabled data-control-button="accent">Start</button>',
     '<button type="button" id="loop-stop" disabled data-control-button="danger">Stop</button>',
-    '</div></section>',
+    '</div></div>',
+    '</section>',
+    '</div>',
+    '<div class="loop-modal-footer">',
     '<div id="loop-status" class="loop-modal-status" role="status">IDLE</div>',
-    '<div id="loop-feedback" class="loop-modal-feedback" role="status"></div></div>'
+    '<div id="loop-feedback" class="loop-modal-feedback" role="status"></div>',
+    '</div></div>'
   ].join("");
 }
 function syncNames(goals) {
@@ -97,14 +116,21 @@ function render() {
       : manual
         ? "MANUAL: 모터 명령과 시간을 기록·반복 재생합니다. Goal은 시각화 전용입니다."
         : "AUTO: 선택한 Goal을 순서대로 Nav2로 순찰합니다.";
-  const bags = $("loop-bags"); bags.hidden = !manual; bags.replaceChildren();
-  for (const bag of latest.recordings || []) {
+  const bags = $("loop-bags");
+  const recordings = Array.isArray(latest.recordings) ? latest.recordings : [];
+  const showBagList = manual && recordings.length > 0;
+  // An empty list must not produce a selectable/expandable native dropdown.
+  bags.hidden = !showBagList;
+  bags.disabled = !showBagList || playing || recording;
+  bags.setAttribute("aria-hidden", String(!showBagList));
+  bags.replaceChildren();
+  for (const bag of showBagList ? recordings : []) {
     const option = document.createElement("option");
     option.value = bag.name; option.textContent = bag.name + " (" + bag.events + " events)";
     bags.appendChild(option);
   }
   if ([...bags.options].some(x => x.value === chosenBag)) bags.value = chosenBag;
-  chosenBag = bags.value || ""; bags.disabled = playing || recording;
+  chosenBag = showBagList ? (bags.value || "") : "";
   $("loop-record").disabled = busy || playing || recording || !manual || !piConnected || !mapReady;
   $("loop-save").disabled = busy || !recording || !piConnected;
   $("loop-delete").disabled = busy || playing || !mapReady || (!recording && !chosenBag);
@@ -114,7 +140,13 @@ function render() {
   $("loop-status").textContent = (latest.status || "IDLE") +
       (latest.lap ? " / Lap " + latest.lap : "") + (latest.error ? " / " + latest.error : "");
   $("loop-policy-toggle").textContent = policy === "WAIT" ? "Wait" : "Replan";
-  window.DabomDashboardComponents?.controls?.controlButton?.enhanceAll?.(manager.body);
+  enhanceModalControls();
+}
+function enhanceModalControls() {
+  // Components are created by the shared ControlButton/CycleFilterButton.
+  // Apply them before state fetch: Pi/network errors must not reveal browser
+  // default buttons, and dynamically added Goal buttons remain enhanced.
+  window.DabomDashboardComponents?.controls?.controlButton?.enhanceAll?.(manager?.body);
 }
 async function refresh() {
   const ticket = ++generation;
@@ -188,7 +220,7 @@ function ensureLoopModal() {
   }
   if (!manager) return null;
   manager.register("loopModal", { title: "LOOP", render: layout,
-    onOpen: async () => { bind(); await refresh(); } });
+    onOpen: async () => { enhanceModalControls(); bind(); await refresh(); } });
   modalRegistered = true;
   return manager;
 }
