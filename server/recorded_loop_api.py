@@ -690,6 +690,10 @@ class RecordedLoopApi:
         return {"ok": True, **self._play_snapshot()}
 
     def begin_playback(self, payload: dict) -> dict:
+        external = getattr(self, "_external_session_active", None)
+        if callable(external) and external():
+            raise RecordedLoopError(
+                "LOOP_BUSY", "Stop the session Loop before legacy recorded replay")
         if self._play_task is not None and not self._play_task.done():
             raise RecordedLoopError("REPLAY_ACTIVE", "Stop existing playback first")
         if self._record is not None:

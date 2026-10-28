@@ -128,6 +128,9 @@ class LoopSessionApi:
 
     def record(self) -> dict:
         self._idle()
+        old_task = getattr(self.recorded, "_play_task", None)
+        if old_task is not None and not old_task.done():
+            raise RecordedLoopError("LOOP_BUSY", "Stop legacy replay before recording")
         if self._mode() != "MANUAL":
             raise RecordedLoopError("MANUAL_REQUIRED", "Record a bag while the robot is in MANUAL")
         key = self._active()
@@ -389,6 +392,10 @@ class LoopSessionApi:
 
     def start(self, data: dict) -> dict:
         self._idle()
+        old_task = getattr(self.recorded, "_play_task", None)
+        if old_task is not None and not old_task.done():
+            raise RecordedLoopError(
+                "LOOP_BUSY", "Stop legacy recorded playback before session Loop")
         if self._record is not None:
             raise RecordedLoopError("RECORDING_ACTIVE", "Save or Delete the recording first")
         key = self._active()

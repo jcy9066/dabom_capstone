@@ -1099,6 +1099,7 @@ loop_session_api = LoopSessionApi(
     csrf_failure=csrf_failure,
     send_robot_command=connections.send_command_wait_ack,
 )
+recorded_loop_api._external_session_active = lambda: loop_session_api.playing
 
 async def stop_recorded_loop_owners():
     # Navigation transitions must revoke both replay systems before changing
