@@ -10,6 +10,33 @@ const root = path.resolve(__dirname, "../..");
 const source = fs.readFileSync(
   path.join(root, "frontend/services/static/recorded_loop_ui.js"), "utf8");
 
+function testDiagnosticSummaryHidden() {
+  const html = fs.readFileSync(
+    path.join(root, "frontend/templates/index.html"), "utf8");
+  const start = html.indexOf('<details id="recordedLoopPanel"');
+  const end = html.indexOf("</details>", start);
+  assert.ok(start >= 0 && end > start, "Recorded Path / Loop panel missing");
+  const panel = html.slice(start, end);
+  for (const id of ["recorded-map", "recorded-position",
+                    "recorded-goals", "recorded-segments"]) {
+    assert.ok(!panel.includes(`id="${id}"`), `Summary field still visible: ${id}`);
+    assert.ok(!source.includes(`$("${id}")`), `Stale JS reference: ${id}`);
+  }
+  for (const id of [
+    "recorded-goal-id", "recorded-add-goal", "recorded-segment-id",
+    "recorded-from", "recorded-to", "recorded-source",
+    "recorded-start", "recorded-save", "recorded-discard",
+    "recorded-route-id", "recorded-route-segments", "recorded-save-route",
+    "recorded-play-kind", "recorded-play-route", "recorded-policy",
+    "recorded-play-start", "recorded-play-stop", "recorded-play-reset",
+    "recorded-delete-kind", "recorded-delete-id", "recorded-delete"
+  ]) {
+    assert.ok(panel.includes(`id="${id}"`), `Required control missing: ${id}`);
+  }
+  assert.ok(source.includes("state.current_pose"),
+            "Saving a Goal still requires the current pose from the API");
+}
+
 async function runScenario(kind, policy, id, expectedLaps) {
   const elements = new Map();
   const get = (id) => {
@@ -329,6 +356,7 @@ async function testMutationRejectsEarlierStateResponse() {
 }
 
 async function main() {
+  testDiagnosticSummaryHidden();
   await runScenario("path", "REPLAN", "AB", 1);
   await runScenario("path", "WAIT", "BA", 1);
   await runScenario("loop", "WAIT", "A_B_A", null);
@@ -336,7 +364,7 @@ async function main() {
   await testOutOfOrderStateResponses();
   await testStateFailureAllowsStopAndRecovers();
   await testMutationRejectsEarlierStateResponse();
-  process.stdout.write("Recorded Path/Loop dashboard: 7/7 mocked UI PASS\n");
+  process.stdout.write("Recorded Path/Loop dashboard: 8/8 mocked UI PASS\n");
 }
 
 main().catch(error => {

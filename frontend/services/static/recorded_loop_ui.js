@@ -33,19 +33,11 @@
     }
     function render(data) {
         state = data;
-        $("recorded-map").textContent = data.map_name || "--";
-        const goals = Object.keys(data.data?.goals || {}).sort();
-        const segments = Object.keys(data.data?.segments || {}).sort();
-        $("recorded-goals").textContent = goals.join(", ") || "없음";
-        $("recorded-segments").textContent = segments.join(", ") || "없음";
         $("recorded-status").textContent = data.recording?.active
             ? (data.recording.armed ? "Set Goal 시작 대기: " : "기록 중: ") +
               data.recording.segment_id +
               (data.recording.error ? " / 오류: " + data.recording.error : "")
             : "기록 대기";
-        $("recorded-position").textContent = data.current_pose
-            ? data.current_pose.x.toFixed(2) + ", " +
-              data.current_pose.y.toFixed(2) : "위치 없음";
         const active = data.play_active === true;
         const replay = data.playback || {};
         const status = replay.label || "재생 준비";
