@@ -417,9 +417,12 @@ class LoopSessionApi:
             if self._cancelled:
                 return
             try:
-                await self.navigation.plan_goal(
-                    {"goal": destination}, session_cached_path=path,
-                )
+                if path is None:
+                    await self.navigation.plan_goal({"goal": destination})
+                else:
+                    await self.navigation.plan_goal(
+                        {"goal": destination}, session_cached_path=path,
+                    )
             except Exception as exc:
                 code = getattr(exc, "error_code", "")
                 if self._policy == "REPLAN" and path and code in {
