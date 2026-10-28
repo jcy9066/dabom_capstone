@@ -83,6 +83,7 @@ def fixture(tmp_path):
         map_api=SimpleNamespace(resolve_map=lambda name: SimpleNamespace(yaml_path=yaml)),
         _play_stop=stop,
         get_live_scan=lambda: None,
+        _pose=lambda: None,
     )
     api = LoopSessionApi(
         app=FastAPI(), navigation=nav, recorded=recorded,
