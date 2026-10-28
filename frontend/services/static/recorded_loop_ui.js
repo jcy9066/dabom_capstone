@@ -2,9 +2,10 @@
 (() => {
 "use strict";
 const $ = id => document.getElementById(id);
-const trigger = $("loop-modal-trigger");
+const trigger = $("loopDrawerToggle");
 const drawer = $("loop-side-drawer");
-if (!trigger || !drawer) return;
+const drawerContent = $("loop-side-drawer-content");
+if (!trigger || !drawer || !drawerContent) return;
 let latest = null, csrf = null, busy = false, generation = 0, barrier = 0;
 let policy = "WAIT", order = [], selected = new Set(), chosenBag = "";
 let obstacleToggle = null;
@@ -195,7 +196,6 @@ function bindOnce() {
     policy, name: chosenBag, goals: order.filter(name => selected.has(name))
   }, "Loop 시작"));
   $("loop-stop").addEventListener("click", () => void mutate("stop", {}, "Stop 요청"));
-  $("loop-drawer-close").addEventListener("click", () => setDrawerOpen(false));
   // Reuse the existing navigation-mode Toggle component in isolated mode.
   // Obstacle policy cannot be mutated by ROS navigation-mode broadcasts.
   obstacleToggle = controls()?.mountNavigationMode?.(
@@ -217,19 +217,23 @@ function init() {
   trigger.disabled = false;
   trigger.removeAttribute("aria-disabled");
   trigger.classList.remove("disabled");
+  drawerContent.inert = true;
+  drawerContent.setAttribute("aria-hidden", "true");
   const drawerComponent = controls()?.drawerToggle;
   // The trigger is managed only by the existing DrawerToggle component.
   drawerComponent?.enhance?.(trigger);
   document.addEventListener("dabom:drawer-toggle", event => {
     if (event.detail?.targetId !== "loop-side-drawer") return;
     const opened = event.detail.open === true;
-    drawer.inert = !opened;
-    drawer.setAttribute("aria-hidden", String(!opened));
+    // The persistent right-edge handle must stay focusable while closed.
+    // Only the content is hidden/inert, as in the existing LAYERS drawer.
+    drawerContent.inert = !opened;
+    drawerContent.setAttribute("aria-hidden", String(!opened));
     if (opened) {
       enhanceControls();
       render();
       void refresh();
-      $("loop-drawer-close").focus();
+      // Opening is controlled by the edge handle, not a separate LOOP button.
     } else {
       trigger.focus();
     }
