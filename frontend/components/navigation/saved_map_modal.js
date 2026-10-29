@@ -230,12 +230,15 @@
         }
     }
 
-    async function waitLocalizationSession(container, progress, sessionId) {
+    async function waitLocalizationSession(container, progress, sessionId, token) {
         for (let attempt = 0; attempt < 600; attempt++) {
             if (!container.isConnected) {
-                // A closed modal must not leave an unobserved localization
-                // attempt that might still activate Driving later.
-                throw new Error('Localization 모달이 닫혔습니다. 상태를 다시 확인하세요.');
+                await requestJson('/api/navigation/localization/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body: JSON.stringify({session_id: sessionId}),
+                }).catch(() => null);
+                throw new Error('Localization 모달이 닫혀 위치 추정을 취소했습니다.');
             }
             const state = await requestJson('/api/navigation/localization/state');
             if (state.session_id !== sessionId) {
@@ -319,7 +322,7 @@
                 container.dataset.localizationSessionId = started.session_id;
                 container.dataset.localizationMapName = mapName;
                 const result = await waitLocalizationSession(
-                    container, progress, started.session_id,
+                    container, progress, started.session_id, token,
                 );
                 if (result.phase !== 'READY') {
                     showMessage(progress,
@@ -341,7 +344,7 @@
                         }),
                     });
                     const result = await waitLocalizationSession(
-                        container, progress, sessionId,
+                        container, progress, sessionId, token,
                     );
                     if (result.phase === 'READY') break;
                     if (result.phase !== 'POSE_CONFIRMATION_REQUIRED'

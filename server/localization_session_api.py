@@ -57,7 +57,7 @@ class LocalizationSessionApi:
                 and self.result.get("nav2_ready") is True
             ),
             "can_cancel": self.phase in {
-                "QUEUED", "ESTIMATING", *self.WAITING,
+                "QUEUED", "ESTIMATING", "POSE_VALIDATING", *self.WAITING,
             },
         }
 
@@ -89,9 +89,11 @@ class LocalizationSessionApi:
         map_name = payload.get("map_name")
         if source == "existing" and (not isinstance(map_name, str) or not map_name.strip()):
             raise NavigationControlError("MAP_REQUIRED", "Select a saved map", 400)
-        if self.phase not in self.TERMINAL:
+        if (self.phase not in self.TERMINAL
+            or self._task is not None and not self._task.done()):
             raise NavigationControlError(
-                "LOCALIZATION_BUSY", "Cancel or finish the current localization first.",
+                "LOCALIZATION_BUSY",
+                "Previous localization must stop safely before starting another.",
             )
         if self.navigation._operation_lock.locked():
             raise NavigationControlError(
@@ -208,10 +210,8 @@ class LocalizationSessionApi:
         }
         if pose.get("warning_acknowledged") is True:
             self.proposed_pose["warning_acknowledged"] = True
-        if live is not None:
-            await asyncio.to_thread(
-                self.navigation._validate_live_initial_pose, live, self.proposed_pose,
-            )
+        # Use the immutable saved snapshot for both source types. A live SLAM
+        # grid may change between the estimate and the operator's map click.
         await asyncio.to_thread(
             self.navigation._map_api.validate_initial_pose,
             selected, self.proposed_pose,
