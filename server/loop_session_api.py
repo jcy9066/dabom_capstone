@@ -10,6 +10,7 @@ import asyncio
 import math
 import threading
 import time
+from uuid import uuid4
 from collections import OrderedDict
 from typing import Any
 
@@ -19,11 +20,15 @@ from fastapi.responses import JSONResponse
 from server.recorded_loop_core import RecordedLoopError, pose_dict, map_identifier, map_digest
 from pathlib import Path
 from server.recorded_loop_obstacle import path_blocked
+from server.manual_loop_segments import compile_manual_segments
 from server.env_config import env_float
 
 GOAL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 MAX_EVENTS = 10000
 MAX_RECORD_SECONDS = 3600.0
+MAX_SAVED_BAGS_PER_MAP = 24
+MANUAL_PULSE_MAX_MS = 120
+MANUAL_ACK_TIMEOUT_SEC = 2.5
 
 
 class LoopSessionApi:
@@ -43,6 +48,16 @@ class LoopSessionApi:
         self._error: str | None = None
         self._laps = 0
         self._running_kind: str | None = None
+        self._resume_event = asyncio.Event()
+        self._requires_resume = False
+        self._connection_generation = 0
+        self._replay_generation = 0
+        self._manual_session_id = ""
+        self._manual_segment_index = 0
+        self._manual_elapsed_ms = 0.0
+        self._manual_pulse_index = 0
+        self._manual_pi_safety_session = None
+        self._uncertain_manual_pulse = None
         self._register(app)
 
     def _selected_map(self) -> tuple[str, str]:
@@ -81,6 +96,32 @@ class LoopSessionApi:
     def _mode(self) -> str:
         return str(self.navigation.state_response().get("robot_mode", "")).upper()
 
+    def note_pi_connection(self, connected: bool) -> None:
+        """External Pi WebSocket generation, not the status HTTP polling clock."""
+        with self._lock:
+            self._connection_generation += 1
+            if self.manual_playing:
+                self._requires_resume = True
+                self._replay_generation += 1
+                self._resume_event.clear()
+                self._status = "PAUSED_CONNECTION" if not connected else "RESUME_REQUIRED"
+
+    def resume(self, _payload: dict | None = None) -> dict:
+        if not self.manual_playing or not self._requires_resume:
+            raise RecordedLoopError("RESUME_NOT_REQUIRED", "No paused manual Loop to resume")
+        state = self.navigation.state_response()
+        if (state.get("connected") is not True
+            or state.get("navigation_mode") != "DRIVING"
+            or self._mode() != "MANUAL"
+            or state.get("emergency_stop")
+            or state.get("pi_safety", {}).get("fresh") is not True
+            or state.get("pi_safety", {}).get("emergency_stop") is not False):
+            raise RecordedLoopError("RESUME_UNSAFE", "Fresh Pi safety and MANUAL/DRIVING required")
+        # Waking the worker is not motion authorization: STOP, new encoder
+        # evidence, obstacle, and current safety generation are rechecked.
+        self._resume_event.set()
+        return {"ok": True, "resume_requested": True}
+
     def snapshot(self) -> dict:
         """Read-only modal state must work with Pi disconnected or no map."""
         state = self.navigation.state_response()
@@ -112,6 +153,11 @@ class LoopSessionApi:
                 "playing": self.playing, "running_kind": self._running_kind,
                 "policy": self._policy, "status": self._status,
                 "lap": self._laps, "error": self._error,
+                "segment_index": self._manual_segment_index if self.manual_playing else None,
+                "segment_elapsed_ms": round(self._manual_elapsed_ms, 2) if self.manual_playing else None,
+                "replay_generation": self._replay_generation if self.manual_playing else None,
+                "resume_required": self._requires_resume,
+                "ack_reconciliation_required": self._uncertain_manual_pulse is not None,
             }
 
     def toggle_goal(self, data: dict) -> dict:
@@ -228,6 +274,10 @@ class LoopSessionApi:
             if record["key"] != self._active():
                 raise RecordedLoopError("MAP_CHANGED", "Map changed during recording")
             entry = self._entry(record["key"])
+            if len(entry["bags"]) >= MAX_SAVED_BAGS_PER_MAP:
+                raise RecordedLoopError(
+                    "BAG_LIMIT", "Delete an old Loop before saving another recording",
+                )
             name = "Loop " + str(entry["bag_next"])
             entry["bag_next"] += 1
             entry["bags"][name] = {"events": events, "seconds": events[-1]["at"]}
@@ -285,39 +335,203 @@ class LoopSessionApi:
             import logging
             logging.getLogger(__name__).exception("manual safety diagnostic failed")
 
-    async def _manual_send(self, packet: dict) -> None:
-        if self._cancelled or self._mode() != "MANUAL":
+    def _manual_state(self) -> dict:
+        state = self.navigation.state_response()
+        if self._cancelled:
+            raise RuntimeError("REPLAY_CANCELLED")
+        if (state.get("navigation_mode") != "DRIVING"
+            or str(state.get("robot_mode") or "").upper() != "MANUAL"
+            or state.get("emergency_stop")):
+            raise RuntimeError("MANUAL_REPLAY_INTERRUPTED")
+        return state
+
+    async def _wait_connection_resume(self) -> None:
+        state = self._manual_state()
+        pi = state.get("pi_safety") or {}
+        healthy = (
+            state.get("connected") is True
+            and pi.get("fresh") is True
+            and pi.get("emergency_stop") is False
+            and bool(pi.get("safety_session"))
+        )
+        replaced = (
+            self._manual_pi_safety_session is not None
+            and pi.get("safety_session") != self._manual_pi_safety_session
+        )
+        if (not healthy or replaced) and not self._requires_resume:
+            self._requires_resume = True
+            self._replay_generation += 1
+            self._resume_event.clear()
+        while self._requires_resume and not self._cancelled:
+            state = self._manual_state()
+            pi = state.get("pi_safety") or {}
+            ready = (
+                state.get("connected") is True
+                and pi.get("fresh") is True
+                and pi.get("emergency_stop") is False
+                and bool(pi.get("safety_session"))
+            )
+            if not ready:
+                self._status = "PAUSED_CONNECTION"
+            else:
+                self._status = "RESUME_REQUIRED"
+                if self._resume_event.is_set():
+                    self._resume_event.clear()
+                    # A reconnect never inherits the previous STOP gate.
+                    # Fresh Pi ACK and NEW encoder samples are mandatory.
+                    await self._verified_stop()
+                    context = self.navigation.motion_safety_context()
+                    if context is None or context.get("safety_session") != pi["safety_session"]:
+                        raise RuntimeError("MANUAL_RESUME_SAFETY_FAILED")
+                    self._manual_pi_safety_session = pi["safety_session"]
+                    self._replay_generation += 1
+                    self._requires_resume = False
+                    self._status = "RUNNING"
+                    return
+            await asyncio.sleep(0.10)
+        if self._cancelled:
+            raise RuntimeError("REPLAY_CANCELLED")
+
+    async def _manual_send(self, packet: dict) -> float:
+        """Return *only* Pi-confirmed applied milliseconds for one pulse."""
+        if self._cancelled or self._mode() != "MANUAL" or self._requires_resume:
             raise RuntimeError("MANUAL_REPLAY_INTERRUPTED")
         context = self.navigation.motion_safety_context()
-        if context is None:
-            self._log_manual_safety_diagnostic("before_manual_send")
+        if context is None or not self.navigation.motion_allowed():
+            self._log_manual_safety_diagnostic("before_manual_pulse")
             raise RuntimeError("MANUAL_SAFETY_REVOKED")
-        command = {**packet, "safety_session": context["safety_session"],
-                   "safety_epoch": context["safety_epoch"]}
-        delivered = await self.send(
-            self.navigation._robot_id, command,
-            preflight=lambda: (not self._cancelled and self._mode() == "MANUAL"
-                               and self.navigation.motion_safety_context() == context))
-        if not delivered or self._cancelled:
-            raise RuntimeError("PI_MOTOR_ACK_FAILED")
-        if packet["type"] == "move" and not self.navigation.note_authorized_motion(context):
-            raise RuntimeError("MOTION_PERMISSION_REVOKED")
+        generation = self._replay_generation
+        connection = self._connection_generation
+        pulse_id = packet["pulse_id"]
+        command = {
+            **packet,
+            "type": "manual_loop_pulse",
+            "replay_generation": generation,
+            "safety_session": context["safety_session"],
+            "safety_epoch": context["safety_epoch"],
+        }
+        def preflight() -> bool:
+            # Recheck at the last WebSocket authorization boundary. A safe
+            # scan obtained before reconnect/STOP may now be stale or blocked.
+            clearance = path_blocked(
+                self.recorded.get_live_scan(), command["direction"],
+                mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
+            return (
+                clearance is False
+                and not self._cancelled and not self._requires_resume
+                and self._replay_generation == generation
+                and self._connection_generation == connection
+                and self._mode() == "MANUAL"
+                and self.navigation.motion_safety_context() == context
+                and not getattr(self.navigation, "_localization_turn_active", False)
+            )
+        try:
+            reply = await asyncio.wait_for(
+                self.send(
+                    self.navigation._robot_id, command,
+                    motion_ack=True, preflight=preflight,
+                ),
+                timeout=MANUAL_ACK_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, ConnectionError, OSError) as exc:
+            self._uncertain_manual_pulse = dict(command)
+            raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN") from exc
+        if not preflight():
+            if not self._cancelled:
+                self._uncertain_manual_pulse = dict(command)
+            raise RuntimeError(
+                "REPLAY_CANCELLED" if self._cancelled
+                else "MANUAL_PULSE_ACK_UNCERTAIN"
+            )
+        if not self.navigation._pi_command_delivered(reply):
+            # A MOVE may have completed even when the ACK was lost.
+            # Record its exact identity for a READ-ONLY Pi receipt query.
+            self._uncertain_manual_pulse = dict(command)
+            raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN")
+        observed = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
+        if not isinstance(observed, dict):
+            raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
+        elapsed = observed.get("elapsed_ms")
+        duration = packet["duration_ms"]
+        if (observed.get("pulse_id") != pulse_id
+            or observed.get("replay_generation") != generation
+            or observed.get("duration_ms") != duration
+            or observed.get("stopped") is not True
+            or type(elapsed) is not int
+            or not 0 <= elapsed <= duration):
+            raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
+        if not self.navigation.note_authorized_motion(context):
+            raise RuntimeError("MANUAL_MOTION_PERMISSION_REVOKED")
+        self._manual_pi_safety_session = context["safety_session"]
+        return float(elapsed)
+
+    async def _reconcile_uncertain_manual_pulse(self) -> float:
+        """Resume only when Pi proves how long the motor was powered.
+
+        Never reissue an uncertain MOVE. A missing receipt is a safety
+        failure, not a guessed amount of movement.
+        """
+        original = self._uncertain_manual_pulse
+        if not isinstance(original, dict):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        if not self._requires_resume:
+            self._requires_resume = True
+            self._resume_event.clear()
+            self._replay_generation += 1
+        self._status = "PAUSED_CONNECTION"
+        await self._wait_connection_resume()
+        query = {
+            "type": "manual_loop_query",
+            "pulse_id": original["pulse_id"],
+            "replay_generation": original["replay_generation"],
+            "pulse_safety_epoch": original["safety_epoch"],
+            "safety_session": original["safety_session"],
+        }
+        try:
+            reply = await asyncio.wait_for(
+                self.send(self.navigation._robot_id, query, motion_ack=True),
+                timeout=MANUAL_ACK_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, ConnectionError, OSError) as exc:
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE") from exc
+        if not self.navigation._pi_command_delivered(reply):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        receipt = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
+        if not isinstance(receipt, dict):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        duration = original["duration_ms"]
+        elapsed = receipt.get("elapsed_ms")
+        if (receipt.get("pulse_id") != original["pulse_id"]
+            or receipt.get("replay_generation") != original["replay_generation"]
+            or receipt.get("duration_ms") != duration
+            or receipt.get("stopped") is not True
+            or type(elapsed) is not int or not 0 <= elapsed <= duration):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_MISMATCH")
+        self._uncertain_manual_pulse = None
+        self._status = "RUNNING"
+        return float(elapsed)
 
     async def _wait_obstacle_clear(self, direction: str) -> float:
         def obstacle() -> bool | None:
             return path_blocked(
                 self.recorded.get_live_scan(), direction,
                 mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
-                mount_yaw=env_float("LIDAR_YAW"))
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
         if obstacle() is False:
             return 0.0
         began = time.monotonic()
         await self._verified_stop()
-        self._status = "WAITING"
+        self._status = "PAUSED_OBSTACLE"
         stable_since = None
         while not self._cancelled:
-            if self._mode() != "MANUAL" or self.navigation.motion_safety_context() is None:
-                self._log_manual_safety_diagnostic("waiting_for_obstacle")
+            await self._wait_connection_resume()
+            state = self._manual_state()
+            if state.get("pi_safety", {}).get("fresh") is not True:
+                continue
+            if self.navigation.motion_safety_context() is None:
                 raise RuntimeError("MANUAL_SAFETY_REVOKED")
             clear = obstacle()
             now = time.monotonic()
@@ -331,67 +545,101 @@ class LoopSessionApi:
             await asyncio.sleep(0.10)
         raise RuntimeError("REPLAY_CANCELLED")
 
+    async def _manual_idle_wait(self, duration_ms: float) -> None:
+        deadline = time.monotonic() + duration_ms / 1000.0
+        while not self._cancelled:
+            wait_started = time.monotonic()
+            await self._wait_connection_resume()
+            resume_delay = time.monotonic() - wait_started
+            if resume_delay > 0.15:
+                deadline += resume_delay
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            before = time.monotonic()
+            await asyncio.sleep(min(0.05, left))
+            # A communication pause is not counted as the recorded STOP gap.
+            if self._requires_resume:
+                deadline += time.monotonic() - before
+        raise RuntimeError("REPLAY_CANCELLED")
+
     async def _manual_bag(self, key: tuple[str, str], events: list[dict]) -> None:
+        segments = compile_manual_segments(events)  # O(N), once per replay
+        await self._wait_connection_resume()
         await self._verified_stop()
         self._status = "RUNNING"
+        previous_direction = None
+        last_map_check = 0.0
         while not self._cancelled:
             if self._active() != key:
                 raise RuntimeError("MAP_CHANGED")
-            lap_start = time.monotonic()
-            paused = 0.0
-            next_map_check = time.monotonic() + 2.0
-            for event_index, event in enumerate(events):
-                while not self._cancelled:
-                    remaining = lap_start + event["at"] + paused - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    await asyncio.sleep(min(0.05, remaining))
+            for index, segment in enumerate(segments):
                 if self._cancelled:
                     break
-                if time.monotonic() >= next_map_check:
-                    if self._active() != key:
-                        raise RuntimeError("MAP_CHANGED")
-                    next_map_check = time.monotonic() + 2.0
-                if event["type"] == "move":
-                    if event["speed"] > 0:
-                        paused += await self._wait_obstacle_clear(event["direction"])
-                    # Never keep replaying old MOVE events after their
-                    # next recorded STOP deadline has passed.
-                    next_stop = next(
-                        (item["at"] for item in events[event_index + 1:]
-                         if item["type"] == "stop"),
-                        None,
-                    )
-                    if next_stop is None:
-                        raise RuntimeError("MANUAL_REPLAY_STOP_MISSING")
-
-                    deadline = lap_start + next_stop + paused
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        await self._verified_stop()
-                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
-
-                    try:
-                        await asyncio.wait_for(
-                            self._manual_send({
-                                "type": "move", "direction": event["direction"],
-                                "speed": event["speed"]}),
-                            timeout=remaining,
-                        )
-                    except asyncio.TimeoutError:
-                        await self._verified_stop()
-                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
-
-                    if time.monotonic() >= deadline:
-                        await self._verified_stop()
-                        raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
-                else:
+                await self._wait_connection_resume()
+                self._manual_segment_index = index
+                remaining_ms = float(segment["duration_ms"])
+                self._manual_elapsed_ms = 0.0
+                if segment["type"] == "stop":
                     await self._verified_stop()
+                    previous_direction = None
+                    await self._manual_idle_wait(remaining_ms)
+                    continue
+                direction = segment["direction"]
+                if direction != previous_direction:
+                    # A changed direction must not inherit a possibly rotating
+                    # wheel, even if Pico's 120ms electrical deadtime passed.
+                    await self._verified_stop()
+                previous_direction = direction
+                idle_pulses = 0
+                while remaining_ms > 0.001 and not self._cancelled:
+                    await self._wait_connection_resume()
+                    if time.monotonic() - last_map_check >= 2.0:
+                        if self._active() != key:
+                            raise RuntimeError("MAP_CHANGED")
+                        last_map_check = time.monotonic()
+                    # A bounded Pi pulse makes obstacle reaction latency at
+                    # most the pulse duration + transport (never 5s/event).
+                    await self._wait_obstacle_clear(direction)
+                    await self._wait_connection_resume()
+                    # Resume/STOP can take arbitrary time; clearance
+                    # observed before that wait cannot authorize a MOVE.
+                    await self._wait_obstacle_clear(direction)
+                    duration = min(MANUAL_PULSE_MAX_MS, max(1, math.ceil(remaining_ms)))
+                    self._manual_pulse_index += 1
+                    pulse_id = (
+                        f"{self._manual_session_id}:{self._replay_generation}:"
+                        f"{self._laps}:{index}:{self._manual_pulse_index}"
+                    )
+                    try:
+                        applied_ms = await self._manual_send({
+                            "pulse_id": pulse_id,
+                            "pulse_sequence": self._manual_pulse_index,
+                            "direction": direction, "speed": segment["speed"],
+                            "duration_ms": duration,
+                        })
+                    except RuntimeError as exc:
+                        if str(exc) == "MANUAL_PULSE_ACK_UNCERTAIN":
+                            # The Pi enforces a local STOP. A read-only receipt
+                            # after operator Resume proves the lost exposure.
+                            applied_ms = await self._reconcile_uncertain_manual_pulse()
+                        else:
+                            raise
+                    if applied_ms < 1:
+                        idle_pulses += 1
+                        if idle_pulses >= 5:
+                            raise RuntimeError("MANUAL_MOTOR_NO_PROGRESS")
+                    else:
+                        idle_pulses = 0
+                    remaining_ms = max(0.0, remaining_ms - applied_ms)
+                    self._manual_elapsed_ms += applied_ms
+                await self._wait_connection_resume()
+                await self._verified_stop()
             if not self._cancelled:
+                await self._wait_connection_resume()
                 await self._verified_stop()
                 self._laps += 1
-        # A non-closed manual bag is intentionally replayed from the next
-        # actual position. Never require a pose match or Nav2 correction.
+        # Not using Nav2 and never correcting the saved open-loop trajectory.
 
     @staticmethod
     def _certified_auto_trace(trace: Any, origin: dict, destination: dict) -> list[dict]:
@@ -558,8 +806,11 @@ class LoopSessionApi:
         except asyncio.CancelledError:
             self._status = "STOPPED"
         except Exception as exc:
-            self._status = "FAILED"
-            self._error = str(exc)[:180]
+            if str(exc) in {"REPLAY_CANCELLED", "MANUAL_REPLAY_INTERRUPTED"} and self._cancelled:
+                self._status = "STOPPED"
+            else:
+                self._status = "FAILED"
+                self._error = str(exc)[:180]
         finally:
             if kind == "AUTO" and self._status == "FAILED":
                 # Never leave an active Nav2 Goal moving after a worker fault.
@@ -573,9 +824,6 @@ class LoopSessionApi:
                             "LOOP_AUTO_ABORT_FAILED", automatic=True, force=True)
                     except Exception:
                         pass
-            if kind == "AUTO":
-                if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
-                    self.navigation._loop_session_owner = None
             if kind == "MANUAL":
                 try:
                     await self._verified_stop()
@@ -587,6 +835,14 @@ class LoopSessionApi:
                             "LOOP_MANUAL_STOP_NOT_CONFIRMED", automatic=True, force=True)
                     except Exception:
                         pass
+            # Release the exclusive motor owner only AFTER the final physical
+            # STOP proof or requested E-STOP. Releasing earlier would let
+            # another Goal race the still-moving manual replay.
+            if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
+                self.navigation._loop_session_owner = None
+            self._requires_resume = False
+            self._uncertain_manual_pulse = None
+            self._resume_event.clear()
 
     def start(self, data: dict) -> dict:
         self._idle()
@@ -598,6 +854,11 @@ class LoopSessionApi:
                 "LOOP_BUSY", "Stop legacy recorded playback before session Loop")
         if self._record is not None:
             raise RecordedLoopError("RECORDING_ACTIVE", "Save or Delete the recording first")
+        if getattr(self.navigation, "_localization_turn_active", False):
+            raise RecordedLoopError(
+                "LOCALIZATION_TURN_ACTIVE",
+                "Automatic Initial Pose rotation must finish before starting a Loop",
+            )
         key = self._active()
         entry = self._entry(key)
         mode = self._mode()
@@ -633,13 +894,22 @@ class LoopSessionApi:
         self._cancelled = False
         self._policy = policy
         self._status = "STARTING"
+        self._requires_resume = False
+        self._resume_event.clear()
+        self._manual_session_id = uuid4().hex[:20]
+        self._replay_generation += 1
+        self._manual_segment_index = 0
+        self._manual_elapsed_ms = 0
+        self._manual_pulse_index = 0
+        self._manual_pi_safety_session = None
+        self._uncertain_manual_pulse = None
         self._error = None
         self._laps = 0
         self._running_kind = mode
         self._task = asyncio.create_task(
             self._run(key, mode, events, goals), name="loop-session-replay")
-        if mode == "AUTO":
-            self.navigation._loop_session_owner = self._task
+        # The same Nav2 Goal ownership exclusion applies to MANUAL replay.
+        self.navigation._loop_session_owner = self._task
         return {"ok": True, "started": True, "mode": mode}
 
     async def stop(self, from_navigation: bool = False) -> dict:
@@ -647,6 +917,7 @@ class LoopSessionApi:
         if task is None or task.done():
             return {"ok": True, "stopped": True}
         self._cancelled = True
+        self._resume_event.set()
         if self._running_kind == "AUTO":
             with self.navigation._lock:
                 self.navigation._loop_session_cancel_token += 1
@@ -755,3 +1026,7 @@ class LoopSessionApi:
         @app.post("/api/navigation/loop/stop")
         async def stop(request: Request):
             return await handle(request, lambda _: self.stop())
+
+        @app.post("/api/navigation/loop/resume")
+        async def resume(request: Request):
+            return await handle(request, self.resume)

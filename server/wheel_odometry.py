@@ -108,6 +108,8 @@ class WheelOdometryNode(Node):
         self.latest_angular_velocity = 0.0
         self.last_encoder_time_sec = None
         self.has_encoder_data = False
+        self.odometry_fault_latched = False
+        self.max_wheel_mps = env_float("MAX_WHEEL_MPS", minimum=0.01)
 
         # Fresh encoder input is required before publishing /odom and TF.
         self.publish_rate_hz = 20.0
@@ -177,6 +179,31 @@ class WheelOdometryNode(Node):
             )
         ]
 
+        # Reject a Pico encoder reset or a delayed, physically impossible
+        # tick delta before it can change /odom or odom->base_link TF.
+        dt_measured = now_sec - self.previous_time_sec
+        gap = dt_measured > max(1.0, 2.0 * self.velocity_timeout_sec)
+        max_displacement = (
+            self.max_wheel_mps * max(0.05, dt_measured) * 2.0 + 0.03
+        )
+        impossible_delta = any(
+            abs(delta) * self.meters_per_tick > max_displacement
+            for delta in delta_ticks
+        )
+        if dt_measured <= 0 or impossible_delta or (
+            gap and any(delta_ticks)
+        ):
+            self.odometry_fault_latched = True
+            self.get_logger().error(
+                "Encoder continuity lost: stopping odometry TF until restart"
+            )
+        if self.odometry_fault_latched or gap:
+            self.previous_ticks = ticks
+            self.previous_time_sec = now_sec
+            self.latest_linear_velocity = 0.0
+            self.latest_angular_velocity = 0.0
+            return
+
         # 앞·뒤 바퀴 tick 평균을 좌우 대표값으로 사용한다.
         left_delta_ticks = (
             delta_ticks[0] + delta_ticks[2]
@@ -238,7 +265,7 @@ class WheelOdometryNode(Node):
 
     def publish_timer_callback(self) -> None:
         """최신 위치를 20Hz로 계속 발행한다."""
-        if not self.has_encoder_data:
+        if not self.has_encoder_data or self.odometry_fault_latched:
             return
 
         now = self.get_clock().now()

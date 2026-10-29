@@ -21,6 +21,7 @@ class NavigationStub:
         self._lock = threading.RLock()
         self._loop_session_cancel_token = 0
         self.mode = "manual"
+        self.connected = True
         self.navigation_state = "READY"
         self.localization_ready = False
         self.nav2_ready = False
@@ -31,12 +32,15 @@ class NavigationStub:
     def state_response(self):
         return {
             "navigation_mode": "DRIVING",
-            "connected": True,
+            "connected": self.connected,
             "robot_mode": self.mode,
             "active_map": {"map_name": "map_one"},
             "localization_ready": self.localization_ready,
             "nav2_ready": self.nav2_ready,
             "navigation_state": self.navigation_state,
+            "emergency_stop": False,
+            "pi_safety": {"fresh": self.connected, "emergency_stop": False,
+                          "safety_session": "session", "safety_epoch": 1},
         }
 
     def motion_safety_context(self):
@@ -45,6 +49,16 @@ class NavigationStub:
     def note_authorized_motion(self, context):
         assert context["safety_session"] == "session"
         return True
+
+    def motion_allowed(self):
+        return True
+
+    @staticmethod
+    def _pi_command_delivered(response):
+        return response is True or (
+            isinstance(response, dict)
+            and response.get("ok") is True and response.get("delivered") is True
+        )
 
     async def plan_goal(self, payload):
         self.calls.append(("plan", payload))
@@ -74,10 +88,18 @@ def fixture(tmp_path):
     nav = NavigationStub()
     sent = []
 
-    async def send(_robot_id, command, *, preflight=None):
+    async def send(_robot_id, command, *, preflight=None, motion_ack=False):
         if preflight is not None and not preflight():
             return False
         sent.append(dict(command))
+        if command["type"] == "manual_loop_pulse":
+            duration = command["duration_ms"]
+            await asyncio.sleep(duration / 1000.0)
+            return {"ok": True, "delivered": True, "manual_loop_pulse": {
+                "pulse_id": command["pulse_id"],
+                "replay_generation": command["replay_generation"],
+                "elapsed_ms": duration, "duration_ms": duration, "stopped": True,
+            }}
         return True
 
     async def stop():
@@ -95,7 +117,13 @@ def fixture(tmp_path):
             ),
         ),
         _play_stop=stop,
-        get_live_scan=lambda: None,
+        get_live_scan=lambda: {
+            "received_at": __import__("time").time(),
+            "angle_min": -3.141592653589793,
+            "angle_increment": 2 * 3.141592653589793 / 360,
+            "range_min": 0.12, "range_max": 6.0,
+            "ranges": [2.0] * 360,
+        },
         _pose=lambda: None,
     )
     api = LoopSessionApi(
@@ -178,7 +206,8 @@ def test_manual_bag_replays_without_pose_checks(tmp_path):
         await asyncio.sleep(0.09)
         await api.stop()
     asyncio.run(scenario())
-    assert any(command["type"] == "move" and command["direction"] == "forward"
+    assert any(command["type"] == "manual_loop_pulse"
+               and command["direction"] == "forward"
                and command["speed"] == 0.25 for command in sent)
 
 
@@ -291,3 +320,43 @@ def test_offline_modal_preserves_cached_goals_for_selected_map(tmp_path):
     assert snapshot["goals"][0]["pose"]["x"] == 2.0
     with pytest.raises(RecordedLoopError, match="DRIVING"):
         api.toggle_goal({"pose": pose(4.0)})
+
+
+def test_localization_turn_excludes_manual_loop_start(tmp_path):
+    api, nav, sent = fixture(tmp_path)
+    key = api._active()
+    api._entry(key)["bags"]["Loop 1"] = {
+        "events": [
+            {"at": 0.0, "type": "move", "direction": "forward", "speed": 0.2},
+            {"at": 0.2, "type": "stop"},
+        ],
+        "seconds": 0.2,
+    }
+    nav._localization_turn_active = True
+    with pytest.raises(RecordedLoopError) as error:
+        api.start({"name": "Loop 1", "policy": "WAIT"})
+    assert error.value.code == "LOCALIZATION_TURN_ACTIVE"
+    assert not api.playing and not sent
+
+
+def test_manual_owner_is_not_released_until_final_stop(tmp_path):
+    api, nav, sent = fixture(tmp_path)
+    observed = []
+
+    async def immediate_failure(*_args):
+        raise RuntimeError("injected replay failure")
+
+    async def check_final_stop():
+        observed.append(nav._loop_session_owner is asyncio.current_task())
+
+    async def scenario():
+        api._manual_bag = immediate_failure
+        api._verified_stop = check_final_stop
+        task = asyncio.create_task(api._run(api._active(), "MANUAL", [], None))
+        nav._loop_session_owner = task
+        await task
+
+    asyncio.run(scenario())
+    assert observed == [True]
+    assert nav._loop_session_owner is None
+    assert api._status == "FAILED"

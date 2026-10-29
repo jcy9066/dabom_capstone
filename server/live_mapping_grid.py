@@ -248,6 +248,9 @@ class LiveMappingGrid:
                     resolution,
                 )
 
+            # Each new SLAM OccupancyGrid replaces obsolete map cells.
+            # Preserve no ghost walls outside revised bounds or loop closures.
+            self._cells.clear()
             cos_yaw = math.cos(origin_yaw)
             sin_yaw = math.sin(origin_yaw)
             for y in range(height):
@@ -314,9 +317,10 @@ class LiveMappingGrid:
             ):
                 return None
 
-            # After /map is available SLAM is the authoritative source.
-            # Reprojecting raw LiDAR using delayed pose creates ghost walls.
+            # Preview is a one-frame observation, never a persistent map.
+            # Unmatched latest poses cannot be used to accumulate world cells.
             if not self._base_map_seen:
+                self._cells.clear()
                 self._integrate_locked(pose, self._scan)
             self._last_update_monotonic = float(monotonic_now)
             self._sequence += 1
@@ -507,6 +511,9 @@ class LiveMappingGrid:
             },
             "data_encoding": "rle",
             "data": _rle_encode(dense),
-            "source": "live_mapping_grid",
+            "source": "slam_toolbox" if self._base_map_seen else "live_mapping_grid",
+            "map_kind": "slam" if self._base_map_seen else "preview",
+            "map_verified": self._base_map_seen,
+            "preview": not self._base_map_seen,
             "sequence": self._sequence,
         }

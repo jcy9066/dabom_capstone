@@ -230,6 +230,37 @@
         }
     }
 
+    async function waitLocalizationSession(container, progress, sessionId, token) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+            if (!container.isConnected) {
+                await requestJson('/api/navigation/localization/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body: JSON.stringify({session_id: sessionId}),
+                }).catch(() => null);
+                throw new Error('Localization 모달이 닫혀 위치 추정을 취소했습니다.');
+            }
+            const state = await requestJson('/api/navigation/localization/state');
+            if (state.session_id !== sessionId) {
+                throw new Error('Localization 세션이 변경됐습니다.');
+            }
+            if (state.phase === 'READY') return state;
+            if (state.phase === 'FAILED' || state.phase === 'CANCELLED') {
+                const error = new Error(state.reason || 'Localization 실패');
+                error.code = state.error_code || state.phase;
+                throw error;
+            }
+            if (state.phase === 'WAITING_FOR_CLICK'
+                || state.phase === 'POSE_CONFIRMATION_REQUIRED') return state;
+            showMessage(progress,
+                state.phase === 'APPLYING'
+                    ? 'Initial Pose 검증 및 AMCL/Nav2 활성화 중...'
+                    : 'LiDAR·Encoder를 이용해 Initial Pose를 추정 중...');
+            await new Promise(resolve => global.setTimeout(resolve, 300));
+        }
+        throw new Error('Localization 상태 확인 시간이 초과됐습니다. 자동 주행을 시작하지 마세요.');
+    }
+
     async function loadSelectedMap(container, progress) {
         const mapName = selectedMapName(container);
         if (state.busy) return;
@@ -266,18 +297,100 @@
         try {
             global.navigationMapView?.restoreMapDisplay?.();
             const token = await csrfToken();
-            const payload = await requestJson('/api/navigation/control/mode', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-                body: JSON.stringify({
-                    mode: 'DRIVING',
-                    source: 'existing',
-                    map_name: mapName,
-                    ...(manualPoseRequested ? { initial_pose: { x, y, yaw_degrees: yawDegrees } } : {})
-                })
-            });
+            let warningAcknowledged = false;
+            let payload;
+            const sessionId = container.dataset.localizationSessionId;
+            const activeSession = sessionId
+                && container.dataset.localizationMapName === mapName;
+            if (!manualPoseRequested) {
+                if (sessionId) {
+                    await requestJson('/api/navigation/localization/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                        body: JSON.stringify({ session_id: sessionId }),
+                    }).catch(() => null);
+                }
+                const started = await requestJson('/api/navigation/localization/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body: JSON.stringify({
+                        source: 'existing', map_name: mapName,
+                        ...(container.dataset.mapRevision
+                            ? {map_revision: container.dataset.mapRevision} : {}),
+                    }),
+                });
+                container.dataset.localizationSessionId = started.session_id;
+                container.dataset.localizationMapName = mapName;
+                const result = await waitLocalizationSession(
+                    container, progress, started.session_id, token,
+                );
+                if (result.phase !== 'READY') {
+                    showMessage(progress,
+                        '자동 Initial Pose 추정 불확실: 지도에서 위치를 클릭하고 방향으로 드래그한 뒤 다시 불러오세요.',
+                        true);
+                    setControlsDisabled(container, false);
+                    return;
+                }
+                payload = await requestJson('/api/navigation/control/state');
+            } else if (activeSession) {
+                for (;;) {
+                    await requestJson('/api/navigation/localization/pose', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            initial_pose: {x, y, yaw_degrees: yawDegrees,
+                                           warning_acknowledged: warningAcknowledged},
+                        }),
+                    });
+                    const result = await waitLocalizationSession(
+                        container, progress, sessionId, token,
+                    );
+                    if (result.phase === 'READY') break;
+                    if (result.phase !== 'POSE_CONFIRMATION_REQUIRED'
+                        || warningAcknowledged
+                        || !global.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 확인 후 AMCL 검증을 진행하시겠습니까?')) {
+                        showMessage(progress,
+                            'Initial Pose 지정이 필요합니다: ' + (result.reason || ''),
+                            true);
+                        setControlsDisabled(container, false);
+                        return;
+                    }
+                    warningAcknowledged = true;
+                }
+                payload = await requestJson('/api/navigation/control/state');
+            } else {
+                // Preserve the original direct manual-pose route for users
+                // who explicitly entered all three coordinates first.
+                for (;;) {
+                    try {
+                        payload = await requestJson('/api/navigation/control/mode', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                            body: JSON.stringify({
+                                mode: 'DRIVING', source: 'existing', map_name: mapName,
+                                ...(container.dataset.mapRevision
+                                    ? {map_revision: container.dataset.mapRevision} : {}),
+                                initial_pose: {x, y, yaw_degrees: yawDegrees,
+                                               warning_acknowledged: warningAcknowledged},
+                            }),
+                        });
+                        break;
+                    } catch (error) {
+                        if (!warningAcknowledged
+                            && error.code === 'INITIAL_POSE_CONFIRMATION_REQUIRED'
+                            && global.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 확인 후 AMCL 검증을 진행하시겠습니까?')) {
+                            warningAcknowledged = true;
+                            continue;
+                        }
+                        throw error;
+                    }
+                }
+            }
+            delete container.dataset.localizationSessionId;
+            delete container.dataset.localizationMapName;
             global.navigationControl?.applyState?.(payload);
-            showMessage(progress, `${payload.active_map.map_name} ${labels.success}`);
+            showMessage(progress, `${payload.active_map?.map_name || mapName} ${labels.success}`);
             await refreshActiveMap();
             succeeded = true;
             setControlsDisabled(container, true, false);
@@ -402,6 +515,7 @@
                 const loadButton = container.querySelector('.saved-map-load');
                 if (loadButton) loadButton.disabled = !currentSelection;
                 showMessage(progress, '');
+                void refreshMapPreview();
             });
             option.addEventListener('contextmenu', event => {
                 event.preventDefault();
@@ -428,6 +542,158 @@
         }
         mapColumn.append(pose);
         mapColumn.append(list);
+
+        // Render the selected stored OccupancyGrid, not the active 3D map.
+        // Canvas Y is inverted relative to ROS OccupancyGrid row order.
+        const previewBox = create('div', 'saved-map-initialpose-preview');
+        const previewInfo = create('div', 'saved-map-details',
+            '지도를 선택하면 점유 지도가 표시됩니다. 클릭으로 위치, 드래그로 방향을 지정합니다.');
+        const previewCanvas = create('canvas', 'saved-map-initialpose-canvas');
+        previewCanvas.style.cssText =
+            'display:block;max-width:420px;width:100%;height:auto;' +
+            'border:1px solid #536578;border-radius:6px;image-rendering:pixelated;touch-action:none;cursor:crosshair;';
+        previewBox.append(previewInfo, previewCanvas);
+        mapColumn.append(previewBox);
+        let previewData = null;
+        let previewCells = null;
+        let previewRequestId = 0;
+        let dragStart = null;
+
+        function gridPoint(event) {
+            if (!previewData || !previewCells) return null;
+            const rect = previewCanvas.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return null;
+            const col = Math.min(previewData.width - 1, Math.max(0,
+                Math.floor((event.clientX - rect.left) * previewCanvas.width / rect.width)));
+            const imageRow = Math.min(previewData.height - 1, Math.max(0,
+                Math.floor((event.clientY - rect.top) * previewCanvas.height / rect.height)));
+            const row = previewData.height - 1 - imageRow;
+            const localX = (col + 0.5) * previewData.resolution;
+            const localY = (row + 0.5) * previewData.resolution;
+            const theta = previewData.origin.yaw;
+            return {
+                x: previewData.origin.x + Math.cos(theta) * localX - Math.sin(theta) * localY,
+                y: previewData.origin.y + Math.sin(theta) * localX + Math.cos(theta) * localY,
+                col, imageRow,
+            };
+        }
+
+        function renderPreview(end = null) {
+            if (!previewData || !previewCells) return;
+            const width = previewData.width, height = previewData.height;
+            const ctx = previewCanvas.getContext('2d');
+            if (!ctx) return;
+            const image = ctx.createImageData(width, height);
+            for (let i = 0; i < width * height; i++) {
+                const col = i % width, row = Math.floor(i / width);
+                const target = ((height - 1 - row) * width + col) * 4;
+                const occupancy = previewCells[i];
+                const grey = occupancy < 0 ? 116 : occupancy >= 65 ? 27 : 226;
+                image.data[target] = grey;
+                image.data[target + 1] = grey;
+                image.data[target + 2] = grey;
+                image.data[target + 3] = 255;
+            }
+            ctx.putImageData(image, 0, 0);
+            if (dragStart) {
+                ctx.lineWidth = Math.max(1, width / 170);
+                ctx.strokeStyle = '#e85d58';
+                ctx.fillStyle = '#e85d58';
+                ctx.beginPath();
+                ctx.arc(dragStart.col, dragStart.imageRow, Math.max(2, width / 90), 0, Math.PI * 2);
+                ctx.fill();
+                if (end) {
+                    ctx.beginPath();
+                    ctx.moveTo(dragStart.col, dragStart.imageRow);
+                    ctx.lineTo(end.col, end.imageRow);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        async function refreshMapPreview() {
+            const targetName = currentSelection;
+            const requestId = ++previewRequestId;
+            previewData = null;
+            previewCells = null;
+            dragStart = null;
+            delete container.dataset.mapRevision;
+            previewInfo.textContent = targetName
+                ? '선택한 지도 점유 데이터를 불러오는 중...'
+                : '지도를 선택하면 위치·방향을 지정할 수 있습니다.';
+            if (!targetName) return;
+            try {
+                const data = await requestJson(
+                    '/api/navigation/maps/' + encodeURIComponent(targetName) + '/preview');
+                if (requestId !== previewRequestId || targetName !== currentSelection) return;
+                const width = Number(data.width), height = Number(data.height);
+                const n = width * height;
+                if (!Number.isSafeInteger(n) || n <= 0 || n > 2000000
+                    || !Array.isArray(data.data)) throw new Error('잘못된 지도 데이터');
+                let cells;
+                if (data.data_encoding === 'rle') {
+                    cells = [];
+                    for (const run of data.data) {
+                        const count = Number(run[1]);
+                        if (!Number.isSafeInteger(count) || count <= 0 || count > n - cells.length)
+                            throw new Error('잘못된 RLE 데이터');
+                        for (let k = 0; k < count; k++) cells.push(Number(run[0]));
+                    }
+                } else cells = data.data.map(Number);
+                if (cells.length !== n) throw new Error('지도 크기 불일치');
+                previewData = {
+                    width, height, resolution: Number(data.resolution),
+                    origin: {x: Number(data.origin.x), y: Number(data.origin.y),
+                             yaw: Number(data.origin.yaw || 0)}
+                };
+                if (![previewData.resolution, ...Object.values(previewData.origin)]
+                    .every(Number.isFinite) || previewData.resolution <= 0)
+                    throw new Error('지도 원점·해상도 오류');
+                previewCells = cells;
+                previewCanvas.width = width;
+                previewCanvas.height = height;
+                previewCanvas.style.aspectRatio = width + ' / ' + height;
+                container.dataset.mapRevision = data.map_revision;
+                previewInfo.textContent =
+                    '회색: 미탐색 · 검정: 장애물 · 밝은색: 이동 가능 영역. 클릭 후 방향으로 드래그하세요.';
+                renderPreview();
+            } catch (error) {
+                if (requestId === previewRequestId) {
+                    previewInfo.textContent = '지도 미리보기 실패: ' + error.message;
+                }
+            }
+        }
+
+        previewCanvas.addEventListener('pointerdown', event => {
+            if (state.busy || !previewData) return;
+            dragStart = gridPoint(event);
+            if (!dragStart) return;
+            previewCanvas.setPointerCapture(event.pointerId);
+            renderPreview(dragStart);
+        });
+        previewCanvas.addEventListener('pointermove', event => {
+            if (dragStart) renderPreview(gridPoint(event));
+        });
+        previewCanvas.addEventListener('pointerup', event => {
+            if (!dragStart || !previewData) return;
+            const end = gridPoint(event);
+            if (!end) return;
+            const start = dragStart;
+            renderPreview(end);
+            container.querySelector('#saved-map-pose-x').value = start.x.toFixed(3);
+            container.querySelector('#saved-map-pose-y').value = start.y.toFixed(3);
+            const length = Math.hypot(end.x - start.x, end.y - start.y);
+            if (length >= Math.max(0.08, previewData.resolution)) {
+                container.querySelector('#saved-map-pose-yaw').value =
+                    (Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI).toFixed(2);
+            } else {
+                previewInfo.textContent = '위치를 선택했습니다. 방향을 드래그하거나 각도를 입력하세요.';
+            }
+            previewCanvas.releasePointerCapture(event.pointerId);
+        });
+        previewCanvas.addEventListener('pointercancel', () => { dragStart = null; renderPreview(); });
+        global.setTimeout(() => { if (container.isConnected) void refreshMapPreview(); }, 0);
+
         progress = create('div', 'saved-map-progress', context.feedback || '');
         if (context.feedback) showMessage(progress, context.feedback, context.feedbackIsError);
         mapColumn.append(progress);
@@ -453,7 +719,42 @@
 
         const save = create('button', 'mb-btn saved-map-save-current', labels.saveCurrent);
         save.type = 'button';
+        // A rendered LiDAR Preview is not a persisted, verified SLAM map.
+        save.disabled = true;
+        async function refreshMapReadiness() {
+            if (!container.isConnected) return;
+            try {
+                const health = await requestJson('/api/navigation/status');
+                if (!container.isConnected) return;
+                save.disabled = health?.map_saveable !== true;
+                save.title = save.disabled
+                    ? 'SLAM /map 검증 전에는 임시 Preview를 저장할 수 없습니다.'
+                    : '검증된 마지막 SLAM 지도를 저장합니다.';
+            } catch (error) {
+                save.disabled = true;
+            }
+        }
+        // All events share this listener; remove it when the modal is replaced.
+        const onMapChanged = () => {
+            if (!container.isConnected) {
+                global.document.removeEventListener(
+                    'dabom:navigation-visualization-state', onMapChanged,
+                );
+                return;
+            }
+            void refreshMapReadiness();
+        };
+        global.document.addEventListener(
+            'dabom:navigation-visualization-state', onMapChanged,
+        );
+        global.setTimeout(() => void refreshMapReadiness(), 0);
         save.addEventListener('click', async () => {
+            const health = await requestJson('/api/navigation/status').catch(() => null);
+            if (!health || health.map_saveable !== true) {
+                save.disabled = true;
+                showMessage(progress, '검증된 SLAM 지도가 없습니다.', true);
+                return;
+            }
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });

@@ -365,6 +365,7 @@ const lidarState = {
     map: null,
     pose: null,
     scan: null,
+    sessionId: null,
     globalPath: [],
     globalPathStatus: "none",
     costmap: null,
@@ -391,6 +392,52 @@ function getScanKey(scan) {
     const first = scan.ranges.length ? scan.ranges[0] : '';
     const last = scan.ranges.length ? scan.ranges[scan.ranges.length - 1] : '';
     return `${scan.timestamp || ''}:${scan.received_at || ''}:${scan.ranges.length}:${first}:${last}`;
+}
+
+function acceptNavigationPose(pose) {
+    if (!pose) {
+        lidarState.pose = null;
+        return true;
+    }
+    const old = lidarState.pose;
+    if (old?.session_id && pose.session_id && old.session_id === pose.session_id) {
+        const oldAt = Date.parse(old.timestamp || '');
+        const newAt = Date.parse(pose.timestamp || '');
+        if (Number.isFinite(oldAt) && Number.isFinite(newAt) && newAt < oldAt) {
+            return false;
+        }
+    }
+    lidarState.pose = pose;
+    return true;
+}
+
+function acceptNavigationScan(scan) {
+    if (!scan || !Array.isArray(scan.ranges)) return false;
+    const previous = lidarState.scan;
+    if (previous) {
+        if (previous.session_id && scan.session_id
+            && previous.session_id !== scan.session_id) {
+            clearNavigationScan();
+        } else {
+            const matchedPrevious = Boolean(previous.map_sensor_pose);
+            const matchedNext = Boolean(scan.map_sensor_pose);
+            const previousAt = Number(previous.received_at) || 0;
+            const nextAt = Number(scan.received_at) || 0;
+            // Prefer an exact scan-time TF over a newer, unpaired Pi frame.
+            if (matchedPrevious && !matchedNext
+                && nextAt - previousAt < 1.5) return false;
+            if (previous.source === scan.source) {
+                const a = Date.parse(previous.timestamp || '');
+                const b = Date.parse(scan.timestamp || '');
+                if (Number.isFinite(a) && Number.isFinite(b) && b < a) return false;
+                if (previous.sequence != null && scan.sequence != null
+                    && Number(scan.sequence) <= Number(previous.sequence)) return false;
+            }
+        }
+    }
+    lidarState.scan = scan;
+    noteScanUpdate(scan);
+    return true;
 }
 
 function noteScanUpdate(scan) {
@@ -556,6 +603,8 @@ let navigationMapSuppressedRevision = null;
 let navigationVisualizationSocket = null;
 let navigationVisualizationSocketOpen = false;
 let navigationVisualizationReconnectTimer = null;
+let navigationEventSeq = 0;
+let navigationResyncRequired = false;
 let navigationVisualizationReconnectDelayMs = 500;
 let navigationGlobalPathStaleTimer = null;
 let navigationGlobalPathRunKey = null;
@@ -659,6 +708,14 @@ function emitNavigationVisualizationState(mapChanged = false) {
 }
 
 function applyNavigationMapPayload(map, revision, mapChanged = true) {
+    if (map && lidarState.map
+        && map.session_id && lidarState.map.session_id === map.session_id) {
+        const oldAt = Date.parse(lidarState.map.timestamp || '');
+        const newAt = Date.parse(map.timestamp || '');
+        if (Number.isFinite(oldAt) && Number.isFinite(newAt) && newAt < oldAt) {
+            return;
+        }
+    }
     const incomingMapRevision = revision ?? null;
     if (
         navigationMapDisplaySuppressed
@@ -679,18 +736,29 @@ function applyNavigationMapPayload(map, revision, mapChanged = true) {
 
 function applyNavigationSnapshot(data) {
     if (!data?.ok) return;
+    if (data.session_id && data.session_id !== lidarState.sessionId) {
+        lidarState.map = null;
+        lidarState.pose = null;
+        clearNavigationScan();
+    }
+    if (Number.isSafeInteger(data.event_seq)) navigationEventSeq = data.event_seq;
+    navigationResyncRequired = false;
 
     if (data.status) {
         lidarState.status = data.status;
         lidarState.statusObservedAtMs = performance.now();
     }
-    lidarState.pose = data.pose_available ? data.pose : null;
+    if (data.session_id && lidarState.sessionId !== data.session_id) {
+        lidarState.sessionId = data.session_id;
+        clearNavigationScan();
+        lidarState.pose = null;
+    }
+    acceptNavigationPose(data.pose_available ? data.pose : null);
     // Snapshot /plan events have no Goal execution identifier and are
     // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
-        lidarState.scan = data.scan;
-        noteScanUpdate(data.scan);
+        acceptNavigationScan(data.scan);
     } else {
         clearNavigationScan();
     }
@@ -716,12 +784,40 @@ function applyNavigationSnapshot(data) {
     emitNavigationVisualizationState(Boolean(data.map_changed));
 }
 
+function requestNavigationStreamResync() {
+    navigationResyncRequired = true;
+    // Recovery must work while the WebSocket stays open.
+    if (navigationSnapshotInFlight) {
+        navigationSnapshotRefreshQueued = true;
+    } else {
+        void fetchNavigationSnapshot();
+    }
+}
+
 function applyNavigationStreamMessage(message) {
     if (!message || typeof message !== 'object') return;
 
     if (message.type === 'snapshot') {
         applyNavigationSnapshot(message.snapshot);
         return;
+    }
+    if (message.type === 'resync_required') {
+        requestNavigationStreamResync();
+        return;
+    }
+    if (navigationResyncRequired) return;
+    if (message.type !== 'reset' && lidarState.sessionId && message.session_id
+        && message.session_id !== lidarState.sessionId) {
+        requestNavigationStreamResync();
+        return;
+    }
+    if (Number.isSafeInteger(message.event_seq)) {
+        if (navigationEventSeq > 0 && message.event_seq !== navigationEventSeq + 1) {
+            if (message.event_seq <= navigationEventSeq) return;
+            requestNavigationStreamResync();
+            return;
+        }
+        navigationEventSeq = message.event_seq;
     }
 
     if (message.type === 'scan') {
@@ -730,8 +826,7 @@ function applyNavigationStreamMessage(message) {
             lidarState.statusObservedAtMs = performance.now();
         }
         if (message.scan) {
-            lidarState.scan = message.scan;
-            noteScanUpdate(message.scan);
+            acceptNavigationScan(message.scan);
         } else {
             clearNavigationScan();
         }
@@ -740,8 +835,11 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'pose') {
-        lidarState.pose = message.pose || null;
-        emitNavigationVisualizationState(false);
+        if (lidarState.sessionId && message.pose?.session_id
+            && message.pose.session_id !== lidarState.sessionId) return;
+        if (acceptNavigationPose(message.pose || null)) {
+            emitNavigationVisualizationState(false);
+        }
         return;
     }
 
@@ -760,6 +858,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'map') {
+        if (lidarState.sessionId && message.map?.session_id
+            && message.map.session_id !== lidarState.sessionId) return;
         applyNavigationMapPayload(
             message.map || null,
             message.map_revision ?? null,
@@ -774,6 +874,8 @@ function applyNavigationStreamMessage(message) {
         navigationMapSuppressedRevision = null;
         lidarState.map = null;
         lidarState.pose = null;
+        lidarState.sessionId = message.session_id || null;
+        clearNavigationScan();
         resetNavigationGlobalPath();
         navigationGlobalPathRunKey = null;
         lidarState.costmap = null;
@@ -842,6 +944,11 @@ async function fetchNavigationSnapshot() {
         if (!navigationVisualizationSocketOpen) {
             scheduleNavigationSnapshot(
                 refreshImmediately ? 0 : navigationSnapshotDelayMs(),
+            );
+        } else if (navigationResyncRequired || refreshImmediately) {
+            navigationSnapshotTimer = window.setTimeout(
+                fetchNavigationSnapshot,
+                navigationResyncRequired ? 1000 : 0,
             );
         }
     }

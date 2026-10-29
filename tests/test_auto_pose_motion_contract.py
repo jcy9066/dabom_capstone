@@ -4,8 +4,11 @@ from pathlib import Path
 
 def test_auto_pose_rechecks_encoder_after_matching_and_before_pi_driving():
     control = (Path(__file__).resolve().parents[1] / "server/navigation_control_api.py").read_text(encoding="utf-8")
-    assert "auto_pose_encoder_baseline = self._encoder_ticks" in control
-    assert control.count("self._encoder_ticks != auto_pose_encoder_baseline") >= 2
+    # First check after matching, then again before Pi DRIVING transition.
+    assert "baseline_ticks = self._encoder_ticks" in control
+    assert "self._encoder_ticks != baseline_ticks" in control
+    assert "self._encoder_ticks != auto_pose_encoder_baseline" in control
+    assert "await self._estimate_initial_pose_with_retry(" in control
     assert "AUTO_POSE_MOVED" in control
     assert '"CANCELING_STOP"' in control
     assert "or self._state[\"emergency_stop\"]" in control
@@ -15,3 +18,12 @@ def test_encoder_stationarity_is_checked_before_scan_fusion():
     fusion = (Path(__file__).resolve().parents[1] / "server/scan_pose_fusion.py").read_text(encoding="utf-8")
     assert "if max(values) != min(values):" in fusion
     assert "Wheel encoder movement during localization" in fusion
+
+
+def test_initial_pose_turn_rejects_active_loop_owner():
+    control = (Path(__file__).resolve().parents[1] / "server/navigation_control_api.py").read_text(encoding="utf-8")
+    bounded = control.split("async def _bounded_initial_pose_turn(", 1)[1].split(
+        "async def _wait_initial_pose_stop_proof(", 1
+    )[0]
+    assert "self._loop_session_owner.done()" in bounded
+    assert "not self._localization_turn_active" in bounded

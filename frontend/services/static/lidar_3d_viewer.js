@@ -181,6 +181,28 @@ if (root && canvas) {
     goalRoot.name = 'navigation-goals';
     layerGroups.goal.add(goalRoot);
 
+    // Independent from Set Goal/Loop; never creates a navigation goal.
+    const initialPoseArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, 0, 0.03),
+        0.55, 0x38bdf8, 0.16, 0.10,
+    );
+    initialPoseArrow.visible = false;
+    layerGroups.goal.add(initialPoseArrow);
+    document.addEventListener('dabom:initial-pose-draft', event => {
+        const pose = event.detail?.pose;
+        if (!pose || ![pose.x, pose.y, pose.yaw].every(Number.isFinite)) {
+            initialPoseArrow.visible = false;
+        } else {
+            initialPoseArrow.position.set(pose.x, pose.y, 0.03);
+            initialPoseArrow.setDirection(
+                new THREE.Vector3(Math.cos(pose.yaw), Math.sin(pose.yaw), 0),
+            );
+            initialPoseArrow.visible = true;
+        }
+        // Viewer has a persistent animation loop; no separate render call.
+    });
+
     const cameraFrustumPoseGroup = new THREE.Group();
     cameraFrustumPoseGroup.name = 'camera-frustum-pose';
     cameraFrustumPoseGroup.visible = false;
@@ -1404,6 +1426,10 @@ if (root && canvas) {
         return [
             scan.timestamp || '',
             scan.received_at || '',
+            currentMap?.map_kind || '',
+            currentMap?.preview ? 'preview' : '',
+            scan.map_sensor_pose?.stamp_ns || '',
+            scan.map_sensor_pose?.yaw || '',
             scan.ranges.length,
             scan.ranges[0] ?? '',
             scan.ranges[scan.ranges.length - 1] ?? '',
@@ -1491,11 +1517,25 @@ if (root && canvas) {
 
         ensureScanCapacity(scan.ranges.length);
 
-        // Anchor this single scan at the latest available base map pose.
-        // The previous scan stays fixed while the robot moves; each new scan
-        // replaces it (LaserScan Decay Time = 0). Never translate map/costmap.
-        if (targetPose) {
-            const yaw = targetPose.yaw;
+        // Scan-time map->laser TF takes precedence over latest map->base_link.
+        // Never apply the laser mount a second time to a sensor-frame TF.
+        const matched = scan?.map_sensor_pose;
+        const hasMatchedTf = Boolean(
+            matched && matched.frame_id === 'map'
+            && [matched.x, matched.y, matched.yaw].every(v => Number.isFinite(Number(v)))
+        );
+        // An unmatched LiDAR scan may serve as a temporary local preview.
+        // It must not appear as a world obstacle on an authoritative SLAM map.
+        const isPreview = !currentMap || currentMap.preview === true
+            || currentMap.map_kind === 'preview';
+        const canUseLatestPose = isPreview && Boolean(targetPose);
+        if (hasMatchedTf) {
+            for (const group of [scanRoot, pointsRoot]) {
+                group.position.set(Number(matched.x), Number(matched.y), Number(matched.z) || 0);
+                group.rotation.z = Number(matched.yaw);
+            }
+        } else if (canUseLatestPose) {
+            const yaw = Number(targetPose.yaw) || 0;
             const cy = Math.cos(yaw);
             const sy = Math.sin(yaw);
             const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
@@ -1547,8 +1587,8 @@ if (root && canvas) {
         pointAttribute.needsUpdate = true;
         scanRayGeometry.setDrawRange(0, validCount * 2);
         scanPointGeometry.setDrawRange(0, validCount);
-        scanRoot.visible = Boolean(validCount && targetPose);
-        pointsRoot.visible = Boolean(validCount && targetPose);
+        scanRoot.visible = Boolean(validCount && (hasMatchedTf || canUseLatestPose));
+        pointsRoot.visible = Boolean(validCount && (hasMatchedTf || canUseLatestPose));
     }
 
     function displayedGlobalPath(
@@ -2031,7 +2071,21 @@ if (root && canvas) {
                     : '지도에서 Goal 위치와 방향을 지정합니다.')
                 : 'DRIVING 및 Pi·Localization·Nav2 준비 후 사용할 수 있습니다.';
         }
-        if (!allowed && ['set-goal', 'set-loop'].includes(interactionMode)) {
+        const poseButton = root.querySelector('[data-lidar-interaction="set-initial-pose"]');
+        const poseAllowed = viewerExpanded
+            && String(control?.navigation_mode || '').toUpperCase() === 'MAPPING'
+            && currentMap?.source === 'slam_toolbox'
+            && currentMap?.map_verified === true
+            && control?.connected === true
+            && !control?.emergency_stop;
+        if (poseButton) {
+            poseButton.disabled = !poseAllowed;
+            poseButton.title = poseAllowed
+                ? '현재 SLAM 지도에서 로봇의 위치와 방향을 드래그하여 지정합니다.'
+                : '실제 /map과 Pi 안전 상태가 준비되어야 사용할 수 있습니다.';
+        }
+        if ((!allowed && ['set-goal', 'set-loop'].includes(interactionMode))
+            || (!poseAllowed && interactionMode === 'set-initial-pose')) {
             setInteractionMode('view');
         }
     }
@@ -2130,10 +2184,17 @@ if (root && canvas) {
     }
 
     function setInteractionMode(mode) {
+        const poseAllowed = mode === 'set-initial-pose'
+            && viewerExpanded
+            && isMappingMode()
+            && currentMap?.source === 'slam_toolbox'
+            && currentMap?.map_verified === true
+            && currentControlState?.connected === true
+            && !currentControlState?.emergency_stop;
         interactionMode = (
             ['set-goal', 'set-loop'].includes(mode) && goalInteractionAllowed()
                 ? mode
-                : 'view'
+                : poseAllowed ? 'set-initial-pose' : 'view'
         );
         controls.enabled = viewerExpanded;
         controls.enableRotate = viewerExpanded && interactionMode === 'view';
@@ -2141,7 +2202,7 @@ if (root && canvas) {
         controls.enableZoom = viewerExpanded;
         root.closest('.lidar-viewer-overlay')?.classList.toggle(
             'goal-input-active',
-            viewerExpanded && ['set-goal', 'set-loop'].includes(interactionMode),
+            viewerExpanded && ['set-goal', 'set-loop', 'set-initial-pose'].includes(interactionMode),
         );
         root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
             button.classList.toggle(
@@ -2149,6 +2210,7 @@ if (root && canvas) {
                 button.dataset.lidarInteraction === interactionMode,
             );
         });
+        if (interactionMode !== 'set-initial-pose') initialPoseArrow.visible = false;
         if (interactionMode !== 'view') canvas.focus({ preventScroll: true });
         document.dispatchEvent(new CustomEvent('dabom:navigation-interaction-mode', {
             detail: { mode: interactionMode },
@@ -2190,6 +2252,7 @@ if (root && canvas) {
         const liveCostmap = mappingMode ? null : (state.costmap || null);
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
+        syncGoalInteractionAvailability();
         rebuildCostmap(liveCostmap);
         rebuildPath(displayedGlobalPath(currentControlState, state));
 
@@ -2219,7 +2282,13 @@ if (root && canvas) {
             && Number.isFinite(poseReceived) && poseReceived > 0
             && Math.abs(scanReceived - poseReceived) > 0.75
         );
-        rebuildScan(scanPoseMismatch ? null : liveScan);
+        const scanAgeSec = Date.now() / 1000 - Number(liveScan?.received_at);
+        const scanIsStale = liveScan && Number.isFinite(scanAgeSec)
+            && scanAgeSec > 1.5;
+        rebuildScan(
+            scanIsStale || (scanPoseMismatch && !liveScan?.map_sensor_pose)
+                ? null : liveScan
+        );
 
         if (
             trajectorySessionActive

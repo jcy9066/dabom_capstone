@@ -137,7 +137,7 @@ def test_removed_wall_is_cleared_on_next_update():
     assert cell_value(second, 1.0, 0.0) == 0
 
 
-def test_unobserved_cells_persist_and_map_expands():
+def test_unverified_preview_does_not_keep_unobserved_ghost_cells():
     grid = LiveMappingGrid(
         resolution=0.1,
         refresh_sec=1.0,
@@ -153,7 +153,6 @@ def test_unobserved_cells_persist_and_map_expands():
         wall_time=1.0,
         force=True,
     )
-    old_width = first["width"]
     assert cell_value(first, 0.0, 1.0) == 100
 
     grid.update_pose({"x": 3.0, "y": 0.0, "yaw": -0.5})
@@ -163,8 +162,9 @@ def test_unobserved_cells_persist_and_map_expands():
         monotonic_now=2.0,
         wall_time=2.0,
     )
-    assert second["width"] > old_width
-    assert cell_value(second, 0.0, 1.0) == 100
+    # Unverified scan-only geometry is a per-frame preview, never a fused map.
+    assert second["preview"] is True
+    assert cell_value(second, 0.0, 1.0) is None
     assert cell_value(second, 4.0, 0.0) == 100
 
 
@@ -249,3 +249,71 @@ def test_slam_map_remains_authoritative_after_live_scan():
     # SLAM occupied cells are not cleared by unaligned LiDAR overlay data.
     assert cell_value(payload, 1.0, 0.0) == 100
 
+
+
+def test_authoritative_map_snapshot_removes_old_out_of_bounds_occupied_cells():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    first = {
+        "width": 30, "height": 1, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "rle", "data": [[0, 20], [100, 1], [-1, 9]],
+    }
+    assert grid.update_base_map(first)
+    before = grid.snapshot(robot_id="pi-01", wall_time=1.0)
+    assert before["map_verified"] is True
+    assert cell_value(before, 2.05, 0.05) == 100
+
+    corrected = {
+        "width": 10, "height": 1, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "rle", "data": [[0, 10]],
+    }
+    assert grid.update_base_map(corrected)
+    after = grid.snapshot(robot_id="pi-01", wall_time=2.0)
+    assert after["source"] == "slam_toolbox"
+    assert after["preview"] is False
+    assert cell_value(after, 2.05, 0.05) is None
+
+
+def test_scan_preview_is_explicitly_unverified():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    assert grid.update_scan(make_scan([1.0]))
+    preview = grid.maybe_update(
+        robot_id="pi-01", monotonic_now=1.0, wall_time=1.0, force=True
+    )
+    assert preview["preview"] is True
+    assert preview["map_verified"] is False
+    assert preview["source"] == "live_mapping_grid"
+    assert preview["map_kind"] == "preview"
+
+
+def test_scan_preview_rotation_keeps_static_obstacle_in_world_coordinates():
+    grid = LiveMappingGrid(
+        resolution=0.1, refresh_sec=1.0, padding_cells=0,
+        sensor_yaw=math.pi,
+    )
+    for i, (robot_yaw, scan_angle) in enumerate([
+        (0.0, -math.pi), (math.pi / 2, math.pi / 2),
+        (math.pi, 0.0), (2 * math.pi, -math.pi),
+    ], 1):
+        assert grid.update_pose({"x": 0.0, "y": 0.0, "yaw": robot_yaw})
+        scan = make_scan([2.0])
+        scan["angle_min"] = scan_angle
+        scan["angle_increment"] = 0.01
+        assert grid.update_scan(scan)
+        snapshot = grid.maybe_update(
+            robot_id="pi-01", monotonic_now=float(i),
+            wall_time=float(i), force=True,
+        )
+        assert snapshot["preview"] is True
+        occupied = []
+        for idx, value in enumerate(decode_rle(snapshot)):
+            if value == 100:
+                cell_x = idx % snapshot["width"]
+                cell_y = idx // snapshot["width"]
+                occupied.append((
+                    snapshot["origin"]["x"] + (cell_x + 0.5) * snapshot["resolution"],
+                    snapshot["origin"]["y"] + (cell_y + 0.5) * snapshot["resolution"],
+                ))
+        assert occupied
+        assert min(math.hypot(x - 2.0, y) for x, y in occupied) < 0.15

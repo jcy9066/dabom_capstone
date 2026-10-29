@@ -282,6 +282,7 @@
                                         <span class="lidar-control-separator" aria-hidden="true"></span>
                                         <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
+                                        <button type="button" data-lidar-interaction="set-initial-pose" data-control-button="secondary" disabled>SET INITIAL POSE</button>
                                         <label class="loop-map-radio"><input type="checkbox" id="loop-goal-toggle"><span>SET LOOP</span></label>
                                     </div>
 
@@ -425,6 +426,7 @@
                                         <span class="loop-modal-subtitle">EXECUTION</span>
                                         <div class="loop-modal-buttons">
                                             <button type="button" id="loop-start" disabled data-control-button="accent">Start</button>
+                                            <button type="button" id="loop-resume" disabled hidden data-control-button="secondary">Resume</button>
                                             <button type="button" id="loop-stop" disabled data-control-button="danger">Stop</button>
                                         </div>
                                     </div>

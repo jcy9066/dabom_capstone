@@ -1,11 +1,13 @@
 import math
 import time
+import threading
 from datetime import datetime, timezone
 
 import requests
 import rclpy
 from patrol_navigation.env_config import env_text
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
+from lifecycle_msgs.srv import GetState
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
@@ -230,7 +232,31 @@ class MapBridge(Node):
 
         self.latest_map = None
         self.latest_scan = None
+        self.ready_scan = None
+        self._scan_seen_at = None
+        self._odom_seen_at = None
+        self._map_seen_at = None
+        self._map_post_acked_at = None
+        self._lifecycle_state = "unknown"
+        self._lifecycle_request = None
+        self._last_scan_queued_stamp_ns = 0
         self.last_warning_at = 0.0
+        # One pending frame per stream: stalled HTTP must not block ROS or
+        # queue stale observations indefinitely.
+        self._post_condition = threading.Condition()
+        self._pending_posts = {}
+        self._posting_stopped = False
+        self._post_threads = [
+            threading.Thread(
+                target=self._post_worker,
+                args=(kind,),
+                daemon=True,
+                name=f"map-bridge-{kind}",
+            )
+            for kind in ("map", "pose", "scan", "health")
+        ]
+        for worker in self._post_threads:
+            worker.start()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(
@@ -240,12 +266,16 @@ class MapBridge(Node):
 
         self.map_subscription = (
             self.create_subscription(
-                OccupancyGrid,
-                self.map_topic,
-                self.on_map,
-                1,
+                OccupancyGrid, self.map_topic, self.on_map, 1,
             )
         )
+        self.odom_subscription = self.create_subscription(
+            Odometry, "/odom", self.on_odom, qos_profile_sensor_data,
+        )
+        self.lifecycle_client = self.create_client(
+            GetState, "/slam_toolbox/get_state",
+        )
+        self.create_timer(1.0, self.publish_mapping_health)
 
         if self.send_scan:
             self.scan_subscription = (
@@ -274,6 +304,7 @@ class MapBridge(Node):
                 "scan_publish_period_sec"
             ).value
         )
+        self._scan_period = scan_period
 
         if self.send_map and map_period > 0:
             self.create_timer(
@@ -306,14 +337,103 @@ class MapBridge(Node):
         )
 
     def on_map(self, msg):
+        self._map_seen_at = time.monotonic()
         self.latest_map = msg
         # RViz2 Map display처럼 /map callback이 도착한 순간 dashboard로
         # 전달한다. 별도 timer polling으로 지연시키지 않는다.
         if self.send_map:
-            self.publish_map(msg)
+            # Store only the latest ROS message; no RLE encoding or HTTP
+            # work runs on the ROS subscription callback.
+            self._queue_post("map", "/navigation/map", msg)
 
     def on_scan(self, msg):
+        self._scan_seen_at = time.monotonic()
+        # Always queue the preceding scan, giving TF publishers time to catch up.
+        self.ready_scan = self.latest_scan
         self.latest_scan = msg
+        if self.send_scan and self.ready_scan is not None and self._scan_period <= 0:
+            self.publish_scan()
+
+    def on_odom(self, msg):
+        if (math.isfinite(msg.pose.pose.position.x)
+            and math.isfinite(msg.pose.pose.position.y)):
+            self._odom_seen_at = time.monotonic()
+
+    def _lifecycle_response(self, future):
+        self._lifecycle_request = None
+        try:
+            self._lifecycle_state = str(future.result().current_state.label).lower()
+        except Exception:
+            self._lifecycle_state = "unknown"
+
+    def publish_mapping_health(self):
+        if self.navigation_mode != "mapping":
+            return
+        now = time.monotonic()
+        if (self._lifecycle_request is None
+            and self.lifecycle_client.service_is_ready()):
+            future = self.lifecycle_client.call_async(GetState.Request())
+            self._lifecycle_request = future
+            future.add_done_callback(self._lifecycle_response)
+
+        def age(at):
+            return None if at is None else max(0.0, now - at)
+
+        scan = self.latest_scan
+        stamp = Time.from_msg(scan.header.stamp) if scan is not None else Time()
+        frame = scan.header.frame_id if scan is not None else ""
+        tf_base = bool(scan is not None and self.tf_buffer.can_transform(
+            "odom", self.pose_child_frame, stamp,
+        ))
+        tf_laser = bool(scan is not None and self.tf_buffer.can_transform(
+            self.pose_child_frame, frame, stamp,
+        ))
+        tf_map = bool(scan is not None and self.tf_buffer.can_transform(
+            self.pose_parent_frame, "odom", stamp,
+        ))
+        self._queue_post("health", "/navigation/mapping/health", {
+            **self.common_payload(),
+            "scan_age_sec": age(self._scan_seen_at),
+            "odom_age_sec": age(self._odom_seen_at),
+            "slam_map_age_sec": age(self._map_seen_at),
+            "last_map_post_acked_age_sec": age(self._map_post_acked_at),
+            "tf": {"odom_to_base": tf_base, "base_to_laser": tf_laser,
+                   "map_to_odom": tf_map},
+            "slam_lifecycle": self._lifecycle_state,
+        })
+
+    def _queue_post(self, kind, path, payload):
+        with self._post_condition:
+            if self._posting_stopped:
+                return
+            self._pending_posts[kind] = (path, payload)
+            self._post_condition.notify_all()
+
+    def _post_worker(self, kind):
+        while True:
+            with self._post_condition:
+                while not self._posting_stopped and kind not in self._pending_posts:
+                    self._post_condition.wait()
+                if self._posting_stopped:
+                    return
+                path, payload = self._pending_posts.pop(kind)
+            try:
+                if kind == "map":
+                    payload = self._map_payload(payload)
+                result = self.post_json(path, payload)
+                if kind == "map" and result:
+                    self._map_post_acked_at = time.monotonic()
+            except Exception as exc:
+                self.warn_throttled(f"POST {path} worker failed: {exc}")
+
+    def destroy_node(self):
+        with self._post_condition:
+            self._posting_stopped = True
+            self._pending_posts.clear()
+            self._post_condition.notify_all()
+        for worker in self._post_threads:
+            worker.join(timeout=max(0.2, self.request_timeout_sec + 0.2))
+        return super().destroy_node()
 
     def post_json(
         self,
@@ -333,7 +453,12 @@ class MapBridge(Node):
                 timeout=self.request_timeout_sec,
             )
 
-            if response.status_code >= 400:
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if (response.status_code >= 400
+                or (isinstance(body, dict) and body.get("ok") is False)):
                 self.warn_throttled(
                     f"POST {path} failed "
                     f"status={response.status_code} "
@@ -371,11 +496,11 @@ class MapBridge(Node):
 
     def publish_map(self, msg=None):
         msg = msg or self.latest_map
+        if msg is not None:
+            self._queue_post("map", "/navigation/map", msg)
 
-        if msg is None:
-            return
-
-        payload = {
+    def _map_payload(self, msg):
+        return {
             **self.common_payload(),
             "frame_id": (
                 msg.header.frame_id
@@ -410,11 +535,6 @@ class MapBridge(Node):
                 list(msg.data)
             ),
         }
-
-        self.post_json(
-            "/navigation/map",
-            payload,
-        )
 
     def publish_pose(self):
         try:
@@ -469,17 +589,40 @@ class MapBridge(Node):
             },
         }
 
-        self.post_json(
-            "/navigation/pose",
-            payload,
+        self._queue_post(
+            "pose", "/navigation/pose", payload,
         )
 
     def publish_scan(self):
-        msg = self.latest_scan
+        msg = self.ready_scan
 
         if msg is None:
             return
+        stamp_ns = (
+            int(msg.header.stamp.sec) * 1000000000
+            + int(msg.header.stamp.nanosec)
+        )
+        if stamp_ns <= self._last_scan_queued_stamp_ns:
+            return
 
+        # Always transform at the acquisition time of this LaserScan.
+        # Time() means latest TF and makes stationary walls rotate with
+        # the robot when network/ROS callbacks are delayed.
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.pose_parent_frame,
+                msg.header.frame_id,
+                Time.from_msg(msg.header.stamp),
+            )
+        except TransformException as exc:
+            self.warn_throttled(
+                f"Scan TF unavailable at measurement stamp "
+                f"{msg.header.frame_id}->{self.pose_parent_frame}: {exc}"
+            )
+            return
+
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
         ranges = list(msg.ranges)
 
         if (
@@ -526,6 +669,25 @@ class MapBridge(Node):
                 msg.header.stamp
             ),
             "bridge_timestamp": now_iso(),
+            "scan_stamp_ns": (
+                int(msg.header.stamp.sec) * 1000000000
+                + int(msg.header.stamp.nanosec)
+            ),
+            "time_increment_sec": float(msg.time_increment) * step,
+            "scan_time_sec": float(msg.scan_time),
+            "source": "map_bridge",
+            "map_sensor_pose": {
+                "frame_id": self.pose_parent_frame,
+                "sensor_frame_id": msg.header.frame_id,
+                "x": float(translation.x),
+                "y": float(translation.y),
+                "z": float(translation.z),
+                "yaw": yaw_from_quaternion(rotation),
+                "stamp_ns": (
+                    int(msg.header.stamp.sec) * 1000000000
+                    + int(msg.header.stamp.nanosec)
+                ),
+            },
             "angle_min": msg.angle_min,
             "angle_max": msg.angle_max,
             "angle_increment": (
@@ -536,10 +698,10 @@ class MapBridge(Node):
             "ranges": sanitized_ranges,
         }
 
-        self.post_json(
-            "/navigation/scan",
-            payload,
+        self._queue_post(
+            "scan", "/navigation/scan", payload,
         )
+        self._last_scan_queued_stamp_ns = stamp_ns
 
 
 def main(args=None):

@@ -204,6 +204,13 @@ class RobotCommandClient:
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
+        encoder = self.motor.encoder_snapshot()
+        encoder_age = encoder.get("age_sec") if encoder else None
+        encoder_healthy = bool(
+            self.motor.connected
+            and isinstance(encoder_age, (int, float))
+            and 0 <= encoder_age <= 1.0
+        )
         with self._safety_lock:
             safety_epoch = self._safety_epoch
             emergency_stop_latched = self.emergency_stop_latched
@@ -241,6 +248,8 @@ class RobotCommandClient:
             "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
+            "encoder_age_sec": encoder_age,
+            "encoder_stream_healthy": encoder_healthy,
             "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
@@ -353,6 +362,8 @@ class RobotCommandClient:
                 await asyncio.sleep(1.0)
 
         previous_sequence = -1
+        last_fresh_encoder_at = time.monotonic()
+        encoder_link_fault_active = False
 
         while self.running:
             if self.motor.pico_reboot_pending():
@@ -373,9 +384,34 @@ class RobotCommandClient:
                     continue
 
             snapshot = self.motor.encoder_snapshot()
+            encoder_age = snapshot.get("age_sec") if snapshot else None
+            healthy = bool(
+                self.motor.connected
+                and isinstance(encoder_age, (int, float))
+                and 0 <= encoder_age <= 1.0
+            )
+            if healthy:
+                last_fresh_encoder_at = time.monotonic()
+                encoder_link_fault_active = False
+            elif time.monotonic() - last_fresh_encoder_at >= 2.0:
+                if not encoder_link_fault_active:
+                    # Link loss is not a new movement authorization. Operators
+                    # must explicitly recover from E-STOP after connectivity.
+                    encoder_link_fault_active = True
+                    self._resume_safety_prepared = False
+                    with self._safety_lock:
+                        self.emergency_stop_latched = True
+                        self._safety_epoch += 1
+                try:
+                    await asyncio.to_thread(self.motor.recover_encoder_stream)
+                except Exception as exc:
+                    print(f"[encoder] UART/stream recovery pending: {exc}")
+                await asyncio.sleep(1.0)
+                continue
 
             if (
-                snapshot is not None
+                healthy
+                and snapshot is not None
                 and snapshot["sequence"]
                 != previous_sequence
             ):
@@ -436,6 +472,7 @@ class RobotCommandClient:
         error = None
         encoder_sequence = None
         recorded_drive = None
+        manual_pulse = None
 
         try:
             if command_type == "move":
@@ -452,6 +489,60 @@ class RobotCommandClient:
                     self.motor.move,
                     message.get("direction", ""),
                     message.get("speed", 1.0),
+                )
+
+            elif command_type == "manual_loop_pulse":
+                self._require_current_motion_safety(message)
+                if self.current_mode != "manual" or self.navigation_mode != "driving":
+                    raise RuntimeError("Manual Loop requires MANUAL/DRIVING")
+                duration = self._duration_ms(message.get("duration_ms"))
+                if not 1 <= duration <= 120:
+                    raise RuntimeError("Manual Loop pulse must be 1..120ms")
+                pulse_id = message.get("pulse_id")
+                generation = message.get("replay_generation")
+                if (not isinstance(pulse_id, str) or not 1 <= len(pulse_id) <= 64
+                    or type(generation) is not int or generation < 1):
+                    raise RuntimeError("Manual Loop command identity invalid")
+                sequence = message.get("pulse_sequence")
+                if type(sequence) is not int or sequence <= 0:
+                    raise RuntimeError("Manual Loop pulse sequence invalid")
+                manual_pulse = await asyncio.to_thread(
+                    self._run_manual_loop_pulse, message, pulse_id,
+                    generation, sequence, duration,
+                )
+
+            elif command_type == "manual_loop_query":
+                # Read-only receipt: may query a previous safety epoch after
+                # an explicit STOP, but never authorizes a new MOVE.
+                with self.motor._command_lock:
+                    pulse_id = message.get("pulse_id")
+                    generation = message.get("replay_generation")
+                    epoch = message.get("pulse_safety_epoch")
+                    session = message.get("safety_session")
+                    if (not isinstance(pulse_id, str)
+                        or type(generation) is not int
+                        or type(epoch) is not int
+                        or session != self._safety_session):
+                        raise RuntimeError("Invalid manual Loop receipt identity")
+                    identity = (session, epoch, generation, pulse_id)
+                    receipt = getattr(self, "_manual_loop_recent", {}).get(identity)
+                    if not isinstance(receipt, dict):
+                        raise RuntimeError("Manual Loop pulse receipt missing")
+                    manual_pulse = dict(receipt["result"])
+                    if manual_pulse.get("stopped") is not True:
+                        raise RuntimeError("Manual Loop STOP unconfirmed")
+
+            elif command_type == "initial_pose_turn":
+                self._require_current_motion_safety(message)
+                if self.current_mode != "manual" or self.navigation_mode != "mapping":
+                    raise RuntimeError("Initial Pose turn requires Pi MANUAL/MAPPING")
+                duration = self._duration_ms(message.get("duration_ms"))
+                if not 1 <= duration <= 100:
+                    raise RuntimeError("Initial Pose turn exceeds 100ms limit")
+                if message.get("direction") != "rotate_left" or float(message.get("speed", 0)) != 0.20:
+                    raise RuntimeError("Initial Pose turn command must be a 20% rotate_left pulse")
+                await asyncio.to_thread(
+                    self._run_bounded_initial_pose_turn, message, duration,
                 )
 
             elif command_type == "auto_drive":
@@ -657,6 +748,7 @@ class RobotCommandClient:
             if command_type in {
                 "move",
                 "auto_drive",
+                "manual_loop_pulse",
             }:
                 self.motor.stop(
                     reason=f"{command_type}_error",
@@ -685,6 +777,9 @@ class RobotCommandClient:
                     "motion": self.motor.current_motion,
                     **({"recorded_drive": recorded_drive}
                        if command_type == "auto_drive" and message.get("source") == "recorded_loop" else {}),
+                    **({"manual_loop_pulse": manual_pulse}
+                       if command_type in {"manual_loop_pulse", "manual_loop_query"}
+                       and manual_pulse is not None else {}),
                     "motor_connected": (
                         self.motor.connected
                     ),
@@ -692,6 +787,86 @@ class RobotCommandClient:
                 }
             )
         )
+
+    def _run_manual_loop_pulse(
+        self, message: dict, pulse_id: str, generation: int,
+        sequence: int, duration_ms: int,
+    ) -> dict:
+        """Pi-owned exposure budget, ACKed by Pico. Never exceed its watchdog.
+
+        A repeat of one pulse id never applies motor output a second time.
+        Timestamp accounting starts *after* the Pico accepts MOVE and ends
+        when STOP is requested. STOP failure makes the entire pulse fail.
+        """
+        with self.motor._command_lock:
+            self._require_current_motion_safety(message)
+            identity = (
+                self._safety_session, self._safety_epoch,
+                generation, pulse_id,
+            )
+            record = (message.get("direction"), message.get("speed"), duration_ms)
+            cache = getattr(self, "_manual_loop_recent", None)
+            if cache is None:
+                cache = self._manual_loop_recent = {}
+            if identity in cache:
+                if cache[identity]["record"] != record:
+                    raise RuntimeError("Manual Loop pulse identity changed")
+                return dict(cache[identity]["result"])
+            latest = getattr(self, "_manual_loop_latest", {})
+            session = (self._safety_session, generation)
+            if sequence <= latest.get(session, 0):
+                raise RuntimeError("Stale or replayed Manual Loop pulse sequence")
+            if any(key[0] == self._safety_session and key[1] > generation for key in latest):
+                raise RuntimeError("Stale Manual Loop replay generation")
+            start = None
+            error = None
+            elapsed_ms = 0
+            try:
+                self._require_current_motion_safety(message)
+                self.motor.move(message.get("direction", ""), message.get("speed", 0))
+                start = time.monotonic()
+                time.sleep(duration_ms / 1000.0)
+                self._require_current_motion_safety(message)
+            except Exception as exc:
+                error = exc
+            finally:
+                if start is not None:
+                    elapsed_ms = max(0, min(
+                        duration_ms, int((time.monotonic() - start) * 1000),
+                    ))
+                # This local STOP is mandatory even if the WebSocket disappears.
+                # Do not convert a failed STOP into a positive exposure ACK.
+                try:
+                    self.motor.stop("manual_loop_pulse_complete")
+                except Exception as exc:
+                    error = exc
+            if error is not None:
+                raise error
+            result = {
+                "pulse_id": pulse_id, "replay_generation": generation,
+                "elapsed_ms": elapsed_ms, "duration_ms": duration_ms,
+                "stopped": True,
+            }
+            cache[identity] = {"record": record, "result": result}
+            latest[session] = sequence
+            self._manual_loop_latest = latest
+            while len(latest) > 24:
+                latest.pop(next(iter(latest)))
+            while len(cache) > 128:
+                cache.pop(next(iter(cache)))
+            return dict(result)
+
+    def _run_bounded_initial_pose_turn(self, message: dict, duration_ms: int) -> None:
+        # This operation runs in a Pi-local thread. It is bounded independently
+        # of GPU WebSocket response time and STOP runs even if the network dies.
+        with self.motor._command_lock:
+            try:
+                self._require_current_motion_safety(message)
+                self.motor.move("rotate_left", 0.20)
+                time.sleep(duration_ms / 1000.0)
+                self._require_current_motion_safety(message)
+            finally:
+                self.motor.stop("initialpose_local_stop")
 
     def _run_guarded_motor_motion(self, message: dict, operation, *args):
         # Share the actual MotorController's UART command lock.

@@ -69,6 +69,7 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.recorded_loop_api import RecordedLoopApi
+from server.localization_session_api import LocalizationSessionApi
 from server.loop_session_api import LoopSessionApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
@@ -77,6 +78,8 @@ from server.location_security_notifications import build_location_transition_mes
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
+from server.mapping_health import mapping_health_state
+from server.map_storage_integrity import commit_bundle
 from server.gpu_telemetry import GpuUtilizationSampler
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
@@ -484,6 +487,13 @@ navigation_state = {
     "map": None,
     "pose": None,
     "scan": None,
+    "matched_scan": None,
+    "session_id": uuid4().hex,
+    "session_started_at": time.time(),
+    "mapping_probe": None,
+    "mapping_probe_updated_at": None,
+    "odometry_continuity_lost": False,
+    "odometry_last_pico_ms": None,
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -860,6 +870,37 @@ class RobotConnectionManager:
                 except Exception:
                     # Observability never changes the physical ACK contract.
                     pass
+            if command.get("type") == "manual_loop_query":
+                # A receipt query is read-only. The queried pulse may have
+                # completed in an older STOP safety epoch. Its cached identity
+                # is checked on Pi; do not require current epoch == old epoch.
+                matched = (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                )
+                result = ack.get("manual_loop_pulse") if matched else None
+                return {
+                    "ok": matched and isinstance(result, dict),
+                    "delivered": matched and isinstance(result, dict),
+                    "manual_loop_pulse": result if isinstance(result, dict) else None,
+                }
+            if command.get("type") == "manual_loop_pulse":
+                # The Pi has already issued local STOP when this ACK arrives.
+                # Report only Pi-confirmed exposure, never an ACK-roundtrip age.
+                matched = (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and type(ack.get("safety_epoch")) is int
+                    and ack.get("safety_epoch") == command.get("safety_epoch")
+                )
+                result = ack.get("manual_loop_pulse") if matched else None
+                return {
+                    "ok": matched and isinstance(result, dict),
+                    "delivered": matched and isinstance(result, dict),
+                    "manual_loop_pulse": result if isinstance(result, dict) else None,
+                }
             if command.get("type") == "resume_safety_check":
                 # Only a command_id-matched Pi ACK can prove processing.
                 # The Pi's raw ACK has "ok" but no "delivered" field.
@@ -964,6 +1005,13 @@ class NavigationVisualizationHub:
         self.max_queue_size = max(1, int(max_queue_size))
         self._loop = None
         self._queues = {}
+        self._event_seq = 0
+        self._event_lock = threading.Lock()
+
+    @property
+    def event_seq(self):
+        with self._event_lock:
+            return self._event_seq
 
     def bind_loop(self, loop):
         self._loop = loop
@@ -983,7 +1031,12 @@ class NavigationVisualizationHub:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
+        with self._event_lock:
+            self._event_seq += 1
+            sequence = self._event_seq
         payload = dict(event)
+        payload["event_seq"] = sequence
+        payload.setdefault("session_id", navigation_state.get("session_id"))
         try:
             loop.call_soon_threadsafe(self._enqueue, payload)
         except RuntimeError:
@@ -992,14 +1045,20 @@ class NavigationVisualizationHub:
     def _enqueue(self, payload):
         for queue in tuple(self._queues.values()):
             if queue.full():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                pass
+                # A lost map or reset cannot be recovered by applying a later
+                # delta. Explicitly require a complete HTTP snapshot.
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                queue.put_nowait({
+                    "type": "resync_required",
+                    "event_seq": payload["event_seq"],
+                    "session_id": payload.get("session_id"),
+                })
+                continue
+            queue.put_nowait(payload)
 
 
 navigation_visualization_hub = NavigationVisualizationHub()
@@ -1044,9 +1103,16 @@ location_security_api = LocationSecurityApi(
 
 
 def current_navigation_map_snapshot():
+    process = navigation_process_control.status()
+    running = process.get("mode") == "MAPPING"
     with state_lock:
         current = navigation_state.get("map")
-        return dict(current) if isinstance(current, dict) else None
+        if not isinstance(current, dict):
+            return None
+        result = dict(current)
+        result["map_revision"] = navigation_state.get("map_revision")
+        result.update(build_mapping_health(process_running=running))
+        return result
 
 
 def current_navigation_pose_snapshot():
@@ -1074,6 +1140,15 @@ def clear_navigation_visualization_state():
         localization_scan_history.clear()
         navigation_state["map"] = None
         navigation_state["pose"] = None
+        navigation_state["scan"] = None
+        navigation_state["matched_scan"] = None
+        navigation_state["scan_updated_at"] = None
+        navigation_state["session_id"] = uuid4().hex
+        navigation_state["session_started_at"] = time.time()
+        navigation_state["mapping_probe"] = None
+        navigation_state["mapping_probe_updated_at"] = None
+        navigation_state["odometry_continuity_lost"] = False
+        navigation_state["odometry_last_pico_ms"] = None
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -1081,12 +1156,16 @@ def clear_navigation_visualization_state():
         navigation_state["map_updated_at"] = None
         navigation_state["pose_updated_at"] = None
         navigation_state["map_revision"] = None
-    navigation_visualization_hub.publish({"type": "reset"})
+    navigation_visualization_hub.publish({
+        "type": "reset",
+        "session_id": navigation_state["session_id"],
+    })
 
 
 def publish_live_mapping_map(map_payload, received_at):
     map_revision = build_navigation_map_revision(map_payload)
     stored_map = received_payload(map_payload, received_at)
+    stored_map["map_revision"] = map_revision
     with state_lock:
         navigation_state["map"] = stored_map
         navigation_state["map_updated_at"] = received_at
@@ -1131,6 +1210,13 @@ navigation_control_api = NavigationControlApi(
     clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+# Dedicated asynchronous Initial Pose preparation and map-click recovery API.
+# It reuses NavigationControlApi's existing verified switch_mode path.
+localization_session_api = LocalizationSessionApi(
+    app=app,
+    navigation=navigation_control_api,
+)
+
 # A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
 # This observer only accepts command_id-matched ACKs from the current socket.
 recorded_loop_api = RecordedLoopApi(
@@ -4069,6 +4155,22 @@ def store_navigation_mode(mode, received_at):
     navigation_state["mode_updated_at"] = received_at
 
 
+def build_mapping_health(now=None, process_running=None):
+    now = time.time() if now is None else float(now)
+    return mapping_health_state(
+        mode=("mapping" if process_running is True
+              else navigation_state.get("mode")),
+        probe=navigation_state.get("mapping_probe"),
+        probe_received_at=navigation_state.get("mapping_probe_updated_at"),
+        scan_updated_at=navigation_state.get("scan_updated_at"),
+        map_payload=navigation_state.get("map"),
+        map_updated_at=navigation_state.get("map_updated_at"),
+        now=now,
+        process_running=process_running,
+        odometry_continuity_lost=navigation_state.get("odometry_continuity_lost", False),
+    )
+
+
 def build_navigation_status(now=None):
     now = now or time.time()
     decision = build_navigation_decision(now)
@@ -4104,6 +4206,8 @@ def build_navigation_status(now=None):
         "last_update_age_sec": last_update_age_sec,
         "timeout_sec": NAVIGATION_TIMEOUT_SEC,
         "has_map": navigation_state.get("map") is not None,
+        **build_mapping_health(now),
+        "mapping_session_id": navigation_state["session_id"],
         "has_pose": navigation_state.get("pose") is not None,
         "has_scan": navigation_state.get("scan") is not None,
         "map_updated_at": navigation_state.get("map_updated_at"),
@@ -4132,6 +4236,7 @@ def build_navigation_decision(now=None):
 def received_payload(data, received_at):
     payload = dict(data)
     payload["received_at"] = received_at
+    payload["session_id"] = navigation_state["session_id"]
     return payload
 
 
@@ -4231,7 +4336,16 @@ def occupancy_to_pgm_bytes(width, height, cells):
     return header + bytes(pixels)
 
 
+_navigation_map_save_lock = threading.Lock()
+
+
 def save_navigation_map_files(map_payload, requested_name=None, location_metadata=None):
+    # Both the HTTP save endpoint and the DRIVING transition use this entrypoint.
+    with _navigation_map_save_lock:
+        return _save_navigation_map_files_unlocked(map_payload, requested_name, location_metadata)
+
+
+def _save_navigation_map_files_unlocked(map_payload, requested_name=None, location_metadata=None):
     width, height, cells = decode_map_cells(map_payload)
     base_name = unique_map_name(sanitize_map_name(requested_name))
     saved_at = time.time()
@@ -4250,28 +4364,22 @@ def save_navigation_map_files(map_payload, requested_name=None, location_metadat
     origin_yaw = float(origin.get("yaw", 0.0))
     resolution = float(map_payload.get("resolution") or 0.05)
 
-    pgm_path.write_bytes(occupancy_to_pgm_bytes(width, height, cells))
-    yaml_path.write_text(
-        "\n".join(
-            [
-                f"image: {pgm_path.name}",
-                f"resolution: {resolution}",
-                f"origin: [{origin_x}, {origin_y}, {origin_yaw}]",
-                "negate: 0",
-                "occupied_thresh: 0.65",
-                "free_thresh: 0.196",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    pgm_bytes = occupancy_to_pgm_bytes(width, height, cells)
+    yaml_bytes = "\n".join(
+        [
+            f"image: {pgm_path.name}",
+            f"resolution: {resolution}",
+            f"origin: [{origin_x}, {origin_y}, {origin_yaw}]",
+            "negate: 0",
+            "occupied_thresh: 0.65",
+            "free_thresh: 0.196",
+            "",
+        ]
+    ).encode("utf-8")
     raw_payload = dict(map_payload)
     raw_payload["saved_at"] = saved_at
     raw_payload["saved_at_iso"] = saved_at_iso
-    raw_path.write_text(
-        json.dumps(raw_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    raw_bytes = json.dumps(raw_payload, ensure_ascii=False, indent=2).encode("utf-8")
 
     meta = {
         "map_name": base_name,
@@ -4291,11 +4399,29 @@ def save_navigation_map_files(map_payload, requested_name=None, location_metadat
             "raw": str(raw_path.relative_to(ROOT_DIR)),
         },
     }
+    meta["bundle_version"] = 2
+    meta["checksums"] = {
+        "pgm": hashlib.sha256(pgm_bytes).hexdigest(),
+        "yaml": hashlib.sha256(yaml_bytes).hexdigest(),
+        "raw": hashlib.sha256(raw_bytes).hexdigest(),
+    }
+    meta["map_revision"] = build_navigation_map_revision(map_payload)
+    meta["content_sha256"] = meta["map_revision"]
+    meta["verification"] = {
+        "source": map_payload.get("source"),
+        "map_verified": map_payload.get("map_verified") is True,
+    }
     if isinstance(location_metadata, dict) and location_metadata:
         meta["location"] = dict(location_metadata)
-    meta_path.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    manifest = json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")
+    commit_bundle(
+        {
+            pgm_path: pgm_bytes,
+            yaml_path: yaml_bytes,
+            raw_path: raw_bytes,
+            meta_path: manifest,
+        },
+        manifest=meta_path,
     )
     return meta
 
@@ -4351,10 +4477,21 @@ async def update_navigation_map(request: Request):
     received_at = time.time()
 
     if navigation_mode == "mapping":
-        # Mirror RViz2 Map behavior: every slam_toolbox /map refresh becomes the
-        # persistent base OccupancyGrid. Then re-apply the newest LiDAR sample so
-        # dynamic walls clear/appear on the same one-second cadence. The composed
-        # grid is both what the Viewer renders and what "현재 지도 저장" persists.
+        # Reject maps captured before a reset; delayed HTTP must not resurrect
+        # the previous SLAM session as the current authoritative map.
+        try:
+            map_captured_at = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError):
+            map_captured_at = None
+        with state_lock:
+            session_started_at = navigation_state["session_started_at"]
+        if (map_captured_at is not None
+            and map_captured_at < session_started_at - 0.2):
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
         with state_lock:
             navigation_state["robot_id"] = data.get(
                 "robot_id",
@@ -4362,25 +4499,21 @@ async def update_navigation_map(request: Request):
             )
             store_navigation_mode(navigation_mode, received_at)
 
-        live_mapping_grid.update_base_map(data)
-        live_map_payload = live_mapping_grid.maybe_update(
-            robot_id=data.get("robot_id", SERVER_ROBOT_ID),
-            monotonic_now=time.monotonic(),
-            wall_time=received_at,
-            force=True,
-        )
-        if live_map_payload is None:
-            live_map_payload = live_mapping_grid.snapshot(
-                robot_id=data.get("robot_id", SERVER_ROBOT_ID),
-                wall_time=received_at,
+        if not live_mapping_grid.update_base_map(data):
+            return JSONResponse(
+                {"ok": False, "error": "INVALID_SLAM_MAP",
+                 "message": "SLAM OccupancyGrid dimensions, origin, or data are invalid."},
+                status_code=422,
             )
-        if live_map_payload is not None:
-            publish_live_mapping_map(live_map_payload, received_at)
-        return {
-            "ok": True,
-            "source": "slam_toolbox+live_scan",
-            "used_for_live_map": live_map_payload is not None,
-        }
+        # Preserve the original ROS OccupancyGrid geometry and cell values.
+        # Preview/ray observations must never be mixed into the saved SLAM map.
+        authoritative = dict(data)
+        authoritative["source"] = "slam_toolbox"
+        authoritative["map_kind"] = "slam"
+        authoritative["preview"] = False
+        authoritative["map_verified"] = True
+        publish_live_mapping_map(authoritative, received_at)
+        return {"ok": True, "source": "slam_toolbox", "used_for_live_map": True}
 
     map_revision = build_navigation_map_revision(data)
     stored_map = received_payload(data, received_at)
@@ -4423,6 +4556,20 @@ async def update_navigation_pose(request: Request):
         return denied
 
     received_at = time.time()
+    if navigation_mode == "mapping" and data.get("timestamp"):
+        try:
+            pose_captured_at = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            pose_captured_at = None
+        with state_lock:
+            session_started_at = navigation_state["session_started_at"]
+        if (pose_captured_at is not None
+            and pose_captured_at < session_started_at - 0.2):
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
     stored_pose = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
@@ -4463,6 +4610,45 @@ async def update_navigation_scan(request: Request):
         return denied
 
     received_at = time.time()
+    # The TF must refer to this exact scan header, never the newest robot pose.
+    matched = data.get("map_sensor_pose")
+    if matched is not None:
+        try:
+            stamp_ns = int(data["scan_stamp_ns"])
+            matched_stamp_ns = int(matched["stamp_ns"])
+            iso_stamp = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+            pose_values = (
+                float(matched["x"]), float(matched["y"]),
+                float(matched.get("z", 0)), float(matched["yaw"]),
+            )
+            valid = (
+                stamp_ns == matched_stamp_ns
+                and str(matched["sensor_frame_id"]) == str(data["frame_id"])
+                and str(matched["frame_id"]) == "map"
+                and all(math.isfinite(v) for v in pose_values)
+                and -0.1 <= received_at - iso_stamp <= 1.5
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            return JSONResponse(
+                {"ok": False, "error": "SCAN_TF_STALE_OR_INVALID"}, status_code=422
+            )
+        with state_lock:
+            last_matched = navigation_state.get("matched_scan")
+            session_started_at = navigation_state["session_started_at"]
+        if iso_stamp < session_started_at - 0.2:
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
+        if (last_matched and last_matched.get("session_id") == navigation_state["session_id"]
+            and int(last_matched.get("scan_stamp_ns") or 0) >= stamp_ns):
+            return JSONResponse(
+                {"ok": False, "error": "OUT_OF_ORDER_SCAN"}, status_code=409
+            )
+
     stored_scan = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
@@ -4471,10 +4657,12 @@ async def update_navigation_scan(request: Request):
         )
         store_navigation_mode(navigation_mode, received_at)
         navigation_state["scan"] = stored_scan
+        if matched is not None:
+            navigation_state["matched_scan"] = stored_scan
         navigation_state["scan_updated_at"] = received_at
         build_navigation_decision(received_at)
         status = build_navigation_status(received_at)
-    if navigation_mode == "mapping":
+    if navigation_mode == "mapping" and matched is None:
         live_mapping_grid.update_scan(data)
     navigation_control_api.note_navigation_sample("scan", received_at)
     navigation_visualization_hub.publish(
@@ -4487,10 +4675,40 @@ async def update_navigation_scan(request: Request):
     return {"ok": True}
 
 
+@app.post("/navigation/mapping/health")
+async def update_mapping_health(request: Request):
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+        if not isinstance(data, dict) or data.get("navigation_mode") != "mapping":
+            raise ValueError("mapping health payload required")
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    denied = robot_id_failure(data)
+    if denied:
+        return denied
+    with state_lock:
+        if navigation_state.get("mode") != "mapping":
+            return JSONResponse(
+                {"ok": False, "error": "MAPPING_SESSION_INACTIVE"}, status_code=409
+            )
+        navigation_state["mapping_probe"] = dict(data)
+        navigation_state["mapping_probe_updated_at"] = time.time()
+        status = build_mapping_health()
+    return {"ok": True, **status}
+
+
 @app.get("/api/navigation/status")
 async def get_navigation_status():
+    # /proc is queried outside the state lock and outside the hot LiDAR path.
+    process = await asyncio.to_thread(navigation_process_control.status)
+    running = process.get("mode") == "MAPPING"
     with state_lock:
-        return build_navigation_status()
+        status = build_navigation_status()
+        status.update(build_mapping_health(process_running=running))
+    return status
 
 
 def build_navigation_snapshot_payload(map_revision=None):
@@ -4500,7 +4718,15 @@ def build_navigation_snapshot_payload(map_revision=None):
         current_map = navigation_state.get("map")
         current_revision = navigation_state.get("map_revision")
         pose = navigation_state.get("pose")
-        scan = navigation_state.get("scan")
+        raw_scan = navigation_state.get("scan")
+        matched_scan = navigation_state.get("matched_scan")
+        scan = (
+            matched_scan
+            if isinstance(matched_scan, dict)
+            and matched_scan.get("navigation_mode") == navigation_state.get("mode")
+            and time.time() - float(matched_scan.get("received_at") or 0) <= 1.5
+            else raw_scan
+        )
         global_path = navigation_state.get("global_path") or []
         global_path_updated_at = navigation_state.get("global_path_updated_at")
         costmap = navigation_state.get("costmap")
@@ -4516,9 +4742,11 @@ def build_navigation_snapshot_payload(map_revision=None):
         snapshot = {
             "ok": True,
             "status": status,
+            "session_id": navigation_state["session_id"],
             "map_available": current_map is not None,
             "map_changed": map_changed,
             "map_revision": current_revision,
+            "event_seq": navigation_visualization_hub.event_seq,
             "pose_available": pose is not None,
             "pose": pose,
             "scan_available": scan is not None,
@@ -4604,12 +4832,16 @@ async def save_current_navigation_map(request: Request):
         status = build_navigation_status()
     if current_map is None:
         return JSONResponse(
-            {
-                "ok": False,
-                "status": status,
-                "error": "map unavailable",
-            },
+            {"ok": False, "status": status, "error": "map unavailable"},
             status_code=404,
+        )
+    if (current_map.get("source") != "slam_toolbox"
+        or current_map.get("map_verified") is not True
+        or current_map.get("preview") is True):
+        return JSONResponse(
+            {"ok": False, "status": status, "error": "SLAM_MAP_NOT_VERIFIED",
+             "message": "Preview LiDAR grid cannot be saved as an authoritative SLAM map."},
+            status_code=409,
         )
     try:
         meta = save_navigation_map_files(
@@ -5457,11 +5689,17 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
             live_map_payload = None
             if sensor_navigation_mode == "mapping":
                 live_mapping_grid.update_scan(message)
-                live_map_payload = live_mapping_grid.maybe_update(
-                    robot_id=robot_id,
-                    monotonic_now=time.monotonic(),
-                    wall_time=received_at,
-                )
+                with state_lock:
+                    authoritative_map_active = (
+                        isinstance(navigation_state.get("map"), dict)
+                        and navigation_state["map"].get("map_verified") is True
+                    )
+                if not authoritative_map_active:
+                    live_map_payload = live_mapping_grid.maybe_update(
+                        robot_id=robot_id,
+                        monotonic_now=time.monotonic(),
+                        wall_time=received_at,
+                    )
 
             stored_scan = received_payload(
                 dashboard_scan,
@@ -5476,6 +5714,12 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     )
                 navigation_state["scan"] = stored_scan
                 navigation_state["scan_updated_at"] = received_at
+                matched_frame = navigation_state.get("matched_scan")
+                emit_raw_scan = not (
+                    isinstance(matched_frame, dict)
+                    and matched_frame.get("navigation_mode") == sensor_navigation_mode
+                    and received_at - float(matched_frame.get("received_at") or 0) < 1.5
+                )
                 # No auto-localization without fresh, motion-free encoder
                 # observations corresponding to every stored LiDAR frame.
                 encoder_at = encoder_state.get("updated_at")
@@ -5497,13 +5741,14 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 })
                 status = build_navigation_status(received_at)
 
-            navigation_visualization_hub.publish(
-                {
-                    "type": "scan",
-                    "scan": stored_scan,
-                    "status": status,
-                }
-            )
+            if emit_raw_scan:
+                navigation_visualization_hub.publish(
+                    {
+                        "type": "scan",
+                        "scan": stored_scan,
+                        "status": status,
+                    }
+                )
             if live_map_payload is not None:
                 publish_live_mapping_map(
                     live_map_payload,
@@ -5569,6 +5814,7 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
             localization_scan_history.clear()
             encoder_state["updated_at"] = None
         navigation_control_api.note_pi_connection(True)
+        loop_session_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
         while True:
@@ -5614,9 +5860,15 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                 with state_lock:
                     if (encoder_state.get("updated_at") is not None
                         and received_encoder["sequence"] <= encoder_state["sequence"]):
-                        # Ignore stale/duplicate Pi packets for visualization
-                        # and for sensor-independent localization proof.
+                        # Reject stale sequence before changing the epoch guard.
                         continue
+                    previous_pico_ms = navigation_state.get("odometry_last_pico_ms")
+                    current_pico_ms = received_encoder["pico_timestamp_ms"]
+                    if (navigation_state.get("mode") == "mapping"
+                        and previous_pico_ms is not None
+                        and current_pico_ms + 50 < previous_pico_ms):
+                        navigation_state["odometry_continuity_lost"] = True
+                    navigation_state["odometry_last_pico_ms"] = current_pico_ms
                     encoder_state.update(received_encoder)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_encoder(received_encoder)
@@ -5638,6 +5890,7 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
         disconnected = await connections.disconnect(robot_id, websocket)
         if robot_id == SERVER_ROBOT_ID and disconnected:
             navigation_control_api.note_pi_connection(False)
+            loop_session_api.note_pi_connection(False)
 
 
 @app.get("/api/encoder/bridge")
@@ -5888,6 +6141,33 @@ async def send_robot_command(
             and loop_session_api.manual_playing):
         return JSONResponse(
             {"ok": False, "delivered": False, "error": "Manual Loop replay owns motor control"},
+            status_code=409,
+        )
+    if (robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
+        and navigation_control_api._localization_turn_active):
+        return JSONResponse(
+            {"ok": False, "delivered": False,
+             "error": "Automatic Initial Pose rotation owns motor control"},
+            status_code=409,
+        )
+    # Initial Pose turns are internal-only. The public robot command endpoint
+    # must never accept a custom motor pulse, even with a forged safety token.
+    if command_type in {"initial_pose_turn", "manual_loop_pulse", "manual_loop_query"}:
+        return JSONResponse(
+            {"ok": False, "delivered": False,
+             "error": "Internal timed motor commands are not exposed to dashboard clients"},
+            status_code=403,
+        )
+    # The Loop worker drives via the internal ACK transport, not this public
+    # endpoint. Do not permit Dashboard D-pad/auto_drive to seize motors
+    # while a Loop owns them, including during its final STOP proof.
+    if (robot_id == SERVER_ROBOT_ID
+        and command_type in {"move", "auto_drive"}
+        and not nav2_dry_run
+        and loop_session_api.playing):
+        return JSONResponse(
+            {"ok": False, "delivered": False,
+             "error": "LOOP_ACTIVE: Stop the active Loop before manual driving"},
             status_code=409,
         )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}

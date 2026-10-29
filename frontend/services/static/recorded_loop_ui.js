@@ -136,9 +136,17 @@ function render() {
   $("loop-delete").disabled = busy || playing || !mapReady || (!recording && !chosenBag);
   $("loop-start").disabled = busy || playing || recording || !connected || !mapReady
     || (manual ? !chosenBag || policy === "REPLAN" : order.filter(name => selected.has(name)).length < 2);
+  const resume = $("loop-resume");
+  const canResume = latest.resume_required === true
+      && latest.status === "RESUME_REQUIRED"
+      && connected && manual && playing && mapReady;
+  resume.hidden = !latest.resume_required;
+  resume.disabled = busy || !canResume;
   $("loop-stop").disabled = busy || !playing;
   $("loop-status").textContent = (latest.status || "IDLE")
     + (latest.lap ? " / Lap " + latest.lap : "")
+    + (latest.ack_reconciliation_required
+        ? " / Pi 펄스 ACK 복구 확인 필요" : "")
     + (latest.error ? " / " + latest.error : "");
   obstacleToggle?.sync(policy === "REPLAN" ? "DRIVING" : "MAPPING");
   enhanceControls();
@@ -158,7 +166,8 @@ async function refresh() {
     document.dispatchEvent(new CustomEvent("dabom:loop-session-state", { detail: data }));
     const viewer = $("recordedLoopViewerStatus");
     if (viewer) {
-      viewer.hidden = !["WAITING", "FAILED"].includes(data.status);
+      viewer.hidden = !["WAITING", "FAILED", "PAUSED_OBSTACLE",
+        "PAUSED_CONNECTION", "RESUME_REQUIRED"].includes(data.status);
       viewer.textContent = viewer.hidden ? "" : (data.error || data.status);
       viewer.dataset.state = data.status || "IDLE";
     }
@@ -196,6 +205,8 @@ function bindOnce() {
     policy, name: chosenBag, goals: order.filter(name => selected.has(name))
   }, "Loop 시작"));
   $("loop-stop").addEventListener("click", () => void mutate("stop", {}, "Stop 요청"));
+  $("loop-resume").addEventListener("click", () =>
+    void mutate("resume", {}, "안전 조건 검증 후 남은 명령부터 재개 요청"));
   // Reuse the existing navigation-mode Toggle component in isolated mode.
   // Obstacle policy cannot be mutated by ROS navigation-mode broadcasts.
   obstacleToggle = controls()?.mountNavigationMode?.(

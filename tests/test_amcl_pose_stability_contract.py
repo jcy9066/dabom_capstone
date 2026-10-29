@@ -10,8 +10,9 @@ def test_amcl_stability_is_gated_after_initial_pose_published():
     assert "stable_amcl_observations(recent, initial_pose)" in ros
     assert 'max(float(covariance[0]), float(covariance[7]))' in ros
     assert "yaw_variance = float(covariance[35])" in ros
-    assert '"stable_samples": 3 if stable else 1' in ros
-    assert "minimum_samples=1, minimum_span=0.0" in ros
+    assert '"stable_samples": len(recent)' in ros
+    wait_for_amcl = ros.split("def _wait_for_amcl(", 1)[1].split("def _publish_initial_pose(", 1)[0]
+    assert "minimum_samples=1" not in wait_for_amcl
 
 
 def test_no_amcl_stable_check_bypass_to_driving():
@@ -42,3 +43,35 @@ def test_stationary_one_sample_still_checks_covariance():
     assert not stable_amcl_observations([sample], initial)
     sample["yaw_variance"] = math.radians(50) ** 2
     assert not stable_amcl_observations([sample], initial, minimum_samples=1, minimum_span=0.0)
+
+def test_amcl_initialization_never_accepts_single_echo():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    ros = (root / "server/navigation_ros_control.py").read_text()
+    config = (root / "navigation/ros/patrol_navigation/config/amcl.yaml").read_text()
+    body = ros.split("def _wait_for_amcl(", 1)[1].split("def _publish_initial_pose(", 1)[0]
+    assert "minimum_samples=1" not in body
+    assert "if stable:" in body
+    # Match YAML keys, not substrings of always_reset_initial_pose.
+    lines = [line.strip() for line in config.splitlines()]
+    assert "set_initial_pose: false" in lines
+    assert "set_initial_pose: true" not in lines
+
+
+def test_amcl_map_fingerprint_uses_occupancy_not_only_dimensions(tmp_path):
+    import hashlib
+    import json
+    from server.navigation_ros_control import _saved_map_occupancy_digest
+
+    path = tmp_path / "map.raw.json"
+    path.write_text(json.dumps({
+        "width": 2, "height": 2, "data_encoding": "raw",
+        "data": [-1, 0, 100, 40],
+    }), encoding="utf-8")
+    info = path.stat()
+    actual = _saved_map_occupancy_digest(
+        str(path), 2, 2, info.st_size, info.st_mtime_ns,
+    )
+    expected = hashlib.sha256(bytes([0, 1, 101, 0])).hexdigest()
+    assert actual == expected
+    assert actual != hashlib.sha256(bytes([1, 1, 101, 0])).hexdigest()
