@@ -492,6 +492,7 @@ navigation_state = {
     "mapping_probe": None,
     "mapping_probe_updated_at": None,
     "odometry_continuity_lost": False,
+    "odometry_last_pico_ms": None,
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -1112,6 +1113,7 @@ def clear_navigation_visualization_state():
         navigation_state["mapping_probe"] = None
         navigation_state["mapping_probe_updated_at"] = None
         navigation_state["odometry_continuity_lost"] = False
+        navigation_state["odometry_last_pico_ms"] = None
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -5812,21 +5814,17 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                     continue
 
                 with state_lock:
-                    previous_pico_ms = encoder_state.get("pico_timestamp_ms")
-                    current_pico_ms = received_encoder["pico_timestamp_ms"]
-                    # Pico uptime decreases only after a reboot/reset.
-                    # An old map-frame odometry trajectory cannot be
-                    # safely concatenated across an unknown encoder origin.
-                    if (navigation_state.get("mode") == "mapping"
-                        and encoder_state.get("updated_at") is not None
-                        and isinstance(previous_pico_ms, int)
-                        and current_pico_ms + 50 < previous_pico_ms):
-                        navigation_state["odometry_continuity_lost"] = True
                     if (encoder_state.get("updated_at") is not None
                         and received_encoder["sequence"] <= encoder_state["sequence"]):
-                        # Ignore stale/duplicate Pi packets for visualization
-                        # and for sensor-independent localization proof.
+                        # Reject stale sequence before changing the epoch guard.
                         continue
+                    previous_pico_ms = navigation_state.get("odometry_last_pico_ms")
+                    current_pico_ms = received_encoder["pico_timestamp_ms"]
+                    if (navigation_state.get("mode") == "mapping"
+                        and previous_pico_ms is not None
+                        and current_pico_ms + 50 < previous_pico_ms):
+                        navigation_state["odometry_continuity_lost"] = True
+                    navigation_state["odometry_last_pico_ms"] = current_pico_ms
                     encoder_state.update(received_encoder)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_encoder(received_encoder)
