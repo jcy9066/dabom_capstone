@@ -1,5 +1,6 @@
 import math
 import time
+import threading
 from datetime import datetime, timezone
 
 import requests
@@ -231,6 +232,22 @@ class MapBridge(Node):
         self.latest_map = None
         self.latest_scan = None
         self.last_warning_at = 0.0
+        # One pending frame per stream: stalled HTTP must not block ROS or
+        # queue stale observations indefinitely.
+        self._post_condition = threading.Condition()
+        self._pending_posts = {}
+        self._posting_stopped = False
+        self._post_threads = [
+            threading.Thread(
+                target=self._post_worker,
+                args=(kind,),
+                daemon=True,
+                name=f"map-bridge-{kind}",
+            )
+            for kind in ("map", "pose", "scan")
+        ]
+        for worker in self._post_threads:
+            worker.start()
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(
@@ -314,6 +331,35 @@ class MapBridge(Node):
 
     def on_scan(self, msg):
         self.latest_scan = msg
+
+    def _queue_post(self, kind, path, payload):
+        with self._post_condition:
+            if self._posting_stopped:
+                return
+            self._pending_posts[kind] = (path, payload)
+            self._post_condition.notify_all()
+
+    def _post_worker(self, kind):
+        while True:
+            with self._post_condition:
+                while not self._posting_stopped and kind not in self._pending_posts:
+                    self._post_condition.wait()
+                if self._posting_stopped:
+                    return
+                path, payload = self._pending_posts.pop(kind)
+            try:
+                self.post_json(path, payload)
+            except Exception as exc:
+                self.warn_throttled(f"POST {path} worker failed: {exc}")
+
+    def destroy_node(self):
+        with self._post_condition:
+            self._posting_stopped = True
+            self._pending_posts.clear()
+            self._post_condition.notify_all()
+        for worker in self._post_threads:
+            worker.join(timeout=max(0.2, self.request_timeout_sec + 0.2))
+        return super().destroy_node()
 
     def post_json(
         self,
@@ -411,9 +457,8 @@ class MapBridge(Node):
             ),
         }
 
-        self.post_json(
-            "/navigation/map",
-            payload,
+        self._queue_post(
+            "map", "/navigation/map", payload,
         )
 
     def publish_pose(self):
@@ -469,9 +514,8 @@ class MapBridge(Node):
             },
         }
 
-        self.post_json(
-            "/navigation/pose",
-            payload,
+        self._queue_post(
+            "pose", "/navigation/pose", payload,
         )
 
     def publish_scan(self):
@@ -536,9 +580,8 @@ class MapBridge(Node):
             "ranges": sanitized_ranges,
         }
 
-        self.post_json(
-            "/navigation/scan",
-            payload,
+        self._queue_post(
+            "scan", "/navigation/scan", payload,
         )
 
 

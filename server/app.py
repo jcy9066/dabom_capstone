@@ -4362,7 +4362,12 @@ async def update_navigation_map(request: Request):
             )
             store_navigation_mode(navigation_mode, received_at)
 
-        live_mapping_grid.update_base_map(data)
+        if not live_mapping_grid.update_base_map(data):
+            return JSONResponse(
+                {"ok": False, "error": "INVALID_SLAM_MAP",
+                 "message": "SLAM OccupancyGrid dimensions, origin, or data are invalid."},
+                status_code=422,
+            )
         live_map_payload = live_mapping_grid.maybe_update(
             robot_id=data.get("robot_id", SERVER_ROBOT_ID),
             monotonic_now=time.monotonic(),
@@ -4378,7 +4383,7 @@ async def update_navigation_map(request: Request):
             publish_live_mapping_map(live_map_payload, received_at)
         return {
             "ok": True,
-            "source": "slam_toolbox+live_scan",
+            "source": "slam_toolbox",
             "used_for_live_map": live_map_payload is not None,
         }
 
@@ -4604,12 +4609,14 @@ async def save_current_navigation_map(request: Request):
         status = build_navigation_status()
     if current_map is None:
         return JSONResponse(
-            {
-                "ok": False,
-                "status": status,
-                "error": "map unavailable",
-            },
+            {"ok": False, "status": status, "error": "map unavailable"},
             status_code=404,
+        )
+    if current_map.get("preview") is True or current_map.get("map_verified") is False:
+        return JSONResponse(
+            {"ok": False, "status": status, "error": "SLAM_MAP_NOT_VERIFIED",
+             "message": "Preview LiDAR grid cannot be saved as an authoritative SLAM map."},
+            status_code=409,
         )
     try:
         meta = save_navigation_map_files(

@@ -249,3 +249,38 @@ def test_slam_map_remains_authoritative_after_live_scan():
     # SLAM occupied cells are not cleared by unaligned LiDAR overlay data.
     assert cell_value(payload, 1.0, 0.0) == 100
 
+
+
+def test_authoritative_map_snapshot_removes_old_out_of_bounds_occupied_cells():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    first = {
+        "width": 30, "height": 1, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "rle", "data": [[0, 20], [100, 1], [-1, 9]],
+    }
+    assert grid.update_base_map(first)
+    before = grid.snapshot(robot_id="pi-01", wall_time=1.0)
+    assert before["map_verified"] is True
+    assert cell_value(before, 2.05, 0.05) == 100
+
+    corrected = {
+        "width": 10, "height": 1, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "rle", "data": [[0, 10]],
+    }
+    assert grid.update_base_map(corrected)
+    after = grid.snapshot(robot_id="pi-01", wall_time=2.0)
+    assert after["source"] == "slam_toolbox"
+    assert after["preview"] is False
+    assert cell_value(after, 2.05, 0.05) is None
+
+
+def test_scan_preview_is_explicitly_unverified():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    assert grid.update_scan(make_scan([1.0]))
+    preview = grid.maybe_update(
+        robot_id="pi-01", monotonic_now=1.0, wall_time=1.0, force=True
+    )
+    assert preview["preview"] is True
+    assert preview["map_verified"] is False
+    assert preview["source"] == "scan_preview"

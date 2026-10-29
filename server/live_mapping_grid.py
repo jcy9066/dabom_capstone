@@ -248,6 +248,9 @@ class LiveMappingGrid:
                     resolution,
                 )
 
+            # Each new SLAM OccupancyGrid replaces obsolete map cells.
+            # Preserve no ghost walls outside revised bounds or loop closures.
+            self._cells.clear()
             cos_yaw = math.cos(origin_yaw)
             sin_yaw = math.sin(origin_yaw)
             for y in range(height):
@@ -507,6 +510,8 @@ class LiveMappingGrid:
             },
             "data_encoding": "rle",
             "data": _rle_encode(dense),
-            "source": "live_mapping_grid",
+            "source": "slam_toolbox" if self._base_map_seen else "scan_preview",
+            "map_verified": self._base_map_seen,
+            "preview": not self._base_map_seen,
             "sequence": self._sequence,
         }
