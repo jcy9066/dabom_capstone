@@ -495,8 +495,8 @@ class RobotCommandClient:
                 if self.current_mode != "manual" or self.navigation_mode != "mapping":
                     raise RuntimeError("Initial Pose turn requires Pi MANUAL/MAPPING")
                 duration = self._duration_ms(message.get("duration_ms"))
-                if not 1 <= duration <= 150:
-                    raise RuntimeError("Initial Pose turn exceeds 150ms limit")
+                if not 1 <= duration <= 100:
+                    raise RuntimeError("Initial Pose turn exceeds 100ms limit")
                 if message.get("direction") != "rotate_left" or float(message.get("speed", 0)) != 0.20:
                     raise RuntimeError("Initial Pose turn command must be a 20% rotate_left pulse")
                 await asyncio.to_thread(
@@ -746,9 +746,9 @@ class RobotCommandClient:
         # This operation runs in a Pi-local thread. It is bounded independently
         # of GPU WebSocket response time and STOP runs even if the network dies.
         with self.motor._command_lock:
-            self._require_current_motion_safety(message)
-            self.motor.move("rotate_left", 0.20)
             try:
+                self._require_current_motion_safety(message)
+                self.motor.move("rotate_left", 0.20)
                 time.sleep(duration_ms / 1000.0)
                 self._require_current_motion_safety(message)
             finally:

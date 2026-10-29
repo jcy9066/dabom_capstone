@@ -1750,7 +1750,7 @@ class NavigationControlApi:
             # localization operation after STOP and a full safety preflight.
             command = {
                 "type": "initial_pose_turn", "direction": "rotate_left",
-                "speed": 0.20, "duration_ms": 150,
+                "speed": 0.20, "duration_ms": 100,
                 "safety_session": context["safety_session"],
                 "safety_epoch": context["safety_epoch"],
             }
@@ -1758,7 +1758,7 @@ class NavigationControlApi:
                 raise UnsafeLocalizationTurn("Motor safety generation changed before turn")
             if not self.note_authorized_motion(context):
                 raise UnsafeLocalizationTurn("Rotation safety context revoked")
-            # The Pi enforces 150ms and STOP locally before it sends the ACK.
+            # The Pi enforces 100ms and STOP locally before it sends the ACK.
             acknowledged = await self._send_robot_command(self._robot_id, command)
             if not self._pi_command_delivered(acknowledged):
                 raise UnsafeLocalizationTurn("Pi-local rotation/STOP ACK missing")
