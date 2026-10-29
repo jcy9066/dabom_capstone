@@ -6129,10 +6129,10 @@ async def send_robot_command(
         )
     # Initial Pose turns are internal-only. The public robot command endpoint
     # must never accept a custom motor pulse, even with a forged safety token.
-    if command_type == "initial_pose_turn":
+    if command_type in {"initial_pose_turn", "manual_loop_pulse"}:
         return JSONResponse(
             {"ok": False, "delivered": False,
-             "error": "Initial Pose motor rotation is internal-only"},
+             "error": "Internal timed motor commands are not exposed to dashboard clients"},
             status_code=403,
         )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
