@@ -297,7 +297,10 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                 "map_verified": True,
                 "mapping_state": "MAPPING_ACTIVE",
             },
-            get_live_pose=lambda: {"x": 0.25, "y": 0.5, "yaw": 0.4},
+            get_live_pose=lambda: {
+                "x": 0.25, "y": 0.5, "yaw": 0.4,
+                "received_at": time.time(), "frame_id": "map",
+            },
             save_map=lambda payload, name: {"map_name": "test_map"},
             send_robot_command=sender,
             watchdog=NavigationWatchdogConfig(
