@@ -78,3 +78,61 @@ def test_stale_safety_session_does_not_move():
             pi, msg(safety_epoch=0), "first", 1, 1, 1,
         )
     assert not pi.motor.commands
+
+
+def test_cached_pi_receipt_query_is_read_only_after_stop_epoch():
+    import asyncio
+    import json
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, message):
+            self.sent.append(json.loads(message))
+
+    class QueryPi(Pi):
+        current_mode = "manual"
+        navigation_mode = "driving"
+        led_enabled = False
+        emergency_stop_latched = False
+
+        def __init__(self):
+            super().__init__()
+            self._safety_lock = threading.Lock()
+            self._safety_session = "abc"
+            self._safety_epoch = 3
+            self.motor.connected = True
+            self.motor.current_motion = "stop"
+            self._manual_loop_recent = {
+                ("abc", 2, 7, "recovered"): {
+                    "record": ("forward", 0.2, 100),
+                    "result": {
+                        "pulse_id": "recovered", "replay_generation": 7,
+                        "duration_ms": 100, "elapsed_ms": 66, "stopped": True,
+                    },
+                },
+            }
+
+        @staticmethod
+        def _current_speaker_volume():
+            return 20
+
+    client = QueryPi()
+    socket = Socket()
+    query = {
+        "command_id": "query-1", "type": "manual_loop_query",
+        "pulse_id": "recovered", "replay_generation": 7,
+        "pulse_safety_epoch": 2, "safety_session": "abc",
+    }
+    asyncio.run(RobotCommandClient.handle_command(client, socket, query))
+    assert socket.sent[-1]["ok"] is True
+    assert socket.sent[-1]["manual_loop_pulse"]["elapsed_ms"] == 66
+    assert client.motor.commands == [], "Read-only receipt must not move or stop motors"
+    assert socket.sent[-1]["safety_epoch"] == 3
+
+    query["pulse_id"] = "missing"
+    asyncio.run(RobotCommandClient.handle_command(client, socket, query))
+    assert socket.sent[-1]["ok"] is False
+    assert "missing" in socket.sent[-1]["error"]
+    assert client.motor.commands == []
