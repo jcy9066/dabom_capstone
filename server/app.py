@@ -869,6 +869,22 @@ class RobotConnectionManager:
                 except Exception:
                     # Observability never changes the physical ACK contract.
                     pass
+            if command.get("type") == "manual_loop_pulse":
+                # The Pi has already issued local STOP when this ACK arrives.
+                # Report only Pi-confirmed exposure, never an ACK-roundtrip age.
+                matched = (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and type(ack.get("safety_epoch")) is int
+                    and ack.get("safety_epoch") == command.get("safety_epoch")
+                )
+                result = ack.get("manual_loop_pulse") if matched else None
+                return {
+                    "ok": matched and isinstance(result, dict),
+                    "delivered": matched and isinstance(result, dict),
+                    "manual_loop_pulse": result if isinstance(result, dict) else None,
+                }
             if command.get("type") == "resume_safety_check":
                 # Only a command_id-matched Pi ACK can prove processing.
                 # The Pi's raw ACK has "ok" but no "delivered" field.
