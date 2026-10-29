@@ -10,6 +10,7 @@ import asyncio
 import math
 import threading
 import time
+from uuid import uuid4
 from collections import OrderedDict
 from typing import Any
 
@@ -19,11 +20,15 @@ from fastapi.responses import JSONResponse
 from server.recorded_loop_core import RecordedLoopError, pose_dict, map_identifier, map_digest
 from pathlib import Path
 from server.recorded_loop_obstacle import path_blocked
+from server.manual_loop_segments import compile_manual_segments
 from server.env_config import env_float
 
 GOAL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 MAX_EVENTS = 10000
 MAX_RECORD_SECONDS = 3600.0
+MAX_SAVED_BAGS_PER_MAP = 24
+MANUAL_PULSE_MAX_MS = 180
+MANUAL_ACK_TIMEOUT_SEC = 2.5
 
 
 class LoopSessionApi:
@@ -43,6 +48,15 @@ class LoopSessionApi:
         self._error: str | None = None
         self._laps = 0
         self._running_kind: str | None = None
+        self._resume_event = asyncio.Event()
+        self._requires_resume = False
+        self._connection_generation = 0
+        self._replay_generation = 0
+        self._manual_session_id = ""
+        self._manual_segment_index = 0
+        self._manual_elapsed_ms = 0.0
+        self._manual_pulse_index = 0
+        self._manual_pi_safety_session = None
         self._register(app)
 
     def _selected_map(self) -> tuple[str, str]:
@@ -81,6 +95,32 @@ class LoopSessionApi:
     def _mode(self) -> str:
         return str(self.navigation.state_response().get("robot_mode", "")).upper()
 
+    def note_pi_connection(self, connected: bool) -> None:
+        """External Pi WebSocket generation, not the status HTTP polling clock."""
+        with self._lock:
+            self._connection_generation += 1
+            if self.manual_playing:
+                self._requires_resume = True
+                self._replay_generation += 1
+                self._resume_event.clear()
+                self._status = "PAUSED_CONNECTION" if not connected else "RESUME_REQUIRED"
+
+    def resume(self, _payload: dict | None = None) -> dict:
+        if not self.manual_playing or not self._requires_resume:
+            raise RecordedLoopError("RESUME_NOT_REQUIRED", "No paused manual Loop to resume")
+        state = self.navigation.state_response()
+        if (state.get("connected") is not True
+            or state.get("navigation_mode") != "DRIVING"
+            or self._mode() != "MANUAL"
+            or state.get("emergency_stop")
+            or state.get("pi_safety", {}).get("fresh") is not True
+            or state.get("pi_safety", {}).get("emergency_stop") is not False):
+            raise RecordedLoopError("RESUME_UNSAFE", "Fresh Pi safety and MANUAL/DRIVING required")
+        # Waking the worker is not motion authorization: STOP, new encoder
+        # evidence, obstacle, and current safety generation are rechecked.
+        self._resume_event.set()
+        return {"ok": True, "resume_requested": True}
+
     def snapshot(self) -> dict:
         """Read-only modal state must work with Pi disconnected or no map."""
         state = self.navigation.state_response()
@@ -112,6 +152,10 @@ class LoopSessionApi:
                 "playing": self.playing, "running_kind": self._running_kind,
                 "policy": self._policy, "status": self._status,
                 "lap": self._laps, "error": self._error,
+                "segment_index": self._manual_segment_index if self.manual_playing else None,
+                "segment_elapsed_ms": round(self._manual_elapsed_ms, 2) if self.manual_playing else None,
+                "replay_generation": self._replay_generation if self.manual_playing else None,
+                "resume_required": self._requires_resume,
             }
 
     def toggle_goal(self, data: dict) -> dict:
@@ -228,6 +272,10 @@ class LoopSessionApi:
             if record["key"] != self._active():
                 raise RecordedLoopError("MAP_CHANGED", "Map changed during recording")
             entry = self._entry(record["key"])
+            if len(entry["bags"]) >= MAX_SAVED_BAGS_PER_MAP:
+                raise RecordedLoopError(
+                    "BAG_LIMIT", "Delete an old Loop before saving another recording",
+                )
             name = "Loop " + str(entry["bag_next"])
             entry["bag_next"] += 1
             entry["bags"][name] = {"events": events, "seconds": events[-1]["at"]}
@@ -573,9 +621,8 @@ class LoopSessionApi:
                             "LOOP_AUTO_ABORT_FAILED", automatic=True, force=True)
                     except Exception:
                         pass
-            if kind == "AUTO":
-                if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
-                    self.navigation._loop_session_owner = None
+            if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
+                self.navigation._loop_session_owner = None
             if kind == "MANUAL":
                 try:
                     await self._verified_stop()
@@ -633,13 +680,21 @@ class LoopSessionApi:
         self._cancelled = False
         self._policy = policy
         self._status = "STARTING"
+        self._requires_resume = False
+        self._resume_event.clear()
+        self._manual_session_id = uuid4().hex[:20]
+        self._replay_generation += 1
+        self._manual_segment_index = 0
+        self._manual_elapsed_ms = 0
+        self._manual_pulse_index = 0
+        self._manual_pi_safety_session = None
         self._error = None
         self._laps = 0
         self._running_kind = mode
         self._task = asyncio.create_task(
             self._run(key, mode, events, goals), name="loop-session-replay")
-        if mode == "AUTO":
-            self.navigation._loop_session_owner = self._task
+        # The same Nav2 Goal ownership exclusion applies to MANUAL replay.
+        self.navigation._loop_session_owner = self._task
         return {"ok": True, "started": True, "mode": mode}
 
     async def stop(self, from_navigation: bool = False) -> dict:
@@ -647,6 +702,7 @@ class LoopSessionApi:
         if task is None or task.done():
             return {"ok": True, "stopped": True}
         self._cancelled = True
+        self._resume_event.set()
         if self._running_kind == "AUTO":
             with self.navigation._lock:
                 self.navigation._loop_session_cancel_token += 1
@@ -755,3 +811,7 @@ class LoopSessionApi:
         @app.post("/api/navigation/loop/stop")
         async def stop(request: Request):
             return await handle(request, lambda _: self.stop())
+
+        @app.post("/api/navigation/loop/resume")
+        async def resume(request: Request):
+            return await handle(request, self.resume)
