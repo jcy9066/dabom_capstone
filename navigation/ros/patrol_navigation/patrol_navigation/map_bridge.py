@@ -386,7 +386,12 @@ class MapBridge(Node):
                 timeout=self.request_timeout_sec,
             )
 
-            if response.status_code >= 400:
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if (response.status_code >= 400
+                or (isinstance(body, dict) and body.get("ok") is False)):
                 self.warn_throttled(
                     f"POST {path} failed "
                     f"status={response.status_code} "

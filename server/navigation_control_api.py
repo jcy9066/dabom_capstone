@@ -1401,7 +1401,7 @@ class NavigationControlApi:
             else:
                 await asyncio.to_thread(self._ros.cancel_navigation)
             try:
-                await asyncio.to_thread(
+                mapping_process_status = await asyncio.to_thread(
                     self._process.transition,
                     "MAPPING",
                     None,
@@ -1414,7 +1414,10 @@ class NavigationControlApi:
                     self._touch_locked()
                 raise
 
-            if self._clear_visualization is not None:
+            # Re-selecting an existing Mapping process is not a new SLAM
+            # session: preserve its map, source timestamps and TF evidence.
+            if (self._clear_visualization is not None
+                and not mapping_process_status.get("reused_session", False)):
                 self._clear_visualization()
 
             with self._lock:
@@ -1493,7 +1496,8 @@ class NavigationControlApi:
                         409,
                     )
 
-            if live_map.get("preview") is True or live_map.get("map_verified") is False:
+            if (live_map.get("source") != "slam_toolbox"
+                or live_map.get("map_verified") is not True):
                 raise NavigationControlError(
                     "SLAM_MAP_NOT_VERIFIED",
                     "Preview LiDAR observations cannot be used as a Driving map.",

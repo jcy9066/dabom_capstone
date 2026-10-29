@@ -117,10 +117,12 @@ class NavigationProcessControl:
                 self._stop_locked(normalized)
                 matches = []
 
+            reused_session = bool(matches)
             if not matches:
                 self._start_locked(normalized, map_yaml)
 
             status = self.status()
+            status["reused_session"] = reused_session
             pgid_key = (
                 "mapping_pgids"
                 if normalized == "MAPPING"
