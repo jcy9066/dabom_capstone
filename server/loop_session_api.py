@@ -57,6 +57,7 @@ class LoopSessionApi:
         self._manual_elapsed_ms = 0.0
         self._manual_pulse_index = 0
         self._manual_pi_safety_session = None
+        self._uncertain_manual_pulse = None
         self._register(app)
 
     def _selected_map(self) -> tuple[str, str]:
@@ -156,6 +157,7 @@ class LoopSessionApi:
                 "segment_elapsed_ms": round(self._manual_elapsed_ms, 2) if self.manual_playing else None,
                 "replay_generation": self._replay_generation if self.manual_playing else None,
                 "resume_required": self._requires_resume,
+                "ack_reconciliation_required": self._uncertain_manual_pulse is not None,
             }
 
     def toggle_goal(self, data: dict) -> dict:
@@ -433,16 +435,20 @@ class LoopSessionApi:
                 ),
                 timeout=MANUAL_ACK_TIMEOUT_SEC,
             )
-        except asyncio.TimeoutError as exc:
+        except (asyncio.TimeoutError, ConnectionError, OSError) as exc:
+            self._uncertain_manual_pulse = dict(command)
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN") from exc
         if not preflight():
+            if not self._cancelled:
+                self._uncertain_manual_pulse = dict(command)
             raise RuntimeError(
                 "REPLAY_CANCELLED" if self._cancelled
                 else "MANUAL_PULSE_ACK_UNCERTAIN"
             )
         if not self.navigation._pi_command_delivered(reply):
-            # The Pi may have moved before its ACK was lost. Never fabricate
-            # exposure time or replay this pulse using a new identity.
+            # A MOVE may have completed even when the ACK was lost.
+            # Record its exact identity for a READ-ONLY Pi receipt query.
+            self._uncertain_manual_pulse = dict(command)
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN")
         observed = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
         if not isinstance(observed, dict):
@@ -459,6 +465,52 @@ class LoopSessionApi:
         if not self.navigation.note_authorized_motion(context):
             raise RuntimeError("MANUAL_MOTION_PERMISSION_REVOKED")
         self._manual_pi_safety_session = context["safety_session"]
+        return float(elapsed)
+
+    async def _reconcile_uncertain_manual_pulse(self) -> float:
+        """Resume only when Pi proves how long the motor was powered.
+
+        Never reissue an uncertain MOVE. A missing receipt is a safety
+        failure, not a guessed amount of movement.
+        """
+        original = self._uncertain_manual_pulse
+        if not isinstance(original, dict):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        if not self._requires_resume:
+            self._requires_resume = True
+            self._resume_event.clear()
+            self._replay_generation += 1
+        self._status = "PAUSED_CONNECTION"
+        await self._wait_connection_resume()
+        query = {
+            "type": "manual_loop_query",
+            "pulse_id": original["pulse_id"],
+            "replay_generation": original["replay_generation"],
+            "pulse_safety_epoch": original["safety_epoch"],
+            "safety_session": original["safety_session"],
+        }
+        try:
+            reply = await asyncio.wait_for(
+                self.send(self.navigation._robot_id, query, motion_ack=True),
+                timeout=MANUAL_ACK_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, ConnectionError, OSError) as exc:
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE") from exc
+        if not self.navigation._pi_command_delivered(reply):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        receipt = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
+        if not isinstance(receipt, dict):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+        duration = original["duration_ms"]
+        elapsed = receipt.get("elapsed_ms")
+        if (receipt.get("pulse_id") != original["pulse_id"]
+            or receipt.get("replay_generation") != original["replay_generation"]
+            or receipt.get("duration_ms") != duration
+            or receipt.get("stopped") is not True
+            or type(elapsed) is not int or not 0 <= elapsed <= duration):
+            raise RuntimeError("MANUAL_PULSE_RECEIPT_MISMATCH")
+        self._uncertain_manual_pulse = None
+        self._status = "RUNNING"
         return float(elapsed)
 
     async def _wait_obstacle_clear(self, direction: str) -> float:
@@ -568,10 +620,11 @@ class LoopSessionApi:
                         })
                     except RuntimeError as exc:
                         if str(exc) == "MANUAL_PULSE_ACK_UNCERTAIN":
-                            # STOP may have executed locally, but unconfirmed
-                            # exposure must never be re-sent or counted twice.
-                            await self._verified_stop()
-                        raise
+                            # The Pi enforces a local STOP. A read-only receipt
+                            # after operator Resume proves the lost exposure.
+                            applied_ms = await self._reconcile_uncertain_manual_pulse()
+                        else:
+                            raise
                     if applied_ms < 1:
                         idle_pulses += 1
                         if idle_pulses >= 5:
@@ -788,6 +841,7 @@ class LoopSessionApi:
             if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
                 self.navigation._loop_session_owner = None
             self._requires_resume = False
+            self._uncertain_manual_pulse = None
             self._resume_event.clear()
 
     def start(self, data: dict) -> dict:
@@ -848,6 +902,7 @@ class LoopSessionApi:
         self._manual_elapsed_ms = 0
         self._manual_pulse_index = 0
         self._manual_pi_safety_session = None
+        self._uncertain_manual_pulse = None
         self._error = None
         self._laps = 0
         self._running_kind = mode
