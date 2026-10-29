@@ -472,6 +472,7 @@ class RobotCommandClient:
         error = None
         encoder_sequence = None
         recorded_drive = None
+        manual_pulse = None
 
         try:
             if command_type == "move":
@@ -488,6 +489,23 @@ class RobotCommandClient:
                     self.motor.move,
                     message.get("direction", ""),
                     message.get("speed", 1.0),
+                )
+
+            elif command_type == "manual_loop_pulse":
+                self._require_current_motion_safety(message)
+                if self.current_mode != "manual" or self.navigation_mode != "driving":
+                    raise RuntimeError("Manual Loop requires MANUAL/DRIVING")
+                duration = self._duration_ms(message.get("duration_ms"))
+                if not 1 <= duration <= 180:
+                    raise RuntimeError("Manual Loop pulse must be 1..180ms")
+                pulse_id = message.get("pulse_id")
+                generation = message.get("replay_generation")
+                if (not isinstance(pulse_id, str) or not 1 <= len(pulse_id) <= 64
+                    or type(generation) is not int or generation < 1):
+                    raise RuntimeError("Manual Loop command identity invalid")
+                manual_pulse = await asyncio.to_thread(
+                    self._run_manual_loop_pulse, message, pulse_id,
+                    generation, duration,
                 )
 
             elif command_type == "initial_pose_turn":
@@ -706,6 +724,7 @@ class RobotCommandClient:
             if command_type in {
                 "move",
                 "auto_drive",
+                "manual_loop_pulse",
             }:
                 self.motor.stop(
                     reason=f"{command_type}_error",
@@ -734,6 +753,8 @@ class RobotCommandClient:
                     "motion": self.motor.current_motion,
                     **({"recorded_drive": recorded_drive}
                        if command_type == "auto_drive" and message.get("source") == "recorded_loop" else {}),
+                    **({"manual_loop_pulse": manual_pulse}
+                       if command_type == "manual_loop_pulse" and manual_pulse is not None else {}),
                     "motor_connected": (
                         self.motor.connected
                     ),
@@ -741,6 +762,63 @@ class RobotCommandClient:
                 }
             )
         )
+
+    def _run_manual_loop_pulse(
+        self, message: dict, pulse_id: str, generation: int, duration_ms: int,
+    ) -> dict:
+        """Pi-owned exposure budget, ACKed by Pico. Never exceed its watchdog.
+
+        A repeat of one pulse id never applies motor output a second time.
+        Timestamp accounting starts *after* the Pico accepts MOVE and ends
+        when STOP is requested. STOP failure makes the entire pulse fail.
+        """
+        with self.motor._command_lock:
+            self._require_current_motion_safety(message)
+            identity = (
+                self._safety_session, self._safety_epoch,
+                generation, pulse_id,
+            )
+            record = (message.get("direction"), message.get("speed"), duration_ms)
+            cache = getattr(self, "_manual_loop_recent", None)
+            if cache is None:
+                cache = self._manual_loop_recent = {}
+            if identity in cache:
+                if cache[identity]["record"] != record:
+                    raise RuntimeError("Manual Loop pulse identity changed")
+                return dict(cache[identity]["result"])
+            start = None
+            error = None
+            elapsed_ms = 0
+            try:
+                self._require_current_motion_safety(message)
+                self.motor.move(message.get("direction", ""), message.get("speed", 0))
+                start = time.monotonic()
+                time.sleep(duration_ms / 1000.0)
+                self._require_current_motion_safety(message)
+            except Exception as exc:
+                error = exc
+            finally:
+                if start is not None:
+                    elapsed_ms = max(0, min(
+                        duration_ms, int((time.monotonic() - start) * 1000),
+                    ))
+                # This local STOP is mandatory even if the WebSocket disappears.
+                # Do not convert a failed STOP into a positive exposure ACK.
+                try:
+                    self.motor.stop("manual_loop_pulse_complete")
+                except Exception as exc:
+                    error = exc
+            if error is not None:
+                raise error
+            result = {
+                "pulse_id": pulse_id, "replay_generation": generation,
+                "elapsed_ms": elapsed_ms, "duration_ms": duration_ms,
+                "stopped": True,
+            }
+            cache[identity] = {"record": record, "result": result}
+            while len(cache) > 128:
+                cache.pop(next(iter(cache)))
+            return dict(result)
 
     def _run_bounded_initial_pose_turn(self, message: dict, duration_ms: int) -> None:
         # This operation runs in a Pi-local thread. It is bounded independently
