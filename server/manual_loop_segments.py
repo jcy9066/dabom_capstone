@@ -33,6 +33,9 @@ def compile_manual_segments(events: list[dict]) -> list[dict]:
         previous_time = at
         if kind not in ("move", "stop"):
             raise ValueError("MANUAL_REPLAY_INVALID_EVENT_TYPE")
+        if index == 0 and at > 0:
+            # Preserve the operator's initial idle period before first MOVE.
+            result.append({"type": "stop", "duration_ms": at * 1000})
         if kind == "move":
             try:
                 speed = float(current["speed"])

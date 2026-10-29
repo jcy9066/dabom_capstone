@@ -47,3 +47,13 @@ def test_large_bag_has_bounded_segments():
     segments = compile_manual_segments(events)
     assert len(segments) == 1
     assert abs(segments[0]["duration_ms"] - 99990.0) < 0.001
+
+
+def test_initial_idle_before_first_move_is_preserved():
+    bag = [
+        {"at": .4, "type": "move", "direction": "forward", "speed": .2},
+        {"at": .8, "type": "stop"},
+    ]
+    actual = compile_manual_segments(bag)
+    assert [s["type"] for s in actual] == ["stop", "move"]
+    assert [round(s["duration_ms"]) for s in actual] == [400, 400]
