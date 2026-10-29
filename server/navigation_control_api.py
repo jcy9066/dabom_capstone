@@ -21,6 +21,7 @@ from server.navigation_motion_segments import annotate_path
 from server.auto_initial_pose import estimate_initial_pose, AutoPoseUncertain
 from server.scan_pose_fusion import fuse_stationary_scans
 from server.localization_observation import observation_baseline, wait_fresh_fused_scan
+from server.initial_pose_safety import decode_grid, evaluate_initial_pose_grid, PoseGridError
 from server.env_config import env_float, env_int, env_text
 
 
@@ -1524,6 +1525,10 @@ class NavigationControlApi:
                 initial_pose_payload = self._current_mapping_initial_pose()
                 current_auto_recovery = initial_pose_payload is None
 
+            if initial_pose_payload is not None:
+                await asyncio.to_thread(
+                    self._validate_live_initial_pose, live_map, initial_pose_payload,
+                )
             # Nav2 map_server needs a map file. Snapshot the current in-memory
             # Mapping result automatically so the operator does not have to
             # manually save and reload it before setting a Goal.
@@ -1635,6 +1640,34 @@ class NavigationControlApi:
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
             self._touch_locked()
         return self.state_response()
+
+    @staticmethod
+    def _validate_live_initial_pose(live_map, pose):
+        try:
+            cells = decode_grid(
+                live_map["data"], live_map.get("data_encoding", "raw"),
+                int(live_map["width"]), int(live_map["height"]),
+            )
+            risk = evaluate_initial_pose_grid(
+                width=int(live_map["width"]), height=int(live_map["height"]),
+                resolution=float(live_map["resolution"]),
+                origin=live_map["origin"],
+                cells=cells,
+                x=float(pose["x"]), y=float(pose["y"]),
+            )
+        except (KeyError, ValueError, TypeError, OverflowError, PoseGridError) as exc:
+            raise NavigationControlError(
+                "INVALID_INITIAL_POSE", f"Cannot validate live map pose: {exc}", 409,
+            ) from exc
+        if risk["risk"] == "BLOCKED":
+            raise NavigationControlError(
+                "INITIAL_POSE_OCCUPIED", f"Initial Pose is blocked: {risk['reason']}", 409,
+            )
+        if risk["risk"] == "WARNING" and pose.get("warning_acknowledged") is not True:
+            raise NavigationControlError(
+                "INITIAL_POSE_CONFIRMATION_REQUIRED",
+                f"Initial Pose requires confirmation: {risk['reason']}", 409,
+            )
 
     async def _estimate_initial_pose_with_retry(self, selected_map):
         with self._lock:
