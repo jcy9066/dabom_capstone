@@ -45,4 +45,5 @@ def test_large_bag_has_bounded_segments():
               for i in range(9999)]
     events.append({"at": 99.99, "type": "stop"})
     segments = compile_manual_segments(events)
-    assert len(segments) == 9999
+    assert len(segments) == 1
+    assert abs(segments[0]["duration_ms"] - 99990.0) < 0.001

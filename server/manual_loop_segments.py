@@ -59,6 +59,17 @@ def compile_manual_segments(events: list[dict]) -> list[dict]:
         }
         if segment["type"] == "move":
             segment.update(direction=direction, speed=speed)
+            if (result and result[-1]["type"] == "move"
+                and result[-1]["direction"] == direction
+                and result[-1]["speed"] == speed):
+                # The Dashboard records the same held D-pad direction at
+                # ~120ms intervals. Coalesce its heartbeats without changing
+                # the motion duration or direction-change/STOP boundaries.
+                result[-1]["duration_ms"] += segment["duration_ms"]
+                continue
+        elif result and result[-1]["type"] == "stop":
+            result[-1]["duration_ms"] += segment["duration_ms"]
+            continue
         result.append(segment)
     if not any(v["type"] == "move" and v["duration_ms"] > 0 for v in result):
         raise ValueError("MANUAL_REPLAY_NO_MOTION")
