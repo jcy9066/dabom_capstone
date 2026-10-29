@@ -334,10 +334,16 @@ class LocalizationSessionApi:
             if not isinstance(payload, dict):
                 return self._error("INVALID_REQUEST", "JSON object required.", 400)
             try:
+                user = request.session.get("user") or {}
+                identity = str(user.get("user_id") or user.get("email") or "unknown")
                 if with_user:
-                    user = request.session.get("user") or {}
-                    identity = str(user.get("user_id") or user.get("email") or "unknown")
                     return await operation(payload, user=identity)
+                if self._owner is not None and identity != self._owner:
+                    raise NavigationControlError(
+                        "LOCALIZATION_OWNER_CHANGED",
+                        "Only the initiating operator may change this session.",
+                        403,
+                    )
                 return await operation(payload)
             except NavigationControlError as exc:
                 return self._error(exc.error_code, str(exc), exc.status_code)
