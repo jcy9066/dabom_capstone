@@ -496,8 +496,8 @@ class RobotCommandClient:
                 if self.current_mode != "manual" or self.navigation_mode != "driving":
                     raise RuntimeError("Manual Loop requires MANUAL/DRIVING")
                 duration = self._duration_ms(message.get("duration_ms"))
-                if not 1 <= duration <= 180:
-                    raise RuntimeError("Manual Loop pulse must be 1..180ms")
+                if not 1 <= duration <= 120:
+                    raise RuntimeError("Manual Loop pulse must be 1..120ms")
                 pulse_id = message.get("pulse_id")
                 generation = message.get("replay_generation")
                 if (not isinstance(pulse_id, str) or not 1 <= len(pulse_id) <= 64
