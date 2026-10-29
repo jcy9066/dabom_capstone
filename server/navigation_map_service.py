@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from server.initial_pose_safety import decode_grid, evaluate_initial_pose_grid, PoseGridError
+
 
 MAP_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -131,15 +133,41 @@ class NavigationMapService:
         local_y = -sin_yaw * dx + cos_yaw * dy
         max_x = selected_map.width * selected_map.resolution
         max_y = selected_map.height * selected_map.resolution
-        if not 0.0 <= local_x <= max_x or not 0.0 <= local_y <= max_y:
+        if not 0.0 <= local_x < max_x or not 0.0 <= local_y < max_y:
             raise NavigationMapError(
                 "INITIAL_POSE_OUT_OF_BOUNDS",
                 "Initial position is outside the selected map bounds.",
             )
 
+        try:
+            raw = self._verify_raw_map(selected_map.raw_path)
+            cells = decode_grid(
+                raw["data"], raw.get("data_encoding", "raw"),
+                selected_map.width, selected_map.height,
+            )
+            risk = evaluate_initial_pose_grid(
+                width=selected_map.width, height=selected_map.height,
+                resolution=selected_map.resolution,
+                origin={"x": selected_map.origin_x, "y": selected_map.origin_y,
+                        "yaw": selected_map.origin_yaw},
+                cells=cells, x=x, y=y,
+            )
+        except (KeyError, TypeError, ValueError, PoseGridError) as exc:
+            raise NavigationMapError(
+                "INVALID_MAP_DATA", f"Cannot validate map occupancy: {exc}", 409,
+            ) from exc
+        if risk["risk"] == "BLOCKED":
+            raise NavigationMapError(
+                "INITIAL_POSE_OCCUPIED", f"Initial position is blocked: {risk['reason']}", 409,
+            )
+        if risk["risk"] == "WARNING" and value.get("warning_acknowledged") is not True:
+            raise NavigationMapError(
+                "INITIAL_POSE_CONFIRMATION_REQUIRED",
+                f"Initial position requires confirmation: {risk['reason']}", 409,
+            )
+
         return {
-            "x": x,
-            "y": y,
+            "x": x, "y": y,
             "yaw_degrees": yaw_degrees,
             "yaw": math.radians(yaw_degrees),
         }
