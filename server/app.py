@@ -1078,6 +1078,7 @@ def current_navigation_map_snapshot():
         if not isinstance(current, dict):
             return None
         result = dict(current)
+        result["map_revision"] = navigation_state.get("map_revision")
         result.update(build_mapping_health(process_running=running))
         return result
 
@@ -1132,6 +1133,7 @@ def clear_navigation_visualization_state():
 def publish_live_mapping_map(map_payload, received_at):
     map_revision = build_navigation_map_revision(map_payload)
     stored_map = received_payload(map_payload, received_at)
+    stored_map["map_revision"] = map_revision
     with state_lock:
         navigation_state["map"] = stored_map
         navigation_state["map_updated_at"] = received_at

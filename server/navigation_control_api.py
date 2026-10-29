@@ -1498,6 +1498,13 @@ class NavigationControlApi:
                         409,
                     )
 
+            expected_revision = payload.get("map_revision")
+            if expected_revision is not None and expected_revision != live_map.get("map_revision"):
+                raise NavigationControlError(
+                    "MAP_REVISION_CHANGED",
+                    "Current Mapping changed during Initial Pose selection.",
+                    409,
+                )
             if (live_map.get("source") != "slam_toolbox"
                 or live_map.get("map_verified") is not True):
                 raise NavigationControlError(
