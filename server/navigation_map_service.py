@@ -99,6 +99,28 @@ class NavigationMapService:
             raise NavigationMapError("MAP_DOES_NOT_EXIST", "The selected map does not exist.", 404)
         return self._read_map(meta_path)
 
+    def preview_map(self, map_name: Any) -> dict[str, Any]:
+        selected_map = self.get_map(map_name)
+        raw = self._verify_raw_map(selected_map.raw_path)
+        revision = hashlib.sha256(
+            selected_map.meta_path.read_bytes()
+            + selected_map.raw_path.read_bytes()
+            + selected_map.pgm_path.read_bytes()
+        ).hexdigest()
+        return {
+            "map_name": selected_map.map_name,
+            "width": selected_map.width,
+            "height": selected_map.height,
+            "resolution": selected_map.resolution,
+            "origin": {"x": selected_map.origin_x,
+                       "y": selected_map.origin_y,
+                       "yaw": selected_map.origin_yaw},
+            "data_encoding": raw.get("data_encoding", "raw"),
+            "data": raw.get("data"),
+            "map_revision": revision,
+            "verified": True,
+        }
+
     def validate_initial_pose(
         self,
         selected_map: SavedNavigationMap,

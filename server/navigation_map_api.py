@@ -192,6 +192,15 @@ class NavigationMapApi:
 
     def _activate_map_locked(self, payload: dict[str, Any], user: str) -> dict[str, Any]:
         selected_map = self._registry.get_map(payload.get("map_name"))
+        expected_revision = payload.get("map_revision")
+        if expected_revision is not None:
+            current_revision = self._registry.preview_map(selected_map.map_name)["map_revision"]
+            if expected_revision != current_revision:
+                raise NavigationMapError(
+                    "MAP_REVISION_CHANGED",
+                    "The selected map changed. Reopen the preview before setting Initial Pose.",
+                    409,
+                )
         initial_pose = self._registry.validate_initial_pose(selected_map, payload.get("initial_pose"))
         self._registry.mark_selected(selected_map)
         self._logger.info(
@@ -229,6 +238,17 @@ class NavigationMapApi:
             self._operation_state = value
 
     def _attach_routes(self) -> None:
+        @self._app.get("/api/navigation/maps/{map_name}/preview")
+        async def preview_saved_navigation_map(map_name: str, request: Request):
+            denied = self._login_failure(request)
+            if denied:
+                return denied
+            try:
+                preview = await asyncio.to_thread(self._registry.preview_map, map_name)
+                return {"ok": True, **preview}
+            except NavigationMapError as exc:
+                return self._error(exc.error_code, str(exc), exc.status_code)
+
         @self._app.get("/api/navigation/maps/active")
         async def get_active_navigation_map(request: Request):
             denied = self._login_failure(request)

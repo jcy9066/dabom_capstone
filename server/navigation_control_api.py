@@ -1549,7 +1549,8 @@ class NavigationControlApi:
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
             loaded = await self._activate_map_when_ready(
-                {"map_name": selected.map_name, "initial_pose": initial_pose_payload},
+                {"map_name": selected.map_name, "initial_pose": initial_pose_payload,
+                 "map_revision": payload.get("map_revision") if source == "existing" else None},
                 user,
             )
             await self._wait_for_nav2_ready()
