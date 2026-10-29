@@ -484,6 +484,8 @@ navigation_state = {
     "map": None,
     "pose": None,
     "scan": None,
+    "matched_scan": None,
+    "session_id": uuid4().hex,
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -1074,6 +1076,10 @@ def clear_navigation_visualization_state():
         localization_scan_history.clear()
         navigation_state["map"] = None
         navigation_state["pose"] = None
+        navigation_state["scan"] = None
+        navigation_state["matched_scan"] = None
+        navigation_state["scan_updated_at"] = None
+        navigation_state["session_id"] = uuid4().hex
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -4132,6 +4138,7 @@ def build_navigation_decision(now=None):
 def received_payload(data, received_at):
     payload = dict(data)
     payload["received_at"] = received_at
+    payload["session_id"] = navigation_state["session_id"]
     return payload
 
 
@@ -4368,24 +4375,15 @@ async def update_navigation_map(request: Request):
                  "message": "SLAM OccupancyGrid dimensions, origin, or data are invalid."},
                 status_code=422,
             )
-        live_map_payload = live_mapping_grid.maybe_update(
-            robot_id=data.get("robot_id", SERVER_ROBOT_ID),
-            monotonic_now=time.monotonic(),
-            wall_time=received_at,
-            force=True,
-        )
-        if live_map_payload is None:
-            live_map_payload = live_mapping_grid.snapshot(
-                robot_id=data.get("robot_id", SERVER_ROBOT_ID),
-                wall_time=received_at,
-            )
-        if live_map_payload is not None:
-            publish_live_mapping_map(live_map_payload, received_at)
-        return {
-            "ok": True,
-            "source": "slam_toolbox",
-            "used_for_live_map": live_map_payload is not None,
-        }
+        # Preserve the original ROS OccupancyGrid geometry and cell values.
+        # Preview/ray observations must never be mixed into the saved SLAM map.
+        authoritative = dict(data)
+        authoritative["source"] = "slam_toolbox"
+        authoritative["map_kind"] = "slam"
+        authoritative["preview"] = False
+        authoritative["map_verified"] = True
+        publish_live_mapping_map(authoritative, received_at)
+        return {"ok": True, "source": "slam_toolbox", "used_for_live_map": True}
 
     map_revision = build_navigation_map_revision(data)
     stored_map = received_payload(data, received_at)
@@ -4468,6 +4466,33 @@ async def update_navigation_scan(request: Request):
         return denied
 
     received_at = time.time()
+    # The TF must refer to this exact scan header, never the newest robot pose.
+    matched = data.get("map_sensor_pose")
+    if matched is not None:
+        try:
+            stamp_ns = int(data["scan_stamp_ns"])
+            matched_stamp_ns = int(matched["stamp_ns"])
+            iso_stamp = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+            pose_values = (
+                float(matched["x"]), float(matched["y"]),
+                float(matched.get("z", 0)), float(matched["yaw"]),
+            )
+            valid = (
+                stamp_ns == matched_stamp_ns
+                and str(matched["sensor_frame_id"]) == str(data["frame_id"])
+                and str(matched["frame_id"]) == "map"
+                and all(math.isfinite(v) for v in pose_values)
+                and 0 <= received_at - iso_stamp <= 1.5
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            return JSONResponse(
+                {"ok": False, "error": "SCAN_TF_STALE_OR_INVALID"}, status_code=422
+            )
+
     stored_scan = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(
@@ -4476,10 +4501,12 @@ async def update_navigation_scan(request: Request):
         )
         store_navigation_mode(navigation_mode, received_at)
         navigation_state["scan"] = stored_scan
+        if matched is not None:
+            navigation_state["matched_scan"] = stored_scan
         navigation_state["scan_updated_at"] = received_at
         build_navigation_decision(received_at)
         status = build_navigation_status(received_at)
-    if navigation_mode == "mapping":
+    if navigation_mode == "mapping" and matched is None:
         live_mapping_grid.update_scan(data)
     navigation_control_api.note_navigation_sample("scan", received_at)
     navigation_visualization_hub.publish(
@@ -4505,7 +4532,14 @@ def build_navigation_snapshot_payload(map_revision=None):
         current_map = navigation_state.get("map")
         current_revision = navigation_state.get("map_revision")
         pose = navigation_state.get("pose")
-        scan = navigation_state.get("scan")
+        raw_scan = navigation_state.get("scan")
+        matched_scan = navigation_state.get("matched_scan")
+        scan = (
+            matched_scan
+            if isinstance(matched_scan, dict)
+            and time.time() - float(matched_scan.get("received_at") or 0) <= 1.5
+            else raw_scan
+        )
         global_path = navigation_state.get("global_path") or []
         global_path_updated_at = navigation_state.get("global_path_updated_at")
         costmap = navigation_state.get("costmap")
@@ -4521,6 +4555,7 @@ def build_navigation_snapshot_payload(map_revision=None):
         snapshot = {
             "ok": True,
             "status": status,
+            "session_id": navigation_state["session_id"],
             "map_available": current_map is not None,
             "map_changed": map_changed,
             "map_revision": current_revision,
@@ -5464,11 +5499,17 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
             live_map_payload = None
             if sensor_navigation_mode == "mapping":
                 live_mapping_grid.update_scan(message)
-                live_map_payload = live_mapping_grid.maybe_update(
-                    robot_id=robot_id,
-                    monotonic_now=time.monotonic(),
-                    wall_time=received_at,
-                )
+                with state_lock:
+                    authoritative_map_active = (
+                        isinstance(navigation_state.get("map"), dict)
+                        and navigation_state["map"].get("map_verified") is True
+                    )
+                if not authoritative_map_active:
+                    live_map_payload = live_mapping_grid.maybe_update(
+                        robot_id=robot_id,
+                        monotonic_now=time.monotonic(),
+                        wall_time=received_at,
+                    )
 
             stored_scan = received_payload(
                 dashboard_scan,
@@ -5483,6 +5524,11 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     )
                 navigation_state["scan"] = stored_scan
                 navigation_state["scan_updated_at"] = received_at
+                matched_frame = navigation_state.get("matched_scan")
+                emit_raw_scan = not (
+                    isinstance(matched_frame, dict)
+                    and received_at - float(matched_frame.get("received_at") or 0) < 1.5
+                )
                 # No auto-localization without fresh, motion-free encoder
                 # observations corresponding to every stored LiDAR frame.
                 encoder_at = encoder_state.get("updated_at")
@@ -5504,13 +5550,14 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 })
                 status = build_navigation_status(received_at)
 
-            navigation_visualization_hub.publish(
-                {
-                    "type": "scan",
-                    "scan": stored_scan,
-                    "status": status,
-                }
-            )
+            if emit_raw_scan:
+                navigation_visualization_hub.publish(
+                    {
+                        "type": "scan",
+                        "scan": stored_scan,
+                        "status": status,
+                    }
+                )
             if live_map_payload is not None:
                 publish_live_mapping_map(
                     live_map_payload,

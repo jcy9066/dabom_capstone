@@ -1493,6 +1493,12 @@ class NavigationControlApi:
                         409,
                     )
 
+            if live_map.get("preview") is True or live_map.get("map_verified") is False:
+                raise NavigationControlError(
+                    "SLAM_MAP_NOT_VERIFIED",
+                    "Preview LiDAR observations cannot be used as a Driving map.",
+                    409,
+                )
             if initial_pose_payload is None:
                 initial_pose_payload = self._current_mapping_initial_pose()
             if initial_pose_payload is None:

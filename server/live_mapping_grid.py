@@ -317,9 +317,10 @@ class LiveMappingGrid:
             ):
                 return None
 
-            # After /map is available SLAM is the authoritative source.
-            # Reprojecting raw LiDAR using delayed pose creates ghost walls.
+            # Preview is a one-frame observation, never a persistent map.
+            # Unmatched latest poses cannot be used to accumulate world cells.
             if not self._base_map_seen:
+                self._cells.clear()
                 self._integrate_locked(pose, self._scan)
             self._last_update_monotonic = float(monotonic_now)
             self._sequence += 1
