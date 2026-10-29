@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from datetime import datetime, timezone
 import threading
 import time
 from dataclasses import dataclass
@@ -1698,10 +1699,14 @@ class NavigationControlApi:
             y = float(pose["y"])
             yaw = float(pose["yaw"])
             captured_at = float(pose["received_at"])
+            measured_at = datetime.fromisoformat(
+                str(pose["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
-        if (not all(math.isfinite(value) for value in (x, y, yaw, captured_at))
+        if (not all(math.isfinite(value) for value in (x, y, yaw, captured_at, measured_at))
             or not 0 <= time.time() - captured_at <= 1.5
+            or not 0 <= time.time() - measured_at <= 1.5
             or str(pose.get("frame_id") or "map") != "map"):
             return None
         normalized_yaw = math.atan2(math.sin(yaw), math.cos(yaw))

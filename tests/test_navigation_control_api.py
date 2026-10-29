@@ -300,6 +300,7 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             get_live_pose=lambda: {
                 "x": 0.25, "y": 0.5, "yaw": 0.4,
                 "received_at": time.time(), "frame_id": "map",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
             save_map=lambda payload, name: {"map_name": "test_map"},
             send_robot_command=sender,
