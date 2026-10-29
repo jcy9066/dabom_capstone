@@ -1554,6 +1554,13 @@ class NavigationControlApi:
                     "A verified localization estimate or explicit map pose is required.",
                     409,
                 )
+        # Validate occupancy, footprint, and warning acknowledgment before
+        # stopping the existing Mapping process. An invalid user click must
+        # never destroy the only healthy SLAM session.
+        if hasattr(self._map_api, "validate_initial_pose"):
+            await asyncio.to_thread(
+                self._map_api.validate_initial_pose, selected, initial_pose_payload,
+            )
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
             loaded = await self._activate_map_when_ready(

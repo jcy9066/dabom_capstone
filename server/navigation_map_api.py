@@ -48,6 +48,9 @@ class NavigationMapApi:
     def resolve_map(self, map_name: Any):
         return self._registry.get_map(map_name)
 
+    def validate_initial_pose(self, selected_map, payload):
+        return self._registry.validate_initial_pose(selected_map, payload)
+
     def set_active_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
         self._active_listener = listener
 
