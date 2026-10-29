@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
 import json
 import math
 import os
@@ -381,7 +383,11 @@ class NavigationMapService:
         ):
             raise NavigationMapError("INVALID_MAP_METADATA", "Map file names do not match the selected map.")
         self._verify_yaml_image(yaml_path, pgm_path)
-        self._verify_raw_map(raw_path)
+        raw_payload = self._verify_raw_map(raw_path)
+        self._verify_bundle_integrity(
+            metadata, pgm_path, yaml_path, raw_path, raw_payload,
+            width, height, resolution, origin_x, origin_y, origin_yaw,
+        )
 
         return SavedNavigationMap(
             map_name=map_name,
@@ -440,6 +446,68 @@ class NavigationMapService:
             raise NavigationMapError("INVALID_MAP_DATA", "Raw map data cannot be read.") from exc
         if not isinstance(payload, dict):
             raise NavigationMapError("INVALID_MAP_DATA", "Raw map data must be an object.")
+        return payload
+
+    def _verify_bundle_integrity(
+        self, metadata, pgm_path, yaml_path, raw_path, raw_payload,
+        width, height, resolution, origin_x, origin_y, origin_yaw,
+    ) -> None:
+        if int(metadata.get("bundle_version") or 1) >= 2:
+            checksums = metadata.get("checksums")
+            if not isinstance(checksums, dict):
+                raise NavigationMapError("INVALID_MAP_DATA", "Map bundle checksum manifest is missing.")
+            for name, path in (("pgm", pgm_path), ("yaml", yaml_path), ("raw", raw_path)):
+                expected = checksums.get(name)
+                if (not isinstance(expected, str) or len(expected) != 64
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                    raise NavigationMapError("MAP_CHECKSUM_MISMATCH", f"Map {name} checksum mismatch.")
+
+        try:
+            if (int(raw_payload["width"]) != width
+                or int(raw_payload["height"]) != height
+                or abs(float(raw_payload["resolution"]) - resolution) > 1e-9):
+                raise ValueError("RAW map dimensions differ from metadata")
+            origin = raw_payload["origin"]
+            for actual, expected in ((origin["x"], origin_x), (origin["y"], origin_y),
+                                     (origin.get("yaw", 0), origin_yaw)):
+                if abs(float(actual) - expected) > 1e-8:
+                    raise ValueError("RAW map origin differs from metadata")
+            data = raw_payload["data"]
+            if not isinstance(data, list):
+                raise ValueError("RAW map data is missing")
+            if raw_payload.get("data_encoding") == "rle":
+                count = sum(int(run[1]) for run in data
+                            if isinstance(run, list) and len(run) == 2
+                            and int(run[1]) >= 0)
+            else:
+                count = len(data)
+            if count != width * height:
+                raise ValueError("RAW map cell count differs from metadata")
+
+            pgm = pgm_path.read_bytes()
+            header, sep, pixels = pgm.partition(b"\n255\n")
+            if (not sep or not header.startswith(b"P5\n")
+                or f"{width} {height}".encode("ascii") not in header
+                or len(pixels) != width * height):
+                raise ValueError("PGM image dimensions or raster length mismatch")
+
+            config = yaml_path.read_text(encoding="utf-8")
+            lines = dict(
+                line.split(":", 1) for line in config.splitlines()
+                if ":" in line and not line.lstrip().startswith("#")
+            )
+            if abs(float(lines["resolution"].strip()) - resolution) > 1e-9:
+                raise ValueError("YAML resolution mismatch")
+            parsed_origin = ast.literal_eval(lines["origin"].strip())
+            if len(parsed_origin) != 3 or any(
+                abs(float(x) - y) > 1e-8
+                for x, y in zip(parsed_origin, (origin_x, origin_y, origin_yaw))
+            ):
+                raise ValueError("YAML map origin mismatch")
+        except (OSError, ValueError, TypeError, KeyError, IndexError, SyntaxError) as exc:
+            raise NavigationMapError(
+                "INVALID_MAP_DATA", f"Saved map data is inconsistent: {exc}"
+            ) from exc
 
     def _read_state(self) -> dict[str, Any]:
         try:
