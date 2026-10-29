@@ -199,6 +199,7 @@ class LidarRosBridge:
 
         # 오래된 scan이 밀리지 않도록 최신 scan만 유지한다.
         self.scan_queue: queue.Queue[LaserScan] = queue.Queue(maxsize=1)
+        self._last_accepted_sequence: int | None = None
         self._future_stamp_warning_at = 0.0
 
         self.node = None
@@ -280,6 +281,7 @@ class LidarRosBridge:
             self.bridge_stats["robot_id"] = robot_id
             self.bridge_stats["connected_at"] = time.time()
             self.bridge_stats["disconnected_at"] = None
+            self._last_accepted_sequence = None
 
     def mark_disconnected(self, robot_id: str) -> None:
         with self.stats_lock:
@@ -301,6 +303,17 @@ class LidarRosBridge:
             raise RuntimeError("LiDAR ROS bridge is not started")
 
         message, dashboard_payload = self.packet_to_scan(packet)
+        seq = packet.get("sequence")
+        if seq is not None:
+            try:
+                seq = int(seq)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("LiDAR sequence must be an integer") from exc
+            with self.stats_lock:
+                if (self._last_accepted_sequence is not None
+                    and seq <= self._last_accepted_sequence):
+                    raise ValueError("out-of-order or repeated LiDAR sequence")
+                self._last_accepted_sequence = seq
 
         if self.scan_queue.full():
             try:

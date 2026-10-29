@@ -486,6 +486,7 @@ navigation_state = {
     "scan": None,
     "matched_scan": None,
     "session_id": uuid4().hex,
+    "session_started_at": time.time(),
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -1080,6 +1081,7 @@ def clear_navigation_visualization_state():
         navigation_state["matched_scan"] = None
         navigation_state["scan_updated_at"] = None
         navigation_state["session_id"] = uuid4().hex
+        navigation_state["session_started_at"] = time.time()
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -1087,7 +1089,10 @@ def clear_navigation_visualization_state():
         navigation_state["map_updated_at"] = None
         navigation_state["pose_updated_at"] = None
         navigation_state["map_revision"] = None
-    navigation_visualization_hub.publish({"type": "reset"})
+    navigation_visualization_hub.publish({
+        "type": "reset",
+        "session_id": navigation_state["session_id"],
+    })
 
 
 def publish_live_mapping_map(map_payload, received_at):
@@ -4358,10 +4363,21 @@ async def update_navigation_map(request: Request):
     received_at = time.time()
 
     if navigation_mode == "mapping":
-        # Mirror RViz2 Map behavior: every slam_toolbox /map refresh becomes the
-        # persistent base OccupancyGrid. Then re-apply the newest LiDAR sample so
-        # dynamic walls clear/appear on the same one-second cadence. The composed
-        # grid is both what the Viewer renders and what "현재 지도 저장" persists.
+        # Reject maps captured before a reset; delayed HTTP must not resurrect
+        # the previous SLAM session as the current authoritative map.
+        try:
+            map_captured_at = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError):
+            map_captured_at = None
+        with state_lock:
+            session_started_at = navigation_state["session_started_at"]
+        if (map_captured_at is not None
+            and map_captured_at < session_started_at - 0.2):
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
         with state_lock:
             navigation_state["robot_id"] = data.get(
                 "robot_id",
@@ -4484,13 +4500,25 @@ async def update_navigation_scan(request: Request):
                 and str(matched["sensor_frame_id"]) == str(data["frame_id"])
                 and str(matched["frame_id"]) == "map"
                 and all(math.isfinite(v) for v in pose_values)
-                and 0 <= received_at - iso_stamp <= 1.5
+                and -0.1 <= received_at - iso_stamp <= 1.5
             )
         except (KeyError, TypeError, ValueError, OverflowError):
             valid = False
         if not valid:
             return JSONResponse(
                 {"ok": False, "error": "SCAN_TF_STALE_OR_INVALID"}, status_code=422
+            )
+        with state_lock:
+            last_matched = navigation_state.get("matched_scan")
+            session_started_at = navigation_state["session_started_at"]
+        if iso_stamp < session_started_at - 0.2:
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
+        if (last_matched and last_matched.get("session_id") == navigation_state["session_id"]
+            and int(last_matched.get("scan_stamp_ns") or 0) >= stamp_ns):
+            return JSONResponse(
+                {"ok": False, "error": "OUT_OF_ORDER_SCAN"}, status_code=409
             )
 
     stored_scan = received_payload(data, received_at)
@@ -4537,6 +4565,7 @@ def build_navigation_snapshot_payload(map_revision=None):
         scan = (
             matched_scan
             if isinstance(matched_scan, dict)
+            and matched_scan.get("navigation_mode") == navigation_state.get("mode")
             and time.time() - float(matched_scan.get("received_at") or 0) <= 1.5
             else raw_scan
         )
@@ -5527,6 +5556,7 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                 matched_frame = navigation_state.get("matched_scan")
                 emit_raw_scan = not (
                     isinstance(matched_frame, dict)
+                    and matched_frame.get("navigation_mode") == sensor_navigation_mode
                     and received_at - float(matched_frame.get("received_at") or 0) < 1.5
                 )
                 # No auto-localization without fresh, motion-free encoder

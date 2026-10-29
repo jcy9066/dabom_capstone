@@ -137,7 +137,7 @@ def test_removed_wall_is_cleared_on_next_update():
     assert cell_value(second, 1.0, 0.0) == 0
 
 
-def test_unobserved_cells_persist_and_map_expands():
+def test_unverified_preview_does_not_keep_unobserved_ghost_cells():
     grid = LiveMappingGrid(
         resolution=0.1,
         refresh_sec=1.0,
@@ -163,8 +163,9 @@ def test_unobserved_cells_persist_and_map_expands():
         monotonic_now=2.0,
         wall_time=2.0,
     )
-    assert second["width"] > old_width
-    assert cell_value(second, 0.0, 1.0) == 100
+    # Unverified scan-only geometry is a per-frame preview, never a fused map.
+    assert second["preview"] is True
+    assert cell_value(second, 0.0, 1.0) is None
     assert cell_value(second, 4.0, 0.0) == 100
 
 
@@ -285,3 +286,25 @@ def test_scan_preview_is_explicitly_unverified():
     assert preview["map_verified"] is False
     assert preview["source"] == "live_mapping_grid"
     assert preview["map_kind"] == "preview"
+
+
+def test_scan_preview_rotation_keeps_static_obstacle_in_world_coordinates():
+    grid = LiveMappingGrid(
+        resolution=0.1, refresh_sec=1.0, padding_cells=0,
+        sensor_yaw=math.pi,
+    )
+    for i, (robot_yaw, scan_angle) in enumerate([
+        (0.0, -math.pi), (math.pi / 2, math.pi / 2),
+        (math.pi, 0.0), (2 * math.pi, -math.pi),
+    ], 1):
+        assert grid.update_pose({"x": 0.0, "y": 0.0, "yaw": robot_yaw})
+        scan = make_scan([2.0])
+        scan["angle_min"] = scan_angle
+        scan["angle_increment"] = 0.01
+        assert grid.update_scan(scan)
+        snapshot = grid.maybe_update(
+            robot_id="pi-01", monotonic_now=float(i),
+            wall_time=float(i), force=True,
+        )
+        assert snapshot["preview"] is True
+        assert cell_value(snapshot, 2.0, 0.0) == 100

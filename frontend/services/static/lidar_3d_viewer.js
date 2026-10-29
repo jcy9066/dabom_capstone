@@ -1404,6 +1404,10 @@ if (root && canvas) {
         return [
             scan.timestamp || '',
             scan.received_at || '',
+            currentMap?.map_kind || '',
+            currentMap?.preview ? 'preview' : '',
+            scan.map_sensor_pose?.stamp_ns || '',
+            scan.map_sensor_pose?.yaw || '',
             scan.ranges.length,
             scan.ranges[0] ?? '',
             scan.ranges[scan.ranges.length - 1] ?? '',
