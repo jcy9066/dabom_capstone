@@ -200,7 +200,7 @@ if (root && canvas) {
             );
             initialPoseArrow.visible = true;
         }
-        requestRender();
+        // Viewer has a persistent animation loop; no separate render call.
     });
 
     const cameraFrustumPoseGroup = new THREE.Group();
@@ -2252,6 +2252,7 @@ if (root && canvas) {
         const liveCostmap = mappingMode ? null : (state.costmap || null);
 
         rebuildMap(liveMap, liveMap ? state.mapRevision : null);
+        syncGoalInteractionAvailability();
         rebuildCostmap(liveCostmap);
         rebuildPath(displayedGlobalPath(currentControlState, state));
 
