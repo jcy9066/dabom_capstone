@@ -286,11 +286,22 @@ class NavigationMapService:
             raw_payload = dict(raw_payload)
             raw_payload["map_name"] = new_map_name
 
+        yaml_bytes = renamed_yaml.encode("utf-8")
+        raw_bytes = (json.dumps(raw_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        # Rename changes YAML's image reference and possibly the RAW name.
+        # Preserve the saved-map integrity contract by rehashing the new files.
+        if int(renamed_metadata.get("bundle_version") or 1) >= 2:
+            renamed_metadata["checksums"] = {
+                "pgm": hashlib.sha256(pgm_bytes).hexdigest(),
+                "yaml": hashlib.sha256(yaml_bytes).hexdigest(),
+                "raw": hashlib.sha256(raw_bytes).hexdigest(),
+            }
+
         return {
             "pgm": pgm_bytes,
-            "yaml": renamed_yaml.encode("utf-8"),
+            "yaml": yaml_bytes,
             "meta": (json.dumps(renamed_metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
-            "raw": (json.dumps(raw_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            "raw": raw_bytes,
         }
 
     def _relative_map_path(self, map_name: str, suffix: str) -> str:
