@@ -535,6 +535,10 @@ class NavigationMapService:
                     raise NavigationMapError(
                         "MAP_CHECKSUM_MISMATCH", f"Map {name} checksum mismatch."
                     )
+        else:
+            # Historical maps predate RAW occupancy and bundle checksums.
+            # Their legacy PGM/YAML verification still runs in get_map().
+            return
 
         try:
             if (int(raw_payload["width"]) != width
