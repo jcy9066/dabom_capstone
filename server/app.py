@@ -1071,12 +1071,14 @@ location_security_api = LocationSecurityApi(
 
 
 def current_navigation_map_snapshot():
+    process = navigation_process_control.status()
+    running = process.get("mode") == "MAPPING"
     with state_lock:
         current = navigation_state.get("map")
         if not isinstance(current, dict):
             return None
         result = dict(current)
-        result.update(build_mapping_health())
+        result.update(build_mapping_health(process_running=running))
         return result
 
 
