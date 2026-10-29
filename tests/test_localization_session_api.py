@@ -52,6 +52,14 @@ class Navigation:
         }
         self.use_live_pose = False
 
+    @staticmethod
+    def state_response():
+        return {
+            "connected": True, "robot_mode": "MANUAL",
+            "navigation_state": "IDLE", "emergency_stop": False,
+            "active_goal": None,
+        }
+
     def _get_live_map(self):
         return dict(self.live_map)
 

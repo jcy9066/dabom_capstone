@@ -69,6 +69,22 @@ class LocalizationSessionApi:
             status_code=status,
         )
 
+    def _check_navigation_safe(self):
+        state = self.navigation.state_response()
+        if (state.get("connected") is not True
+            or str(state.get("robot_mode") or "").upper() != "MANUAL"
+            or state.get("emergency_stop") is True
+            or state.get("active_goal") is not None
+            or state.get("navigation_state") in {
+                "NAVIGATING", "RESUMING", "PAUSING_FOR_MANUAL",
+                "CANCELING", "CANCELING_STOP", "EMERGENCY_STOPPED",
+            }):
+            raise NavigationControlError(
+                "LOCALIZATION_REQUIRES_SAFE_MANUAL",
+                "Connected, stationary MANUAL control with no active Goal is required.",
+                409,
+            )
+
     def _check_cancelled(self):
         if self._cancel_requested:
             raise NavigationControlError(
@@ -97,6 +113,7 @@ class LocalizationSessionApi:
                 "LOCALIZATION_BUSY",
                 "Previous localization must stop safely before starting another.",
             )
+        self._check_navigation_safe()
         if self.navigation._operation_lock.locked():
             raise NavigationControlError(
                 "NAVIGATION_BUSY", "Another navigation operation is in progress.",
@@ -215,6 +232,7 @@ class LocalizationSessionApi:
 
     async def _validate_and_apply(self, selected, pose, live):
         self._check_cancelled()
+        self._check_navigation_safe()
         self._validate_map_revision(live)
         self.proposed_pose = {
             key: pose[key] for key in ("x", "y", "yaw_degrees")
