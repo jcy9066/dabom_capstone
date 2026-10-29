@@ -773,6 +773,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'pose') {
+        if (lidarState.sessionId && message.pose?.session_id
+            && message.pose.session_id !== lidarState.sessionId) return;
         lidarState.pose = message.pose || null;
         emitNavigationVisualizationState(false);
         return;
@@ -793,6 +795,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'map') {
+        if (lidarState.sessionId && message.map?.session_id
+            && message.map.session_id !== lidarState.sessionId) return;
         applyNavigationMapPayload(
             message.map || null,
             message.map_revision ?? null,
@@ -807,7 +811,7 @@ function applyNavigationStreamMessage(message) {
         navigationMapSuppressedRevision = null;
         lidarState.map = null;
         lidarState.pose = null;
-        lidarState.sessionId = null;
+        lidarState.sessionId = message.session_id || null;
         clearNavigationScan();
         resetNavigationGlobalPath();
         navigationGlobalPathRunKey = null;

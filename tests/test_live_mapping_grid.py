@@ -307,4 +307,14 @@ def test_scan_preview_rotation_keeps_static_obstacle_in_world_coordinates():
             wall_time=float(i), force=True,
         )
         assert snapshot["preview"] is True
-        assert cell_value(snapshot, 2.0, 0.0) == 100
+        occupied = []
+        for idx, value in enumerate(decode_rle(snapshot)):
+            if value == 100:
+                cell_x = idx % snapshot["width"]
+                cell_y = idx // snapshot["width"]
+                occupied.append((
+                    snapshot["origin"]["x"] + (cell_x + 0.5) * snapshot["resolution"],
+                    snapshot["origin"]["y"] + (cell_y + 0.5) * snapshot["resolution"],
+                ))
+        assert occupied
+        assert min(math.hypot(x - 2.0, y) for x, y in occupied) < 0.15

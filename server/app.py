@@ -4442,6 +4442,20 @@ async def update_navigation_pose(request: Request):
         return denied
 
     received_at = time.time()
+    if navigation_mode == "mapping" and data.get("timestamp"):
+        try:
+            pose_captured_at = datetime.fromisoformat(
+                str(data["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            pose_captured_at = None
+        with state_lock:
+            session_started_at = navigation_state["session_started_at"]
+        if (pose_captured_at is not None
+            and pose_captured_at < session_started_at - 0.2):
+            return JSONResponse(
+                {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
+            )
     stored_pose = received_payload(data, received_at)
     with state_lock:
         navigation_state["robot_id"] = data.get(

@@ -231,6 +231,8 @@ class MapBridge(Node):
 
         self.latest_map = None
         self.latest_scan = None
+        self.ready_scan = None
+        self._last_scan_queued_stamp_ns = 0
         self.last_warning_at = 0.0
         # One pending frame per stream: stalled HTTP must not block ROS or
         # queue stale observations indefinitely.
@@ -331,11 +333,11 @@ class MapBridge(Node):
             self.publish_map(msg)
 
     def on_scan(self, msg):
-        # Process the preceding scan, not the just-arrived frame: TF may
-        # still be catching up with the newest /scan timestamp.
-        if self.send_scan and self.latest_scan is not None and self._scan_period <= 0:
-            self.publish_scan()
+        # Always queue the preceding scan, giving TF publishers time to catch up.
+        self.ready_scan = self.latest_scan
         self.latest_scan = msg
+        if self.send_scan and self.ready_scan is not None and self._scan_period <= 0:
+            self.publish_scan()
 
     def _queue_post(self, kind, path, payload):
         with self._post_condition:
@@ -524,9 +526,15 @@ class MapBridge(Node):
         )
 
     def publish_scan(self):
-        msg = self.latest_scan
+        msg = self.ready_scan
 
         if msg is None:
+            return
+        stamp_ns = (
+            int(msg.header.stamp.sec) * 1000000000
+            + int(msg.header.stamp.nanosec)
+        )
+        if stamp_ns <= self._last_scan_queued_stamp_ns:
             return
 
         # Always transform at the acquisition time of this LaserScan.
@@ -625,6 +633,7 @@ class MapBridge(Node):
         self._queue_post(
             "scan", "/navigation/scan", payload,
         )
+        self._last_scan_queued_stamp_ns = stamp_ns
 
 
 def main(args=None):
