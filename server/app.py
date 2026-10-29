@@ -77,6 +77,7 @@ from server.location_security_notifications import build_location_transition_mes
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
+from server.mapping_health import mapping_health_state
 from server.gpu_telemetry import GpuUtilizationSampler
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
@@ -487,6 +488,8 @@ navigation_state = {
     "matched_scan": None,
     "session_id": uuid4().hex,
     "session_started_at": time.time(),
+    "mapping_probe": None,
+    "mapping_probe_updated_at": None,
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -1049,7 +1052,11 @@ location_security_api = LocationSecurityApi(
 def current_navigation_map_snapshot():
     with state_lock:
         current = navigation_state.get("map")
-        return dict(current) if isinstance(current, dict) else None
+        if not isinstance(current, dict):
+            return None
+        result = dict(current)
+        result.update(build_mapping_health())
+        return result
 
 
 def current_navigation_pose_snapshot():
@@ -1082,6 +1089,8 @@ def clear_navigation_visualization_state():
         navigation_state["scan_updated_at"] = None
         navigation_state["session_id"] = uuid4().hex
         navigation_state["session_started_at"] = time.time()
+        navigation_state["mapping_probe"] = None
+        navigation_state["mapping_probe_updated_at"] = None
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -4080,6 +4089,20 @@ def store_navigation_mode(mode, received_at):
     navigation_state["mode_updated_at"] = received_at
 
 
+def build_mapping_health(now=None, process_running=None):
+    now = time.time() if now is None else float(now)
+    return mapping_health_state(
+        mode=navigation_state.get("mode"),
+        probe=navigation_state.get("mapping_probe"),
+        probe_received_at=navigation_state.get("mapping_probe_updated_at"),
+        scan_updated_at=navigation_state.get("scan_updated_at"),
+        map_payload=navigation_state.get("map"),
+        map_updated_at=navigation_state.get("map_updated_at"),
+        now=now,
+        process_running=process_running,
+    )
+
+
 def build_navigation_status(now=None):
     now = now or time.time()
     decision = build_navigation_decision(now)
@@ -4115,6 +4138,8 @@ def build_navigation_status(now=None):
         "last_update_age_sec": last_update_age_sec,
         "timeout_sec": NAVIGATION_TIMEOUT_SEC,
         "has_map": navigation_state.get("map") is not None,
+        **build_mapping_health(now),
+        "mapping_session_id": navigation_state["session_id"],
         "has_pose": navigation_state.get("pose") is not None,
         "has_scan": navigation_state.get("scan") is not None,
         "map_updated_at": navigation_state.get("map_updated_at"),
@@ -4561,10 +4586,40 @@ async def update_navigation_scan(request: Request):
     return {"ok": True}
 
 
+@app.post("/navigation/mapping/health")
+async def update_mapping_health(request: Request):
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
+    try:
+        data = await request.json()
+        if not isinstance(data, dict) or data.get("navigation_mode") != "mapping":
+            raise ValueError("mapping health payload required")
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    denied = robot_id_failure(data)
+    if denied:
+        return denied
+    with state_lock:
+        if navigation_state.get("mode") != "mapping":
+            return JSONResponse(
+                {"ok": False, "error": "MAPPING_SESSION_INACTIVE"}, status_code=409
+            )
+        navigation_state["mapping_probe"] = dict(data)
+        navigation_state["mapping_probe_updated_at"] = time.time()
+        status = build_mapping_health()
+    return {"ok": True, **status}
+
+
 @app.get("/api/navigation/status")
 async def get_navigation_status():
+    # /proc is queried outside the state lock and outside the hot LiDAR path.
+    process = await asyncio.to_thread(navigation_process_control.status)
+    running = process.get("mode") == "MAPPING"
     with state_lock:
-        return build_navigation_status()
+        status = build_navigation_status()
+        status.update(build_mapping_health(process_running=running))
+    return status
 
 
 def build_navigation_snapshot_payload(map_revision=None):
@@ -4602,6 +4657,7 @@ def build_navigation_snapshot_payload(map_revision=None):
             "map_available": current_map is not None,
             "map_changed": map_changed,
             "map_revision": current_revision,
+            "event_seq": navigation_visualization_hub.event_seq,
             "pose_available": pose is not None,
             "pose": pose,
             "scan_available": scan is not None,
@@ -4690,7 +4746,9 @@ async def save_current_navigation_map(request: Request):
             {"ok": False, "status": status, "error": "map unavailable"},
             status_code=404,
         )
-    if current_map.get("preview") is True or current_map.get("map_verified") is False:
+    if (current_map.get("source") != "slam_toolbox"
+        or current_map.get("map_verified") is not True
+        or current_map.get("preview") is True):
         return JSONResponse(
             {"ok": False, "status": status, "error": "SLAM_MAP_NOT_VERIFIED",
              "message": "Preview LiDAR grid cannot be saved as an authoritative SLAM map."},
