@@ -109,7 +109,8 @@ def generate_launch_description():
             # 서버로 전송할 데이터
             "send_map": True,
             "send_pose": True,
-            "send_scan": False,
+            # Stamped TF paired with each scan, independent from the Pi WS preview.
+            "send_scan": True,
         }],
     )
 

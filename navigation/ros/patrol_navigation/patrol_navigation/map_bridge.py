@@ -291,6 +291,7 @@ class MapBridge(Node):
                 "scan_publish_period_sec"
             ).value
         )
+        self._scan_period = scan_period
 
         if self.send_map and map_period > 0:
             self.create_timer(
@@ -330,6 +331,10 @@ class MapBridge(Node):
             self.publish_map(msg)
 
     def on_scan(self, msg):
+        # Process the preceding scan, not the just-arrived frame: TF may
+        # still be catching up with the newest /scan timestamp.
+        if self.send_scan and self.latest_scan is not None and self._scan_period <= 0:
+            self.publish_scan()
         self.latest_scan = msg
 
     def _queue_post(self, kind, path, payload):
@@ -524,6 +529,24 @@ class MapBridge(Node):
         if msg is None:
             return
 
+        # Always transform at the acquisition time of this LaserScan.
+        # Time() means latest TF and makes stationary walls rotate with
+        # the robot when network/ROS callbacks are delayed.
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.pose_parent_frame,
+                msg.header.frame_id,
+                Time.from_msg(msg.header.stamp),
+            )
+        except TransformException as exc:
+            self.warn_throttled(
+                f"Scan TF unavailable at measurement stamp "
+                f"{msg.header.frame_id}->{self.pose_parent_frame}: {exc}"
+            )
+            return
+
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
         ranges = list(msg.ranges)
 
         if (
@@ -570,6 +593,25 @@ class MapBridge(Node):
                 msg.header.stamp
             ),
             "bridge_timestamp": now_iso(),
+            "scan_stamp_ns": (
+                int(msg.header.stamp.sec) * 1000000000
+                + int(msg.header.stamp.nanosec)
+            ),
+            "time_increment_sec": float(msg.time_increment) * step,
+            "scan_time_sec": float(msg.scan_time),
+            "source": "map_bridge",
+            "map_sensor_pose": {
+                "frame_id": self.pose_parent_frame,
+                "sensor_frame_id": msg.header.frame_id,
+                "x": float(translation.x),
+                "y": float(translation.y),
+                "z": float(translation.z),
+                "yaw": yaw_from_quaternion(rotation),
+                "stamp_ns": (
+                    int(msg.header.stamp.sec) * 1000000000
+                    + int(msg.header.stamp.nanosec)
+                ),
+            },
             "angle_min": msg.angle_min,
             "angle_max": msg.angle_max,
             "angle_increment": (
