@@ -3,9 +3,6 @@ on:
   push:
     branches:
       - fix/pr96-integrated-stabilization-20261029
-  pull_request:
-    branches:
-      - hotfix/recorded-loop-replay-20261026
   workflow_dispatch:
 
 permissions:

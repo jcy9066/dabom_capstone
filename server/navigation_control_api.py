@@ -1544,8 +1544,8 @@ class NavigationControlApi:
             # Do not invent an arbitrary origin when a saved map is selected.
             # Automatic localization must prove a fresh, unambiguous scan
             # match; otherwise the operator must supply Initial Pose.
-            # The same scan matching and retry applies to current and saved maps.
             # Actual matching starts after the saved-map snapshot is available.
+            pass
         else:
             raise NavigationControlError(
                 "INVALID_SOURCE",
