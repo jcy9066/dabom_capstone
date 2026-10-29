@@ -1822,7 +1822,17 @@ class NavigationControlApi:
             await asyncio.sleep(0.05)
         return False
 
-    async def _estimate_initial_pose_with_retry(self, selected_map, *, expected_map_revision=None):
+    async def _estimate_initial_pose_with_retry(
+        self, selected_map, *, expected_map_revision=None,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        def ensure_not_cancelled():
+            if cancelled is not None and cancelled():
+                raise NavigationControlError(
+                    "LOCALIZATION_CANCELLED",
+                    "Localization was cancelled before Driving activation.", 409,
+                )
+        ensure_not_cancelled()
         with self._lock:
             stopped = (
                 self._robot_mode == "manual"
@@ -1841,6 +1851,7 @@ class NavigationControlApi:
             )
         history = self._get_live_scans()
         base_time, base_sequence = observation_baseline(history)
+        ensure_not_cancelled()
 
         def match(scan):
             return estimate_initial_pose(
@@ -1857,18 +1868,22 @@ class NavigationControlApi:
             # One bounded retry, using only genuinely new LiDAR + encoder
             # observations. No automatic motor movement is authorized here.
             try:
+                ensure_not_cancelled()
                 scan = await wait_fresh_fused_scan(
                     self._get_live_scans,
                     after_time=base_time,
                     after_encoder_sequence=base_sequence,
                 )
+                ensure_not_cancelled()
                 pose = await asyncio.to_thread(match, scan)
             except (AutoPoseUncertain, OSError, KeyError, TypeError, ValueError) as exc:
                 # The only allowed automatic motion is a bounded Pi MANUAL
                 # turn after full 360-degree clearance and STOP/encoder proof.
                 # Unsafe or failed turns always fall back to map-click recovery.
                 try:
+                    ensure_not_cancelled()
                     await self._bounded_initial_pose_turn()
+                    ensure_not_cancelled()
                     baseline_ticks = self._encoder_ticks
                     new_history = self._get_live_scans()
                     new_time, new_sequence = observation_baseline(new_history)
@@ -1877,6 +1892,7 @@ class NavigationControlApi:
                         after_time=new_time,
                         after_encoder_sequence=new_sequence,
                     )
+                    ensure_not_cancelled()
                     pose = await asyncio.to_thread(match, rotated_scan)
                 except (AutoPoseUncertain, UnsafeLocalizationTurn,
                         OSError, KeyError, TypeError, ValueError) as recovery_exc:
@@ -1887,6 +1903,7 @@ class NavigationControlApi:
                         409,
                     ) from recovery_exc
 
+        ensure_not_cancelled()
         if expected_map_revision is not None:
             live_map = self._get_live_map() or {}
             if (live_map.get("map_revision") != expected_map_revision

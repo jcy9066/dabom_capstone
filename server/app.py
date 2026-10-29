@@ -69,6 +69,7 @@ from server.media_service import (
 )
 from server.navigation_control_api import NavigationControlApi
 from server.recorded_loop_api import RecordedLoopApi
+from server.localization_session_api import LocalizationSessionApi
 from server.loop_session_api import LoopSessionApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
@@ -1194,6 +1195,13 @@ navigation_control_api = NavigationControlApi(
     clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
 )
+# Dedicated asynchronous Initial Pose preparation and map-click recovery API.
+# It reuses NavigationControlApi's existing verified switch_mode path.
+localization_session_api = LocalizationSessionApi(
+    app=app,
+    navigation=navigation_control_api,
+)
+
 # A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
 # This observer only accepts command_id-matched ACKs from the current socket.
 recorded_loop_api = RecordedLoopApi(
