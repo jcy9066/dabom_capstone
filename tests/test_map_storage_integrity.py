@@ -52,10 +52,10 @@ def test_renamed_bundle_recomputes_hashes_and_remains_loadable(tmp_path):
     map_dir = tmp_path / "maps"
     map_dir.mkdir()
     original = "original"
-    image = b"P5\\n# AI patrol robot map\\n1 1\\n255\\n" + bytes([254])
-    yaml = (f"image: {original}.pgm\\nresolution: 0.1\\n"
-            "origin: [0.0, 0.0, 0.0]\\nnegate: 0\\n"
-            "occupied_thresh: 0.65\\nfree_thresh: 0.196\\n").encode()
+    image = b"P5\n# AI patrol robot map\n1 1\n255\n" + bytes([254])
+    yaml = (f"image: {original}.pgm\nresolution: 0.1\n"
+            "origin: [0.0, 0.0, 0.0]\nnegate: 0\n"
+            "occupied_thresh: 0.65\nfree_thresh: 0.196\n").encode()
     raw = json.dumps({
         "map_name": original, "width": 1, "height": 1,
         "resolution": 0.1, "origin": {"x": 0, "y": 0, "yaw": 0},
