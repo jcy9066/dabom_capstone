@@ -1749,19 +1749,20 @@ class NavigationControlApi:
             # ceiling and capped at 20% PWM. Further turns require a new
             # localization operation after STOP and a full safety preflight.
             command = {
-                "type": "move", "direction": "rotate_left", "speed": 0.20,
+                "type": "initial_pose_turn", "direction": "rotate_left",
+                "speed": 0.20, "duration_ms": 150,
                 "safety_session": context["safety_session"],
                 "safety_epoch": context["safety_epoch"],
             }
             if self.motion_safety_context() != context:
                 raise UnsafeLocalizationTurn("Motor safety generation changed before turn")
-            acknowledged = await self._send_robot_command(self._robot_id, command)
-            if not self._pi_command_delivered(acknowledged):
-                raise UnsafeLocalizationTurn("Rotation motor ACK missing")
-            moved = True
             if not self.note_authorized_motion(context):
                 raise UnsafeLocalizationTurn("Rotation safety context revoked")
-            await asyncio.sleep(0.15)
+            # The Pi enforces 150ms and STOP locally before it sends the ACK.
+            acknowledged = await self._send_robot_command(self._robot_id, command)
+            if not self._pi_command_delivered(acknowledged):
+                raise UnsafeLocalizationTurn("Pi-local rotation/STOP ACK missing")
+            moved = True
         finally:
             # No exception, disconnection, or canceled coroutine may skip STOP.
             self.recorded_stop_begin()

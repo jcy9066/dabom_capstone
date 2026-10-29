@@ -490,6 +490,19 @@ class RobotCommandClient:
                     message.get("speed", 1.0),
                 )
 
+            elif command_type == "initial_pose_turn":
+                self._require_current_motion_safety(message)
+                if self.current_mode != "manual" or self.navigation_mode != "mapping":
+                    raise RuntimeError("Initial Pose turn requires Pi MANUAL/MAPPING")
+                duration = self._duration_ms(message.get("duration_ms"))
+                if not 1 <= duration <= 150:
+                    raise RuntimeError("Initial Pose turn exceeds 150ms limit")
+                if message.get("direction") != "rotate_left" or float(message.get("speed", 0)) != 0.20:
+                    raise RuntimeError("Initial Pose turn command must be a 20% rotate_left pulse")
+                await asyncio.to_thread(
+                    self._run_bounded_initial_pose_turn, message, duration,
+                )
+
             elif command_type == "auto_drive":
                 self._require_current_motion_safety(message)
                 if self.current_mode != "auto":
@@ -728,6 +741,18 @@ class RobotCommandClient:
                 }
             )
         )
+
+    def _run_bounded_initial_pose_turn(self, message: dict, duration_ms: int) -> None:
+        # This operation runs in a Pi-local thread. It is bounded independently
+        # of GPU WebSocket response time and STOP runs even if the network dies.
+        with self.motor._command_lock:
+            self._require_current_motion_safety(message)
+            self.motor.move("rotate_left", 0.20)
+            try:
+                time.sleep(duration_ms / 1000.0)
+                self._require_current_motion_safety(message)
+            finally:
+                self.motor.stop("initialpose_local_stop")
 
     def _run_guarded_motor_motion(self, message: dict, operation, *args):
         # Share the actual MotorController's UART command lock.

@@ -6102,6 +6102,13 @@ async def send_robot_command(
             {"ok": False, "delivered": False, "error": "Manual Loop replay owns motor control"},
             status_code=409,
         )
+    if (robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
+        and navigation_control_api._localization_turn_active):
+        return JSONResponse(
+            {"ok": False, "delivered": False,
+             "error": "Automatic Initial Pose rotation owns motor control"},
+            status_code=409,
+        )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
     motion_context = None
     if controlled_motion:
