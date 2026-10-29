@@ -1553,7 +1553,11 @@ class NavigationControlApi:
         if initial_pose_payload is None:
             if source == "existing" or current_auto_recovery:
                 initial_pose_payload, auto_pose_encoder_baseline = (
-                    await self._estimate_initial_pose_with_retry(selected)
+                    await self._estimate_initial_pose_with_retry(
+                        selected,
+                        expected_map_revision=(live_map.get("map_revision")
+                                               if source in {"current", "save_current"} else None),
+                    )
                 )
             else:
                 raise NavigationControlError(
@@ -1812,7 +1816,7 @@ class NavigationControlApi:
             await asyncio.sleep(0.05)
         return False
 
-    async def _estimate_initial_pose_with_retry(self, selected_map):
+    async def _estimate_initial_pose_with_retry(self, selected_map, *, expected_map_revision=None):
         with self._lock:
             stopped = (
                 self._robot_mode == "manual"
@@ -1877,6 +1881,15 @@ class NavigationControlApi:
                         409,
                     ) from recovery_exc
 
+        if expected_map_revision is not None:
+            live_map = self._get_live_map() or {}
+            if (live_map.get("map_revision") != expected_map_revision
+                or live_map.get("mapping_state") != "MAPPING_ACTIVE"):
+                raise NavigationControlError(
+                    "MAP_CHANGED_DURING_LOCALIZATION",
+                    "SLAM map changed after the localization snapshot; select a fresh map pose.",
+                    409,
+                )
         with self._lock:
             if (self._encoder_ticks != baseline_ticks
                 or self._robot_mode != "manual"
