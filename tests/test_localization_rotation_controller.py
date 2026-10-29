@@ -1,9 +1,16 @@
 """Pi-local Initial Pose pulse must STOP even if move raises."""
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 
-from raspberry.robot_command_client import RobotCommandClient
+# Match the actual Pi executable's import root (controllers/ is top-level).
+RASPBERRY_DIR = Path(__file__).resolve().parents[1] / "raspberry"
+if str(RASPBERRY_DIR) not in sys.path:
+    sys.path.insert(0, str(RASPBERRY_DIR))
+
+from robot_command_client import RobotCommandClient
 
 
 class FakeMotor:
