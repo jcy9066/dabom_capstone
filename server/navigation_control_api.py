@@ -1701,6 +1701,8 @@ class NavigationControlApi:
                 and not self._loop_goals
                 and self._state["active_goal"] is None
                 and not self._localization_turn_active
+                and (self._loop_session_owner is None
+                     or self._loop_session_owner.done())
                 and self._encoder_ticks is not None
             )
             if not ready:

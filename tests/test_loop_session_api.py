@@ -320,3 +320,20 @@ def test_offline_modal_preserves_cached_goals_for_selected_map(tmp_path):
     assert snapshot["goals"][0]["pose"]["x"] == 2.0
     with pytest.raises(RecordedLoopError, match="DRIVING"):
         api.toggle_goal({"pose": pose(4.0)})
+
+
+def test_localization_turn_excludes_manual_loop_start(tmp_path):
+    api, nav, sent = fixture(tmp_path)
+    key = api._active()
+    api._entry(key)["bags"]["Loop 1"] = {
+        "events": [
+            {"at": 0.0, "type": "move", "direction": "forward", "speed": 0.2},
+            {"at": 0.2, "type": "stop"},
+        ],
+        "seconds": 0.2,
+    }
+    nav._localization_turn_active = True
+    with pytest.raises(RecordedLoopError) as error:
+        api.start({"name": "Loop 1", "policy": "WAIT"})
+    assert error.value.code == "LOCALIZATION_TURN_ACTIVE"
+    assert not api.playing and not sent

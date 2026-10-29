@@ -423,6 +423,7 @@ class LoopSessionApi:
                 and self._connection_generation == connection
                 and self._mode() == "MANUAL"
                 and self.navigation.motion_safety_context() == context
+                and not getattr(self.navigation, "_localization_turn_active", False)
             )
         try:
             reply = await asyncio.wait_for(
@@ -794,6 +795,11 @@ class LoopSessionApi:
                 "LOOP_BUSY", "Stop legacy recorded playback before session Loop")
         if self._record is not None:
             raise RecordedLoopError("RECORDING_ACTIVE", "Save or Delete the recording first")
+        if getattr(self.navigation, "_localization_turn_active", False):
+            raise RecordedLoopError(
+                "LOCALIZATION_TURN_ACTIVE",
+                "Automatic Initial Pose rotation must finish before starting a Loop",
+            )
         key = self._active()
         entry = self._entry(key)
         mode = self._mode()
