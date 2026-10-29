@@ -293,6 +293,9 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
                 "height": 1,
                 "data": [[0, 1]],
                 "navigation_mode": "mapping",
+                "source": "slam_toolbox",
+                "map_verified": True,
+                "mapping_state": "MAPPING_ACTIVE",
             },
             get_live_pose=lambda: {"x": 0.25, "y": 0.5, "yaw": 0.4},
             save_map=lambda payload, name: {"map_name": "test_map"},
@@ -464,29 +467,35 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             payload["initial_pose"]["yaw_degrees"],
         )
 
-    async def test_current_mapping_falls_back_to_origin_without_live_pose(self):
+    async def test_current_mapping_requires_verified_pose_not_origin(self):
         self.api._get_live_pose = lambda: None
-        result = await self.api.switch_mode(
-            {"mode": "DRIVING", "source": "current"}, user="tester",
-        )
-        self.assertEqual("DRIVING", result["navigation_mode"])
-        payload, _user = self.map_api.activate_calls[-1]
-        self.assertEqual(
-            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
-            payload["initial_pose"],
-        )
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_mode(
+                {"mode": "DRIVING", "source": "current"}, user="tester",
+            )
+        self.assertEqual("INITIAL_POSE_UNAVAILABLE", raised.exception.error_code)
+        self.assertEqual([], self.map_api.activate_calls)
 
-    async def test_current_mapping_falls_back_from_invalid_pose(self):
+    async def test_current_mapping_rejects_invalid_pose_not_origin(self):
         self.api._get_live_pose = lambda: {"x": float("nan"), "y": 0, "yaw": 0}
-        result = await self.api.switch_mode(
-            {"mode": "DRIVING", "source": "current"}, user="tester",
-        )
-        self.assertEqual("DRIVING", result["navigation_mode"])
-        payload, _user = self.map_api.activate_calls[-1]
-        self.assertEqual(
-            {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0},
-            payload["initial_pose"],
-        )
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_mode(
+                {"mode": "DRIVING", "source": "current"}, user="tester",
+            )
+        self.assertEqual("INITIAL_POSE_UNAVAILABLE", raised.exception.error_code)
+        self.assertEqual([], self.map_api.activate_calls)
+
+    async def test_current_driving_refuses_unverified_mapping_health(self):
+        self.api._get_live_map = lambda: {
+            "navigation_mode": "mapping",
+            "source": "slam_toolbox",
+            "map_verified": True,
+            "mapping_state": "MAPPING_DEGRADED",
+        }
+        with self.assertRaises(NavigationControlError) as raised:
+            await self.api.switch_mode({"mode": "DRIVING", "source": "current"})
+        self.assertEqual("MAPPING_NOT_READY", raised.exception.error_code)
+        self.assertEqual([], self.map_api.activate_calls)
 
     async def test_goal_only_plans_until_explicit_start(self):
         await self.driving_ready()
