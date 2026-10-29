@@ -503,9 +503,12 @@ class RobotCommandClient:
                 if (not isinstance(pulse_id, str) or not 1 <= len(pulse_id) <= 64
                     or type(generation) is not int or generation < 1):
                     raise RuntimeError("Manual Loop command identity invalid")
+                sequence = message.get("pulse_sequence")
+                if type(sequence) is not int or sequence <= 0:
+                    raise RuntimeError("Manual Loop pulse sequence invalid")
                 manual_pulse = await asyncio.to_thread(
                     self._run_manual_loop_pulse, message, pulse_id,
-                    generation, duration,
+                    generation, sequence, duration,
                 )
 
             elif command_type == "initial_pose_turn":
@@ -764,7 +767,8 @@ class RobotCommandClient:
         )
 
     def _run_manual_loop_pulse(
-        self, message: dict, pulse_id: str, generation: int, duration_ms: int,
+        self, message: dict, pulse_id: str, generation: int,
+        sequence: int, duration_ms: int,
     ) -> dict:
         """Pi-owned exposure budget, ACKed by Pico. Never exceed its watchdog.
 
@@ -786,6 +790,12 @@ class RobotCommandClient:
                 if cache[identity]["record"] != record:
                     raise RuntimeError("Manual Loop pulse identity changed")
                 return dict(cache[identity]["result"])
+            latest = getattr(self, "_manual_loop_latest", {})
+            session = (self._safety_session, generation)
+            if sequence <= latest.get(session, 0):
+                raise RuntimeError("Stale or replayed Manual Loop pulse sequence")
+            if any(key[0] == self._safety_session and key[1] > generation for key in latest):
+                raise RuntimeError("Stale Manual Loop replay generation")
             start = None
             error = None
             elapsed_ms = 0
@@ -816,6 +826,10 @@ class RobotCommandClient:
                 "stopped": True,
             }
             cache[identity] = {"record": record, "result": result}
+            latest[session] = sequence
+            self._manual_loop_latest = latest
+            while len(latest) > 24:
+                latest.pop(next(iter(latest)))
             while len(cache) > 128:
                 cache.pop(next(iter(cache)))
             return dict(result)

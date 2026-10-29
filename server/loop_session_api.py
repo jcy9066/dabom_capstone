@@ -483,7 +483,11 @@ class LoopSessionApi:
     async def _manual_idle_wait(self, duration_ms: float) -> None:
         deadline = time.monotonic() + duration_ms / 1000.0
         while not self._cancelled:
+            wait_started = time.monotonic()
             await self._wait_connection_resume()
+            resume_delay = time.monotonic() - wait_started
+            if resume_delay > 0.15:
+                deadline += resume_delay
             left = deadline - time.monotonic()
             if left <= 0:
                 return
@@ -539,8 +543,10 @@ class LoopSessionApi:
                     )
                     try:
                         applied_ms = await self._manual_send({
-                            "pulse_id": pulse_id, "direction": direction,
-                            "speed": segment["speed"], "duration_ms": duration,
+                            "pulse_id": pulse_id,
+                            "pulse_sequence": self._manual_pulse_index,
+                            "direction": direction, "speed": segment["speed"],
+                            "duration_ms": duration,
                         })
                     except RuntimeError as exc:
                         if str(exc) == "MANUAL_PULSE_ACK_UNCERTAIN":
