@@ -603,6 +603,8 @@ let navigationMapSuppressedRevision = null;
 let navigationVisualizationSocket = null;
 let navigationVisualizationSocketOpen = false;
 let navigationVisualizationReconnectTimer = null;
+let navigationEventSeq = 0;
+let navigationResyncRequired = false;
 let navigationVisualizationReconnectDelayMs = 500;
 let navigationGlobalPathStaleTimer = null;
 let navigationGlobalPathRunKey = null;
@@ -734,6 +736,13 @@ function applyNavigationMapPayload(map, revision, mapChanged = true) {
 
 function applyNavigationSnapshot(data) {
     if (!data?.ok) return;
+    if (data.session_id && data.session_id !== lidarState.sessionId) {
+        lidarState.map = null;
+        lidarState.pose = null;
+        clearNavigationScan();
+    }
+    if (Number.isSafeInteger(data.event_seq)) navigationEventSeq = data.event_seq;
+    navigationResyncRequired = false;
 
     if (data.status) {
         lidarState.status = data.status;
@@ -775,12 +784,40 @@ function applyNavigationSnapshot(data) {
     emitNavigationVisualizationState(Boolean(data.map_changed));
 }
 
+function requestNavigationStreamResync() {
+    navigationResyncRequired = true;
+    // Recovery must work while the WebSocket stays open.
+    if (navigationSnapshotInFlight) {
+        navigationSnapshotRefreshQueued = true;
+    } else {
+        void fetchNavigationSnapshot();
+    }
+}
+
 function applyNavigationStreamMessage(message) {
     if (!message || typeof message !== 'object') return;
 
     if (message.type === 'snapshot') {
         applyNavigationSnapshot(message.snapshot);
         return;
+    }
+    if (message.type === 'resync_required') {
+        requestNavigationStreamResync();
+        return;
+    }
+    if (navigationResyncRequired) return;
+    if (message.type !== 'reset' && lidarState.sessionId && message.session_id
+        && message.session_id !== lidarState.sessionId) {
+        requestNavigationStreamResync();
+        return;
+    }
+    if (Number.isSafeInteger(message.event_seq)) {
+        if (navigationEventSeq > 0 && message.event_seq !== navigationEventSeq + 1) {
+            if (message.event_seq <= navigationEventSeq) return;
+            requestNavigationStreamResync();
+            return;
+        }
+        navigationEventSeq = message.event_seq;
     }
 
     if (message.type === 'scan') {
@@ -907,6 +944,11 @@ async function fetchNavigationSnapshot() {
         if (!navigationVisualizationSocketOpen) {
             scheduleNavigationSnapshot(
                 refreshImmediately ? 0 : navigationSnapshotDelayMs(),
+            );
+        } else if (navigationResyncRequired || refreshImmediately) {
+            navigationSnapshotTimer = window.setTimeout(
+                fetchNavigationSnapshot,
+                navigationResyncRequired ? 1000 : 0,
             );
         }
     }
