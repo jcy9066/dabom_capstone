@@ -15,6 +15,7 @@ def mapping_health_state(
     map_updated_at: float | None,
     now: float,
     process_running: bool | None = None,
+    odometry_continuity_lost: bool = False,
 ) -> dict[str, Any]:
     def age(at):
         if at is None:
@@ -53,7 +54,10 @@ def mapping_health_state(
     map_current = bool(verified and map_age is not None and map_age <= 5.0)
     # The presence of a process or a Preview does not prove SLAM readiness.
     ready = scan_ok and odom_ok and tf_ok and lifecycle == "active" and map_current
-    if process_running is False:
+    if odometry_continuity_lost:
+        state = "MAPPING_ERROR"
+        ready = False
+    elif process_running is False:
         state = "MAPPING_ERROR" if not verified else "MAPPING_DEGRADED"
         ready = False
     elif ready:
@@ -73,6 +77,7 @@ def mapping_health_state(
         "mapping_state": state,
         "mapping_health": {
             "process_running": process_running,
+            "odometry_continuity_lost": odometry_continuity_lost,
             "probe_fresh": fresh_probe,
             "scan": {"ready": scan_ok, "age_sec": scan_age},
             "odom": {"ready": odom_ok, "age_sec": odom_age},

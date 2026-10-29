@@ -491,6 +491,7 @@ navigation_state = {
     "session_started_at": time.time(),
     "mapping_probe": None,
     "mapping_probe_updated_at": None,
+    "odometry_continuity_lost": False,
     "global_path": [],
     "global_path_updated_at": None,
     "costmap": None,
@@ -1110,6 +1111,7 @@ def clear_navigation_visualization_state():
         navigation_state["session_started_at"] = time.time()
         navigation_state["mapping_probe"] = None
         navigation_state["mapping_probe_updated_at"] = None
+        navigation_state["odometry_continuity_lost"] = False
         navigation_state["global_path"] = []
         navigation_state["global_path_updated_at"] = None
         navigation_state["costmap"] = None
@@ -4119,6 +4121,7 @@ def build_mapping_health(now=None, process_running=None):
         map_updated_at=navigation_state.get("map_updated_at"),
         now=now,
         process_running=process_running,
+        odometry_continuity_lost=navigation_state.get("odometry_continuity_lost", False),
     )
 
 
@@ -5808,6 +5811,16 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                     continue
 
                 with state_lock:
+                    previous_pico_ms = encoder_state.get("pico_timestamp_ms")
+                    current_pico_ms = received_encoder["pico_timestamp_ms"]
+                    # Pico uptime decreases only after a reboot/reset.
+                    # An old map-frame odometry trajectory cannot be
+                    # safely concatenated across an unknown encoder origin.
+                    if (navigation_state.get("mode") == "mapping"
+                        and encoder_state.get("updated_at") is not None
+                        and isinstance(previous_pico_ms, int)
+                        and current_pico_ms + 50 < previous_pico_ms):
+                        navigation_state["odometry_continuity_lost"] = True
                     if (encoder_state.get("updated_at") is not None
                         and received_encoder["sequence"] <= encoder_state["sequence"]):
                         # Ignore stale/duplicate Pi packets for visualization
