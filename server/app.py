@@ -870,6 +870,21 @@ class RobotConnectionManager:
                 except Exception:
                     # Observability never changes the physical ACK contract.
                     pass
+            if command.get("type") == "manual_loop_query":
+                # A receipt query is read-only. The queried pulse may have
+                # completed in an older STOP safety epoch. Its cached identity
+                # is checked on Pi; do not require current epoch == old epoch.
+                matched = (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                )
+                result = ack.get("manual_loop_pulse") if matched else None
+                return {
+                    "ok": matched and isinstance(result, dict),
+                    "delivered": matched and isinstance(result, dict),
+                    "manual_loop_pulse": result if isinstance(result, dict) else None,
+                }
             if command.get("type") == "manual_loop_pulse":
                 # The Pi has already issued local STOP when this ACK arrives.
                 # Report only Pi-confirmed exposure, never an ACK-roundtrip age.
@@ -6137,7 +6152,7 @@ async def send_robot_command(
         )
     # Initial Pose turns are internal-only. The public robot command endpoint
     # must never accept a custom motor pulse, even with a forged safety token.
-    if command_type in {"initial_pose_turn", "manual_loop_pulse"}:
+    if command_type in {"initial_pose_turn", "manual_loop_pulse", "manual_loop_query"}:
         return JSONResponse(
             {"ok": False, "delivered": False,
              "error": "Internal timed motor commands are not exposed to dashboard clients"},

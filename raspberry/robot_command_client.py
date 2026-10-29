@@ -511,6 +511,27 @@ class RobotCommandClient:
                     generation, sequence, duration,
                 )
 
+            elif command_type == "manual_loop_query":
+                # Read-only receipt: may query a previous safety epoch after
+                # an explicit STOP, but never authorizes a new MOVE.
+                with self.motor._command_lock:
+                    pulse_id = message.get("pulse_id")
+                    generation = message.get("replay_generation")
+                    epoch = message.get("pulse_safety_epoch")
+                    session = message.get("safety_session")
+                    if (not isinstance(pulse_id, str)
+                        or type(generation) is not int
+                        or type(epoch) is not int
+                        or session != self._safety_session):
+                        raise RuntimeError("Invalid manual Loop receipt identity")
+                    identity = (session, epoch, generation, pulse_id)
+                    receipt = getattr(self, "_manual_loop_recent", {}).get(identity)
+                    if not isinstance(receipt, dict):
+                        raise RuntimeError("Manual Loop pulse receipt missing")
+                    manual_pulse = dict(receipt["result"])
+                    if manual_pulse.get("stopped") is not True:
+                        raise RuntimeError("Manual Loop STOP unconfirmed")
+
             elif command_type == "initial_pose_turn":
                 self._require_current_motion_safety(message)
                 if self.current_mode != "manual" or self.navigation_mode != "mapping":
@@ -757,7 +778,8 @@ class RobotCommandClient:
                     **({"recorded_drive": recorded_drive}
                        if command_type == "auto_drive" and message.get("source") == "recorded_loop" else {}),
                     **({"manual_loop_pulse": manual_pulse}
-                       if command_type == "manual_loop_pulse" and manual_pulse is not None else {}),
+                       if command_type in {"manual_loop_pulse", "manual_loop_query"}
+                       and manual_pulse is not None else {}),
                     "motor_connected": (
                         self.motor.connected
                     ),
