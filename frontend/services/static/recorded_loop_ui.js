@@ -145,6 +145,8 @@ function render() {
   $("loop-stop").disabled = busy || !playing;
   $("loop-status").textContent = (latest.status || "IDLE")
     + (latest.lap ? " / Lap " + latest.lap : "")
+    + (latest.ack_reconciliation_required
+        ? " / Pi 펄스 ACK 복구 확인 필요" : "")
     + (latest.error ? " / " + latest.error : "");
   obstacleToggle?.sync(policy === "REPLAN" ? "DRIVING" : "MAPPING");
   enhanceControls();
