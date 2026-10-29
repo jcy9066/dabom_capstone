@@ -52,8 +52,10 @@ def test_amcl_initialization_never_accepts_single_echo():
     body = ros.split("def _wait_for_amcl(", 1)[1].split("def _publish_initial_pose(", 1)[0]
     assert "minimum_samples=1" not in body
     assert "if stable:" in body
-    assert "set_initial_pose: false" in config
-    assert "set_initial_pose: true" not in config
+    # Match YAML keys, not substrings of always_reset_initial_pose.
+    lines = [line.strip() for line in config.splitlines()]
+    assert "set_initial_pose: false" in lines
+    assert "set_initial_pose: true" not in lines
 
 
 def test_amcl_map_fingerprint_uses_occupancy_not_only_dimensions(tmp_path):
