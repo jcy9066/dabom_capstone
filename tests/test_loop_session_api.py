@@ -337,3 +337,26 @@ def test_localization_turn_excludes_manual_loop_start(tmp_path):
         api.start({"name": "Loop 1", "policy": "WAIT"})
     assert error.value.code == "LOCALIZATION_TURN_ACTIVE"
     assert not api.playing and not sent
+
+
+def test_manual_owner_is_not_released_until_final_stop(tmp_path):
+    api, nav, sent = fixture(tmp_path)
+    observed = []
+
+    async def immediate_failure(*_args):
+        raise RuntimeError("injected replay failure")
+
+    async def check_final_stop():
+        observed.append(nav._loop_session_owner is asyncio.current_task())
+
+    async def scenario():
+        api._manual_bag = immediate_failure
+        api._verified_stop = check_final_stop
+        task = asyncio.create_task(api._run(api._active(), "MANUAL", [], None))
+        nav._loop_session_owner = task
+        await task
+
+    asyncio.run(scenario())
+    assert observed == [True]
+    assert nav._loop_session_owner is None
+    assert api._status == "FAILED"

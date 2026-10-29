@@ -771,8 +771,6 @@ class LoopSessionApi:
                             "LOOP_AUTO_ABORT_FAILED", automatic=True, force=True)
                     except Exception:
                         pass
-            if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
-                self.navigation._loop_session_owner = None
             if kind == "MANUAL":
                 try:
                     await self._verified_stop()
@@ -784,6 +782,13 @@ class LoopSessionApi:
                             "LOOP_MANUAL_STOP_NOT_CONFIRMED", automatic=True, force=True)
                     except Exception:
                         pass
+            # Release the exclusive motor owner only AFTER the final physical
+            # STOP proof or requested E-STOP. Releasing earlier would let
+            # another Goal race the still-moving manual replay.
+            if getattr(self.navigation, "_loop_session_owner", None) is asyncio.current_task():
+                self.navigation._loop_session_owner = None
+            self._requires_resume = False
+            self._resume_event.clear()
 
     def start(self, data: dict) -> dict:
         self._idle()
