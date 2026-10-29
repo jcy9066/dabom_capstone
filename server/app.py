@@ -6135,6 +6135,18 @@ async def send_robot_command(
              "error": "Internal timed motor commands are not exposed to dashboard clients"},
             status_code=403,
         )
+    # The Loop worker drives via the internal ACK transport, not this public
+    # endpoint. Do not permit Dashboard D-pad/auto_drive to seize motors
+    # while a Loop owns them, including during its final STOP proof.
+    if (robot_id == SERVER_ROBOT_ID
+        and command_type in {"move", "auto_drive"}
+        and not nav2_dry_run
+        and loop_session_api.playing):
+        return JSONResponse(
+            {"ok": False, "delivered": False,
+             "error": "LOOP_ACTIVE: Stop the active Loop before manual driving"},
+            status_code=409,
+        )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
     motion_context = None
     if controlled_motion:
