@@ -42,3 +42,14 @@ def test_stationary_one_sample_still_checks_covariance():
     assert not stable_amcl_observations([sample], initial)
     sample["yaw_variance"] = math.radians(50) ** 2
     assert not stable_amcl_observations([sample], initial, minimum_samples=1, minimum_span=0.0)
+
+def test_amcl_initialization_never_accepts_single_echo():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    ros = (root / "server/navigation_ros_control.py").read_text()
+    config = (root / "navigation/ros/patrol_navigation/config/amcl.yaml").read_text()
+    body = ros.split("def _wait_for_amcl(", 1)[1].split("def _publish_initial_pose(", 1)[0]
+    assert "minimum_samples=1" not in body
+    assert "if stable:" in body
+    assert "set_initial_pose: false" in config
+    assert "set_initial_pose: true" not in config

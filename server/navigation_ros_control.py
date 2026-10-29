@@ -1309,19 +1309,13 @@ class NavigationRosControl:
                         and item["at"] >= self._amcl_initial_pose_after
                     ]
                     stable = stable_amcl_observations(recent, initial_pose)
-                    # A stationary AMCL may publish once and wait for movement.
-                    # The fallback still needs a new, covariance-checked
-                    # post-initialpose estimate near the requested pose.
-                    single = bool(recent) and stable_amcl_observations(
-                        recent[-1:], initial_pose,
-                        minimum_samples=1, minimum_span=0.0,
-                    )
-                    if stable or single:
+                    # A single AMCL echo cannot prove localization.
+                    if stable:
                         return {
                             "x": self._amcl.x,
                             "y": self._amcl.y,
                             "yaw": self._amcl.yaw,
-                            "stable_samples": 3 if stable else 1,
+                            "stable_samples": len(recent),
                         }
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1716,6 +1710,11 @@ class NavigationRosControl:
             and self._map.origin_y is not None
             and math.isclose(self._map.origin_x, selected_map.origin_x, rel_tol=0.0, abs_tol=1e-5)
             and math.isclose(self._map.origin_y, selected_map.origin_y, rel_tol=0.0, abs_tol=1e-5)
+            and self._map.origin_yaw is not None
+            and abs(math.atan2(
+                math.sin(self._map.origin_yaw - selected_map.origin_yaw),
+                math.cos(self._map.origin_yaw - selected_map.origin_yaw),
+            )) <= 1e-5
         )
 
     def _amcl_matches(self, initial_pose: dict[str, float]) -> bool:

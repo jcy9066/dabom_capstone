@@ -59,13 +59,6 @@ amcl:
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
 
-    # 현재 검증용 초기 위치
-    # 지도 생성 시작 위치와 동일한 위치에 로봇이 있다고 가정한다.
-    set_initial_pose: true
-    always_reset_initial_pose: false
-
-    initial_pose:
-      x: 0.0
-      y: 0.0
-      z: 0.0
-      yaw: 0.0
+    # No arbitrary startup origin; /initialpose must be explicitly verified.
+    set_initial_pose: false
+    always_reset_initial_pose: true
