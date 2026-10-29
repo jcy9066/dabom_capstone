@@ -1,6 +1,7 @@
 import ast
 import importlib
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -42,12 +43,20 @@ def runtime_env_keys() -> set[str]:
     )
     shell_env_name = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-    for path in ROOT_DIR.glob("**/*.sh"):
+    tracked_shells = subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "*.sh"], cwd=ROOT_DIR
+    ).decode("utf-8")
+    for relative in tracked_shells.split("\0"):
+        if not relative:
+            continue
+        path = ROOT_DIR / relative
+        if not path.is_file():
+            continue
         source = path.read_text(encoding="utf-8-sig")
         keys.update(required_shell_env.findall(source))
         keys.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON"}
+            - {"XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON", "PYTHON", "ODOM_DISCOVERY_PENDING"}
         )
 
         # Root runtime launchers keep required .env keys in a shell array and

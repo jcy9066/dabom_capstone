@@ -330,6 +330,35 @@
 }
 
 
+
+/* Shared DrawerToggle right-edge orientation: mirror of --left. */
+.dashboard-drawer-toggle--right {
+    width: 15.4px;
+    min-height: 118px;
+}
+.dashboard-drawer-toggle--right::before {
+    top: 50%;
+    right: 0;
+    width: 13px;
+    height: 66px;
+    transform: translateY(-50%);
+    border-right: 0;
+    border-radius: 7px 0 0 7px;
+}
+.dashboard-drawer-toggle--right .dashboard-drawer-toggle-icon {
+    top: 50%;
+    right: 3px;
+    transform: translateY(-50%);
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+}
+.dashboard-drawer-toggle--right[aria-expanded="true"] .dashboard-drawer-toggle-icon {
+    border-left: 5px solid currentColor;
+}
+.dashboard-drawer-toggle--right[aria-expanded="false"] .dashboard-drawer-toggle-icon {
+    border-right: 5px solid currentColor;
+}
+
 /* Shared Mapping / Driving toggle, aligned with the existing Auto / Manual switch language. */
 .dashboard-navigation-mode-group,
 .viewer-navigation-mode-controls {

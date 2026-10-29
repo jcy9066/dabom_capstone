@@ -60,7 +60,7 @@
         });
     }
 
-    controls.mountNavigationMode = function mountNavigationMode(root, handlers = {}) {
+    controls.mountNavigationMode = function mountNavigationMode(root, handlers = {}, settings = {}) {
         if (!root) return null;
         root.dataset.dashboardComponent = 'navigation-mode-control';
 
@@ -117,10 +117,27 @@
         };
 
         render(root, controller);
+        if (settings.isolated === true) {
+            controller.mappingLabel.textContent = settings.labels?.MAPPING || 'Wait';
+            controller.drivingLabel.textContent = settings.labels?.DRIVING || 'Replan';
+            // An isolated obstacle switch must not receive robot navigation
+            // mode broadcasts or overwrite the global navigation controller.
+            const sync = controller.sync;
+            controller.sync = function isolatedSync(value, options = {}) {
+                sync.call(this, value, options);
+                const replan = this.mode === 'DRIVING';
+                this.button?.setAttribute('role', 'switch');
+                this.button?.setAttribute('aria-checked', String(replan));
+                this.button?.setAttribute('aria-label',
+                    'Obstacle: ' + (replan ? this.drivingLabel.textContent
+                        : this.mappingLabel.textContent));
+            };
+        } else {
+            instances.push(controller);
+            controls.navigationMode = controller;
+        }
         root._dabomNavigationModeController = controller;
-        instances.push(controller);
-        controls.navigationMode = controller;
-        controller.sync('', { pending: false });
+        controller.sync(settings.isolated === true ? 'MAPPING' : '', { pending: false });
         return controller;
     };
 

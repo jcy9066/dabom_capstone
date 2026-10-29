@@ -435,6 +435,7 @@ class RobotCommandClient:
         ok = True
         error = None
         encoder_sequence = None
+        recorded_drive = None
 
         try:
             if command_type == "move":
@@ -461,13 +462,15 @@ class RobotCommandClient:
                         "자율주행 명령을 거부했습니다."
                     )
 
-                await asyncio.to_thread(
+                recorded_drive = await asyncio.to_thread(
                     self._run_guarded_motor_motion,
                     message,
-                    self.motor.drive,
+                    self.motor.drive_recorded if message.get("source") == "recorded_loop" else self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
-                    *([True] if message.get("rear_blind_limited") is True else []),
+                    message.get("rear_blind_limited") is True,
+                    *((message.get("replay_command_id"), message.get("replay_duration"))
+                      if message.get("source") == "recorded_loop" else (False,)),
                 )
 
             elif command_type == "stop":
@@ -680,6 +683,8 @@ class RobotCommandClient:
                     "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
                     "motion": self.motor.current_motion,
+                    **({"recorded_drive": recorded_drive}
+                       if command_type == "auto_drive" and message.get("source") == "recorded_loop" else {}),
                     "motor_connected": (
                         self.motor.connected
                     ),
@@ -688,13 +693,14 @@ class RobotCommandClient:
             )
         )
 
-    def _run_guarded_motor_motion(self, message: dict, operation, *args) -> None:
+    def _run_guarded_motor_motion(self, message: dict, operation, *args):
         # Share the actual MotorController's UART command lock.
         # A STOP and a stale motion command cannot overtake each other.
         with self.motor._command_lock:
             self._require_current_motion_safety(message)
-            operation(*args)
+            result = operation(*args)
             self._require_current_motion_safety(message)
+            return result
 
     def _require_current_motion_safety(self, message: dict) -> None:
         with self._safety_lock:

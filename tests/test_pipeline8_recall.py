@@ -86,8 +86,8 @@ def test_x3d_scene_danger_overlay_marks_scene_not_people():
 
     recognizer.draw_scene_overlay(frame, result)
 
-    assert tuple(frame[2, 2]) == (0, 0, 255)
-    assert np.count_nonzero(frame) > 0
+    # Scene alerts are emitted separately; preview pixels stay unchanged.
+    assert np.count_nonzero(frame) == 0
 
 
 def test_x3d_scene_normal_overlay_has_no_red_danger_border():
@@ -150,8 +150,8 @@ def test_x3d_warming_overlay_is_visibly_distinct():
         recognizer._warming_result(1.5),
     )
 
-    assert np.count_nonzero(frame) > 0
-    assert tuple(frame[2, 2]) != (0, 0, 255)
+    # Warming state must not be drawn into camera pixels.
+    assert np.count_nonzero(frame) == 0
 
 
 class _TimestampDetector:

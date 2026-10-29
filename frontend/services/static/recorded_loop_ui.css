@@ -1,0 +1,318 @@
+/* LOOP viewer right drawer. Reuses shared DrawerToggle and ControlButton. */
+.loop-map-radio {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #cbd5e1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.loop-map-radio > span {
+  display: inline-block;
+  flex: 0 0 auto;
+  color: #cbd5e1;
+  opacity: 1;
+  white-space: nowrap;
+}
+.loop-map-radio input {
+  appearance: none; flex: 0 0 13px; width: 13px; height: 13px; margin: 0; border-radius: 50%;
+  border: 2px solid #94a3b8; background: transparent; cursor: pointer;
+}
+.loop-map-radio input:checked {
+  border-color: #22d3ee; background: #22d3ee; box-shadow: inset 0 0 0 2px #0f172a;
+}
+/* Match the left LAYERS drawer: one uninterrupted right-hand panel. */
+.loop-side-drawer {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 70;
+  display: flex;
+  align-items: stretch;
+  transform: translateY(-50%);
+  opacity: 1;
+  pointer-events: auto;
+  height: min(580px, calc(100% - 104px));
+  min-height: 115px;
+  max-height: calc(100% - 32px);
+}
+.minimap-overlay:not(.expanded):not(:fullscreen):not(:-webkit-full-screen) .loop-side-drawer {
+  visibility: hidden;
+  pointer-events: none;
+}
+.minimap-overlay.expanded .loop-side-drawer,
+.minimap-overlay:fullscreen .loop-side-drawer,
+.minimap-overlay:-webkit-full-screen .loop-side-drawer {
+  visibility: visible;
+  pointer-events: auto;
+}
+.loop-side-drawer-handle {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 15.4px;
+  align-self: stretch;
+  min-height: 118px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+/* Shared drawer CSS hides expanded handles. The LOOP edge handle must remain
+   visible at both states, otherwise the user cannot locate the close control. */
+.loop-side-drawer .loop-side-drawer-handle[aria-expanded="true"],
+.loop-side-drawer .loop-side-drawer-handle[aria-expanded="false"] {
+  opacity: 1;
+}
+.loop-side-drawer .loop-side-drawer-handle::before {
+  background: rgba(8, 15, 29, .92);
+  border-color: rgba(34, 211, 238, .42);
+}
+.loop-side-drawer-content {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(385px, 82vw);
+  max-width: min(385px, 82vw);
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 1px solid rgba(34, 211, 238, .32);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  background: rgba(8, 15, 29, .96);
+  color: #cbd5e1;
+  opacity: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  pointer-events: auto;
+  transition: width .2s ease, max-width .2s ease, opacity .16s ease,
+              border-width .2s ease, padding .2s ease;
+}
+.loop-side-drawer-content::-webkit-scrollbar,
+.loop-goal-list::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.loop-side-drawer[data-open="false"] .loop-side-drawer-content {
+  width: 0;
+  max-width: 0;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.loop-side-drawer[data-open="true"] .loop-side-drawer-content {
+  width: min(385px, 82vw);
+  max-width: min(385px, 82vw);
+  opacity: 1;
+  pointer-events: auto;
+}
+.loop-drawer-header {
+  flex: 0 0 auto;
+  padding: 12px 13px 9px;
+  color: #67e8f9;
+  font: 700 10px var(--mono, monospace);
+  letter-spacing: .5px;
+}
+.loop-modal-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 13px 12px;
+  font-size: 10px;
+  color: #cbd5e1;
+}
+.loop-map-status-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+}
+.loop-map-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.loop-modal-info strong {
+  color: #dbeafe;
+  font-weight: 700;
+  padding-left: 5px;
+}
+.loop-modal-status {
+  min-width: 0;
+  max-width: 150px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: right;
+  color: #dbeafe;
+  overflow-wrap: anywhere;
+}
+.loop-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 15px;
+  font-size: 10px;
+  color: #94a3b8;
+}
+/* These are sections of one panel, not individually framed boxes. */
+.loop-modal-section {
+  box-sizing: border-box;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0 12px;
+  padding: 12px 1px 13px;
+  border: 0;
+  border-top: 1px solid rgba(34, 211, 238, .20);
+  border-radius: 0;
+  background: transparent;
+}
+.loop-modal-section h3 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: 700 10px var(--mono, monospace);
+  letter-spacing: .3px;
+  color: #67e8f9;
+}
+.loop-modal-section h3 small {
+  font-size: 9px;
+  color: #94a3b8;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+.loop-modal-hint,
+.loop-modal-subtitle,
+.loop-modal-feedback {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+.loop-goal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 25px;
+  max-height: 152px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  color: #94a3b8;
+  font-size: 10px;
+}
+.loop-goal-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border: 1px solid rgba(34, 211, 238, .18);
+  border-radius: 5px;
+  background: rgba(15, 23, 42, .55);
+}
+.loop-goal-row .loop-goal-label { flex: 1; font-weight: 700; }
+.loop-goal-row .dashboard-control-button { min-height: 24px; }
+.loop-modal-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.loop-modal-buttons .dashboard-control-button { min-width: 53px; }
+.loop-controls-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+.loop-modal-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.loop-modal-subsection + .loop-modal-subsection {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.loop-modal-subtitle {
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+.loop-obstacle-toggle-mount { display: flex; align-items: center; min-width: 0; }
+.loop-obstacle-toggle-mount .navigation-mode-toggle {
+  min-height: 27px;
+  gap: 3px;
+  color: #cbd5e1;
+}
+.loop-obstacle-toggle-mount .navigation-mode-toggle-track {
+  flex-basis: 44px;
+  width: 44px;
+  height: 25px;
+}
+.loop-obstacle-toggle-mount .navigation-mode-toggle-slider { height: 17px; }
+.loop-obstacle-toggle-mount .navigation-mode-toggle.driving .navigation-mode-toggle-slider {
+  left: calc(100% - 19px);
+}
+.loop-obstacle-toggle-mount .navigation-mode-toggle-label {
+  font-size: 9px;
+  color: #94a3b8;
+}
+.loop-obstacle-toggle-mount .navigation-mode-toggle-label.active {
+  color: #67e8f9;
+}
+#loop-bags {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(34, 211, 238, .25);
+  border-radius: 5px;
+  background: #0f172a;
+  color: #dbeafe;
+}
+#loop-bags[hidden] { display: none !important; }
+.loop-modal-footer {
+  display: block;
+  margin: 0 12px;
+  padding: 5px 1px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.loop-modal-feedback:empty { display: none; }
+@media (max-width: 480px) {
+  .loop-side-drawer-content,
+  .loop-side-drawer[data-open="true"] .loop-side-drawer-content {
+    width: min(385px, calc(100vw - 18px));
+    max-width: min(385px, calc(100vw - 18px));
+  }
+}
+.recorded-loop-viewer-status {
+  position: absolute; z-index: 20; top: 22%; left: 50%; transform: translateX(-50%);
+  padding: 9px 18px; border-radius: 8px; background: rgba(11,25,41,.92);
+  border: 1px solid rgba(242,189,98,.7); color: #f6d898;
+  font: 700 19px/1.35 "Noto Sans KR", sans-serif; text-align: center; pointer-events: none;
+}
+.recorded-loop-viewer-status[data-state="FAILED"] {
+  border-color: #f87171; color: #fecaca;
+}
+.recorded-loop-viewer-status[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .loop-side-drawer { transition: none; }
+}
+
+/* Author-level safeguard: UA [hidden] may lose to .loop-side-drawer-content display:flex.
+   Keep the right-edge handle outside the hidden subtree so it can reopen. */
+.loop-side-drawer-content[hidden] {
+  display: none !important;
+}

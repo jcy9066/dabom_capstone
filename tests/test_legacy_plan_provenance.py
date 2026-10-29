@@ -9,7 +9,7 @@ def test_unowned_ros_plan_is_not_dispatched_as_authorized_path():
     start = app.index('if event_type == "global_path":')
     end = app.index('if event_type == "costmap":', start)
     handling = app[start:end]
-    assert "navigation_control_api.note_nav2_replan_signal()" in handling
+    assert "navigation_control_api.note_nav2_replan_signal()" not in handling
     assert "navigation_control_api.note_replanned_path" not in handling
     nav = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
     assert "self._goal_motion_generation == generation" in nav

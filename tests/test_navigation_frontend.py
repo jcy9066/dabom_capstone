@@ -54,7 +54,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         auto_request = self.control.index("await requestDriveMode('AUTO', { announce: false })")
         goal_request = self.control.index("mutate('/api/navigation/control/goal', loopGoals")
         self.assertIn("loop_goals: loopGoals", self.control)
-        self.assertIn("data-lidar-interaction=\"set-loop\"", (
+        self.assertIn("id=\"loop-goal-toggle\"", (
             ROOT / "frontend/templates/index.html"
         ).read_text(encoding="utf-8"))
         self.assertLess(auto_request, goal_request)
@@ -540,7 +540,7 @@ class NavigationFrontendContractTests(unittest.TestCase):
         assert "return livePath" not in displayed
         assert "navigationGlobalPathRunKey === null) return;" in dashboard
         assert "if (navigationGlobalPathRunKey !== null" in dashboard
-        assert "if (!movingNow) trajectorySessionActive = false;" in viewer
+        assert "window.dabomLoopSessionState?.playing !== true" in viewer
         assert "replacing ? null : currentControlState?.active_goal" in viewer
 
     def test_goal_path_owner_decision_executes_with_node_when_available(self):

@@ -2037,3 +2037,142 @@ async function logout() {
         if (button) button.disabled = false;
     }
 }
+// Tracking list is initialized after the existing camera/status polling code.
+// Display only live tracker IDs, never model labels burned into video.
+const OBJECT_LIST_POLL_MS = 2000;
+let objectListTimer = null;
+let objectListController = null;
+
+function renderTrackedPeople(detections) {
+    const container = document.getElementById('detection-data');
+    if (!container) return;
+    container.querySelectorAll('.detection-tag').forEach(node => node.remove());
+    const ids = [...new Set((Array.isArray(detections) ? detections : [])
+        .filter(item => item && item.cls === 0 && Number.isInteger(item.id) && item.id >= 0)
+        .map(item => item.id))].sort((a, b) => a - b);
+    for (const id of ids) {
+        const tag = document.createElement('span');
+        tag.className = 'detection-tag';
+        tag.textContent = 'Person #' + id;
+        container.appendChild(tag);
+    }
+}
+
+function renderSceneAnalysisStatus(payload, fresh) {
+    const element = document.getElementById('scene-analysis-status');
+    if (!element) return;
+
+    const scene = payload?.scene;
+    if (payload?.model_error) {
+        element.textContent = '분석 오류';
+    } else if (!fresh || !scene) {
+        element.textContent = '분석 상태 확인 불가';
+    } else if (scene.status === 'warming_up') {
+        element.textContent = '분석 준비 중';
+    } else if (scene.status !== 'ok' || scene.available === false) {
+        element.textContent = '분석 오류';
+    } else {
+        element.textContent = scene.danger ? '위험 감지' : '분석 정상';
+    }
+}
+
+// Show the current scene danger as one live status row.
+function renderLiveSceneAlert(payload, resultFresh) {
+    const target = document.getElementById('alertBox');
+    if (!target) return;
+
+    const scene = payload?.scene;
+    const updatedAt = Number(scene?.updated_at);
+    const age = Date.now() / 1000 - updatedAt;
+    const sceneFresh = Number.isFinite(updatedAt)
+        && Number.isFinite(age) && age >= 0 && age <= 3;
+    const danger = resultFresh
+        && !payload?.model_error
+        && scene?.status === 'ok'
+        && scene?.available !== false
+        && sceneFresh
+        && scene?.danger === true;
+
+    let row = target.querySelector('[data-live-scene-alert]');
+    if (!danger) {
+        row?.remove();
+        return;
+    }
+
+    if (!row) {
+        row = document.createElement('div');
+        row.className = 'alert-entry alert-danger';
+        row.dataset.liveSceneAlert = 'true';
+
+        const time = document.createElement('span');
+        time.className = 'alert-time';
+        time.textContent = new Date().toLocaleTimeString('ko-KR', {
+            hour12: false
+        });
+
+        const message = document.createElement('span');
+        message.className = 'alert-message';
+
+        row.append(time, message);
+        target.prepend(row);
+    }
+
+    const score = Number(scene.score);
+    const scoreText = Number.isFinite(score)
+        ? ` (${Math.round(score * 100)}%)` : '';
+    row.querySelector('.alert-message').textContent =
+        `위험 행동 감지: ${scene.label || '위험 상황'}${scoreText}`;
+}
+
+async function refreshTrackedPeople() {
+    if (!isDashboardDocumentVisible()) return;
+    objectListController?.abort();
+    const controller = new AbortController();
+    objectListController = controller;
+    try {
+        const response = await fetch('/api/latest_result', { signal: controller.signal });
+        if (!response.ok) throw new Error('tracker request failed');
+        const payload = await response.json();
+        // A fetch can finish parsing after its signal was aborted.
+        if (controller !== objectListController || controller.signal.aborted
+            || !isDashboardDocumentVisible()) return;
+        const age = Date.now() / 1000 - Number(payload.processed_at);
+        const fresh = payload.ok !== false && payload.processed_at
+            && Number.isFinite(age) && age >= 0 && age <= 3;
+        renderTrackedPeople(fresh ? payload.detections : []);
+        renderSceneAnalysisStatus(payload, fresh);
+        renderLiveSceneAlert(payload, fresh);
+    } catch (error) {
+        if (controller === objectListController && !controller.signal.aborted
+            && isDashboardDocumentVisible() && error.name !== 'AbortError') {
+            renderTrackedPeople([]);
+            renderSceneAnalysisStatus(null, false);
+            renderLiveSceneAlert(null, false);
+        }
+    } finally {
+        if (objectListController === controller) objectListController = null;
+    }
+}
+
+function stopTrackedPeoplePoll() {
+    clearInterval(objectListTimer);
+    objectListTimer = null;
+    objectListController?.abort();
+    objectListController = null;
+    renderTrackedPeople([]);
+    renderSceneAnalysisStatus(null, false);
+    renderLiveSceneAlert(null, false);
+}
+function startTrackedPeoplePoll() {
+    if (!isDashboardDocumentVisible() || objectListTimer !== null) return;
+    refreshTrackedPeople();
+    objectListTimer = setInterval(refreshTrackedPeople, OBJECT_LIST_POLL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+    if (isDashboardDocumentVisible()) startTrackedPeoplePoll();
+    else stopTrackedPeoplePoll();
+});
+startTrackedPeoplePoll();
+
+// ===================================================
+// END TRACKED PEOPLE LIST

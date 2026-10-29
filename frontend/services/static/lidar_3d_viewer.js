@@ -1806,6 +1806,7 @@ if (root && canvas) {
 
     function rebuildGoals() {
         const loopGoals = currentControlState?.loop_goals || [];
+        const namedGoals = window.dabomLoopSessionState?.goals || [];
         const draftLoop = currentLoopDraft || [];
         const loopKey = points => points.map(goalKey).join('|');
         const nextKey = [
@@ -1813,6 +1814,7 @@ if (root && canvas) {
             goalKey(currentDraftGoal),
             loopKey(loopGoals),
             loopKey(draftLoop),
+            namedGoals.map(goal => goal.name + ':' + goalKey(goal.pose)).join('|'),
         ].join('::');
         if (nextKey === currentGoalKey) return;
         currentGoalKey = nextKey;
@@ -1835,6 +1837,28 @@ if (root && canvas) {
                 COLORS.goal,
             );
             if (active) goalRoot.add(active);
+        }
+        for (const item of namedGoals) {
+            const marker = createGoalMarker(item.pose, COLORS.goal);
+            if (!marker) continue;
+            const canvas = document.createElement('canvas');
+            canvas.width = 96;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.fillStyle = '#f8fafc';
+                ctx.font = 'bold 44px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(item.name, 48, 47);
+                const texture = new THREE.CanvasTexture(canvas);
+                const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: texture, transparent: true, depthTest: false,
+                }));
+                sprite.position.z = 0.15;
+                sprite.scale.set(0.23, 0.15, 1);
+                marker.add(sprite);
+            }
+            goalRoot.add(marker);
         }
         const draft = createGoalMarker(currentDraftGoal, COLORS.draftGoal, true);
         if (draft) goalRoot.add(draft);
@@ -1988,7 +2012,7 @@ if (root && canvas) {
             viewerExpanded
             && String(control?.navigation_mode || '').toUpperCase() === 'DRIVING'
             && control?.localization_ready
-            && control?.nav2_ready
+            && (control?.nav2_ready || document.getElementById('loop-goal-toggle')?.checked === true)
             && !control?.emergency_stop
             && control?.connected === true
         );
@@ -2057,7 +2081,8 @@ if (root && canvas) {
 
         // Preserve the recorded trace for review after completion but stop
         // appending stationary localization jitter after the Goal ends.
-        if (!movingNow) trajectorySessionActive = false;
+        if (!movingNow && window.dabomLoopSessionState?.playing !== true
+            && window.dabomLoopSessionState?.recording !== true) trajectorySessionActive = false;
         previousNavigationMode = mode;
         previousNavigationState = navState;
         scheduleControlOverflowLayout();
@@ -2265,6 +2290,16 @@ if (root && canvas) {
         scheduleControlOverflowLayout();
     }
 
+    document.addEventListener('dabom:loop-session-state', () => {
+        rebuildGoals();
+        const running = window.dabomLoopSessionState?.playing === true
+            || window.dabomLoopSessionState?.recording === true;
+        if (running && !trajectorySessionActive) {
+            resetTrajectory(currentVisualizationState?.pose, true);
+        } else if (!running && !['NAVIGATING', 'RESUMING'].includes(previousNavigationState)) {
+            trajectorySessionActive = false;
+        }
+    });
     root.querySelectorAll('[data-lidar-view]').forEach(button => {
         button.addEventListener('click', () => setViewMode(button.dataset.lidarView));
     });

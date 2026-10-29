@@ -21,6 +21,8 @@ def test_nonzero_command_counter_does_not_arm_on_zero_or_invalid_twist():
     ros._last_nav_command_linear_x = None
     ros._last_nav_command_angular_z = None
     ros._rotation_command_since_at = None
+    ros._navigate_action_kind = "navigate_to_pose"
+    ros._navigation_state = "IDLE"
 
     ros._on_nav_command(_twist(0.0, 0.0))
     assert ros._nonzero_nav_command_sequence == 0

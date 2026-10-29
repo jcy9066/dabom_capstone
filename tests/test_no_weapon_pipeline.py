@@ -6,7 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_pipeline_8_does_not_load_weapon_model():
     factory = (ROOT / "perception/pipeline_factory.py").read_text(encoding="utf-8")
-    section = factory.split('if choice == "8":', 1)[1].split('if choice == "9":', 1)[0]
+    section = factory.split("def create_pipeline(", 1)[1]
+    assert 'if choice != "8":' in section
     assert "RTMOPoseDetector" in section
     assert "SceneViolenceRecognizer" in section
     assert "WeaponDetector" not in section

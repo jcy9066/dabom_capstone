@@ -198,6 +198,15 @@ class NavigationControlApi:
         self._stop_confirmation_samples = 0
         self._stop_confirmation_episode = 0
         self._post_resume_motion_ready = False
+        # Opt-in, mutually exclusive recorded replay; inert in PR #93 flows.
+        self._recorded_motor_active = False
+        self._recorded_nav2_active = False
+        self._recorded_cancel_callback: Callable[[], Awaitable[dict[str, Any]]] | None = None
+        # Only the owner task may start or replace Nav2 Goals during a
+        # multi-Goal LOOP. External Goal requests remain cancellable via Stop.
+        self._loop_session_owner: asyncio.Task | None = None
+        self._loop_session_path: list[dict[str, float]] | None = None
+        self._loop_session_cancel_token = 0
         self._estop_generation = 0
         # Pi safety_epoch does not distinguish successive GPU Goals.
         self._goal_motion_generation = 0
@@ -552,6 +561,16 @@ class NavigationControlApi:
                 ) >= self._watchdog.stop_encoder_tick_threshold
             ):
                 if not self._encoder_stop_violation:
+                    # Record evidence without changing the stop decision.
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "encoder stop violation: baseline=%s current=%s "
+                        "elapsed=%.3f threshold=%s grace=%.3f sequence=%s",
+                        self._stop_encoder_ticks, ticks,
+                        received_at - self._stop_commanded_at,
+                        self._watchdog.stop_encoder_tick_threshold,
+                        self._watchdog.stop_encoder_grace_sec, sequence,
+                    )
                     self._encoder_stop_violation = True
                     self._estop_generation += 1
             # A delayed encoder sample after the cancel deadline is not success.
@@ -687,6 +706,184 @@ class NavigationControlApi:
             and response.get("delivered") is True
         )
 
+    def _recorded_idle_locked(self) -> bool:
+        """Recorded playback may start after a completed PR93 Set Goal.
+
+        Preserve the legacy SUCCEEDED state; do not overwrite it with READY.
+        Never treat an unfinished Goal, cancel, or pending STOP as idle.
+        """
+        return bool(
+            self._state["navigation_state"] in {"READY", "SUCCEEDED"}
+            and self._state["active_goal"] is None
+            and self._pending_nav_success is None
+            and self._pending_terminal_stop is None
+            and self._pending_goal_cancel is None
+        )
+
+    def activate_recorded_motion(self) -> None:
+        """Reserve motor ownership without mutating the normal Nav2 Goal state."""
+        with self._lock:
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay or Nav2 already owns motors")
+            self._assert_resume_safety_locked(require_estop=False)
+            if (not self._motor_output_enabled or not self._recorded_idle_locked()
+                or self._state["active_goal"] is not None or self._loop_goals
+                or self._pending_goal_cancel is not None or self._patrol_transition is not None
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_NOT_READY", "Recorded replay requires idle healthy Nav2")
+            if self._ros.navigation_status().get("state") in {"NAVIGATING", "RESUMING", "CANCELING"}:
+                raise NavigationControlError("NAV2_BUSY", "Stop all Nav2 actions first")
+            now = time.time()
+            if not self._motion_allowed_locked(now):
+                # A prior successfully completed PR93 Goal can have expired
+                # encoder STOP proof. Reserve ownership only; the Recorded
+                # executor MUST issue fresh Pi STOP and await stable encoder
+                # evidence before its first motor packet.
+                stale_success_only = (
+                    self._state["navigation_state"] == "SUCCEEDED"
+                    and self._stop_commanded_at is not None
+                    and self._sensor_recovery is None
+                    and self._patrol_transition_error is None
+                    and not self._encoder_stop_violation
+                    and not self._state["emergency_stop"]
+                    and self._recorded_idle_locked()
+                )
+                if not stale_success_only:
+                    raise NavigationControlError(
+                        "STOP_NOT_CONFIRMED", "Previous motor stop not confirmed")
+            self._goal_motion_generation += 1
+            self._recorded_motor_active = True
+
+    def set_recorded_cancel_callback(
+        self, callback: Callable[[], Awaitable[dict[str, Any]]]
+    ) -> None:
+        """Register the recorded-loop STOP handler after both APIs initialize."""
+        with self._lock:
+            self._recorded_cancel_callback = callback
+
+    async def _stop_recorded_before_transition(self) -> None:
+        """Physical STOP and complete ownership release precede mode changes."""
+        with self._lock:
+            active = self._recorded_motor_active or self._recorded_nav2_active
+            handler = self._recorded_cancel_callback
+        if handler is None:
+            if active:
+                raise NavigationControlError(
+                    "RECORDED_STOP_UNAVAILABLE", "Recorded Loop cannot be safely stopped")
+            return
+        # Even without a motor-owner bit, a replay Task may be STOPPING
+        # between a Nav2 return and its physical encoder proof. Always ask
+        # its idempotent stop handler before changing legacy control modes.
+        result = await handler()
+        with self._lock:
+            if (not isinstance(result, dict) or result.get("ok") is not True
+                or self._recorded_motor_active or self._recorded_nav2_active):
+                raise NavigationControlError(
+                    "RECORDED_STOP_UNCONFIRMED", "Stop Recorded Loop before changing controls")
+
+    def recorded_nav2_takeover(self) -> None:
+        """Transfer exclusive replay control to Nav2 after physical STOP."""
+        with self._lock:
+            if (not self._recorded_motor_active or self._recorded_nav2_active
+                or not self._stop_confirmed_locked(time.time())
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_HANDOFF_DENIED",
+                                             "Nav2 handoff requires confirmed STOP")
+            self._recorded_motor_active = False
+            self._recorded_nav2_active = True
+            self._goal_motion_generation += 1
+
+    def recorded_nav2_return(self) -> None:
+        with self._lock:
+            if (not self._recorded_nav2_active
+                or not self._stop_confirmed_locked(time.time())
+                or self._state["emergency_stop"]
+                or self._watchdog_issue_locked(time.time()) is not None):
+                raise NavigationControlError("RECORDED_REJOIN_DENIED",
+                                             "Nav2 return requires confirmed STOP")
+            self._recorded_nav2_active = False
+            self._recorded_motor_active = True
+            self._goal_motion_generation += 1
+
+    def suspend_recorded_motion(self) -> bool:
+        """Revoke any in-flight recorded motion generation immediately."""
+        with self._lock:
+            active = bool(self._recorded_motor_active or self._recorded_nav2_active)
+            self._recorded_motor_active = False
+            self._recorded_nav2_active = False
+            if active:
+                self._goal_motion_generation += 1
+            return active
+
+    def recorded_nav2_health(self) -> bool:
+        with self._lock:
+            return bool(
+                self._recorded_nav2_active
+                and self._robot_mode == "auto"
+                and self._pi_navigation_mode == "DRIVING"
+                and self._state["navigation_mode"] == "DRIVING"
+                and not self._state["emergency_stop"]
+                and self._recorded_idle_locked()
+                and self._state["active_goal"] is None
+                and not self._loop_goals
+                and self._watchdog_issue_locked(time.time()) is None
+                and self._connected and self._pi_estop_latched is False
+            )
+
+    def release_recorded_motion(self) -> None:
+        with self._lock:
+            self._recorded_motor_active = False
+            self._recorded_nav2_active = False
+            self._goal_motion_generation += 1
+
+    def recorded_safety_context(self) -> dict[str, Any] | None:
+        """Separate, opt-in auto-drive permit; existing motion API remains unchanged."""
+        with self._lock:
+            now = time.time()
+            if (not self._recorded_motor_active or not self._motor_output_enabled
+                or self._robot_mode != "auto" or self._pi_navigation_mode != "DRIVING"
+                or self._state["navigation_mode"] != "DRIVING"
+                or not self._recorded_idle_locked()
+                or self._state["emergency_stop"] or self._loop_goals
+                or self._state["active_goal"] is not None
+                or not self._connected or self._pi_estop_latched is not False
+                or not self._pi_safety_session or type(self._pi_safety_epoch) is not int
+                or self._age(now, self._pi_updated_at) > self._watchdog.pi_timeout_sec
+                or not self._motion_allowed_locked(now)
+                or self._watchdog_issue_locked(now) is not None):
+                return None
+            return {"safety_session": self._pi_safety_session,
+                    "safety_epoch": self._pi_safety_epoch,
+                    "goal_generation": self._goal_motion_generation,
+                    "estop_generation": self._estop_generation}
+
+    def recorded_motion_delivered(self, expected: dict[str, Any]) -> bool:
+        with self._lock:
+            if self.recorded_safety_context() != expected:
+                return False
+            self._stop_commanded_at = None
+            self._stop_encoder_ticks = None
+            self._stop_confirmation_after_sequence = None
+            self._post_resume_motion_ready = False
+            return True
+
+    def recorded_stop_begin(self) -> None:
+        with self._lock:
+            self._arm_pending_stop_locked()
+
+    def recorded_stop_acknowledged(self, accepted: bool) -> None:
+        with self._lock:
+            if accepted and not self._state["emergency_stop"]:
+                self._stop_confirmation_after_sequence = self._encoder_sequence
+                self._stop_confirmation_ticks = None
+                self._stop_confirmation_started_at = None
+                self._stop_confirmation_last_at = None
+                self._stop_confirmation_samples = 0
+
+    def recorded_stop_proven(self) -> bool:
+        with self._lock:
+            return self._stop_confirmed_locked(time.time())
+
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
         with self._lock:
@@ -698,6 +895,7 @@ class NavigationControlApi:
             if (
                 self._robot_mode == "auto"
                 and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                and not self.recorded_nav2_health()
             ):
                 return None
             if not self._connected:
@@ -732,6 +930,7 @@ class NavigationControlApi:
             if (
                 self._robot_mode == "auto"
                 and self._state["navigation_state"] not in self.ACTIVE_NAV_STATES
+                and not self.recorded_nav2_health()
             ):
                 return False
             if expected_safety is not None and (
@@ -1078,6 +1277,7 @@ class NavigationControlApi:
         target = str(payload.get("mode") or "").strip().lower()
         if target not in {"auto", "manual"}:
             raise NavigationControlError("INVALID_PATROL_MODE", "mode must be auto or manual.", 400)
+        await self._stop_recorded_before_transition()
         if target == "manual":
             with self._lock:
                 self._clear_loop_locked()
@@ -1183,6 +1383,7 @@ class NavigationControlApi:
             raise NavigationControlError("INVALID_MODE", "mode must be MAPPING or DRIVING.", 400)
 
         if mode == "MAPPING":
+            await self._stop_recorded_before_transition()
             with self._lock:
                 self._clear_loop_locked()
                 navigation_in_progress = self._state["navigation_state"] in {
@@ -1562,7 +1763,13 @@ class NavigationControlApi:
             409,
         )
 
-    async def plan_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def plan_goal(self, payload: dict[str, Any], *,
+                        session_cached_path: list[dict[str, float]] | None = None
+                        ) -> dict[str, Any]:
+        owner = self._loop_session_owner
+        if owner is not None and not owner.done() and owner is not asyncio.current_task():
+            raise NavigationControlError(
+                "LOOP_ACTIVE", "Stop active LOOP before replacing a Goal", 409)
         goal = self._validated_goal(payload.get("goal", payload))
         waypoints = self._validated_waypoints(payload.get("waypoints"), goal)
         raw_loop = payload.get("loop_goals")
@@ -1581,6 +1788,9 @@ class NavigationControlApi:
                     "INVALID_LOOP", "A and B must be at least 1.20m apart to avoid overlapping arrival regions.", 400,
                 )
         with self._lock:
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDED_REPLAY_ACTIVE",
+                                             "Stop Recorded Loop before setting a new Goal", 409)
             self._expire_pending_cancel_locked(time.time())
             if self._pending_goal_cancel is not None:
                 raise NavigationControlError("CANCEL_IN_PROGRESS", "Wait for the encoder-confirmed Goal cancel.", 409)
@@ -1606,13 +1816,34 @@ class NavigationControlApi:
                 # Destination validation occurred before cancel; confirm the
                 # live sensor and Pi health again after the physical STOP.
                 self._assert_watchdogs_healthy()
-            # Nav2's ComputePathToPose(use_start=False) starts at the latest
-            # robot pose, not the old Goal or the old planned path origin.
-            path = await asyncio.to_thread(
-                self._compute_path_for_route, goal, waypoints,
-                loop_forward=bool(loop_goals),
-            )
-            normalized_path = self._normalized_path(path)
+            if session_cached_path is not None:
+                # Private Python-only option: HTTP Goal requests cannot pass it.
+                if (self._loop_session_owner is not asyncio.current_task()
+                    or waypoints or loop_goals):
+                    raise NavigationControlError(
+                        "LOOP_PATH_OWNER", "Cached path requires active LOOP owner", 409)
+                normalized_path = self._normalized_path(session_cached_path)
+                if not 2 <= len(normalized_path) <= 2000:
+                    raise NavigationControlError(
+                        "LOOP_PATH_INVALID", "Invalid recorded path length", 422)
+                live = self._safe_live_pose()
+                if (not self._fresh_loop_pose(live)
+                    or math.hypot(live["x"] - normalized_path[0]["x"],
+                                  live["y"] - normalized_path[0]["y"]) > 0.35
+                    or math.hypot(goal["x"] - normalized_path[-1]["x"],
+                                  goal["y"] - normalized_path[-1]["y"]) > 0.40):
+                    raise NavigationControlError(
+                        "LOOP_PATH_MISMATCH", "Cached path endpoints not aligned", 409)
+                if not await asyncio.to_thread(self._ros.loop_path_valid, normalized_path):
+                    raise NavigationControlError(
+                        "LOOP_PATH_BLOCKED", "Cached path obstructed", 409)
+            else:
+                # Existing SET GOAL/#93 behavior remains unchanged.
+                path = await asyncio.to_thread(
+                    self._compute_path_for_route, goal, waypoints,
+                    loop_forward=bool(loop_goals),
+                )
+                normalized_path = self._normalized_path(path)
             if len(normalized_path) < 2:
                 raise NavigationControlError(
                     "PATH_NOT_FOUND", "Nav2 did not return a usable path.", 422,
@@ -1648,16 +1879,33 @@ class NavigationControlApi:
             self._state["active_goal"] = goal
             self._state["waypoints"] = [dict(point) for point in waypoints]
             self._state["planned_path"] = normalized_path
+            self._loop_session_path = (
+                [dict(p) for p in normalized_path]
+                if session_cached_path is not None else None
+            )
             self._state["navigation_state"] = "PATH_READY"
             self._state["last_error"] = None
             self._touch_locked()
         return self.state_response()
 
     async def start_navigation(self) -> dict[str, Any]:
+        owner = self._loop_session_owner
+        if owner is not None and not owner.done() and owner is not asyncio.current_task():
+            raise NavigationControlError(
+                "LOOP_ACTIVE", "Stop active LOOP before starting another Goal", 409)
         with self._lock:
+            if self._recorded_motor_active or self._recorded_nav2_active:
+                raise NavigationControlError("RECORDED_REPLAY_ACTIVE",
+                                             "Stop Recorded Loop before starting Nav2", 409)
             goal = dict(self._state["active_goal"] or {})
             waypoints = [dict(p) for p in self._state["waypoints"]]
             loop_goals = [dict(p) for p in self._loop_goals]
+            session_path = (
+                [dict(p) for p in self._loop_session_path]
+                if self._loop_session_path is not None else None
+            )
+            session_owner = self._loop_session_owner
+            session_token = self._loop_session_cancel_token
             loop_epoch = self._loop_epoch
             path_ready = len(self._state["planned_path"]) >= 2
             estop_generation = self._estop_generation
@@ -1688,13 +1936,30 @@ class NavigationControlApi:
                     or self._state["navigation_state"] != "PATH_READY"):
                     raise NavigationControlError("LOOP_INTERRUPTED", "Loop start interrupted.", 409)
         command_baseline = self._nonzero_command_sequence()
-        if loop_goals and hasattr(self._ros, "begin_loop_trace"):
+        if (loop_goals or session_owner is asyncio.current_task()) and hasattr(
+            self._ros, "begin_loop_trace"
+        ):
             await asyncio.to_thread(self._ros.begin_loop_trace)
-        result = (
-            await asyncio.to_thread(self._ros.navigate_to_pose, goal, loop_reapproach=True)
-            if loop_goals
-            else await asyncio.to_thread(self._navigate_route, goal, waypoints)
-        )
+        if session_path is not None:
+            def cached_preflight() -> bool:
+                with self._lock:
+                    return (
+                        self._loop_session_owner is session_owner
+                        and self._loop_session_cancel_token == session_token
+                        and session_owner is not None and not session_owner.done()
+                        and self._estop_generation == estop_generation
+                        and not self._state["emergency_stop"]
+                    )
+            result = await asyncio.to_thread(
+                self._ros.follow_loop_path, session_path,
+                recorded_auto=True, recorded_preflight=cached_preflight,
+            )
+        else:
+            result = (
+                await asyncio.to_thread(self._ros.navigate_to_pose, goal, loop_reapproach=True)
+                if loop_goals
+                else await asyncio.to_thread(self._navigate_route, goal, waypoints)
+            )
         try:
             progress_pose = self._get_live_pose()
         except Exception:
@@ -1742,6 +2007,7 @@ class NavigationControlApi:
         return {**self.state_response(), "navigation": result}
 
     async def cancel_goal(self) -> dict[str, Any]:
+        await self._stop_recorded_before_transition()
         with self._lock:
             self._clear_loop_locked()
             # The preceding leg already completed a physical STOP; no
