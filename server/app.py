@@ -78,6 +78,7 @@ from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
 from server.live_mapping_grid import LiveMappingGrid
 from server.mapping_health import mapping_health_state
+from server.map_storage_integrity import commit_bundle
 from server.gpu_telemetry import GpuUtilizationSampler
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
@@ -4286,7 +4287,16 @@ def occupancy_to_pgm_bytes(width, height, cells):
     return header + bytes(pixels)
 
 
+_navigation_map_save_lock = threading.Lock()
+
+
 def save_navigation_map_files(map_payload, requested_name=None, location_metadata=None):
+    # Both the HTTP save endpoint and the DRIVING transition use this entrypoint.
+    with _navigation_map_save_lock:
+        return _save_navigation_map_files_unlocked(map_payload, requested_name, location_metadata)
+
+
+def _save_navigation_map_files_unlocked(map_payload, requested_name=None, location_metadata=None):
     width, height, cells = decode_map_cells(map_payload)
     base_name = unique_map_name(sanitize_map_name(requested_name))
     saved_at = time.time()
@@ -4305,28 +4315,22 @@ def save_navigation_map_files(map_payload, requested_name=None, location_metadat
     origin_yaw = float(origin.get("yaw", 0.0))
     resolution = float(map_payload.get("resolution") or 0.05)
 
-    pgm_path.write_bytes(occupancy_to_pgm_bytes(width, height, cells))
-    yaml_path.write_text(
-        "\n".join(
-            [
-                f"image: {pgm_path.name}",
-                f"resolution: {resolution}",
-                f"origin: [{origin_x}, {origin_y}, {origin_yaw}]",
-                "negate: 0",
-                "occupied_thresh: 0.65",
-                "free_thresh: 0.196",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    pgm_bytes = occupancy_to_pgm_bytes(width, height, cells)
+    yaml_bytes = "\n".join(
+        [
+            f"image: {pgm_path.name}",
+            f"resolution: {resolution}",
+            f"origin: [{origin_x}, {origin_y}, {origin_yaw}]",
+            "negate: 0",
+            "occupied_thresh: 0.65",
+            "free_thresh: 0.196",
+            "",
+        ]
+    ).encode("utf-8")
     raw_payload = dict(map_payload)
     raw_payload["saved_at"] = saved_at
     raw_payload["saved_at_iso"] = saved_at_iso
-    raw_path.write_text(
-        json.dumps(raw_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    raw_bytes = json.dumps(raw_payload, ensure_ascii=False, indent=2).encode("utf-8")
 
     meta = {
         "map_name": base_name,
@@ -4346,11 +4350,29 @@ def save_navigation_map_files(map_payload, requested_name=None, location_metadat
             "raw": str(raw_path.relative_to(ROOT_DIR)),
         },
     }
+    meta["bundle_version"] = 2
+    meta["checksums"] = {
+        "pgm": hashlib.sha256(pgm_bytes).hexdigest(),
+        "yaml": hashlib.sha256(yaml_bytes).hexdigest(),
+        "raw": hashlib.sha256(raw_bytes).hexdigest(),
+    }
+    meta["map_revision"] = build_navigation_map_revision(map_payload)
+    meta["content_sha256"] = meta["map_revision"]
+    meta["verification"] = {
+        "source": map_payload.get("source"),
+        "map_verified": map_payload.get("map_verified") is True,
+    }
     if isinstance(location_metadata, dict) and location_metadata:
         meta["location"] = dict(location_metadata)
-    meta_path.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    manifest = json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")
+    commit_bundle(
+        {
+            pgm_path: pgm_bytes,
+            yaml_path: yaml_bytes,
+            raw_path: raw_bytes,
+            meta_path: manifest,
+        },
+        manifest=meta_path,
     )
     return meta
 
