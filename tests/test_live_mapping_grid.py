@@ -283,4 +283,5 @@ def test_scan_preview_is_explicitly_unverified():
     )
     assert preview["preview"] is True
     assert preview["map_verified"] is False
-    assert preview["source"] == "scan_preview"
+    assert preview["source"] == "live_mapping_grid"
+    assert preview["map_kind"] == "preview"

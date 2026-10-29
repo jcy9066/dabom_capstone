@@ -1496,9 +1496,12 @@ class NavigationControlApi:
             if initial_pose_payload is None:
                 initial_pose_payload = self._current_mapping_initial_pose()
             if initial_pose_payload is None:
-                # Operator-approved startup estimate when live Mapping has no TF pose.
-                # Map validation and AMCL/Nav2 readiness remain mandatory.
-                initial_pose_payload = {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0}
+                raise NavigationControlError(
+                    "INITIAL_POSE_UNAVAILABLE",
+                    "Current Mapping has no verified map-frame pose. "
+                    "Obtain a fresh localization estimate or select a position on the map.",
+                    409,
+                )
 
             # Nav2 map_server needs a map file. Snapshot the current in-memory
             # Mapping result automatically so the operator does not have to
