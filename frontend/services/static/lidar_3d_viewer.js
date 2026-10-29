@@ -2237,7 +2237,13 @@ if (root && canvas) {
             && Number.isFinite(poseReceived) && poseReceived > 0
             && Math.abs(scanReceived - poseReceived) > 0.75
         );
-        rebuildScan(scanPoseMismatch && !liveScan?.map_sensor_pose ? null : liveScan);
+        const scanAgeSec = Date.now() / 1000 - Number(liveScan?.received_at);
+        const scanIsStale = liveScan && Number.isFinite(scanAgeSec)
+            && scanAgeSec > 1.5;
+        rebuildScan(
+            scanIsStale || (scanPoseMismatch && !liveScan?.map_sensor_pose)
+                ? null : liveScan
+        );
 
         if (
             trajectorySessionActive

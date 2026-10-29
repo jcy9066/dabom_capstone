@@ -394,6 +394,23 @@ function getScanKey(scan) {
     return `${scan.timestamp || ''}:${scan.received_at || ''}:${scan.ranges.length}:${first}:${last}`;
 }
 
+function acceptNavigationPose(pose) {
+    if (!pose) {
+        lidarState.pose = null;
+        return true;
+    }
+    const old = lidarState.pose;
+    if (old?.session_id && pose.session_id && old.session_id === pose.session_id) {
+        const oldAt = Date.parse(old.timestamp || '');
+        const newAt = Date.parse(pose.timestamp || '');
+        if (Number.isFinite(oldAt) && Number.isFinite(newAt) && newAt < oldAt) {
+            return false;
+        }
+    }
+    lidarState.pose = pose;
+    return true;
+}
+
 function acceptNavigationScan(scan) {
     if (!scan || !Array.isArray(scan.ranges)) return false;
     const previous = lidarState.scan;
@@ -689,6 +706,14 @@ function emitNavigationVisualizationState(mapChanged = false) {
 }
 
 function applyNavigationMapPayload(map, revision, mapChanged = true) {
+    if (map && lidarState.map
+        && map.session_id && lidarState.map.session_id === map.session_id) {
+        const oldAt = Date.parse(lidarState.map.timestamp || '');
+        const newAt = Date.parse(map.timestamp || '');
+        if (Number.isFinite(oldAt) && Number.isFinite(newAt) && newAt < oldAt) {
+            return;
+        }
+    }
     const incomingMapRevision = revision ?? null;
     if (
         navigationMapDisplaySuppressed
@@ -719,7 +744,7 @@ function applyNavigationSnapshot(data) {
         clearNavigationScan();
         lidarState.pose = null;
     }
-    lidarState.pose = data.pose_available ? data.pose : null;
+    acceptNavigationPose(data.pose_available ? data.pose : null);
     // Snapshot /plan events have no Goal execution identifier and are
     // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
@@ -775,8 +800,9 @@ function applyNavigationStreamMessage(message) {
     if (message.type === 'pose') {
         if (lidarState.sessionId && message.pose?.session_id
             && message.pose.session_id !== lidarState.sessionId) return;
-        lidarState.pose = message.pose || null;
-        emitNavigationVisualizationState(false);
+        if (acceptNavigationPose(message.pose || null)) {
+            emitNavigationVisualizationState(false);
+        }
         return;
     }
 

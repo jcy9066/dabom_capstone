@@ -153,7 +153,6 @@ def test_unverified_preview_does_not_keep_unobserved_ghost_cells():
         wall_time=1.0,
         force=True,
     )
-    old_width = first["width"]
     assert cell_value(first, 0.0, 1.0) == 100
 
     grid.update_pose({"x": 3.0, "y": 0.0, "yaw": -0.5})
