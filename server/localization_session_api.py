@@ -28,6 +28,7 @@ class LocalizationSessionApi:
         self.source = None
         self.map_name = None
         self.map_revision = None
+        self.live_source_revision = None
         self.reason = None
         self.error_code = None
         self.result = None
@@ -46,6 +47,7 @@ class LocalizationSessionApi:
             "source": self.source,
             "map_name": self.map_name,
             "map_revision": self.map_revision,
+            "live_source_revision": self.live_source_revision,
             "error_code": self.error_code,
             "reason": self.reason,
             "proposed_pose": self.proposed_pose,
@@ -104,6 +106,9 @@ class LocalizationSessionApi:
         self.source = source
         self.map_name = map_name if source == "existing" else None
         self.map_revision = payload.get("map_revision")
+        self.live_source_revision = (
+            payload.get("map_revision") if source == "current" else None
+        )
         self.phase = "QUEUED"
         self.reason = self.error_code = self.result = self.proposed_pose = None
         self._cancel_requested = False
@@ -141,7 +146,7 @@ class LocalizationSessionApi:
             raise NavigationControlError(
                 "MAP_REVISION_CHANGED", "The current SLAM map changed.", 409,
             )
-        self.map_revision = revision
+        self.live_source_revision = revision
         self._check_cancelled()
         saved = await asyncio.to_thread(
             self.navigation._save_map, dict(live), None,
@@ -150,6 +155,13 @@ class LocalizationSessionApi:
             self.navigation._map_api.resolve_map, saved["map_name"],
         )
         self.map_name = selected.map_name
+        # Localization uses the frozen, validated map snapshot rather than
+        # the mutable /map stream. This also avoids saving a second copy when
+        # switching to Driving. The frozen version is tracked separately.
+        frozen = await asyncio.to_thread(
+            self.navigation._map_api._registry.preview_map, selected.map_name,
+        )
+        self.map_revision = frozen["map_revision"]
         return selected, live
 
     async def _estimate_and_apply(self, session_id: str):
@@ -166,7 +178,7 @@ class LocalizationSessionApi:
                 if pose is None:
                     pose, _ = await self.navigation._estimate_initial_pose_with_retry(
                         selected,
-                        expected_map_revision=(self.map_revision if live is not None else None),
+                        expected_map_revision=None,
                         cancelled=lambda: self._cancel_requested,
                     )
                 self._check_cancelled()
@@ -175,13 +187,11 @@ class LocalizationSessionApi:
             self._handle_error(exc, session_id)
 
     def _validate_map_revision(self, live):
-        if self.source == "existing":
-            current = self.navigation._map_api._registry.preview_map(self.map_name)
-            actual = current["map_revision"]
-        else:
-            current = self.navigation._get_live_map() or {}
-            actual = current.get("map_revision")
-            if current.get("mapping_state") != "MAPPING_ACTIVE":
+        current = self.navigation._map_api._registry.preview_map(self.map_name)
+        actual = current["map_revision"]
+        if self.source == "current":
+            live_state = self.navigation._get_live_map() or {}
+            if live_state.get("mapping_state") != "MAPPING_ACTIVE":
                 raise NavigationControlError(
                     "MAPPING_NOT_READY", "Mapping became unhealthy.", 409,
                 )
@@ -209,12 +219,11 @@ class LocalizationSessionApi:
         self._check_cancelled()
         self.phase = "APPLYING"
         request = {
-            "mode": "DRIVING", "source": self.source,
+            "mode": "DRIVING", "source": "existing",
+            "map_name": self.map_name,
             "map_revision": self.map_revision,
             "initial_pose": self.proposed_pose,
         }
-        if self.source == "existing":
-            request["map_name"] = self.map_name
         # This call revalidates the map and waits for AMCL/Nav2 + Pi.
         result = await self.navigation.switch_mode(request, user=self._owner)
         if (result.get("localization_ready") is not True
