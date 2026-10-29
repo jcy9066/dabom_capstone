@@ -5791,6 +5791,7 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
             localization_scan_history.clear()
             encoder_state["updated_at"] = None
         navigation_control_api.note_pi_connection(True)
+        loop_session_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
         while True:
@@ -5866,6 +5867,7 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
         disconnected = await connections.disconnect(robot_id, websocket)
         if robot_id == SERVER_ROBOT_ID and disconnected:
             navigation_control_api.note_pi_connection(False)
+            loop_session_api.note_pi_connection(False)
 
 
 @app.get("/api/encoder/bridge")
