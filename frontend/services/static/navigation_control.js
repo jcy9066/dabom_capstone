@@ -464,6 +464,24 @@
         return true;
     }
 
+    async function waitInitialPoseSession(sessionId, acceptWaiting = false) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+            const status = await requestJson('/api/navigation/localization/state');
+            if (status.session_id !== sessionId) {
+                throw new Error('Localization 세션이 변경됐습니다.');
+            }
+            if (status.phase === 'READY') return status;
+            if (status.phase === 'FAILED' || status.phase === 'CANCELLED') {
+                throw new Error(status.reason || 'Localization이 완료되지 않았습니다.');
+            }
+            if (acceptWaiting && status.phase === 'WAITING_FOR_CLICK') return status;
+            if (status.phase === 'POSE_CONFIRMATION_REQUIRED'
+                || (!acceptWaiting && status.phase === 'WAITING_FOR_CLICK')) return status;
+            await new Promise(resolve => window.setTimeout(resolve, 300));
+        }
+        throw new Error('Localization 확인 시간이 초과됐습니다. 위치를 재지정하세요.');
+    }
+
     async function finishInitialPose(event) {
         if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose'
             || initialPosePointer?.pointerId !== event.pointerId) return false;
@@ -484,35 +502,47 @@
         state.busy = true;
         state.navigationPending = true;
         syncControlComponents();
+        let localizationSessionId = null;
         try {
-            let acknowledged = false;
-            let result;
-            for (;;) {
-                try {
-                    result = await mutate('/api/navigation/control/mode', {
-                        mode: 'DRIVING', source: 'current',
-                        map_revision: selection.mapRevision,
-                        initial_pose: {
-                            x: selection.pose.x, y: selection.pose.y,
-                            yaw_degrees: selection.pose.yaw * 180 / Math.PI,
-                            warning_acknowledged: acknowledged,
-                        },
-                    });
-                    break;
-                } catch (error) {
-                    if (!acknowledged
-                        && error.code === 'INITIAL_POSE_CONFIRMATION_REQUIRED'
-                        && window.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 위치를 확인하고 AMCL 검증을 진행하시겠습니까?')) {
-                        acknowledged = true;
-                        continue;
-                    }
-                    throw error;
-                }
+            const started = await mutate('/api/navigation/localization/start', {
+                source: 'current', map_revision: selection.mapRevision,
+                manual_only: true,
+            });
+            localizationSessionId = started.session_id;
+            const prepared = await waitInitialPoseSession(localizationSessionId, true);
+            if (prepared.phase !== 'WAITING_FOR_CLICK') {
+                throw new Error('Initial Pose 지도 Snapshot 준비 실패');
             }
-            applyControlState(result);
+            let acknowledged = false;
+            for (;;) {
+                await mutate('/api/navigation/localization/pose', {
+                    session_id: localizationSessionId,
+                    initial_pose: {
+                        x: selection.pose.x, y: selection.pose.y,
+                        yaw_degrees: selection.pose.yaw * 180 / Math.PI,
+                        warning_acknowledged: acknowledged,
+                    },
+                });
+                const status = await waitInitialPoseSession(localizationSessionId);
+                if (status.phase === 'READY') break;
+                if (status.phase === 'POSE_CONFIRMATION_REQUIRED'
+                    && !acknowledged
+                    && window.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 위치를 확인하고 AMCL 검증을 진행하시겠습니까?')) {
+                    acknowledged = true;
+                    continue;
+                }
+                throw new Error(status.reason || '지도에서 안전한 Initial Pose를 다시 지정하세요.');
+            }
+            const verified = await requestJson('/api/navigation/control/state');
+            applyControlState(verified);
             setFeedback('Initial Pose / AMCL 검증 완료. Driving 안전 상태를 확인하세요.');
             window.navigationMapView?.setInteractionMode?.('view');
         } catch (error) {
+            if (localizationSessionId) {
+                await mutate('/api/navigation/localization/cancel', {
+                    session_id: localizationSessionId,
+                }).catch(() => null);
+            }
             setFeedback('Initial Pose 확인 실패: ' + error.message, true);
         } finally {
             document.dispatchEvent(new CustomEvent(
