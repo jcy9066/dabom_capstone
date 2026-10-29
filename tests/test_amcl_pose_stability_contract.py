@@ -53,3 +53,22 @@ def test_amcl_initialization_never_accepts_single_echo():
     assert "if stable:" in body
     assert "set_initial_pose: false" in config
     assert "set_initial_pose: true" not in config
+
+
+def test_amcl_map_fingerprint_uses_occupancy_not_only_dimensions(tmp_path):
+    import hashlib
+    import json
+    from server.navigation_ros_control import _saved_map_occupancy_digest
+
+    path = tmp_path / "map.raw.json"
+    path.write_text(json.dumps({
+        "width": 2, "height": 2, "data_encoding": "raw",
+        "data": [-1, 0, 100, 40],
+    }), encoding="utf-8")
+    info = path.stat()
+    actual = _saved_map_occupancy_digest(
+        str(path), 2, 2, info.st_size, info.st_mtime_ns,
+    )
+    expected = hashlib.sha256(bytes([0, 1, 101, 0])).hexdigest()
+    assert actual == expected
+    assert actual != hashlib.sha256(bytes([1, 1, 101, 0])).hexdigest()
