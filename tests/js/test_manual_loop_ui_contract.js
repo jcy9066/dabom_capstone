@@ -19,4 +19,7 @@ assert(server.includes('MANUAL_PULSE_MAX_MS = 120'), "Wrong bounded pulse durati
 assert(pi.includes('self.motor.stop("manual_loop_pulse_complete")'), "Pi local STOP missing");
 assert(pi.includes('Stale or replayed Manual Loop pulse sequence'), "Replay protection missing");
 assert(bridge.includes('manual_loop_pulse")'), "Manual pulse ACK bridge missing");
+assert(server.includes('_reconcile_uncertain_manual_pulse'));
+assert(server.includes('"manual_loop_query"'));
+assert(pi.includes('Manual Loop pulse receipt missing'));
 console.log("LOOP MANUAL UI, server and Pi contract: PASS");
