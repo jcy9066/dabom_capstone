@@ -427,7 +427,10 @@ class LoopSessionApi:
         except asyncio.TimeoutError as exc:
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN") from exc
         if not preflight():
-            raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN")
+            raise RuntimeError(
+                "REPLAY_CANCELLED" if self._cancelled
+                else "MANUAL_PULSE_ACK_UNCERTAIN"
+            )
         if not self.navigation._pi_command_delivered(reply):
             # The Pi may have moved before its ACK was lost. Never fabricate
             # exposure time or replay this pulse using a new identity.
@@ -501,6 +504,7 @@ class LoopSessionApi:
 
     async def _manual_bag(self, key: tuple[str, str], events: list[dict]) -> None:
         segments = compile_manual_segments(events)  # O(N), once per replay
+        await self._wait_connection_resume()
         await self._verified_stop()
         self._status = "RUNNING"
         previous_direction = None
@@ -511,6 +515,7 @@ class LoopSessionApi:
             for index, segment in enumerate(segments):
                 if self._cancelled:
                     break
+                await self._wait_connection_resume()
                 self._manual_segment_index = index
                 remaining_ms = float(segment["duration_ms"])
                 self._manual_elapsed_ms = 0.0
@@ -563,8 +568,10 @@ class LoopSessionApi:
                         idle_pulses = 0
                     remaining_ms = max(0.0, remaining_ms - applied_ms)
                     self._manual_elapsed_ms += applied_ms
+                await self._wait_connection_resume()
                 await self._verified_stop()
             if not self._cancelled:
+                await self._wait_connection_resume()
                 await self._verified_stop()
                 self._laps += 1
         # Not using Nav2 and never correcting the saved open-loop trajectory.
@@ -734,8 +741,11 @@ class LoopSessionApi:
         except asyncio.CancelledError:
             self._status = "STOPPED"
         except Exception as exc:
-            self._status = "FAILED"
-            self._error = str(exc)[:180]
+            if str(exc) in {"REPLAY_CANCELLED", "MANUAL_REPLAY_INTERRUPTED"} and self._cancelled:
+                self._status = "STOPPED"
+            else:
+                self._status = "FAILED"
+                self._error = str(exc)[:180]
         finally:
             if kind == "AUTO" and self._status == "FAILED":
                 # Never leave an active Nav2 Goal moving after a worker fault.
