@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 import time
@@ -1639,6 +1640,20 @@ class NavigationRosControl:
                     "height": height,
                     "resolution": resolution,
                     "origin": {"x": origin_x, "y": origin_y, "yaw": origin_yaw},
+                    "frame_id": str(message.header.frame_id or "map"),
+                    "stamp_ns": (
+                        int(message.header.stamp.sec) * 1000000000
+                        + int(message.header.stamp.nanosec)
+                    ),
+                    "timestamp": (
+                        datetime.fromtimestamp(
+                            message.header.stamp.sec
+                            + message.header.stamp.nanosec / 1e9,
+                            timezone.utc,
+                        ).isoformat().replace("+00:00", "Z")
+                        if message.header.stamp.sec > 0 else None
+                    ),
+                    "source": "nav2_global_costmap",
                     "dynamic_obstacles": dynamic_obstacles,
                     "inflation": inflation,
                     "received_at": time.time(),
