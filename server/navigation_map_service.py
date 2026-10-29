@@ -452,15 +452,28 @@ class NavigationMapService:
         self, metadata, pgm_path, yaml_path, raw_path, raw_payload,
         width, height, resolution, origin_x, origin_y, origin_yaw,
     ) -> None:
-        if int(metadata.get("bundle_version") or 1) >= 2:
+        try:
+            bundle_version = int(metadata.get("bundle_version") or 1)
+        except (TypeError, ValueError) as exc:
+            raise NavigationMapError(
+                "INVALID_MAP_METADATA", "Invalid map bundle version."
+            ) from exc
+        if bundle_version >= 2:
             checksums = metadata.get("checksums")
             if not isinstance(checksums, dict):
                 raise NavigationMapError("INVALID_MAP_DATA", "Map bundle checksum manifest is missing.")
             for name, path in (("pgm", pgm_path), ("yaml", yaml_path), ("raw", raw_path)):
                 expected = checksums.get(name)
-                if (not isinstance(expected, str) or len(expected) != 64
-                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
-                    raise NavigationMapError("MAP_CHECKSUM_MISMATCH", f"Map {name} checksum mismatch.")
+                try:
+                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as exc:
+                    raise NavigationMapError(
+                        "INVALID_MAP_DATA", f"Cannot read map {name}."
+                    ) from exc
+                if not isinstance(expected, str) or len(expected) != 64 or actual != expected:
+                    raise NavigationMapError(
+                        "MAP_CHECKSUM_MISMATCH", f"Map {name} checksum mismatch."
+                    )
 
         try:
             if (int(raw_payload["width"]) != width
@@ -476,9 +489,13 @@ class NavigationMapService:
             if not isinstance(data, list):
                 raise ValueError("RAW map data is missing")
             if raw_payload.get("data_encoding") == "rle":
-                count = sum(int(run[1]) for run in data
-                            if isinstance(run, list) and len(run) == 2
-                            and int(run[1]) >= 0)
+                if any(
+                    not isinstance(run, list) or len(run) != 2
+                    or int(run[1]) <= 0
+                    for run in data
+                ):
+                    raise ValueError("Invalid RAW map RLE data")
+                count = sum(int(run[1]) for run in data)
             else:
                 count = len(data)
             if count != width * height:
