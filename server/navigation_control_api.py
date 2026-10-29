@@ -19,6 +19,7 @@ from server.navigation_ros_control import NavigationRosError
 from server.navigation_motion_segments import annotate_path
 from server.auto_initial_pose import estimate_initial_pose, AutoPoseUncertain
 from server.scan_pose_fusion import fuse_stationary_scans
+from server.localization_observation import observation_baseline, wait_fresh_fused_scan
 from server.env_config import env_float, env_int, env_text
 
 
@@ -1477,6 +1478,7 @@ class NavigationControlApi:
         map_name = payload.get("map_name")
         initial_pose_payload = payload.get("initial_pose")
         auto_pose_encoder_baseline = None
+        current_auto_recovery = False
 
         if source in {"current", "save_current"}:
             live_map = self._get_live_map()
@@ -1512,13 +1514,7 @@ class NavigationControlApi:
                 )
             if initial_pose_payload is None:
                 initial_pose_payload = self._current_mapping_initial_pose()
-            if initial_pose_payload is None:
-                raise NavigationControlError(
-                    "INITIAL_POSE_UNAVAILABLE",
-                    "Current Mapping has no verified map-frame pose. "
-                    "Obtain a fresh localization estimate or select a position on the map.",
-                    409,
-                )
+                current_auto_recovery = initial_pose_payload is None
 
             # Nav2 map_server needs a map file. Snapshot the current in-memory
             # Mapping result automatically so the operator does not have to
@@ -1529,50 +1525,8 @@ class NavigationControlApi:
             # Do not invent an arbitrary origin when a saved map is selected.
             # Automatic localization must prove a fresh, unambiguous scan
             # match; otherwise the operator must supply Initial Pose.
-            if initial_pose_payload is None:
-                selected_for_match = self._map_api.resolve_map(map_name)
-                with self._lock:
-                    manual = self._robot_mode == "manual"
-                    not_moving = (
-                        self._state["navigation_state"] not in {
-                            "NAVIGATING", "RESUMING", "CANCELING", "CANCELING_STOP",
-                            "PAUSING_FOR_MANUAL", "REPLACING_GOAL", "EMERGENCY_STOPPED",
-                        }
-                        and self._motion_allowed_locked(time.time())
-                    )
-                    auto_pose_encoder_baseline = self._encoder_ticks
-                if not manual or not not_moving or auto_pose_encoder_baseline is None:
-                    raise NavigationControlError(
-                        "AUTO_POSE_REQUIRES_STOP", "Select manual/stopped operation before automatic localization.", 409
-                    )
-                try:
-                    # Merge only fresh LiDAR frames with unchanged encoder
-                    # ticks; never align moving scans at a guessed pose.
-                    scan = await asyncio.to_thread(
-                        fuse_stationary_scans, self._get_live_scans()
-                    )
-                    initial_pose_payload = await asyncio.to_thread(
-                        estimate_initial_pose, selected_for_match, scan,
-                        mount_x=env_float("LIDAR_X"),
-                        mount_y=env_float("LIDAR_Y"),
-                        mount_yaw=env_float("LIDAR_YAW"),
-                    )
-                except (AutoPoseUncertain, OSError, ValueError, KeyError) as exc:
-                    raise NavigationControlError(
-                        "AUTO_INITIAL_POSE_UNCERTAIN",
-                        f"Automatic localization cannot confirm a unique position: {exc}. Enter Initial Pose manually.",
-                        409,
-                    ) from exc
-                # A valid snapshot is not proof the RC car remained stopped
-                # while expensive global scan matching was running.
-                with self._lock:
-                    if (self._encoder_ticks != auto_pose_encoder_baseline
-                        or self._robot_mode != "manual"
-                        or self._state["emergency_stop"]
-                        or not self._motion_allowed_locked(time.time())):
-                        raise NavigationControlError(
-                            "AUTO_POSE_MOVED", "Robot moved during automatic localization; retry while stopped.", 409,
-                        )
+            # The same scan matching and retry applies to current and saved maps.
+            # Actual matching starts after the saved-map snapshot is available.
         else:
             raise NavigationControlError(
                 "INVALID_SOURCE",
@@ -1581,6 +1535,17 @@ class NavigationControlApi:
             )
 
         selected = self._map_api.resolve_map(map_name)
+        if initial_pose_payload is None:
+            if source == "existing" or current_auto_recovery:
+                initial_pose_payload, auto_pose_encoder_baseline = (
+                    await self._estimate_initial_pose_with_retry(selected)
+                )
+            else:
+                raise NavigationControlError(
+                    "INITIAL_POSE_UNAVAILABLE",
+                    "A verified localization estimate or explicit map pose is required.",
+                    409,
+                )
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
             loaded = await self._activate_map_when_ready(
@@ -1655,6 +1620,67 @@ class NavigationControlApi:
             self._touch_locked()
         return self.state_response()
 
+    async def _estimate_initial_pose_with_retry(self, selected_map):
+        with self._lock:
+            stopped = (
+                self._robot_mode == "manual"
+                and self._state["navigation_state"] not in {
+                    "NAVIGATING", "RESUMING", "CANCELING", "CANCELING_STOP",
+                    "PAUSING_FOR_MANUAL", "REPLACING_GOAL", "EMERGENCY_STOPPED",
+                }
+                and self._motion_allowed_locked(time.time())
+            )
+            baseline_ticks = self._encoder_ticks
+        if not stopped or baseline_ticks is None:
+            raise NavigationControlError(
+                "AUTO_POSE_REQUIRES_STOP",
+                "Fresh motor STOP, manual ownership, and encoder evidence are required.",
+                409,
+            )
+        history = self._get_live_scans()
+        base_time, base_sequence = observation_baseline(history)
+
+        def match(scan):
+            return estimate_initial_pose(
+                selected_map, scan,
+                mount_x=env_float("LIDAR_X"),
+                mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
+
+        try:
+            first_scan = await asyncio.to_thread(fuse_stationary_scans, history)
+            pose = await asyncio.to_thread(match, first_scan)
+        except (AutoPoseUncertain, OSError, KeyError, TypeError, ValueError):
+            # One bounded retry, using only genuinely new LiDAR + encoder
+            # observations. No automatic motor movement is authorized here.
+            try:
+                scan = await wait_fresh_fused_scan(
+                    self._get_live_scans,
+                    after_time=base_time,
+                    after_encoder_sequence=base_sequence,
+                )
+                pose = await asyncio.to_thread(match, scan)
+            except (AutoPoseUncertain, OSError, KeyError, TypeError, ValueError) as exc:
+                raise NavigationControlError(
+                    "AWAITING_MAP_CLICK",
+                    f"Automatic Initial Pose remains uncertain after a fresh "
+                    f"observation: {exc}. Select position and yaw on the map.",
+                    409,
+                ) from exc
+
+        with self._lock:
+            if (self._encoder_ticks != baseline_ticks
+                or self._robot_mode != "manual"
+                or self._state["emergency_stop"]
+                or not self._motion_allowed_locked(time.time())):
+                raise NavigationControlError(
+                    "AUTO_POSE_MOVED",
+                    "The robot changed movement or control state during localization.",
+                    409,
+                )
+        return pose, baseline_ticks
+
     def _current_mapping_initial_pose(self) -> dict[str, float] | None:
         pose = self._get_live_pose()
         if not isinstance(pose, dict):
@@ -1662,10 +1688,13 @@ class NavigationControlApi:
         try:
             x = float(pose["x"])
             y = float(pose["y"])
-            yaw = float(pose.get("yaw", 0.0))
+            yaw = float(pose["yaw"])
+            captured_at = float(pose["received_at"])
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
-        if not all(math.isfinite(value) for value in (x, y, yaw)):
+        if (not all(math.isfinite(value) for value in (x, y, yaw, captured_at))
+            or not 0 <= time.time() - captured_at <= 1.5
+            or str(pose.get("frame_id") or "map") != "map"):
             return None
         normalized_yaw = math.atan2(math.sin(yaw), math.cos(yaw))
         return {
