@@ -230,6 +230,34 @@
         }
     }
 
+    async function waitLocalizationSession(container, progress, sessionId) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+            if (!container.isConnected) {
+                // A closed modal must not leave an unobserved localization
+                // attempt that might still activate Driving later.
+                throw new Error('Localization 모달이 닫혔습니다. 상태를 다시 확인하세요.');
+            }
+            const state = await requestJson('/api/navigation/localization/state');
+            if (state.session_id !== sessionId) {
+                throw new Error('Localization 세션이 변경됐습니다.');
+            }
+            if (state.phase === 'READY') return state;
+            if (state.phase === 'FAILED' || state.phase === 'CANCELLED') {
+                const error = new Error(state.reason || 'Localization 실패');
+                error.code = state.error_code || state.phase;
+                throw error;
+            }
+            if (state.phase === 'WAITING_FOR_CLICK'
+                || state.phase === 'POSE_CONFIRMATION_REQUIRED') return state;
+            showMessage(progress,
+                state.phase === 'APPLYING'
+                    ? 'Initial Pose 검증 및 AMCL/Nav2 활성화 중...'
+                    : 'LiDAR·Encoder를 이용해 Initial Pose를 추정 중...');
+            await new Promise(resolve => global.setTimeout(resolve, 300));
+        }
+        throw new Error('Localization 상태 확인 시간이 초과됐습니다. 자동 주행을 시작하지 마세요.');
+    }
+
     async function loadSelectedMap(container, progress) {
         const mapName = selectedMapName(container);
         if (state.busy) return;
@@ -268,36 +296,98 @@
             const token = await csrfToken();
             let warningAcknowledged = false;
             let payload;
-            for (;;) {
-                try {
-                    payload = await requestJson('/api/navigation/control/mode', {
+            const sessionId = container.dataset.localizationSessionId;
+            const activeSession = sessionId
+                && container.dataset.localizationMapName === mapName;
+            if (!manualPoseRequested) {
+                if (sessionId) {
+                    await requestJson('/api/navigation/localization/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                        body: JSON.stringify({ session_id: sessionId }),
+                    }).catch(() => null);
+                }
+                const started = await requestJson('/api/navigation/localization/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body: JSON.stringify({
+                        source: 'existing', map_name: mapName,
+                        ...(container.dataset.mapRevision
+                            ? {map_revision: container.dataset.mapRevision} : {}),
+                    }),
+                });
+                container.dataset.localizationSessionId = started.session_id;
+                container.dataset.localizationMapName = mapName;
+                const result = await waitLocalizationSession(
+                    container, progress, started.session_id,
+                );
+                if (result.phase !== 'READY') {
+                    showMessage(progress,
+                        '자동 Initial Pose 추정 불확실: 지도에서 위치를 클릭하고 방향으로 드래그한 뒤 다시 불러오세요.',
+                        true);
+                    setControlsDisabled(container, false);
+                    return;
+                }
+                payload = await requestJson('/api/navigation/control/state');
+            } else if (activeSession) {
+                for (;;) {
+                    await requestJson('/api/navigation/localization/pose', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
                         body: JSON.stringify({
-                            mode: 'DRIVING',
-                            source: 'existing',
-                            map_name: mapName,
-                            ...(container.dataset.mapRevision
-                                ? { map_revision: container.dataset.mapRevision } : {}),
-                            ...(manualPoseRequested ? { initial_pose: {
-                                x, y, yaw_degrees: yawDegrees,
-                                warning_acknowledged: warningAcknowledged,
-                            } } : {})
-                        })
+                            session_id: sessionId,
+                            initial_pose: {x, y, yaw_degrees: yawDegrees,
+                                           warning_acknowledged: warningAcknowledged},
+                        }),
                     });
-                    break;
-                } catch (error) {
-                    if (manualPoseRequested && !warningAcknowledged
-                        && error.code === 'INITIAL_POSE_CONFIRMATION_REQUIRED'
-                        && global.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 확인 후 AMCL 검증을 진행하시겠습니까?')) {
-                        warningAcknowledged = true;
-                        continue;
+                    const result = await waitLocalizationSession(
+                        container, progress, sessionId,
+                    );
+                    if (result.phase === 'READY') break;
+                    if (result.phase !== 'POSE_CONFIRMATION_REQUIRED'
+                        || warningAcknowledged
+                        || !global.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 확인 후 AMCL 검증을 진행하시겠습니까?')) {
+                        showMessage(progress,
+                            'Initial Pose 지정이 필요합니다: ' + (result.reason || ''),
+                            true);
+                        setControlsDisabled(container, false);
+                        return;
                     }
-                    throw error;
+                    warningAcknowledged = true;
+                }
+                payload = await requestJson('/api/navigation/control/state');
+            } else {
+                // Preserve the original direct manual-pose route for users
+                // who explicitly entered all three coordinates first.
+                for (;;) {
+                    try {
+                        payload = await requestJson('/api/navigation/control/mode', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                            body: JSON.stringify({
+                                mode: 'DRIVING', source: 'existing', map_name: mapName,
+                                ...(container.dataset.mapRevision
+                                    ? {map_revision: container.dataset.mapRevision} : {}),
+                                initial_pose: {x, y, yaw_degrees: yawDegrees,
+                                               warning_acknowledged: warningAcknowledged},
+                            }),
+                        });
+                        break;
+                    } catch (error) {
+                        if (!warningAcknowledged
+                            && error.code === 'INITIAL_POSE_CONFIRMATION_REQUIRED'
+                            && global.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 확인 후 AMCL 검증을 진행하시겠습니까?')) {
+                            warningAcknowledged = true;
+                            continue;
+                        }
+                        throw error;
+                    }
                 }
             }
+            delete container.dataset.localizationSessionId;
+            delete container.dataset.localizationMapName;
             global.navigationControl?.applyState?.(payload);
-            showMessage(progress, `${payload.active_map.map_name} ${labels.success}`);
+            showMessage(progress, `${payload.active_map?.map_name || mapName} ${labels.success}`);
             await refreshActiveMap();
             succeeded = true;
             setControlsDisabled(container, true, false);
