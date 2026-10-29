@@ -117,7 +117,13 @@ def fixture(tmp_path):
             ),
         ),
         _play_stop=stop,
-        get_live_scan=lambda: None,
+        get_live_scan=lambda: {
+            "received_at": __import__("time").time(),
+            "angle_min": -3.141592653589793,
+            "angle_increment": 2 * 3.141592653589793 / 360,
+            "range_min": 0.12, "range_max": 6.0,
+            "ranges": [2.0] * 360,
+        },
         _pose=lambda: None,
     )
     api = LoopSessionApi(

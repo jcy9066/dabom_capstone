@@ -194,3 +194,27 @@ def test_stale_or_malformed_pi_ack_cannot_advance_segment(tmp_path):
             })
     asyncio.run(scenario())
     assert api._manual_elapsed_ms == 0
+
+
+def test_manual_send_rejects_stale_scan_at_dispatch(tmp_path):
+    api, nav, sent = module.fixture(tmp_path)
+    api._replay_generation = 1
+    api._running_kind = "MANUAL"
+    # The scan may be safe during the preceding obstacle check, but stale
+    # by the time the command reaches the serialized send preflight.
+    api.recorded.get_live_scan = lambda: {
+        "received_at": 0.0,
+        "angle_min": -3.141592653589793,
+        "angle_increment": 2 * 3.141592653589793 / 360,
+        "range_min": 0.12, "range_max": 6.0, "ranges": [2.0] * 360,
+    }
+    async def scenario():
+        with pytest.raises(RuntimeError, match="MANUAL_PULSE_ACK_UNCERTAIN"):
+            await api._manual_send({
+                "pulse_id": "stale-scan", "pulse_sequence": 1,
+                "direction": "forward", "speed": 0.2,
+                "duration_ms": 80,
+            })
+    asyncio.run(scenario())
+    assert not any(command["type"] == "manual_loop_pulse" for command in sent)
+    assert api._manual_elapsed_ms == 0

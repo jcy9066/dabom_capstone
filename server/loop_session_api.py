@@ -409,8 +409,16 @@ class LoopSessionApi:
             "safety_epoch": context["safety_epoch"],
         }
         def preflight() -> bool:
+            # Recheck at the last WebSocket authorization boundary. A safe
+            # scan obtained before reconnect/STOP may now be stale or blocked.
+            clearance = path_blocked(
+                self.recorded.get_live_scan(), command["direction"],
+                mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
             return (
-                not self._cancelled and not self._requires_resume
+                clearance is False
+                and not self._cancelled and not self._requires_resume
                 and self._replay_generation == generation
                 and self._connection_generation == connection
                 and self._mode() == "MANUAL"
@@ -541,6 +549,9 @@ class LoopSessionApi:
                     # most the pulse duration + transport (never 5s/event).
                     await self._wait_obstacle_clear(direction)
                     await self._wait_connection_resume()
+                    # Resume/STOP can take arbitrary time; clearance
+                    # observed before that wait cannot authorize a MOVE.
+                    await self._wait_obstacle_clear(direction)
                     duration = min(MANUAL_PULSE_MAX_MS, max(1, math.ceil(remaining_ms)))
                     self._manual_pulse_index += 1
                     pulse_id = (
