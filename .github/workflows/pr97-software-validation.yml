@@ -52,4 +52,40 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
           PYTHONPATH: .
         run: |
-          python -m pytest -q tests --tb=short
+          set +e
+          python -m pytest -q tests --tb=no > /tmp/pr97-tests.txt 2>&1
+          code=$?
+          grep '^FAILED tests/' /tmp/pr97-tests.txt || true
+          grep -E '[0-9]+ (failed|passed),.* in [0-9]' /tmp/pr97-tests.txt | tail -1 || true
+          exit "$code"
+      - name: Checkout PR96 baseline without modifying it
+        if: always()
+        uses: actions/checkout@v4
+        with:
+          ref: 005cbebc42bdc846aeb3978d685e9922cad74621
+          path: original-pr96
+      - name: Compare original PR96 failures to PR97
+        if: always()
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: |
+          (cd original-pr96 && PYTHONPATH=. python -m pytest -q tests --tb=no > /tmp/pr96-tests.txt 2>&1) || true
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          def failures(path):
+              text = Path(path).read_text(errors='replace')
+              ids = set(re.findall(r'^FAILED (tests/\S+)', text, re.MULTILINE))
+              summary = re.findall(r'^.*\d+ failed, \d+ passed.*, text, re.MULTILINE)
+              return ids, summary[-1].strip() if summary else 'No complete pytest summary'
+          before, prior_summary = failures('/tmp/pr96-tests.txt')
+          after, current_summary = failures('/tmp/pr97-tests.txt')
+          print('PR96 original:', prior_summary)
+          print('PR97 current:', current_summary)
+          print('New failing tests:', len(after - before))
+          for test in sorted(after - before):
+              print('NEW FAIL:', test)
+          print('Fixed historical failures:', len(before - after))
+          for test in sorted(before - after):
+              print('FIXED:', test)
+          PY
