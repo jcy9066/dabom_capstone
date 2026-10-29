@@ -10,8 +10,9 @@ def test_amcl_stability_is_gated_after_initial_pose_published():
     assert "stable_amcl_observations(recent, initial_pose)" in ros
     assert 'max(float(covariance[0]), float(covariance[7]))' in ros
     assert "yaw_variance = float(covariance[35])" in ros
-    assert '"stable_samples": 3 if stable else 1' in ros
-    assert "minimum_samples=1, minimum_span=0.0" in ros
+    assert '"stable_samples": len(recent)' in ros
+    wait_for_amcl = ros.split("def _wait_for_amcl(", 1)[1].split("def _publish_initial_pose(", 1)[0]
+    assert "minimum_samples=1" not in wait_for_amcl
 
 
 def test_no_amcl_stable_check_bypass_to_driving():

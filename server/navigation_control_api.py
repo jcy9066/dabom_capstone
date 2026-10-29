@@ -728,8 +728,12 @@ class NavigationControlApi:
     def activate_recorded_motion(self) -> None:
         """Reserve motor ownership without mutating the normal Nav2 Goal state."""
         with self._lock:
-            if self._recorded_motor_active or self._recorded_nav2_active:
-                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay or Nav2 already owns motors")
+            if (self._recorded_motor_active or self._recorded_nav2_active
+                or self._localization_turn_active):
+                raise NavigationControlError(
+                    "RECORDING_ALREADY_ACTIVE",
+                    "Replay, Nav2, or Initial Pose rotation already owns motors",
+                )
             self._assert_resume_safety_locked(require_estop=False)
             if (not self._motor_output_enabled or not self._recorded_idle_locked()
                 or self._state["active_goal"] is not None or self._loop_goals
@@ -1676,7 +1680,7 @@ class NavigationControlApi:
             )
 
     async def _bounded_initial_pose_turn(self) -> None:
-        """One 20-degree-or-less manual PWM pulse; STOP proof is mandatory.
+        """One Pi-local 100ms, PWM 20% pulse; STOP proof is mandatory.
 
         This is never a Nav2 Spin and does not grant motion ownership to
         Recorded Loop, Set Goal, or a stale Pi safety generation.
