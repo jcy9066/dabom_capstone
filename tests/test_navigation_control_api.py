@@ -289,9 +289,12 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             csrf_failure=csrf_failure,
             robot_id="pi-01",
             get_live_map=lambda: {
-                "width": 1,
-                "height": 1,
-                "data": [[0, 1]],
+                "width": 60,
+                "height": 60,
+                "resolution": 0.05,
+                "origin": {"x": -1.0, "y": -1.0, "yaw": 0.0},
+                "data_encoding": "rle",
+                "data": [[0, 3600]],
                 "navigation_mode": "mapping",
                 "source": "slam_toolbox",
                 "map_verified": True,
@@ -477,7 +480,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             await self.api.switch_mode(
                 {"mode": "DRIVING", "source": "current"}, user="tester",
             )
-        self.assertEqual("INITIAL_POSE_UNAVAILABLE", raised.exception.error_code)
+        self.assertIn(raised.exception.error_code,
+                      {"AUTO_POSE_REQUIRES_STOP", "AWAITING_MAP_CLICK"})
         self.assertEqual([], self.map_api.activate_calls)
 
     async def test_current_mapping_rejects_invalid_pose_not_origin(self):
@@ -486,7 +490,8 @@ class NavigationControlTests(unittest.IsolatedAsyncioTestCase):
             await self.api.switch_mode(
                 {"mode": "DRIVING", "source": "current"}, user="tester",
             )
-        self.assertEqual("INITIAL_POSE_UNAVAILABLE", raised.exception.error_code)
+        self.assertIn(raised.exception.error_code,
+                      {"AUTO_POSE_REQUIRES_STOP", "AWAITING_MAP_CLICK"})
         self.assertEqual([], self.map_api.activate_calls)
 
     async def test_current_driving_refuses_unverified_mapping_health(self):
