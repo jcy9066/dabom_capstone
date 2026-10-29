@@ -29,6 +29,7 @@ class LocalizationSessionApi:
         self.map_name = None
         self.map_revision = None
         self.live_source_revision = None
+        self.manual_only = False
         self.reason = None
         self.error_code = None
         self.result = None
@@ -48,6 +49,7 @@ class LocalizationSessionApi:
             "map_name": self.map_name,
             "map_revision": self.map_revision,
             "live_source_revision": self.live_source_revision,
+            "manual_only": self.manual_only,
             "error_code": self.error_code,
             "reason": self.reason,
             "proposed_pose": self.proposed_pose,
@@ -107,6 +109,11 @@ class LocalizationSessionApi:
         self.session_id = uuid4().hex
         self.source = source
         self.map_name = map_name if source == "existing" else None
+        if type(payload.get("manual_only", False)) is not bool:
+            raise NavigationControlError(
+                "INVALID_REQUEST", "manual_only must be boolean.", 400,
+            )
+        self.manual_only = payload.get("manual_only", False)
         self.map_revision = payload.get("map_revision")
         self.live_source_revision = (
             payload.get("map_revision") if source == "current" else None
@@ -173,6 +180,10 @@ class LocalizationSessionApi:
                 self.phase = "ESTIMATING"
                 selected, live = await self._prepare_map()
                 self._check_cancelled()
+                if self.manual_only:
+                    self.phase = "WAITING_FOR_CLICK"
+                    self.reason = "Select position and yaw on the frozen map."
+                    return
                 if live is not None:
                     pose = self.navigation._current_mapping_initial_pose()
                 else:
