@@ -601,7 +601,12 @@
                     throw new Error('Mapping 실행 상태를 확인할 수 없습니다.');
                 }
                 if (mapping.state !== 'off') {
-                    setFeedback('Mapping 모드가 실행 중입니다.');
+                    const health = await requestJson('/api/navigation/status');
+                    const active = health?.mapping_state === 'MAPPING_ACTIVE';
+                    setFeedback(active
+                        ? 'SLAM 지도 생성 및 센서 상태가 정상입니다.'
+                        : 'Mapping 프로세스 실행 중입니다. SLAM /map·센서·TF 준비를 확인해주세요.',
+                        !active);
                     return true;
                 }
             }
@@ -657,6 +662,12 @@
             String(state.control?.navigation_mode || '').toUpperCase() === 'MAPPING'
             && view.map
         ) {
+            const health = await requestJson('/api/navigation/status');
+            if (!health || health.mapping_state !== 'MAPPING_ACTIVE'
+                || health.map_saveable !== true) {
+                setFeedback('확정 SLAM 지도와 Scan·Odometry·TF 준비가 필요합니다.', true);
+                return false;
+            }
             state.busy = true;
             state.navigationPending = true;
             syncControlComponents();

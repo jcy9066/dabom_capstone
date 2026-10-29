@@ -1503,6 +1503,13 @@ class NavigationControlApi:
                     "Preview LiDAR observations cannot be used as a Driving map.",
                     409,
                 )
+            if live_map.get("mapping_state") != "MAPPING_ACTIVE":
+                raise NavigationControlError(
+                    "MAPPING_NOT_READY",
+                    "Mapping requires fresh scan, odom, TF, active SLAM, "
+                    "and an authoritative map before DRIVING.",
+                    409,
+                )
             if initial_pose_payload is None:
                 initial_pose_payload = self._current_mapping_initial_pose()
             if initial_pose_payload is None:
