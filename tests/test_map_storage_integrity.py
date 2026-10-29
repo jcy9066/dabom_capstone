@@ -42,3 +42,49 @@ def test_bundle_must_not_overwrite_existing_map(tmp_path):
     with pytest.raises(FileExistsError):
         commit_bundle({pgm: b"new", meta: b"meta"}, manifest=meta)
     assert pgm.read_bytes() == b"old"
+
+
+def test_renamed_bundle_recomputes_hashes_and_remains_loadable(tmp_path):
+    import hashlib
+    import json
+    from server.navigation_map_service import NavigationMapService
+
+    map_dir = tmp_path / "maps"
+    map_dir.mkdir()
+    original = "original"
+    image = b"P5\\n# AI patrol robot map\\n1 1\\n255\\n" + bytes([254])
+    yaml = (f"image: {original}.pgm\\nresolution: 0.1\\n"
+            "origin: [0.0, 0.0, 0.0]\\nnegate: 0\\n"
+            "occupied_thresh: 0.65\\nfree_thresh: 0.196\\n").encode()
+    raw = json.dumps({
+        "map_name": original, "width": 1, "height": 1,
+        "resolution": 0.1, "origin": {"x": 0, "y": 0, "yaw": 0},
+        "data": [0], "data_encoding": "raw",
+    }).encode()
+    paths = {
+        "pgm": map_dir / f"{original}.pgm",
+        "yaml": map_dir / f"{original}.yaml",
+        "raw": map_dir / f"{original}.raw.json",
+        "meta": map_dir / f"{original}.meta.json",
+    }
+    meta = {
+        "map_name": original, "width": 1, "height": 1, "resolution": 0.1,
+        "origin": {"x": 0, "y": 0, "yaw": 0}, "bundle_version": 2,
+        "files": {key: str(path.relative_to(tmp_path)) for key, path in paths.items()},
+        "checksums": {
+            "pgm": hashlib.sha256(image).hexdigest(),
+            "yaml": hashlib.sha256(yaml).hexdigest(),
+            "raw": hashlib.sha256(raw).hexdigest(),
+        },
+    }
+    for key, content in (
+        ("pgm", image), ("yaml", yaml), ("raw", raw),
+        ("meta", json.dumps(meta).encode()),
+    ):
+        paths[key].write_bytes(content)
+    service = NavigationMapService(tmp_path, map_dir)
+    selected = service.get_map(original)
+    renamed = service._renamed_contents(selected, "renamed")
+    for key, content in renamed.items():
+        (map_dir / f"renamed{'.raw.json' if key == 'raw' else '.meta.json' if key == 'meta' else '.' + key}").write_bytes(content)
+    assert service.get_map("renamed").map_name == "renamed"
