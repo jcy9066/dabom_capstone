@@ -970,6 +970,13 @@ class NavigationVisualizationHub:
         self.max_queue_size = max(1, int(max_queue_size))
         self._loop = None
         self._queues = {}
+        self._event_seq = 0
+        self._event_lock = threading.Lock()
+
+    @property
+    def event_seq(self):
+        with self._event_lock:
+            return self._event_seq
 
     def bind_loop(self, loop):
         self._loop = loop
@@ -989,7 +996,12 @@ class NavigationVisualizationHub:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
+        with self._event_lock:
+            self._event_seq += 1
+            sequence = self._event_seq
         payload = dict(event)
+        payload["event_seq"] = sequence
+        payload.setdefault("session_id", navigation_state.get("session_id"))
         try:
             loop.call_soon_threadsafe(self._enqueue, payload)
         except RuntimeError:
@@ -998,14 +1010,20 @@ class NavigationVisualizationHub:
     def _enqueue(self, payload):
         for queue in tuple(self._queues.values()):
             if queue.full():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                pass
+                # A lost map or reset cannot be recovered by applying a later
+                # delta. Explicitly require a complete HTTP snapshot.
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                queue.put_nowait({
+                    "type": "resync_required",
+                    "event_seq": payload["event_seq"],
+                    "session_id": payload.get("session_id"),
+                })
+                continue
+            queue.put_nowait(payload)
 
 
 navigation_visualization_hub = NavigationVisualizationHub()
