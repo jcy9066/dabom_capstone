@@ -4113,7 +4113,8 @@ def store_navigation_mode(mode, received_at):
 def build_mapping_health(now=None, process_running=None):
     now = time.time() if now is None else float(now)
     return mapping_health_state(
-        mode=navigation_state.get("mode"),
+        mode=("mapping" if process_running is True
+              else navigation_state.get("mode")),
         probe=navigation_state.get("mapping_probe"),
         probe_received_at=navigation_state.get("mapping_probe_updated_at"),
         scan_updated_at=navigation_state.get("scan_updated_at"),
