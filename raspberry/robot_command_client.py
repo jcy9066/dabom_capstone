@@ -204,6 +204,13 @@ class RobotCommandClient:
 
     def status_payload(self) -> dict:
         gps = self.gps.snapshot()
+        encoder = self.motor.encoder_snapshot()
+        encoder_age = encoder.get("age_sec") if encoder else None
+        encoder_healthy = bool(
+            self.motor.connected
+            and isinstance(encoder_age, (int, float))
+            and 0 <= encoder_age <= 1.0
+        )
         with self._safety_lock:
             safety_epoch = self._safety_epoch
             emergency_stop_latched = self.emergency_stop_latched
@@ -241,6 +248,8 @@ class RobotCommandClient:
             "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
             "motor_connected": self.motor.connected,
+            "encoder_age_sec": encoder_age,
+            "encoder_stream_healthy": encoder_healthy,
             "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
@@ -353,6 +362,8 @@ class RobotCommandClient:
                 await asyncio.sleep(1.0)
 
         previous_sequence = -1
+        last_fresh_encoder_at = time.monotonic()
+        encoder_link_fault_active = False
 
         while self.running:
             if self.motor.pico_reboot_pending():
@@ -373,9 +384,34 @@ class RobotCommandClient:
                     continue
 
             snapshot = self.motor.encoder_snapshot()
+            encoder_age = snapshot.get("age_sec") if snapshot else None
+            healthy = bool(
+                self.motor.connected
+                and isinstance(encoder_age, (int, float))
+                and 0 <= encoder_age <= 1.0
+            )
+            if healthy:
+                last_fresh_encoder_at = time.monotonic()
+                encoder_link_fault_active = False
+            elif time.monotonic() - last_fresh_encoder_at >= 2.0:
+                if not encoder_link_fault_active:
+                    # Link loss is not a new movement authorization. Operators
+                    # must explicitly recover from E-STOP after connectivity.
+                    encoder_link_fault_active = True
+                    self._resume_safety_prepared = False
+                    with self._safety_lock:
+                        self.emergency_stop_latched = True
+                        self._safety_epoch += 1
+                try:
+                    await asyncio.to_thread(self.motor.recover_encoder_stream)
+                except Exception as exc:
+                    print(f"[encoder] UART/stream recovery pending: {exc}")
+                await asyncio.sleep(1.0)
+                continue
 
             if (
-                snapshot is not None
+                healthy
+                and snapshot is not None
                 and snapshot["sequence"]
                 != previous_sequence
             ):
