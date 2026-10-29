@@ -446,6 +446,7 @@ class LoopSessionApi:
             raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
         if not self.navigation.note_authorized_motion(context):
             raise RuntimeError("MANUAL_MOTION_PERMISSION_REVOKED")
+        self._manual_pi_safety_session = context["safety_session"]
         return float(elapsed)
 
     async def _wait_obstacle_clear(self, direction: str) -> float:

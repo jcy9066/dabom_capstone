@@ -37,6 +37,9 @@ class NavigationStub:
             "localization_ready": self.localization_ready,
             "nav2_ready": self.nav2_ready,
             "navigation_state": self.navigation_state,
+            "emergency_stop": False,
+            "pi_safety": {"fresh": True, "emergency_stop": False,
+                          "safety_session": "session", "safety_epoch": 1},
         }
 
     def motion_safety_context(self):
@@ -45,6 +48,16 @@ class NavigationStub:
     def note_authorized_motion(self, context):
         assert context["safety_session"] == "session"
         return True
+
+    def motion_allowed(self):
+        return True
+
+    @staticmethod
+    def _pi_command_delivered(response):
+        return response is True or (
+            isinstance(response, dict)
+            and response.get("ok") is True and response.get("delivered") is True
+        )
 
     async def plan_goal(self, payload):
         self.calls.append(("plan", payload))
@@ -74,10 +87,18 @@ def fixture(tmp_path):
     nav = NavigationStub()
     sent = []
 
-    async def send(_robot_id, command, *, preflight=None):
+    async def send(_robot_id, command, *, preflight=None, motion_ack=False):
         if preflight is not None and not preflight():
             return False
         sent.append(dict(command))
+        if command["type"] == "manual_loop_pulse":
+            duration = command["duration_ms"]
+            await asyncio.sleep(duration / 1000.0)
+            return {"ok": True, "delivered": True, "manual_loop_pulse": {
+                "pulse_id": command["pulse_id"],
+                "replay_generation": command["replay_generation"],
+                "elapsed_ms": duration, "duration_ms": duration, "stopped": True,
+            }}
         return True
 
     async def stop():
@@ -178,7 +199,8 @@ def test_manual_bag_replays_without_pose_checks(tmp_path):
         await asyncio.sleep(0.09)
         await api.stop()
     asyncio.run(scenario())
-    assert any(command["type"] == "move" and command["direction"] == "forward"
+    assert any(command["type"] == "manual_loop_pulse"
+               and command["direction"] == "forward"
                and command["speed"] == 0.25 for command in sent)
 
 
