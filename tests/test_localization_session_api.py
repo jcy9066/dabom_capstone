@@ -206,3 +206,41 @@ def test_session_id_blocks_stale_operator_pose():
         assert raised.value.error_code == "LOCALIZATION_SESSION_CHANGED"
         await api._task
     asyncio.run(run())
+
+
+def test_manual_only_current_map_waits_without_motor_or_amcl():
+    async def run():
+        nav = Navigation()
+        api = LocalizationSessionApi(FastAPI(), nav)
+        started = await api.start({
+            "source": "current", "map_revision": "live-revision",
+            "manual_only": True,
+        }, user="operator")
+        await api._task
+        assert api.phase == "WAITING_FOR_CLICK"
+        assert nav.calls == []
+        assert api.map_name == "frozen"
+        await api.pose({
+            "session_id": started["session_id"],
+            "initial_pose": {"x": 2, "y": 2, "yaw_degrees": 90},
+        })
+        await api._task
+        assert api.phase == "READY"
+        assert nav.calls[0][0]["source"] == "existing"
+        assert nav.calls[0][0]["map_revision"] == "frozen-revision"
+    asyncio.run(run())
+
+
+def test_failed_map_revision_does_not_activate_driving():
+    async def run():
+        nav = Navigation()
+        api = LocalizationSessionApi(FastAPI(), nav)
+        await api.start({
+            "source": "existing", "map_name": "saved",
+            "map_revision": "outdated",
+        }, user="operator")
+        await api._task
+        assert api.phase == "FAILED"
+        assert api.error_code == "MAP_REVISION_CHANGED"
+        assert nav.calls == []
+    asyncio.run(run())
