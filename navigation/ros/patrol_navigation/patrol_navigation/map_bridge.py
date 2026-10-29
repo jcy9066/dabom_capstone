@@ -342,7 +342,9 @@ class MapBridge(Node):
         # RViz2 Map display처럼 /map callback이 도착한 순간 dashboard로
         # 전달한다. 별도 timer polling으로 지연시키지 않는다.
         if self.send_map:
-            self.publish_map(msg)
+            # Store only the latest ROS message; no RLE encoding or HTTP
+            # work runs on the ROS subscription callback.
+            self._queue_post("map", "/navigation/map", msg)
 
     def on_scan(self, msg):
         self._scan_seen_at = time.monotonic()
@@ -416,6 +418,8 @@ class MapBridge(Node):
                     return
                 path, payload = self._pending_posts.pop(kind)
             try:
+                if kind == "map":
+                    payload = self._map_payload(payload)
                 result = self.post_json(path, payload)
                 if kind == "map" and result:
                     self._map_post_acked_at = time.monotonic()
@@ -492,11 +496,11 @@ class MapBridge(Node):
 
     def publish_map(self, msg=None):
         msg = msg or self.latest_map
+        if msg is not None:
+            self._queue_post("map", "/navigation/map", msg)
 
-        if msg is None:
-            return
-
-        payload = {
+    def _map_payload(self, msg):
+        return {
             **self.common_payload(),
             "frame_id": (
                 msg.header.frame_id
@@ -531,10 +535,6 @@ class MapBridge(Node):
                 list(msg.data)
             ),
         }
-
-        self._queue_post(
-            "map", "/navigation/map", payload,
-        )
 
     def publish_pose(self):
         try:
