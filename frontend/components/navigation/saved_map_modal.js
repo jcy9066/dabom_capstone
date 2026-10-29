@@ -453,7 +453,42 @@
 
         const save = create('button', 'mb-btn saved-map-save-current', labels.saveCurrent);
         save.type = 'button';
+        // A rendered LiDAR Preview is not a persisted, verified SLAM map.
+        save.disabled = true;
+        async function refreshMapReadiness() {
+            if (!container.isConnected) return;
+            try {
+                const health = await requestJson('/api/navigation/status');
+                if (!container.isConnected) return;
+                save.disabled = health?.map_saveable !== true;
+                save.title = save.disabled
+                    ? 'SLAM /map 검증 전에는 임시 Preview를 저장할 수 없습니다.'
+                    : '검증된 마지막 SLAM 지도를 저장합니다.';
+            } catch (error) {
+                save.disabled = true;
+            }
+        }
+        // All events share this listener; remove it when the modal is replaced.
+        const onMapChanged = () => {
+            if (!container.isConnected) {
+                global.document.removeEventListener(
+                    'dabom:navigation-visualization-state', onMapChanged,
+                );
+                return;
+            }
+            void refreshMapReadiness();
+        };
+        global.document.addEventListener(
+            'dabom:navigation-visualization-state', onMapChanged,
+        );
+        global.setTimeout(() => void refreshMapReadiness(), 0);
         save.addEventListener('click', async () => {
+            const health = await requestJson('/api/navigation/status').catch(() => null);
+            if (!health || health.map_saveable !== true) {
+                save.disabled = true;
+                showMessage(progress, '검증된 SLAM 지도가 없습니다.', true);
+                return;
+            }
             const savedName = await global.saveCurrentNavigationMap?.(save);
             if (savedName) await controller?.open?.();
         });
