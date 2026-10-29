@@ -43,6 +43,11 @@ def test_pi_ack_timeout_forces_stop_and_never_guesses_applied_time(tmp_path, mon
     api._wait_obstacle_clear = clear
     api.send = silent_pi
 
+    async def no_receipt():
+        raise RuntimeError("MANUAL_PULSE_RECEIPT_UNAVAILABLE")
+
+    api._reconcile_uncertain_manual_pulse = no_receipt
+
     async def scenario():
         await asyncio.wait_for(
             api._run(api._active(), "MANUAL", events(200), None), timeout=1.0
@@ -50,7 +55,7 @@ def test_pi_ack_timeout_forces_stop_and_never_guesses_applied_time(tmp_path, mon
     asyncio.run(scenario())
     assert motor_entered.is_set()
     assert api._status == "FAILED"
-    assert api._error == "MANUAL_PULSE_ACK_UNCERTAIN"
+    assert api._error == "MANUAL_PULSE_RECEIPT_UNAVAILABLE"
     assert api._manual_elapsed_ms == 0
     assert len(stop_calls) >= 2
 
@@ -218,3 +223,67 @@ def test_manual_send_rejects_stale_scan_at_dispatch(tmp_path):
     asyncio.run(scenario())
     assert not any(command["type"] == "manual_loop_pulse" for command in sent)
     assert api._manual_elapsed_ms == 0
+
+
+def test_uncertain_pulse_recovers_only_exact_pi_receipt(tmp_path):
+    api, nav, sent = module.fixture(tmp_path)
+    original = {
+        "type": "manual_loop_pulse",
+        "pulse_id": "receipt-007",
+        "replay_generation": 2, "safety_session": "session",
+        "safety_epoch": 1, "duration_ms": 100,
+    }
+    api._uncertain_manual_pulse = dict(original)
+    api._requires_resume = True
+    api._replay_generation = 3
+    stopped = []
+
+    async def confirmed_resume():
+        stopped.append("confirmed_STOP_and_encoder")
+        api._requires_resume = False
+
+    async def receipt_query(robot, command, **_kwargs):
+        assert stopped
+        assert command["type"] == "manual_loop_query"
+        assert command["pulse_id"] == original["pulse_id"]
+        assert command["pulse_safety_epoch"] == 1
+        return {"ok": True, "delivered": True,
+                "manual_loop_pulse": {
+                    "pulse_id": "receipt-007", "replay_generation": 2,
+                    "duration_ms": 100, "elapsed_ms": 62, "stopped": True,
+                }}
+
+    api._wait_connection_resume = confirmed_resume
+    api.send = receipt_query
+    actual = asyncio.run(api._reconcile_uncertain_manual_pulse())
+    assert actual == 62
+    assert api._uncertain_manual_pulse is None
+    assert api._status == "RUNNING"
+
+
+def test_missing_receipt_does_not_guess_or_replay(tmp_path):
+    api, nav, sent = module.fixture(tmp_path)
+    api._uncertain_manual_pulse = {
+        "pulse_id": "no-ack", "replay_generation": 2,
+        "safety_session": "session", "safety_epoch": 1,
+        "duration_ms": 120,
+    }
+    api._requires_resume = True
+
+    async def resume():
+        api._requires_resume = False
+
+    async def missing(_robot, query, **_kwargs):
+        assert query["type"] == "manual_loop_query"
+        return False
+
+    api._wait_connection_resume = resume
+    api.send = missing
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="MANUAL_PULSE_RECEIPT_UNAVAILABLE"):
+            await api._reconcile_uncertain_manual_pulse()
+
+    asyncio.run(scenario())
+    assert api._uncertain_manual_pulse["pulse_id"] == "no-ack"
+    assert not any(v.get("type") == "manual_loop_pulse" for v in sent)
