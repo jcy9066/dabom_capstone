@@ -415,7 +415,118 @@
         );
     }
 
+    let initialPosePointer = null;
+
+    function beginInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose') return false;
+        if (event.button === 2) {
+            event.preventDefault();
+            initialPosePointer = null;
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft', {detail: {pose: null}},
+            ));
+            window.navigationMapView?.setInteractionMode?.('view');
+            setFeedback('Initial Pose 지정을 취소했습니다.');
+            return true;
+        }
+        if (event.button !== 0) return true;
+        const point = window.navigationMapView?.screenToGround(event);
+        if (!point) {
+            setFeedback('지도 밖 Initial Pose는 지정할 수 없습니다.', true);
+            return true;
+        }
+        event.preventDefault();
+        initialPosePointer = {
+            pointerId: event.pointerId, start: point,
+            mapRevision: window.navigationMapView?.snapshot?.()?.map?.map_revision,
+            pose: null,
+        };
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        return true;
+    }
+
+    function moveInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose'
+            || initialPosePointer?.pointerId !== event.pointerId) return false;
+        const point = window.navigationMapView?.screenToGround(event);
+        if (!point) return true;
+        const start = initialPosePointer.start;
+        const distance = Math.hypot(point.x - start.x, point.y - start.y);
+        if (distance >= 0.08) {
+            initialPosePointer.pose = {
+                ...start, yaw: Math.atan2(point.y - start.y, point.x - start.x),
+            };
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft',
+                {detail: {pose: initialPosePointer.pose}},
+            ));
+        }
+        return true;
+    }
+
+    async function finishInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose'
+            || initialPosePointer?.pointerId !== event.pointerId) return false;
+        event.preventDefault();
+        moveInitialPose(event);
+        const selection = initialPosePointer;
+        initialPosePointer = null;
+        if (!selection.pose) {
+            setFeedback('방향을 지정하려면 위치에서 원하는 방향으로 드래그하세요.', true);
+            return true;
+        }
+        const view = window.navigationMapView?.snapshot?.() || {};
+        if (!view.map || view.map.map_revision !== selection.mapRevision) {
+            setFeedback('지도 버전이 변경됐습니다. Initial Pose를 다시 선택하세요.', true);
+            return true;
+        }
+        if (state.busy || state.navigationPending) return true;
+        state.busy = true;
+        state.navigationPending = true;
+        syncControlComponents();
+        try {
+            let acknowledged = false;
+            let result;
+            for (;;) {
+                try {
+                    result = await mutate('/api/navigation/control/mode', {
+                        mode: 'DRIVING', source: 'current',
+                        map_revision: selection.mapRevision,
+                        initial_pose: {
+                            x: selection.pose.x, y: selection.pose.y,
+                            yaw_degrees: selection.pose.yaw * 180 / Math.PI,
+                            warning_acknowledged: acknowledged,
+                        },
+                    });
+                    break;
+                } catch (error) {
+                    if (!acknowledged
+                        && error.code === 'INITIAL_POSE_CONFIRMATION_REQUIRED'
+                        && window.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 위치를 확인하고 AMCL 검증을 진행하시겠습니까?')) {
+                        acknowledged = true;
+                        continue;
+                    }
+                    throw error;
+                }
+            }
+            applyControlState(result);
+            setFeedback('Initial Pose / AMCL 검증 완료. Driving 안전 상태를 확인하세요.');
+            window.navigationMapView?.setInteractionMode?.('view');
+        } catch (error) {
+            setFeedback('Initial Pose 확인 실패: ' + error.message, true);
+        } finally {
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft', {detail: {pose: null}},
+            ));
+            state.busy = false;
+            state.navigationPending = false;
+            syncControlComponents();
+        }
+        return true;
+    }
+
     function beginGoal(event) {
+        if (beginInitialPose(event)) return;
         const interactionMode = window.navigationMapView?.interactionMode?.() || 'view';
         if (!['set-goal', 'set-loop'].includes(interactionMode)) return;
         if (event.button === 2) {
@@ -455,6 +566,7 @@
     }
 
     function moveGoal(event) {
+        if (moveInitialPose(event)) return;
         if (state.pointerId !== event.pointerId || !state.pointerStart) return;
         const point = window.navigationMapView?.screenToGround(event);
         if (!point) return;
@@ -467,6 +579,7 @@
     }
 
     async function finishGoal(event) {
+        if (await finishInitialPose(event)) return;
         if (state.pointerId !== event.pointerId || !state.draftGoal) return;
         event.preventDefault();
         const goal = { ...state.draftGoal };
@@ -874,7 +987,14 @@
         canvas?.addEventListener('pointerdown', beginGoal);
         canvas?.addEventListener('pointermove', moveGoal);
         canvas?.addEventListener('pointerup', finishGoal);
-        canvas?.addEventListener('pointercancel', cancelGoalDraft);
+        canvas?.addEventListener('pointercancel', event => {
+            if (initialPosePointer?.pointerId === event.pointerId) {
+                initialPosePointer = null;
+                document.dispatchEvent(new CustomEvent(
+                    'dabom:initial-pose-draft', {detail: {pose: null}},
+                ));
+            } else cancelGoalDraft(event);
+        });
         const controls = window.DabomDashboardComponents?.controls;
         const dashboardModes = $('dashboard-mode-controls-mount');
         controls?.mountDriveMode(dashboardModes, { request: requestDriveMode });
@@ -892,6 +1012,13 @@
         if (warningButton) warningButton.disabled = false;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
         document.addEventListener('dabom:navigation-interaction-mode', event => {
+            if (event.detail?.mode === 'set-initial-pose') {
+                state.draftGoal = null;
+                state.pointerStart = null;
+                state.pointerId = null;
+                publishGoalDraft();
+                clearLoopDraft();
+            }
             if (event.detail?.mode !== 'set-loop' && state.loopDrafts.length) {
                 state.draftGoal = null;
                 publishGoalDraft();
@@ -907,10 +1034,16 @@
         document.addEventListener('keydown', event => {
             if (
                 event.key === 'Escape'
-                && ['set-goal', 'set-loop'].includes(window.navigationMapView?.interactionMode?.())
+                && ['set-goal', 'set-loop', 'set-initial-pose'].includes(window.navigationMapView?.interactionMode?.())
             ) {
                 event.preventDefault();
-                cancelGoalDraft();
+                if (window.navigationMapView?.interactionMode?.() === 'set-initial-pose') {
+                    initialPosePointer = null;
+                    document.dispatchEvent(new CustomEvent(
+                        'dabom:initial-pose-draft', {detail: {pose: null}},
+                    ));
+                    window.navigationMapView?.setInteractionMode?.('view');
+                } else cancelGoalDraft();
             }
         });
         const alertBox = $('alertBox');

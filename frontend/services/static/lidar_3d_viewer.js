@@ -181,6 +181,28 @@ if (root && canvas) {
     goalRoot.name = 'navigation-goals';
     layerGroups.goal.add(goalRoot);
 
+    // Independent from Set Goal/Loop; never creates a navigation goal.
+    const initialPoseArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, 0, 0.03),
+        0.55, 0x38bdf8, 0.16, 0.10,
+    );
+    initialPoseArrow.visible = false;
+    layerGroups.goal.add(initialPoseArrow);
+    document.addEventListener('dabom:initial-pose-draft', event => {
+        const pose = event.detail?.pose;
+        if (!pose || ![pose.x, pose.y, pose.yaw].every(Number.isFinite)) {
+            initialPoseArrow.visible = false;
+        } else {
+            initialPoseArrow.position.set(pose.x, pose.y, 0.03);
+            initialPoseArrow.setDirection(
+                new THREE.Vector3(Math.cos(pose.yaw), Math.sin(pose.yaw), 0),
+            );
+            initialPoseArrow.visible = true;
+        }
+        requestRender();
+    });
+
     const cameraFrustumPoseGroup = new THREE.Group();
     cameraFrustumPoseGroup.name = 'camera-frustum-pose';
     cameraFrustumPoseGroup.visible = false;
@@ -2049,7 +2071,21 @@ if (root && canvas) {
                     : '지도에서 Goal 위치와 방향을 지정합니다.')
                 : 'DRIVING 및 Pi·Localization·Nav2 준비 후 사용할 수 있습니다.';
         }
-        if (!allowed && ['set-goal', 'set-loop'].includes(interactionMode)) {
+        const poseButton = root.querySelector('[data-lidar-interaction="set-initial-pose"]');
+        const poseAllowed = viewerExpanded
+            && String(control?.navigation_mode || '').toUpperCase() === 'MAPPING'
+            && currentMap?.source === 'slam_toolbox'
+            && currentMap?.map_verified === true
+            && control?.connected === true
+            && !control?.emergency_stop;
+        if (poseButton) {
+            poseButton.disabled = !poseAllowed;
+            poseButton.title = poseAllowed
+                ? '현재 SLAM 지도에서 로봇의 위치와 방향을 드래그하여 지정합니다.'
+                : '실제 /map과 Pi 안전 상태가 준비되어야 사용할 수 있습니다.';
+        }
+        if ((!allowed && ['set-goal', 'set-loop'].includes(interactionMode))
+            || (!poseAllowed && interactionMode === 'set-initial-pose')) {
             setInteractionMode('view');
         }
     }
@@ -2148,10 +2184,17 @@ if (root && canvas) {
     }
 
     function setInteractionMode(mode) {
+        const poseAllowed = mode === 'set-initial-pose'
+            && viewerExpanded
+            && isMappingMode()
+            && currentMap?.source === 'slam_toolbox'
+            && currentMap?.map_verified === true
+            && currentControlState?.connected === true
+            && !currentControlState?.emergency_stop;
         interactionMode = (
             ['set-goal', 'set-loop'].includes(mode) && goalInteractionAllowed()
                 ? mode
-                : 'view'
+                : poseAllowed ? 'set-initial-pose' : 'view'
         );
         controls.enabled = viewerExpanded;
         controls.enableRotate = viewerExpanded && interactionMode === 'view';
@@ -2159,7 +2202,7 @@ if (root && canvas) {
         controls.enableZoom = viewerExpanded;
         root.closest('.lidar-viewer-overlay')?.classList.toggle(
             'goal-input-active',
-            viewerExpanded && ['set-goal', 'set-loop'].includes(interactionMode),
+            viewerExpanded && ['set-goal', 'set-loop', 'set-initial-pose'].includes(interactionMode),
         );
         root.querySelectorAll('[data-lidar-interaction]').forEach(button => {
             button.classList.toggle(
@@ -2167,6 +2210,7 @@ if (root && canvas) {
                 button.dataset.lidarInteraction === interactionMode,
             );
         });
+        if (interactionMode !== 'set-initial-pose') initialPoseArrow.visible = false;
         if (interactionMode !== 'view') canvas.focus({ preventScroll: true });
         document.dispatchEvent(new CustomEvent('dabom:navigation-interaction-mode', {
             detail: { mode: interactionMode },
