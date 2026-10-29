@@ -21,6 +21,7 @@ class NavigationStub:
         self._lock = threading.RLock()
         self._loop_session_cancel_token = 0
         self.mode = "manual"
+        self.connected = True
         self.navigation_state = "READY"
         self.localization_ready = False
         self.nav2_ready = False
@@ -31,14 +32,14 @@ class NavigationStub:
     def state_response(self):
         return {
             "navigation_mode": "DRIVING",
-            "connected": True,
+            "connected": self.connected,
             "robot_mode": self.mode,
             "active_map": {"map_name": "map_one"},
             "localization_ready": self.localization_ready,
             "nav2_ready": self.nav2_ready,
             "navigation_state": self.navigation_state,
             "emergency_stop": False,
-            "pi_safety": {"fresh": True, "emergency_stop": False,
+            "pi_safety": {"fresh": self.connected, "emergency_stop": False,
                           "safety_session": "session", "safety_epoch": 1},
         }
 
