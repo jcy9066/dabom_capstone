@@ -28,7 +28,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PYTHON" -m pytest -q \
   tests/test_initial_pose_safety.py tests/test_initial_pose_map_validation.py \
   tests/test_localization_observation.py tests/test_localization_rotation.py \
   tests/test_localization_rotation_controller.py \
-  tests/test_amcl_pose_stability_contract.py tests/test_navigation_control_api.py \
+  tests/test_amcl_pose_stability_contract.py tests/test_auto_pose_motion_contract.py \
+  tests/test_navigation_control_api.py tests/test_loop_motor_ownership_contract.py \
   tests/test_loop_session_api.py tests/test_loop_deadline_regression.py \
   tests/test_manual_loop_segments.py tests/test_manual_loop_pi_pulse.py \
   --tb=short
