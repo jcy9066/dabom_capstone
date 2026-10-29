@@ -1491,11 +1491,25 @@ if (root && canvas) {
 
         ensureScanCapacity(scan.ranges.length);
 
-        // Anchor this single scan at the latest available base map pose.
-        // The previous scan stays fixed while the robot moves; each new scan
-        // replaces it (LaserScan Decay Time = 0). Never translate map/costmap.
-        if (targetPose) {
-            const yaw = targetPose.yaw;
+        // Scan-time map->laser TF takes precedence over latest map->base_link.
+        // Never apply the laser mount a second time to a sensor-frame TF.
+        const matched = scan?.map_sensor_pose;
+        const hasMatchedTf = Boolean(
+            matched && matched.frame_id === 'map'
+            && [matched.x, matched.y, matched.yaw].every(v => Number.isFinite(Number(v)))
+        );
+        // An unmatched LiDAR scan may serve as a temporary local preview.
+        // It must not appear as a world obstacle on an authoritative SLAM map.
+        const isPreview = !currentMap || currentMap.preview === true
+            || currentMap.map_kind === 'preview';
+        const canUseLatestPose = isPreview && Boolean(targetPose);
+        if (hasMatchedTf) {
+            for (const group of [scanRoot, pointsRoot]) {
+                group.position.set(Number(matched.x), Number(matched.y), Number(matched.z) || 0);
+                group.rotation.z = Number(matched.yaw);
+            }
+        } else if (canUseLatestPose) {
+            const yaw = Number(targetPose.yaw) || 0;
             const cy = Math.cos(yaw);
             const sy = Math.sin(yaw);
             const sensorX = targetPose.x + cy * scanMountLocal.x - sy * scanMountLocal.y;
@@ -1547,8 +1561,8 @@ if (root && canvas) {
         pointAttribute.needsUpdate = true;
         scanRayGeometry.setDrawRange(0, validCount * 2);
         scanPointGeometry.setDrawRange(0, validCount);
-        scanRoot.visible = Boolean(validCount && targetPose);
-        pointsRoot.visible = Boolean(validCount && targetPose);
+        scanRoot.visible = Boolean(validCount && (hasMatchedTf || canUseLatestPose));
+        pointsRoot.visible = Boolean(validCount && (hasMatchedTf || canUseLatestPose));
     }
 
     function displayedGlobalPath(
@@ -2219,7 +2233,7 @@ if (root && canvas) {
             && Number.isFinite(poseReceived) && poseReceived > 0
             && Math.abs(scanReceived - poseReceived) > 0.75
         );
-        rebuildScan(scanPoseMismatch ? null : liveScan);
+        rebuildScan(scanPoseMismatch && !liveScan?.map_sensor_pose ? null : liveScan);
 
         if (
             trajectorySessionActive

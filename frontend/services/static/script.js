@@ -365,6 +365,7 @@ const lidarState = {
     map: null,
     pose: null,
     scan: null,
+    sessionId: null,
     globalPath: [],
     globalPathStatus: "none",
     costmap: null,
@@ -391,6 +392,35 @@ function getScanKey(scan) {
     const first = scan.ranges.length ? scan.ranges[0] : '';
     const last = scan.ranges.length ? scan.ranges[scan.ranges.length - 1] : '';
     return `${scan.timestamp || ''}:${scan.received_at || ''}:${scan.ranges.length}:${first}:${last}`;
+}
+
+function acceptNavigationScan(scan) {
+    if (!scan || !Array.isArray(scan.ranges)) return false;
+    const previous = lidarState.scan;
+    if (previous) {
+        if (previous.session_id && scan.session_id
+            && previous.session_id !== scan.session_id) {
+            clearNavigationScan();
+        } else {
+            const matchedPrevious = Boolean(previous.map_sensor_pose);
+            const matchedNext = Boolean(scan.map_sensor_pose);
+            const previousAt = Number(previous.received_at) || 0;
+            const nextAt = Number(scan.received_at) || 0;
+            // Prefer an exact scan-time TF over a newer, unpaired Pi frame.
+            if (matchedPrevious && !matchedNext
+                && nextAt - previousAt < 1.5) return false;
+            if (previous.source === scan.source) {
+                const a = Date.parse(previous.timestamp || '');
+                const b = Date.parse(scan.timestamp || '');
+                if (Number.isFinite(a) && Number.isFinite(b) && b < a) return false;
+                if (previous.sequence != null && scan.sequence != null
+                    && Number(scan.sequence) <= Number(previous.sequence)) return false;
+            }
+        }
+    }
+    lidarState.scan = scan;
+    noteScanUpdate(scan);
+    return true;
 }
 
 function noteScanUpdate(scan) {
@@ -684,13 +714,17 @@ function applyNavigationSnapshot(data) {
         lidarState.status = data.status;
         lidarState.statusObservedAtMs = performance.now();
     }
+    if (data.session_id && lidarState.sessionId !== data.session_id) {
+        lidarState.sessionId = data.session_id;
+        clearNavigationScan();
+        lidarState.pose = null;
+    }
     lidarState.pose = data.pose_available ? data.pose : null;
     // Snapshot /plan events have no Goal execution identifier and are
     // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
-        lidarState.scan = data.scan;
-        noteScanUpdate(data.scan);
+        acceptNavigationScan(data.scan);
     } else {
         clearNavigationScan();
     }
@@ -730,8 +764,7 @@ function applyNavigationStreamMessage(message) {
             lidarState.statusObservedAtMs = performance.now();
         }
         if (message.scan) {
-            lidarState.scan = message.scan;
-            noteScanUpdate(message.scan);
+            acceptNavigationScan(message.scan);
         } else {
             clearNavigationScan();
         }
@@ -774,6 +807,8 @@ function applyNavigationStreamMessage(message) {
         navigationMapSuppressedRevision = null;
         lidarState.map = null;
         lidarState.pose = null;
+        lidarState.sessionId = null;
+        clearNavigationScan();
         resetNavigationGlobalPath();
         navigationGlobalPathRunKey = null;
         lidarState.costmap = null;
