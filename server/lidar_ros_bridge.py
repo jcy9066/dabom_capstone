@@ -199,6 +199,7 @@ class LidarRosBridge:
 
         # 오래된 scan이 밀리지 않도록 최신 scan만 유지한다.
         self.scan_queue: queue.Queue[LaserScan] = queue.Queue(maxsize=1)
+        self._last_accepted_sequence: int | None = None
         self._future_stamp_warning_at = 0.0
 
         self.node = None
@@ -280,6 +281,7 @@ class LidarRosBridge:
             self.bridge_stats["robot_id"] = robot_id
             self.bridge_stats["connected_at"] = time.time()
             self.bridge_stats["disconnected_at"] = None
+            self._last_accepted_sequence = None
 
     def mark_disconnected(self, robot_id: str) -> None:
         with self.stats_lock:
@@ -301,6 +303,17 @@ class LidarRosBridge:
             raise RuntimeError("LiDAR ROS bridge is not started")
 
         message, dashboard_payload = self.packet_to_scan(packet)
+        seq = packet.get("sequence")
+        if seq is not None:
+            try:
+                seq = int(seq)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("LiDAR sequence must be an integer") from exc
+            with self.stats_lock:
+                if (self._last_accepted_sequence is not None
+                    and seq <= self._last_accepted_sequence):
+                    raise ValueError("out-of-order or repeated LiDAR sequence")
+                self._last_accepted_sequence = seq
 
         if self.scan_queue.full():
             try:
@@ -366,6 +379,7 @@ class LidarRosBridge:
         # Only evidently future source stamps are replaced by GPU receipt
         # time; otherwise keep the original measurement time for SLAM.
         received_stamp = self.node.get_clock().now().to_msg()
+        source_time_used = False
         # A current Pi clock estimate is required for newly updated senders.
         # Legacy senders have no trustworthy cross-host offset; use GPU time.
         # This also allows the GPU update before the Pi branch is updated.
@@ -377,7 +391,12 @@ class LidarRosBridge:
                 stamp_sec + stamp_nanosec / 1_000_000_000
                 - (received_stamp.sec + received_stamp.nanosec / 1_000_000_000)
             ) if valid_source else 0.0
-            if valid_source and skew_sec <= 0.05:
+            if valid_source and skew_sec < -0.75:
+                raise ValueError(
+                    f"stale LiDAR measurement: {abs(skew_sec):.3f}s old"
+                )
+            source_time_used = bool(valid_source and -0.75 <= skew_sec <= 0.05)
+            if source_time_used:
                 message.header.stamp.sec = stamp_sec
                 message.header.stamp.nanosec = stamp_nanosec
             else:
@@ -451,8 +470,21 @@ class LidarRosBridge:
         dashboard_payload = {
             "robot_id": packet.get("robot_id"),
             "frame_id": message.header.frame_id,
-            "timestamp": packet.get("sent_at") or utc_now_iso(),
+            "timestamp": datetime.fromtimestamp(
+                message.header.stamp.sec + message.header.stamp.nanosec / 1e9,
+                timezone.utc,
+            ).isoformat().replace("+00:00", "Z"),
+            "sent_at": packet.get("sent_at"),
             "bridge_timestamp": utc_now_iso(),
+            "scan_stamp_ns": (
+                int(message.header.stamp.sec) * 1000000000
+                + int(message.header.stamp.nanosec)
+            ),
+            "clock_sync_valid": source_time_used,
+            "clock_domain": "gpu_ros_time",
+            "time_increment_sec": float(message.time_increment) * step,
+            "scan_time_sec": float(message.scan_time),
+            "source": "lidar_ros_bridge",
             "sequence": packet.get("sequence"),
             "angle_min": angle_min,
             "angle_max": dashboard_angle_max,

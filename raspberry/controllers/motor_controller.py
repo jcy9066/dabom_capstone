@@ -559,6 +559,13 @@ class MotorController:
         with self._command_lock:
             self._ensure_connected_locked()
 
+    def recover_encoder_stream(self) -> None:
+        """Re-arm a silent encoder stream while keeping the motor STOP gate."""
+        with self._command_lock:
+            self._ensure_connected_locked()
+            self._exchange_locked("STOP,encoder_stream_recovery")
+            self._exchange_locked("ENC_STREAM,1")
+
     def reset_encoders(self) -> None:
         with self._command_lock:
             self._ensure_connected_locked()

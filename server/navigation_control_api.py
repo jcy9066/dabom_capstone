@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from datetime import datetime, timezone
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ from server.navigation_ros_control import NavigationRosError
 from server.navigation_motion_segments import annotate_path
 from server.auto_initial_pose import estimate_initial_pose, AutoPoseUncertain
 from server.scan_pose_fusion import fuse_stationary_scans
+from server.localization_observation import observation_baseline, wait_fresh_fused_scan
+from server.initial_pose_safety import decode_grid, evaluate_initial_pose_grid, PoseGridError
+from server.localization_rotation import verify_localization_turn_clearance, UnsafeLocalizationTurn
 from server.env_config import env_float, env_int, env_text
 
 
@@ -128,6 +132,7 @@ class NavigationControlApi:
         self._clear_goal_visualization = clear_goal_visualization
         self._watchdog = watchdog or NavigationWatchdogConfig.from_env()
         self._motor_output_enabled = bool(motor_output_enabled)
+        self._localization_turn_active = False
         self._driving_ready_timeout_sec = env_float(
             "NAV_DRIVING_READY_TIMEOUT_SEC", minimum=1.0
         )
@@ -188,6 +193,7 @@ class NavigationControlApi:
         self._sensor_recovery: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
+        self._encoder_last_received_at: float | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_commanded_at: float | None = None
         self._encoder_stop_violation = False
@@ -289,6 +295,7 @@ class NavigationControlApi:
             self._volume_override_until = 0.0
             # A replaced Pi socket must establish a fresh encoder baseline.
             self._encoder_sequence = None
+            self._encoder_last_received_at = None
             if not connected:
                 self._stop_confirmation_after_sequence = None
                 self._estop_generation += 1
@@ -539,6 +546,7 @@ class NavigationControlApi:
                 if self._encoder_sequence is not None and sequence <= self._encoder_sequence:
                     return
                 self._encoder_sequence = sequence
+                self._encoder_last_received_at = received_at
             self._encoder_ticks = ticks
             marker = self._stop_confirmation_after_sequence
             if marker is not None and sequence is not None and sequence > marker:
@@ -723,8 +731,12 @@ class NavigationControlApi:
     def activate_recorded_motion(self) -> None:
         """Reserve motor ownership without mutating the normal Nav2 Goal state."""
         with self._lock:
-            if self._recorded_motor_active or self._recorded_nav2_active:
-                raise NavigationControlError("RECORDING_ALREADY_ACTIVE", "Replay or Nav2 already owns motors")
+            if (self._recorded_motor_active or self._recorded_nav2_active
+                or self._localization_turn_active):
+                raise NavigationControlError(
+                    "RECORDING_ALREADY_ACTIVE",
+                    "Replay, Nav2, or Initial Pose rotation already owns motors",
+                )
             self._assert_resume_safety_locked(require_estop=False)
             if (not self._motor_output_enabled or not self._recorded_idle_locked()
                 or self._state["active_goal"] is not None or self._loop_goals
@@ -883,6 +895,27 @@ class NavigationControlApi:
     def recorded_stop_proven(self) -> bool:
         with self._lock:
             return self._stop_confirmed_locked(time.time())
+
+    def manual_motion_health(self) -> bool:
+        """MANUAL LOOP must have fresh, independently sequenced wheel telemetry.
+
+        Nav2's watchdog can be inactive in MANUAL mode; do not inherit its
+        early return as evidence that wheel measurements are live.
+        """
+        with self._lock:
+            now = time.time()
+            age = (None if self._encoder_last_received_at is None
+                   else now - self._encoder_last_received_at)
+            return bool(
+                self._connected and self._encoder_ticks is not None
+                and self._encoder_sequence is not None
+                and age is not None and 0 <= age <= min(
+                    0.5, self._watchdog.odometry_timeout_sec,
+                )
+                and not self._encoder_stop_violation
+                and not self._state["emergency_stop"]
+                and self._pi_estop_latched is False
+            )
 
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
@@ -1377,10 +1410,20 @@ class NavigationControlApi:
                 self._touch_locked()
         return self.state_response()
 
-    async def switch_mode(self, payload: dict[str, Any], user: str = "unknown") -> dict[str, Any]:
+    async def switch_mode(
+        self, payload: dict[str, Any], user: str = "unknown",
+        *, _localization_internal: bool = False,
+    ) -> dict[str, Any]:
         mode = str(payload.get("mode", "")).strip().upper()
         if mode not in self.MODES:
             raise NavigationControlError("INVALID_MODE", "mode must be MAPPING or DRIVING.", 400)
+        localization = getattr(self, "_localization_session_api", None)
+        if (localization is not None and localization.motion_reserved
+            and not _localization_internal):
+            raise NavigationControlError(
+                "LOCALIZATION_BUSY",
+                "Cannot change navigation maps while Initial Pose is being established.", 409,
+            )
 
         if mode == "MAPPING":
             await self._stop_recorded_before_transition()
@@ -1401,7 +1444,7 @@ class NavigationControlApi:
             else:
                 await asyncio.to_thread(self._ros.cancel_navigation)
             try:
-                await asyncio.to_thread(
+                mapping_process_status = await asyncio.to_thread(
                     self._process.transition,
                     "MAPPING",
                     None,
@@ -1414,7 +1457,10 @@ class NavigationControlApi:
                     self._touch_locked()
                 raise
 
-            if self._clear_visualization is not None:
+            # Re-selecting an existing Mapping process is not a new SLAM
+            # session: preserve its map, source timestamps and TF evidence.
+            if (self._clear_visualization is not None
+                and not mapping_process_status.get("reused_session", False)):
                 self._clear_visualization()
 
             with self._lock:
@@ -1474,6 +1520,7 @@ class NavigationControlApi:
         map_name = payload.get("map_name")
         initial_pose_payload = payload.get("initial_pose")
         auto_pose_encoder_baseline = None
+        current_auto_recovery = False
 
         if source in {"current", "save_current"}:
             live_map = self._get_live_map()
@@ -1493,13 +1540,35 @@ class NavigationControlApi:
                         409,
                     )
 
+            expected_revision = payload.get("map_revision")
+            if expected_revision is not None and expected_revision != live_map.get("map_revision"):
+                raise NavigationControlError(
+                    "MAP_REVISION_CHANGED",
+                    "Current Mapping changed during Initial Pose selection.",
+                    409,
+                )
+            if (live_map.get("source") != "slam_toolbox"
+                or live_map.get("map_verified") is not True):
+                raise NavigationControlError(
+                    "SLAM_MAP_NOT_VERIFIED",
+                    "Preview LiDAR observations cannot be used as a Driving map.",
+                    409,
+                )
+            if live_map.get("mapping_state") != "MAPPING_ACTIVE":
+                raise NavigationControlError(
+                    "MAPPING_NOT_READY",
+                    "Mapping requires fresh scan, odom, TF, active SLAM, "
+                    "and an authoritative map before DRIVING.",
+                    409,
+                )
             if initial_pose_payload is None:
                 initial_pose_payload = self._current_mapping_initial_pose()
-            if initial_pose_payload is None:
-                # Operator-approved startup estimate when live Mapping has no TF pose.
-                # Map validation and AMCL/Nav2 readiness remain mandatory.
-                initial_pose_payload = {"x": 0.0, "y": 0.0, "yaw_degrees": 0.0}
+                current_auto_recovery = initial_pose_payload is None
 
+            if initial_pose_payload is not None:
+                await asyncio.to_thread(
+                    self._validate_live_initial_pose, live_map, initial_pose_payload,
+                )
             # Nav2 map_server needs a map file. Snapshot the current in-memory
             # Mapping result automatically so the operator does not have to
             # manually save and reload it before setting a Goal.
@@ -1509,50 +1578,8 @@ class NavigationControlApi:
             # Do not invent an arbitrary origin when a saved map is selected.
             # Automatic localization must prove a fresh, unambiguous scan
             # match; otherwise the operator must supply Initial Pose.
-            if initial_pose_payload is None:
-                selected_for_match = self._map_api.resolve_map(map_name)
-                with self._lock:
-                    manual = self._robot_mode == "manual"
-                    not_moving = (
-                        self._state["navigation_state"] not in {
-                            "NAVIGATING", "RESUMING", "CANCELING", "CANCELING_STOP",
-                            "PAUSING_FOR_MANUAL", "REPLACING_GOAL", "EMERGENCY_STOPPED",
-                        }
-                        and self._motion_allowed_locked(time.time())
-                    )
-                    auto_pose_encoder_baseline = self._encoder_ticks
-                if not manual or not not_moving or auto_pose_encoder_baseline is None:
-                    raise NavigationControlError(
-                        "AUTO_POSE_REQUIRES_STOP", "Select manual/stopped operation before automatic localization.", 409
-                    )
-                try:
-                    # Merge only fresh LiDAR frames with unchanged encoder
-                    # ticks; never align moving scans at a guessed pose.
-                    scan = await asyncio.to_thread(
-                        fuse_stationary_scans, self._get_live_scans()
-                    )
-                    initial_pose_payload = await asyncio.to_thread(
-                        estimate_initial_pose, selected_for_match, scan,
-                        mount_x=env_float("LIDAR_X"),
-                        mount_y=env_float("LIDAR_Y"),
-                        mount_yaw=env_float("LIDAR_YAW"),
-                    )
-                except (AutoPoseUncertain, OSError, ValueError, KeyError) as exc:
-                    raise NavigationControlError(
-                        "AUTO_INITIAL_POSE_UNCERTAIN",
-                        f"Automatic localization cannot confirm a unique position: {exc}. Enter Initial Pose manually.",
-                        409,
-                    ) from exc
-                # A valid snapshot is not proof the RC car remained stopped
-                # while expensive global scan matching was running.
-                with self._lock:
-                    if (self._encoder_ticks != auto_pose_encoder_baseline
-                        or self._robot_mode != "manual"
-                        or self._state["emergency_stop"]
-                        or not self._motion_allowed_locked(time.time())):
-                        raise NavigationControlError(
-                            "AUTO_POSE_MOVED", "Robot moved during automatic localization; retry while stopped.", 409,
-                        )
+            # Actual matching starts after the saved-map snapshot is available.
+            pass
         else:
             raise NavigationControlError(
                 "INVALID_SOURCE",
@@ -1561,13 +1588,69 @@ class NavigationControlApi:
             )
 
         selected = self._map_api.resolve_map(map_name)
+        if initial_pose_payload is None:
+            if source == "existing" or current_auto_recovery:
+                initial_pose_payload, auto_pose_encoder_baseline = (
+                    await self._estimate_initial_pose_with_retry(
+                        selected,
+                        expected_map_revision=(live_map.get("map_revision")
+                                               if source in {"current", "save_current"} else None),
+                        require_mapping_health=source in {"current", "save_current"},
+                    )
+                )
+            else:
+                raise NavigationControlError(
+                    "INITIAL_POSE_UNAVAILABLE",
+                    "A verified localization estimate or explicit map pose is required.",
+                    409,
+                )
+        # An explicit map click is a pose estimate at one instant. Capture
+        # actual wheel/safety identity *before* the potentially slow occupancy
+        # validation and ROS2 transition; AMCL convergence cannot prove that
+        # the physical robot has remained at that clicked pose.
+        with self._lock:
+            pose_wheel_baseline = self._encoder_ticks
+            pose_safety_session = self._pi_safety_session
+            pose_estop_generation = self._estop_generation
+            pose_initial_robot_mode = self._robot_mode
+            if (pose_wheel_baseline is None or not pose_safety_session
+                or not self._connected or pose_initial_robot_mode != "manual"
+                or self._state["emergency_stop"]):
+                raise NavigationControlError(
+                    "INITIAL_POSE_STOP_UNVERIFIED",
+                    "Fresh encoder, Pi safety session and stationary MANUAL state required.", 409,
+                )
+
+        def ensure_pose_stationary():
+            with self._lock:
+                if (self._encoder_ticks != pose_wheel_baseline
+                    or self._pi_safety_session != pose_safety_session
+                    or self._estop_generation != pose_estop_generation
+                    or self._robot_mode != pose_initial_robot_mode
+                    or self._state["emergency_stop"]):
+                    raise NavigationControlError(
+                        "INITIAL_POSE_MOVED",
+                        "Physical movement or safety change invalidated Initial Pose.", 409,
+                    )
+
+        # Validate occupancy, footprint, and warning acknowledgment before
+        # stopping the existing Mapping process. An invalid user click must
+        # never destroy the only healthy SLAM session.
+        if hasattr(self._map_api, "validate_initial_pose"):
+            await asyncio.to_thread(
+                self._map_api.validate_initial_pose, selected, initial_pose_payload,
+            )
+        ensure_pose_stationary()
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
+            ensure_pose_stationary()
             loaded = await self._activate_map_when_ready(
-                {"map_name": selected.map_name, "initial_pose": initial_pose_payload},
+                {"map_name": selected.map_name, "initial_pose": initial_pose_payload,
+                 "map_revision": payload.get("map_revision") if source == "existing" else None},
                 user,
             )
             await self._wait_for_nav2_ready()
+            ensure_pose_stationary()
             if auto_pose_encoder_baseline is not None:
                 with self._lock:
                     if (self._encoder_ticks != auto_pose_encoder_baseline
@@ -1583,12 +1666,17 @@ class NavigationControlApi:
             except Exception:
                 pass
             with self._lock:
+                # Mapping was stopped before the failed DRIVING transition.
+                # No ROS process is now known to provide a valid active mode.
+                self._state["navigation_mode"] = None
                 self._state["navigation_state"] = "ERROR"
+                self._state["active_map"] = None
                 self._state["last_error"] = str(exc)
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False
                 self._touch_locked()
             raise
+        ensure_pose_stationary()
         with self._lock:
             pre_mode_telemetry = self._pi_updated_at
         delivered = await self._send_robot_command(
@@ -1608,12 +1696,19 @@ class NavigationControlApi:
                 pass
             with self._lock:
                 self._arm_pending_stop_locked()
+                self._state["navigation_mode"] = None
                 self._state["navigation_state"] = "ERROR"
+                self._state["active_map"] = None
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
                 self._touch_locked()
             raise NavigationControlError("PI_MODE_SYNC_FAILED", "Pi did not confirm DRIVING mode.", 503)
+        try:
+            ensure_pose_stationary()
+        except NavigationControlError:
+            await self.emergency_stop("INITIAL_POSE_MOVED", automatic=True, force=True)
+            raise
         with self._lock:
             self._state.update(
                 {
@@ -1635,6 +1730,317 @@ class NavigationControlApi:
             self._touch_locked()
         return self.state_response()
 
+    @staticmethod
+    def _validate_live_initial_pose(live_map, pose):
+        try:
+            cells = decode_grid(
+                live_map["data"], live_map.get("data_encoding", "raw"),
+                int(live_map["width"]), int(live_map["height"]),
+            )
+            risk = evaluate_initial_pose_grid(
+                width=int(live_map["width"]), height=int(live_map["height"]),
+                resolution=float(live_map["resolution"]),
+                origin=live_map["origin"],
+                cells=cells,
+                x=float(pose["x"]), y=float(pose["y"]),
+            )
+        except (KeyError, ValueError, TypeError, OverflowError, PoseGridError) as exc:
+            raise NavigationControlError(
+                "INVALID_INITIAL_POSE", f"Cannot validate live map pose: {exc}", 409,
+            ) from exc
+        if risk["risk"] == "BLOCKED":
+            raise NavigationControlError(
+                "INITIAL_POSE_OCCUPIED", f"Initial Pose is blocked: {risk['reason']}", 409,
+            )
+        if risk["risk"] == "WARNING" and pose.get("warning_acknowledged") is not True:
+            raise NavigationControlError(
+                "INITIAL_POSE_CONFIRMATION_REQUIRED",
+                f"Initial Pose requires confirmation: {risk['reason']}", 409,
+            )
+
+    async def _bounded_initial_pose_turn(
+        self, *, saved_map=None, require_mapping_health: bool = False,
+    ) -> None:
+        """One Pi-local 100ms, PWM 20% pulse; STOP proof is mandatory.
+
+        This is never a Nav2 Spin and does not grant motion ownership to
+        Recorded Loop, Set Goal, or a stale Pi safety generation.
+        """
+        if not self._motor_output_enabled:
+            raise UnsafeLocalizationTurn("Physical motor output is unavailable")
+        with self._lock:
+            navigation_mode = self._state["navigation_mode"]
+            ready = (
+                navigation_mode in {"MAPPING", "DRIVING"}
+                and self._state["navigation_state"] in {"IDLE", "READY", "SUCCEEDED"}
+                and self._robot_mode == "manual"
+                and self._pi_navigation_mode == navigation_mode
+                and not self._state["emergency_stop"]
+                and self._pi_estop_latched is False
+                and self._connected
+                and not self._recorded_motor_active
+                and not self._recorded_nav2_active
+                and not self._loop_goals
+                and self._state["active_goal"] is None
+                and not self._localization_turn_active
+                and (self._loop_session_owner is None
+                     or self._loop_session_owner.done())
+                and self._encoder_ticks is not None
+            )
+            if not ready:
+                raise UnsafeLocalizationTurn(
+                    "Stationary MANUAL control, Pi safety, and exclusive motor ownership required"
+                )
+        if navigation_mode == "MAPPING":
+            mapping = self._get_live_map() or {}
+            mapping_ready = (
+                mapping.get("mapping_state") == "MAPPING_ACTIVE"
+                and mapping.get("source") == "slam_toolbox"
+            )
+            # Current Mapping requires valid SLAM. A separately selected
+            # stored map may be recovered using fresh 360-degree scan and
+            # wheel odometry even when no Mapping session exists.
+            if not mapping_ready and (
+                require_mapping_health
+                or saved_map is None
+                or not getattr(saved_map, "yaml_path", None)
+            ):
+                raise UnsafeLocalizationTurn("Valid SLAM Mapping or a saved map is required")
+        else:
+            # A stored-map recovery can rotate in DRIVING before AMCL is
+            # ready, but never while a Nav2 Goal/action is still active.
+            if saved_map is None or not getattr(saved_map, "yaml_path", None):
+                raise UnsafeLocalizationTurn("Selected saved map is required in DRIVING")
+            nav_state = self._ros.navigation_status()
+            if nav_state.get("state") not in {"IDLE", "SUCCEEDED", "CANCELED"}:
+                raise UnsafeLocalizationTurn("Nav2 is active or unverified; rotation blocked")
+        verify_localization_turn_clearance(self._get_live_scan())
+
+        odom = self._ros.rotation_status()
+        try:
+            start_yaw = float(odom["odom_yaw"])
+            start_sequence = int(odom["odom_sequence"])
+            odom_age = float(odom["odometry_age_sec"])
+            linear = float(odom["odom_linear_x"])
+            angular = float(odom["odom_angular_z"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise UnsafeLocalizationTurn("Fresh stationary Odometry unavailable") from exc
+        if (not all(math.isfinite(v) for v in (start_yaw, odom_age, linear, angular))
+            or odom_age > 0.3 or start_sequence <= 0
+            or abs(linear) > 0.05 or abs(angular) > 0.10):
+            raise UnsafeLocalizationTurn("Odometry is stale or robot not stationary")
+        if navigation_mode == "DRIVING":
+            # An unexpired Nav2 velocity command must not overlap a local turn.
+            command_age = odom.get("command_age_sec")
+            if (isinstance(command_age, (int, float))
+                and math.isfinite(command_age) and command_age < 1.0
+                and (abs(float(odom.get("command_linear_x") or 0.0)) > 0.01
+                     or abs(float(odom.get("command_angular_z") or 0.0)) > 0.02)):
+                raise UnsafeLocalizationTurn("Recent nonzero Nav2 velocity blocks rotation")
+        # A second preflight before reserving motor ownership defeats stale UI
+        # observations and arbitrary movement from another controller.
+        with self._lock:
+            if not self._motion_allowed_locked(time.time()):
+                raise UnsafeLocalizationTurn("STOP/safety generation is not ready")
+            self._localization_turn_active = True
+        moved = False
+        stop_ack = False
+        try:
+            self.recorded_stop_begin()
+            initial_stop = await self._send_robot_command(
+                self._robot_id, {"type": "stop", "reason": "initialpose_precheck"},
+            )
+            if not self._pi_command_delivered(initial_stop):
+                raise UnsafeLocalizationTurn("Pre-rotation STOP was not acknowledged")
+            self.recorded_stop_acknowledged(True)
+            if not await self._wait_initial_pose_stop_proof():
+                raise UnsafeLocalizationTurn("Pre-rotation encoder STOP proof missing")
+            context = None
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                context = self.motion_safety_context()
+                if (context is not None and context.get("robot_mode") == "manual"
+                    and context.get("pi_navigation_mode") == navigation_mode):
+                    break
+                await asyncio.sleep(0.05)
+            if (context is None or context.get("robot_mode") != "manual"
+                or context.get("pi_navigation_mode") != navigation_mode):
+                raise UnsafeLocalizationTurn("Pi STOP safety generation not synchronized")
+            verify_localization_turn_clearance(self._get_live_scan())
+            # One short bounded pulse, strictly below the 30% motor firmware
+            # ceiling and capped at 20% PWM. Further turns require a new
+            # localization operation after STOP and a full safety preflight.
+            command = {
+                "type": "initial_pose_turn", "direction": "rotate_left",
+                "speed": 0.20, "duration_ms": 100,
+                "safety_session": context["safety_session"],
+                "safety_epoch": context["safety_epoch"],
+            }
+            if self.motion_safety_context() != context:
+                raise UnsafeLocalizationTurn("Motor safety generation changed before turn")
+            if not self.note_authorized_motion(context):
+                raise UnsafeLocalizationTurn("Rotation safety context revoked")
+            # The Pi enforces 100ms and STOP locally before it sends the ACK.
+            acknowledged = await self._send_robot_command(self._robot_id, command)
+            if not self._pi_command_delivered(acknowledged):
+                raise UnsafeLocalizationTurn("Pi-local rotation/STOP ACK missing")
+            moved = True
+        finally:
+            # No exception, disconnection, or canceled coroutine may skip STOP.
+            self.recorded_stop_begin()
+            try:
+                ack = await self._send_robot_command(
+                    self._robot_id,
+                    {"type": "stop", "reason": "initialpose_turn_complete"},
+                )
+                stop_ack = self._pi_command_delivered(ack)
+                self.recorded_stop_acknowledged(stop_ack)
+                if stop_ack:
+                    stop_ack = await self._wait_initial_pose_stop_proof()
+            except Exception:
+                stop_ack = False
+            with self._lock:
+                self._localization_turn_active = False
+            if not stop_ack:
+                try:
+                    await self.emergency_stop("INITIAL_POSE_STOP_UNCERTAIN", automatic=True)
+                except Exception:
+                    pass
+                raise NavigationControlError(
+                    "INITIAL_POSE_STOP_UNCERTAIN",
+                    "Rotation STOP/encoder proof failed; E-STOP requested.",
+                    503,
+                )
+        if not moved:
+            raise UnsafeLocalizationTurn("Turn was not authorized")
+        actual = self._ros.rotation_status()
+        try:
+            progress = math.atan2(
+                math.sin(float(actual["odom_yaw"]) - start_yaw),
+                math.cos(float(actual["odom_yaw"]) - start_yaw),
+            )
+            new_sequence = int(actual["odom_sequence"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise UnsafeLocalizationTurn("Rotation Odometry proof missing") from exc
+        if (new_sequence <= start_sequence or not math.isfinite(progress)
+            or progress <= math.radians(1) or progress > math.radians(30)):
+            raise UnsafeLocalizationTurn("Rotation progress was missing or outside its safe bound")
+
+    async def _wait_initial_pose_stop_proof(self) -> bool:
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            if self.recorded_stop_proven():
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def _estimate_initial_pose_with_retry(
+        self, selected_map, *, expected_map_revision=None,
+        require_mapping_health: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        def ensure_not_cancelled():
+            if cancelled is not None and cancelled():
+                raise NavigationControlError(
+                    "LOCALIZATION_CANCELLED",
+                    "Localization was cancelled before Driving activation.", 409,
+                )
+        ensure_not_cancelled()
+        with self._lock:
+            stopped = (
+                self._robot_mode == "manual"
+                and self._state["navigation_state"] not in {
+                    "NAVIGATING", "RESUMING", "CANCELING", "CANCELING_STOP",
+                    "PAUSING_FOR_MANUAL", "REPLACING_GOAL", "EMERGENCY_STOPPED",
+                }
+                and self._motion_allowed_locked(time.time())
+            )
+            baseline_ticks = self._encoder_ticks
+        if not stopped or baseline_ticks is None:
+            raise NavigationControlError(
+                "AUTO_POSE_REQUIRES_STOP",
+                "Fresh motor STOP, manual ownership, and encoder evidence are required.",
+                409,
+            )
+        history = self._get_live_scans()
+        base_time, base_sequence = observation_baseline(history)
+        ensure_not_cancelled()
+
+        def match(scan):
+            return estimate_initial_pose(
+                selected_map, scan,
+                mount_x=env_float("LIDAR_X"),
+                mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
+
+        try:
+            first_scan = await asyncio.to_thread(fuse_stationary_scans, history)
+            pose = await asyncio.to_thread(match, first_scan)
+        except (AutoPoseUncertain, OSError, KeyError, TypeError, ValueError):
+            # One bounded retry, using only genuinely new LiDAR + encoder
+            # observations. No automatic motor movement is authorized here.
+            try:
+                ensure_not_cancelled()
+                scan = await wait_fresh_fused_scan(
+                    self._get_live_scans,
+                    after_time=base_time,
+                    after_encoder_sequence=base_sequence,
+                )
+                ensure_not_cancelled()
+                pose = await asyncio.to_thread(match, scan)
+            except (AutoPoseUncertain, OSError, KeyError, TypeError, ValueError) as exc:
+                # The only allowed automatic motion is a bounded Pi MANUAL
+                # turn after full 360-degree clearance and STOP/encoder proof.
+                # Unsafe or failed turns always fall back to map-click recovery.
+                try:
+                    ensure_not_cancelled()
+                    await self._bounded_initial_pose_turn(
+                        saved_map=selected_map,
+                        require_mapping_health=require_mapping_health,
+                    )
+                    ensure_not_cancelled()
+                    baseline_ticks = self._encoder_ticks
+                    new_history = self._get_live_scans()
+                    new_time, new_sequence = observation_baseline(new_history)
+                    rotated_scan = await wait_fresh_fused_scan(
+                        self._get_live_scans,
+                        after_time=new_time,
+                        after_encoder_sequence=new_sequence,
+                    )
+                    ensure_not_cancelled()
+                    pose = await asyncio.to_thread(match, rotated_scan)
+                except (AutoPoseUncertain, UnsafeLocalizationTurn,
+                        OSError, KeyError, TypeError, ValueError) as recovery_exc:
+                    raise NavigationControlError(
+                        "AWAITING_MAP_CLICK",
+                        "Automatic localization and safe rotation could not "
+                        f"confirm Initial Pose: {recovery_exc}. Click the map.",
+                        409,
+                    ) from recovery_exc
+
+        ensure_not_cancelled()
+        if expected_map_revision is not None:
+            live_map = self._get_live_map() or {}
+            if (live_map.get("map_revision") != expected_map_revision
+                or live_map.get("mapping_state") != "MAPPING_ACTIVE"):
+                raise NavigationControlError(
+                    "MAP_CHANGED_DURING_LOCALIZATION",
+                    "SLAM map changed after the localization snapshot; select a fresh map pose.",
+                    409,
+                )
+        with self._lock:
+            if (self._encoder_ticks != baseline_ticks
+                or self._robot_mode != "manual"
+                or self._state["emergency_stop"]
+                or not self._motion_allowed_locked(time.time())):
+                raise NavigationControlError(
+                    "AUTO_POSE_MOVED",
+                    "The robot changed movement or control state during localization.",
+                    409,
+                )
+        return pose, baseline_ticks
+
     def _current_mapping_initial_pose(self) -> dict[str, float] | None:
         pose = self._get_live_pose()
         if not isinstance(pose, dict):
@@ -1642,10 +2048,17 @@ class NavigationControlApi:
         try:
             x = float(pose["x"])
             y = float(pose["y"])
-            yaw = float(pose.get("yaw", 0.0))
+            yaw = float(pose["yaw"])
+            captured_at = float(pose["received_at"])
+            measured_at = datetime.fromisoformat(
+                str(pose["timestamp"]).replace("Z", "+00:00")
+            ).timestamp()
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
-        if not all(math.isfinite(value) for value in (x, y, yaw)):
+        if (not all(math.isfinite(value) for value in (x, y, yaw, captured_at, measured_at))
+            or not 0 <= time.time() - captured_at <= 1.5
+            or not 0 <= time.time() - measured_at <= 1.5
+            or str(pose.get("frame_id") or "map") != "map"):
             return None
         normalized_yaw = math.atan2(math.sin(yaw), math.cos(yaw))
         return {
@@ -1663,6 +2076,7 @@ class NavigationControlApi:
             "mode": "DRIVING",
             "source": "existing",
             "map_name": payload.get("map_name"),
+            "map_revision": payload.get("map_revision"),
             "initial_pose": payload.get("initial_pose"),
         }
         async with self._operation_lock:

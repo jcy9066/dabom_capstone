@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
 
 from server.amcl_pose_stability import stable_amcl_observations
+from server.auto_initial_pose import decode_saved_cells
 from server.env_config import env_float
 from server.navigation_motion_segments import annotate_path
 
@@ -76,6 +80,18 @@ except ModuleNotFoundError as exc:  # Allows the web server to run without ROS l
     ROS_IMPORT_ERROR = exc
 
 
+@lru_cache(maxsize=8)
+def _saved_map_occupancy_digest(raw_path: str, width: int, height: int,
+                                size: int, mtime_ns: int) -> str:
+    # YAML trinary map_server reconstructs the categories encoded in PGM.
+    values = decode_saved_cells(Path(raw_path), width, height)
+    categories = bytes(
+        101 if value >= 65 else 1 if 0 <= value <= 25 else 0
+        for value in values
+    )
+    return hashlib.sha256(categories).hexdigest()
+
+
 class NavigationRosError(Exception):
     def __init__(self, error_code: str, message: str, status_code: int = 409):
         super().__init__(message)
@@ -93,6 +109,7 @@ class _MapObservation:
     origin_y: float | None = None
     origin_yaw: float | None = None
     data: tuple[int, ...] | None = None
+    content_sha256: str | None = None
     received_at: float | None = None
 
 
@@ -1308,19 +1325,13 @@ class NavigationRosControl:
                         and item["at"] >= self._amcl_initial_pose_after
                     ]
                     stable = stable_amcl_observations(recent, initial_pose)
-                    # A stationary AMCL may publish once and wait for movement.
-                    # The fallback still needs a new, covariance-checked
-                    # post-initialpose estimate near the requested pose.
-                    single = bool(recent) and stable_amcl_observations(
-                        recent[-1:], initial_pose,
-                        minimum_samples=1, minimum_span=0.0,
-                    )
-                    if stable or single:
+                    # A single AMCL echo cannot prove localization.
+                    if stable:
                         return {
                             "x": self._amcl.x,
                             "y": self._amcl.y,
                             "yaw": self._amcl.yaw,
-                            "stable_samples": 3 if stable else 1,
+                            "stable_samples": len(recent),
                         }
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1522,6 +1533,9 @@ class NavigationRosControl:
             self._map.origin_y = float(message.info.origin.position.y)
             self._map.origin_yaw = self._yaw_from_orientation(message.info.origin.orientation)
             self._map.data = tuple(int(value) for value in message.data)
+            self._map.content_sha256 = hashlib.sha256(
+                bytes(int(value) + 1 for value in self._map.data)
+            ).hexdigest() if all(-1 <= value <= 100 for value in self._map.data) else None
             self._map.received_at = time.monotonic()
             self._condition.notify_all()
 
@@ -1639,6 +1653,20 @@ class NavigationRosControl:
                     "height": height,
                     "resolution": resolution,
                     "origin": {"x": origin_x, "y": origin_y, "yaw": origin_yaw},
+                    "frame_id": str(message.header.frame_id or "map"),
+                    "stamp_ns": (
+                        int(message.header.stamp.sec) * 1000000000
+                        + int(message.header.stamp.nanosec)
+                    ),
+                    "timestamp": (
+                        datetime.fromtimestamp(
+                            message.header.stamp.sec
+                            + message.header.stamp.nanosec / 1e9,
+                            timezone.utc,
+                        ).isoformat().replace("+00:00", "Z")
+                        if message.header.stamp.sec > 0 else None
+                    ),
+                    "source": "nav2_global_costmap",
                     "dynamic_obstacles": dynamic_obstacles,
                     "inflation": inflation,
                     "received_at": time.time(),
@@ -1694,14 +1722,32 @@ class NavigationRosControl:
     def _map_matches(self, selected_map: Any) -> bool:
         if self._map.width != selected_map.width or self._map.height != selected_map.height:
             return False
-        if self._map.resolution is None or not math.isclose(self._map.resolution, selected_map.resolution, rel_tol=0.0, abs_tol=1e-6):
+        if self._map.resolution is None or not math.isclose(
+            self._map.resolution, selected_map.resolution, rel_tol=0.0, abs_tol=1e-6
+        ):
             return False
-        return (
+        origin_matches = (
             self._map.origin_x is not None
             and self._map.origin_y is not None
             and math.isclose(self._map.origin_x, selected_map.origin_x, rel_tol=0.0, abs_tol=1e-5)
             and math.isclose(self._map.origin_y, selected_map.origin_y, rel_tol=0.0, abs_tol=1e-5)
+            and self._map.origin_yaw is not None
+            and abs(math.atan2(
+                math.sin(self._map.origin_yaw - selected_map.origin_yaw),
+                math.cos(self._map.origin_yaw - selected_map.origin_yaw),
+            )) <= 1e-5
         )
+        if not origin_matches or self._map.content_sha256 is None:
+            return False
+        try:
+            info = selected_map.raw_path.stat()
+            expected = _saved_map_occupancy_digest(
+                str(selected_map.raw_path), selected_map.width,
+                selected_map.height, info.st_size, info.st_mtime_ns,
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        return self._map.content_sha256 == expected
 
     def _amcl_matches(self, initial_pose: dict[str, float]) -> bool:
         if self._amcl.x is None or self._amcl.y is None or self._amcl.yaw is None:

@@ -6,6 +6,7 @@ additional gate, not a replacement for Nav2 costmaps or emergency STOP.
 from __future__ import annotations
 import math
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -31,6 +32,22 @@ def path_blocked(scan: dict[str, Any] | None, direction: str,
         or increment == 0 or minimum < 0 or maximum <= minimum
         or not 0 <= now - received <= 0.35 or not isinstance(ranges, list)):
         return None
+    # HTTP delivery time is not the measurement time. MapBridge can repost
+    # an old laser scan with a fresh received_at; this must never prove a
+    # clear path for LOOP MANUAL. HTTP scan ingest requires a sensor timestamp.
+    captured = scan.get("timestamp")
+    if captured is not None:
+        try:
+            stamp = datetime.fromisoformat(
+                str(captured).replace("Z", "+00:00")
+            )
+            if stamp.tzinfo is None:
+                return None
+            measured = stamp.astimezone(timezone.utc).timestamp()
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if not 0 <= now - measured <= 0.35:
+            return None
     # 360-degree LiDAR may have a rear blind zone from chassis occlusion.
     # Turning sweeps more of the robot footprint than straight travel.
     # Retain the straight forward/rear sectors while extending coverage

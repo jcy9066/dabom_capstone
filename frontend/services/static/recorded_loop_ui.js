@@ -6,7 +6,7 @@ const trigger = $("loopDrawerToggle");
 const drawer = $("loop-side-drawer");
 const drawerContent = $("loop-side-drawer-content");
 if (!trigger || !drawer || !drawerContent) return;
-let latest = null, csrf = null, busy = false, generation = 0, barrier = 0;
+let latest = null, csrf = null, busy = false, pendingStop = false, generation = 0, barrier = 0;
 let policy = "WAIT", order = [], selected = new Set(), chosenBag = "";
 let obstacleToggle = null;
 
@@ -136,9 +136,18 @@ function render() {
   $("loop-delete").disabled = busy || playing || !mapReady || (!recording && !chosenBag);
   $("loop-start").disabled = busy || playing || recording || !connected || !mapReady
     || (manual ? !chosenBag || policy === "REPLAN" : order.filter(name => selected.has(name)).length < 2);
-  $("loop-stop").disabled = busy || !playing;
+  const resume = $("loop-resume");
+  const canResume = latest.resume_required === true
+      && latest.status === "RESUME_REQUIRED"
+      && connected && manual && playing && mapReady;
+  resume.hidden = !latest.resume_required;
+  resume.disabled = busy || !canResume;
+  // STOP must remain clickable even while START/RESUME HTTP is pending.
+  $("loop-stop").disabled = !playing && !busy;
   $("loop-status").textContent = (latest.status || "IDLE")
     + (latest.lap ? " / Lap " + latest.lap : "")
+    + (latest.ack_reconciliation_required
+        ? " / Pi 펄스 ACK 복구 확인 필요" : "")
     + (latest.error ? " / " + latest.error : "");
   obstacleToggle?.sync(policy === "REPLAN" ? "DRIVING" : "MAPPING");
   enhanceControls();
@@ -158,7 +167,8 @@ async function refresh() {
     document.dispatchEvent(new CustomEvent("dabom:loop-session-state", { detail: data }));
     const viewer = $("recordedLoopViewerStatus");
     if (viewer) {
-      viewer.hidden = !["WAITING", "FAILED"].includes(data.status);
+      viewer.hidden = !["WAITING", "FAILED", "PAUSED_OBSTACLE",
+        "PAUSED_CONNECTION", "RESUME_REQUIRED"].includes(data.status);
       viewer.textContent = viewer.hidden ? "" : (data.error || data.status);
       viewer.dataset.state = data.status || "IDLE";
     }
@@ -175,12 +185,26 @@ async function refresh() {
   }
 }
 async function mutate(path, body, message) {
-  if (busy) return;
+  // A STOP during an in-flight START must be replayed after START returns:
+  // otherwise a delayed START response can launch motion after an early STOP.
+  if (busy) {
+    if (path === "stop") pendingStop = true;
+    return;
+  }
   busy = true;
   barrier = ++generation;
   try { await api(path, body); feedback(message); }
   catch (error) { feedback("실패: " + error.message); }
-  finally { busy = false; await refresh(); }
+  finally {
+    busy = false;
+    if (pendingStop && path !== "stop") {
+      pendingStop = false;
+      await mutate("stop", {}, "Stop 요청");
+    } else {
+      pendingStop = false;
+      await refresh();
+    }
+  }
 }
 function bindOnce() {
   $("loop-bags").addEventListener("change", event => { chosenBag = event.target.value; render(); });
@@ -196,6 +220,8 @@ function bindOnce() {
     policy, name: chosenBag, goals: order.filter(name => selected.has(name))
   }, "Loop 시작"));
   $("loop-stop").addEventListener("click", () => void mutate("stop", {}, "Stop 요청"));
+  $("loop-resume").addEventListener("click", () =>
+    void mutate("resume", {}, "안전 조건 검증 후 남은 명령부터 재개 요청"));
   // Reuse the existing navigation-mode Toggle component in isolated mode.
   // Obstacle policy cannot be mutated by ROS navigation-mode broadcasts.
   obstacleToggle = controls()?.mountNavigationMode?.(

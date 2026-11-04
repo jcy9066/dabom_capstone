@@ -3,6 +3,7 @@ import os
 import subprocess
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -83,12 +84,13 @@ class NavigationSnapshotApiTests(unittest.TestCase):
         self.assertEqual(current_map, body["map"])
 
     def test_snapshot_omits_unchanged_map_payload(self):
+        current_stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         map_payload = {
             "robot_id": "pi-01",
             "navigation_mode": "mapping",
             "frame_id": "map",
-            "timestamp": "2026-08-30T00:00:00Z",
-            "bridge_timestamp": "2026-08-30T00:00:01Z",
+            "timestamp": current_stamp,
+            "bridge_timestamp": current_stamp,
             "resolution": 0.05,
             "width": 1,
             "height": 1,
@@ -106,7 +108,9 @@ class NavigationSnapshotApiTests(unittest.TestCase):
             "map_revision"
         ]
 
-        map_payload["bridge_timestamp"] = "2026-08-30T00:00:03Z"
+        map_payload["bridge_timestamp"] = datetime.now(
+            timezone.utc
+        ).isoformat().replace("+00:00", "Z")
         repeated = self.client.post(
             "/navigation/map",
             json=map_payload,

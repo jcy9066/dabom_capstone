@@ -36,6 +36,9 @@ async function exercise(runtimeState, options = {}, mode = 'MAPPING') {
         applyControlState: payload => { state.control = payload; },
         requestJson: async url => {
             calls.push(['GET', url]);
+            if (url === '/api/navigation/status') {
+                return { ok: true, mapping_state: 'MAPPING_ACTIVE' };
+            }
             return { ok: true, gpu: runtimeState === null ? [] : [
                 { id: 'slam_mapping', state: runtimeState },
             ] };
@@ -63,7 +66,10 @@ async function exercise(runtimeState, options = {}, mode = 'MAPPING') {
     for (const running of ['on', 'duplicate']) {
         const active = await exercise(running);
         assert.equal(active.result, true);
-        assert.deepEqual(active.calls, [['GET', '/api/system-control/status']]);
+        assert.deepEqual(active.calls, [
+            ['GET', '/api/system-control/status'],
+            ['GET', '/api/navigation/status'],
+        ]);
     }
     for (const unavailable of [null, 'unreachable']) {
         const failed = await exercise(unavailable);

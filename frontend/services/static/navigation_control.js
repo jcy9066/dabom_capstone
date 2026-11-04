@@ -415,7 +415,148 @@
         );
     }
 
+    let initialPosePointer = null;
+
+    function beginInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose') return false;
+        if (event.button === 2) {
+            event.preventDefault();
+            initialPosePointer = null;
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft', {detail: {pose: null}},
+            ));
+            window.navigationMapView?.setInteractionMode?.('view');
+            setFeedback('Initial Pose 지정을 취소했습니다.');
+            return true;
+        }
+        if (event.button !== 0) return true;
+        const point = window.navigationMapView?.screenToGround(event);
+        if (!point) {
+            setFeedback('지도 밖 Initial Pose는 지정할 수 없습니다.', true);
+            return true;
+        }
+        event.preventDefault();
+        initialPosePointer = {
+            pointerId: event.pointerId, start: point,
+            mapRevision: window.navigationMapView?.snapshot?.()?.map?.map_revision,
+            pose: null,
+        };
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        return true;
+    }
+
+    function moveInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose'
+            || initialPosePointer?.pointerId !== event.pointerId) return false;
+        const point = window.navigationMapView?.screenToGround(event);
+        if (!point) return true;
+        const start = initialPosePointer.start;
+        const distance = Math.hypot(point.x - start.x, point.y - start.y);
+        if (distance >= 0.08) {
+            initialPosePointer.pose = {
+                ...start, yaw: Math.atan2(point.y - start.y, point.x - start.x),
+            };
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft',
+                {detail: {pose: initialPosePointer.pose}},
+            ));
+        }
+        return true;
+    }
+
+    async function waitInitialPoseSession(sessionId, acceptWaiting = false) {
+        for (let attempt = 0; attempt < 600; attempt++) {
+            const status = await requestJson('/api/navigation/localization/state');
+            if (status.session_id !== sessionId) {
+                throw new Error('Localization 세션이 변경됐습니다.');
+            }
+            if (status.phase === 'READY') return status;
+            if (status.phase === 'FAILED' || status.phase === 'CANCELLED') {
+                throw new Error(status.reason || 'Localization이 완료되지 않았습니다.');
+            }
+            if (acceptWaiting && status.phase === 'WAITING_FOR_CLICK') return status;
+            if (status.phase === 'POSE_CONFIRMATION_REQUIRED'
+                || (!acceptWaiting && status.phase === 'WAITING_FOR_CLICK')) return status;
+            await new Promise(resolve => window.setTimeout(resolve, 300));
+        }
+        throw new Error('Localization 확인 시간이 초과됐습니다. 위치를 재지정하세요.');
+    }
+
+    async function finishInitialPose(event) {
+        if (window.navigationMapView?.interactionMode?.() !== 'set-initial-pose'
+            || initialPosePointer?.pointerId !== event.pointerId) return false;
+        event.preventDefault();
+        moveInitialPose(event);
+        const selection = initialPosePointer;
+        initialPosePointer = null;
+        if (!selection.pose) {
+            setFeedback('방향을 지정하려면 위치에서 원하는 방향으로 드래그하세요.', true);
+            return true;
+        }
+        const view = window.navigationMapView?.snapshot?.() || {};
+        if (!view.map || view.map.map_revision !== selection.mapRevision) {
+            setFeedback('지도 버전이 변경됐습니다. Initial Pose를 다시 선택하세요.', true);
+            return true;
+        }
+        if (state.busy || state.navigationPending) return true;
+        state.busy = true;
+        state.navigationPending = true;
+        syncControlComponents();
+        let localizationSessionId = null;
+        try {
+            const started = await mutate('/api/navigation/localization/start', {
+                source: 'current', map_revision: selection.mapRevision,
+                manual_only: true,
+            });
+            localizationSessionId = started.session_id;
+            const prepared = await waitInitialPoseSession(localizationSessionId, true);
+            if (prepared.phase !== 'WAITING_FOR_CLICK') {
+                throw new Error('Initial Pose 지도 Snapshot 준비 실패');
+            }
+            let acknowledged = false;
+            for (;;) {
+                await mutate('/api/navigation/localization/pose', {
+                    session_id: localizationSessionId,
+                    initial_pose: {
+                        x: selection.pose.x, y: selection.pose.y,
+                        yaw_degrees: selection.pose.yaw * 180 / Math.PI,
+                        warning_acknowledged: acknowledged,
+                    },
+                });
+                const status = await waitInitialPoseSession(localizationSessionId);
+                if (status.phase === 'READY') break;
+                if (status.phase === 'POSE_CONFIRMATION_REQUIRED'
+                    && !acknowledged
+                    && window.confirm('미탐색 영역 또는 장애물 인접 위치입니다. 위치를 확인하고 AMCL 검증을 진행하시겠습니까?')) {
+                    acknowledged = true;
+                    continue;
+                }
+                throw new Error(status.reason || '지도에서 안전한 Initial Pose를 다시 지정하세요.');
+            }
+            const verified = await requestJson('/api/navigation/control/state');
+            applyControlState(verified);
+            setFeedback('Initial Pose / AMCL 검증 완료. Driving 안전 상태를 확인하세요.');
+            window.navigationMapView?.setInteractionMode?.('view');
+        } catch (error) {
+            if (localizationSessionId) {
+                await mutate('/api/navigation/localization/cancel', {
+                    session_id: localizationSessionId,
+                }).catch(() => null);
+            }
+            setFeedback('Initial Pose 확인 실패: ' + error.message, true);
+        } finally {
+            document.dispatchEvent(new CustomEvent(
+                'dabom:initial-pose-draft', {detail: {pose: null}},
+            ));
+            state.busy = false;
+            state.navigationPending = false;
+            syncControlComponents();
+        }
+        return true;
+    }
+
     function beginGoal(event) {
+        if (beginInitialPose(event)) return;
         const interactionMode = window.navigationMapView?.interactionMode?.() || 'view';
         if (!['set-goal', 'set-loop'].includes(interactionMode)) return;
         if (event.button === 2) {
@@ -455,6 +596,7 @@
     }
 
     function moveGoal(event) {
+        if (moveInitialPose(event)) return;
         if (state.pointerId !== event.pointerId || !state.pointerStart) return;
         const point = window.navigationMapView?.screenToGround(event);
         if (!point) return;
@@ -467,6 +609,7 @@
     }
 
     async function finishGoal(event) {
+        if (await finishInitialPose(event)) return;
         if (state.pointerId !== event.pointerId || !state.draftGoal) return;
         event.preventDefault();
         const goal = { ...state.draftGoal };
@@ -601,7 +744,12 @@
                     throw new Error('Mapping 실행 상태를 확인할 수 없습니다.');
                 }
                 if (mapping.state !== 'off') {
-                    setFeedback('Mapping 모드가 실행 중입니다.');
+                    const health = await requestJson('/api/navigation/status');
+                    const active = health?.mapping_state === 'MAPPING_ACTIVE';
+                    setFeedback(active
+                        ? 'SLAM 지도 생성 및 센서 상태가 정상입니다.'
+                        : 'Mapping 프로세스 실행 중입니다. SLAM /map·센서·TF 준비를 확인해주세요.',
+                        !active);
                     return true;
                 }
             }
@@ -657,6 +805,12 @@
             String(state.control?.navigation_mode || '').toUpperCase() === 'MAPPING'
             && view.map
         ) {
+            const health = await requestJson('/api/navigation/status');
+            if (!health || health.mapping_state !== 'MAPPING_ACTIVE'
+                || health.map_saveable !== true) {
+                setFeedback('확정 SLAM 지도와 Scan·Odometry·TF 준비가 필요합니다.', true);
+                return false;
+            }
             state.busy = true;
             state.navigationPending = true;
             syncControlComponents();
@@ -863,7 +1017,14 @@
         canvas?.addEventListener('pointerdown', beginGoal);
         canvas?.addEventListener('pointermove', moveGoal);
         canvas?.addEventListener('pointerup', finishGoal);
-        canvas?.addEventListener('pointercancel', cancelGoalDraft);
+        canvas?.addEventListener('pointercancel', event => {
+            if (initialPosePointer?.pointerId === event.pointerId) {
+                initialPosePointer = null;
+                document.dispatchEvent(new CustomEvent(
+                    'dabom:initial-pose-draft', {detail: {pose: null}},
+                ));
+            } else cancelGoalDraft(event);
+        });
         const controls = window.DabomDashboardComponents?.controls;
         const dashboardModes = $('dashboard-mode-controls-mount');
         controls?.mountDriveMode(dashboardModes, { request: requestDriveMode });
@@ -881,6 +1042,13 @@
         if (warningButton) warningButton.disabled = false;
         document.addEventListener('dabom:navigation-hazard', renderNavigationHazard);
         document.addEventListener('dabom:navigation-interaction-mode', event => {
+            if (event.detail?.mode === 'set-initial-pose') {
+                state.draftGoal = null;
+                state.pointerStart = null;
+                state.pointerId = null;
+                publishGoalDraft();
+                clearLoopDraft();
+            }
             if (event.detail?.mode !== 'set-loop' && state.loopDrafts.length) {
                 state.draftGoal = null;
                 publishGoalDraft();
@@ -896,10 +1064,16 @@
         document.addEventListener('keydown', event => {
             if (
                 event.key === 'Escape'
-                && ['set-goal', 'set-loop'].includes(window.navigationMapView?.interactionMode?.())
+                && ['set-goal', 'set-loop', 'set-initial-pose'].includes(window.navigationMapView?.interactionMode?.())
             ) {
                 event.preventDefault();
-                cancelGoalDraft();
+                if (window.navigationMapView?.interactionMode?.() === 'set-initial-pose') {
+                    initialPosePointer = null;
+                    document.dispatchEvent(new CustomEvent(
+                        'dabom:initial-pose-draft', {detail: {pose: null}},
+                    ));
+                    window.navigationMapView?.setInteractionMode?.('view');
+                } else cancelGoalDraft();
             }
         });
         const alertBox = $('alertBox');

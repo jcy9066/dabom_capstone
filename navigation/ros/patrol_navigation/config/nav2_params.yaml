@@ -168,7 +168,7 @@ local_costmap:
           data_type: "LaserScan"
           clearing: true
           marking: true
-          inf_is_valid: false
+          inf_is_valid: true
 
           max_obstacle_height: 2.0
           obstacle_min_range: 0.10
@@ -220,7 +220,7 @@ global_costmap:
           data_type: "LaserScan"
           clearing: true
           marking: true
-          inf_is_valid: false
+          inf_is_valid: true
           # Each scan replaces the previous observation in the global layer.
           # A turning robot otherwise retains obstacle arcs from earlier
           # headings and marks ghost obstacles in free space.
