@@ -4158,6 +4158,22 @@ def store_navigation_mode(mode, received_at):
     navigation_state["mode_updated_at"] = received_at
 
 
+def navigation_ingest_mode_failure(mode):
+    """Reject ROS bridge payloads from a previous active navigation mode."""
+    if mode not in {"mapping", "localization", "localization_nav2"}:
+        return None
+    with navigation_control_api._lock:
+        active = navigation_control_api._state.get("navigation_mode")
+    expected = "MAPPING" if mode == "mapping" else "DRIVING"
+    if active != expected:
+        return JSONResponse(
+            {"ok": False, "error": "NAVIGATION_MODE_MISMATCH",
+             "expected_active_mode": expected},
+            status_code=409,
+        )
+    return None
+
+
 def build_mapping_health(now=None, process_running=None):
     now = time.time() if now is None else float(now)
     return mapping_health_state(
@@ -4476,6 +4492,9 @@ async def update_navigation_map(request: Request):
     denied = robot_id_failure(data)
     if denied:
         return denied
+    denied = navigation_ingest_mode_failure(navigation_mode)
+    if denied:
+        return denied
 
     received_at = time.time()
 
@@ -4557,6 +4576,9 @@ async def update_navigation_pose(request: Request):
     denied = robot_id_failure(data)
     if denied:
         return denied
+    denied = navigation_ingest_mode_failure(navigation_mode)
+    if denied:
+        return denied
 
     received_at = time.time()
     if navigation_mode == "mapping" and data.get("timestamp"):
@@ -4609,6 +4631,9 @@ async def update_navigation_scan(request: Request):
             status_code=400,
         )
     denied = robot_id_failure(raw_data)
+    if denied:
+        return denied
+    denied = navigation_ingest_mode_failure(navigation_mode)
     if denied:
         return denied
 
@@ -4690,6 +4715,9 @@ async def update_mapping_health(request: Request):
     except (ValueError, TypeError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     denied = robot_id_failure(data)
+    if denied:
+        return denied
+    denied = navigation_ingest_mode_failure("mapping")
     if denied:
         return denied
     with state_lock:
