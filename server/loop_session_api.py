@@ -935,6 +935,11 @@ class LoopSessionApi:
     async def stop(self, from_navigation: bool = False) -> dict:
         task = self._task
         if task is None or task.done():
+            if self._error == "STOP_NOT_CONFIRMED":
+                raise RecordedLoopError(
+                    "LOOP_STOP_NOT_CONFIRMED",
+                    "Final motor STOP remains unverified; E-STOP may be required.",
+                )
             return {"ok": True, "stopped": True}
         self._cancelled = True
         self._resume_event.set()
@@ -982,9 +987,24 @@ class LoopSessionApi:
         elif self._running_kind == "MANUAL":
             await self._verified_stop()
         try:
-            await asyncio.wait_for(task, timeout=5.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+            # Shield the worker to keep its STOP/finally section running
+            # throughout the deadline. An incomplete STOP is never success.
+            await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
+        except asyncio.TimeoutError as exc:
             task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            raise RecordedLoopError(
+                "LOOP_STOP_TIMEOUT",
+                "Loop worker did not confirm completion of physical STOP.",
+            ) from exc
+        if self._error == "STOP_NOT_CONFIRMED":
+            raise RecordedLoopError(
+                "LOOP_STOP_NOT_CONFIRMED",
+                "The Pi did not confirm the final motor STOP.",
+            )
         return {"ok": True, "stopped": True}
 
     async def close(self) -> None:
