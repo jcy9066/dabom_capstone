@@ -214,7 +214,7 @@ def test_manual_send_rejects_stale_scan_at_dispatch(tmp_path):
         "range_min": 0.12, "range_max": 6.0, "ranges": [2.0] * 360,
     }
     async def scenario():
-        with pytest.raises(RuntimeError, match="MANUAL_PULSE_ACK_UNCERTAIN"):
+        with pytest.raises(RuntimeError, match="MANUAL_OBSTACLE_BLOCKED"):
             await api._manual_send({
                 "pulse_id": "stale-scan", "pulse_sequence": 1,
                 "direction": "forward", "speed": 0.2,
@@ -287,3 +287,29 @@ def test_missing_receipt_does_not_guess_or_replay(tmp_path):
     asyncio.run(scenario())
     assert api._uncertain_manual_pulse["pulse_id"] == "no-ack"
     assert not any(v.get("type") == "manual_loop_pulse" for v in sent)
+
+
+def test_obstacle_at_final_preflight_is_not_ack_loss(tmp_path):
+    api, nav, sent = module.fixture(tmp_path)
+    api._replay_generation = 2
+    api._running_kind = "MANUAL"
+    import time
+    api.recorded.get_live_scan = lambda: {
+        "received_at": time.time(),
+        "angle_min": -3.141592653589793,
+        "angle_increment": 2 * 3.141592653589793 / 360,
+        "range_min": 0.12, "range_max": 6.0,
+        "ranges": [0.2] * 360,
+    }
+    async def scenario():
+        with pytest.raises(RuntimeError, match="MANUAL_OBSTACLE_BLOCKED"):
+            await api._manual_send({
+                "pulse_id": "blocked-before-send",
+                "pulse_sequence": 1,
+                "direction": "forward", "speed": 0.2,
+                "duration_ms": 100,
+            })
+    asyncio.run(scenario())
+    assert api._uncertain_manual_pulse is None
+    assert api._manual_elapsed_ms == 0
+    assert not any(command.get("type") == "manual_loop_pulse" for command in sent)
