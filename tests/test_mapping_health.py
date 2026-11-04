@@ -65,3 +65,10 @@ def test_process_liveness_cannot_replace_slam_readiness():
     result = snapshot(source_map=None, process=True)
     assert result["mapping_state"] == "SLAM_INITIALIZING"
     assert result["map_saveable"] is False
+
+
+def test_dead_slam_process_is_error_but_verified_map_stays_saveable():
+    result = snapshot(process=False)
+    assert result["mapping_state"] == "MAPPING_ERROR"
+    assert result["map_saveable"] is True
+    assert result["driving_preflight_ready"] is False
