@@ -58,7 +58,9 @@ def mapping_health_state(
         state = "MAPPING_ERROR"
         ready = False
     elif process_running is False:
-        state = "MAPPING_ERROR" if not verified else "MAPPING_DEGRADED"
+        # A terminated SLAM process is not a transient sensor outage.
+        # Keep the last verified map saveable, but never claim Mapping is live.
+        state = "MAPPING_ERROR"
         ready = False
     elif ready:
         state = "MAPPING_ACTIVE"
