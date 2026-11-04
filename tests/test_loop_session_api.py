@@ -360,3 +360,16 @@ def test_manual_owner_is_not_released_until_final_stop(tmp_path):
     assert observed == [True]
     assert nav._loop_session_owner is None
     assert api._status == "FAILED"
+
+
+def test_manual_stop_cannot_claim_success_after_failed_final_proof(tmp_path):
+    api, nav, sent = fixture(tmp_path)
+    api._status = "FAILED"
+    api._error = "STOP_NOT_CONFIRMED"
+
+    async def run():
+        with pytest.raises(RecordedLoopError) as raised:
+            await api.stop()
+        assert raised.value.code == "LOOP_STOP_NOT_CONFIRMED"
+
+    asyncio.run(run())
