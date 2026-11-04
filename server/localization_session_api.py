@@ -48,24 +48,36 @@ class LocalizationSessionApi:
                 or self._task is not None and not self._task.done())
 
     def snapshot(self) -> dict[str, Any]:
+        # A previously READY session is not a permanent movement grant.
+        state = self.navigation.state_response()
+        active_map = state.get("active_map")
+        ready = bool(
+            self.phase == "READY" and isinstance(self.result, dict)
+            and self.result.get("localization_ready") is True
+            and self.result.get("nav2_ready") is True
+            and state.get("navigation_mode") == "DRIVING"
+            and state.get("localization_ready") is True
+            and state.get("nav2_ready") is True
+            and state.get("emergency_stop") is not True
+            and isinstance(active_map, dict)
+            and active_map.get("map_name") == self.map_name
+        )
+        stale = self.phase == "READY" and not ready
         return {
             "ok": True,
             "session_id": self.session_id,
-            "phase": self.phase,
+            "phase": "FAILED" if stale else self.phase,
             "source": self.source,
             "map_name": self.map_name,
             "map_revision": self.map_revision,
             "live_source_revision": self.live_source_revision,
             "live_source_session_id": self.live_source_session_id,
             "manual_only": self.manual_only,
-            "error_code": self.error_code,
-            "reason": self.reason,
+            "error_code": "LOCALIZATION_STALE" if stale else self.error_code,
+            "reason": ("Navigation, map or safety state changed after localization."
+                       if stale else self.reason),
             "proposed_pose": self.proposed_pose,
-            "localization_ready": (
-                self.phase == "READY" and bool(self.result)
-                and self.result.get("localization_ready") is True
-                and self.result.get("nav2_ready") is True
-            ),
+            "localization_ready": ready,
             "can_cancel": self.phase in {
                 "QUEUED", "ESTIMATING", "POSE_VALIDATING", *self.WAITING,
             },
