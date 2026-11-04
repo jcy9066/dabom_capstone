@@ -361,3 +361,27 @@ def test_obstacle_after_positive_ack_preserves_confirmed_exposure(tmp_path):
     }))
     assert applied == 70
     assert api._uncertain_manual_pulse is None
+
+
+def test_reposted_old_scan_cannot_prove_new_clearance():
+    import math
+    import time
+    from datetime import datetime, timezone
+    from server.recorded_loop_obstacle import path_blocked
+
+    now = time.time()
+    scan = {
+        "received_at": now,
+        "timestamp": datetime.fromtimestamp(
+            now - 2.0, timezone.utc,
+        ).isoformat(),
+        "angle_min": -math.pi,
+        "angle_increment": 2 * math.pi / 360,
+        "range_min": 0.12, "range_max": 6.0,
+        "ranges": [3.0] * 360,
+    }
+    assert path_blocked(scan, "forward", now=now) is None
+    scan["timestamp"] = datetime.fromtimestamp(
+        now, timezone.utc,
+    ).isoformat()
+    assert path_blocked(scan, "forward", now=now) is False
