@@ -211,6 +211,7 @@ class LocalizationSessionApi:
                     pose, _ = await self.navigation._estimate_initial_pose_with_retry(
                         selected,
                         expected_map_revision=None,
+                        require_mapping_health=self.source == "current",
                         cancelled=lambda: self._cancel_requested,
                     )
                 self._check_cancelled()
