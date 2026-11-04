@@ -1580,6 +1580,35 @@ class NavigationControlApi:
                     "A verified localization estimate or explicit map pose is required.",
                     409,
                 )
+        # An explicit map click is a pose estimate at one instant. Capture
+        # actual wheel/safety identity *before* the potentially slow occupancy
+        # validation and ROS2 transition; AMCL convergence cannot prove that
+        # the physical robot has remained at that clicked pose.
+        with self._lock:
+            pose_wheel_baseline = self._encoder_ticks
+            pose_safety_session = self._pi_safety_session
+            pose_estop_generation = self._estop_generation
+            pose_initial_robot_mode = self._robot_mode
+            if (pose_wheel_baseline is None or not pose_safety_session
+                or not self._connected or pose_initial_robot_mode != "manual"
+                or self._state["emergency_stop"]):
+                raise NavigationControlError(
+                    "INITIAL_POSE_STOP_UNVERIFIED",
+                    "Fresh encoder, Pi safety session and stationary MANUAL state required.", 409,
+                )
+
+        def ensure_pose_stationary():
+            with self._lock:
+                if (self._encoder_ticks != pose_wheel_baseline
+                    or self._pi_safety_session != pose_safety_session
+                    or self._estop_generation != pose_estop_generation
+                    or self._robot_mode != pose_initial_robot_mode
+                    or self._state["emergency_stop"]):
+                    raise NavigationControlError(
+                        "INITIAL_POSE_MOVED",
+                        "Physical movement or safety change invalidated Initial Pose.", 409,
+                    )
+
         # Validate occupancy, footprint, and warning acknowledgment before
         # stopping the existing Mapping process. An invalid user click must
         # never destroy the only healthy SLAM session.
@@ -1587,14 +1616,17 @@ class NavigationControlApi:
             await asyncio.to_thread(
                 self._map_api.validate_initial_pose, selected, initial_pose_payload,
             )
+        ensure_pose_stationary()
         try:
             await asyncio.to_thread(self._process.transition, "DRIVING", str(selected.yaml_path))
+            ensure_pose_stationary()
             loaded = await self._activate_map_when_ready(
                 {"map_name": selected.map_name, "initial_pose": initial_pose_payload,
                  "map_revision": payload.get("map_revision") if source == "existing" else None},
                 user,
             )
             await self._wait_for_nav2_ready()
+            ensure_pose_stationary()
             if auto_pose_encoder_baseline is not None:
                 with self._lock:
                     if (self._encoder_ticks != auto_pose_encoder_baseline
@@ -1616,6 +1648,7 @@ class NavigationControlApi:
                 self._state["nav2_ready"] = False
                 self._touch_locked()
             raise
+        ensure_pose_stationary()
         with self._lock:
             pre_mode_telemetry = self._pi_updated_at
         delivered = await self._send_robot_command(
@@ -1641,6 +1674,11 @@ class NavigationControlApi:
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
                 self._touch_locked()
             raise NavigationControlError("PI_MODE_SYNC_FAILED", "Pi did not confirm DRIVING mode.", 503)
+        try:
+            ensure_pose_stationary()
+        except NavigationControlError:
+            await self.emergency_stop("INITIAL_POSE_MOVED", automatic=True, force=True)
+            raise
         with self._lock:
             self._state.update(
                 {
