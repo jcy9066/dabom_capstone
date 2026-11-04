@@ -805,7 +805,7 @@ class RobotCommandClient:
                 self._safety_session, self._safety_epoch,
                 generation, pulse_id,
             )
-            record = (message.get("direction"), message.get("speed"), duration_ms)
+            record = (message.get("direction"), message.get("speed"), duration_ms, sequence)
             cache = getattr(self, "_manual_loop_recent", None)
             if cache is None:
                 cache = self._manual_loop_recent = {}
@@ -845,6 +845,10 @@ class RobotCommandClient:
                 raise error
             result = {
                 "pulse_id": pulse_id, "replay_generation": generation,
+                "pulse_sequence": sequence,
+                "direction": message.get("direction"), "speed": message.get("speed"),
+                "safety_session": message.get("safety_session"),
+                "safety_epoch": message.get("safety_epoch"),
                 "elapsed_ms": elapsed_ms, "duration_ms": duration_ms,
                 "stopped": True,
             }
