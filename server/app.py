@@ -4502,15 +4502,21 @@ async def update_navigation_map(request: Request):
         # Reject maps captured before a reset; delayed HTTP must not resurrect
         # the previous SLAM session as the current authoritative map.
         try:
-            map_captured_at = datetime.fromisoformat(
+            captured_stamp = datetime.fromisoformat(
                 str(data["timestamp"]).replace("Z", "+00:00")
-            ).timestamp()
+            )
+            if captured_stamp.tzinfo is None:
+                raise ValueError("Map timestamp needs a timezone")
+            map_captured_at = captured_stamp.timestamp()
         except (KeyError, TypeError, ValueError, OverflowError):
-            map_captured_at = None
+            return JSONResponse(
+                {"ok": False, "error": "INVALID_MAPPING_TIMESTAMP"}, status_code=422
+            )
         with state_lock:
             session_started_at = navigation_state["session_started_at"]
-        if (map_captured_at is not None
-            and map_captured_at < session_started_at - 0.2):
+        if (not math.isfinite(map_captured_at)
+            or map_captured_at < session_started_at
+            or not -0.10 <= received_at - map_captured_at <= 5.0):
             return JSONResponse(
                 {"ok": False, "error": "STALE_MAPPING_SESSION"}, status_code=409
             )
