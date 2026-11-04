@@ -735,7 +735,11 @@ function applyNavigationMapPayload(map, revision, mapChanged = true) {
 }
 
 function applyNavigationSnapshot(data) {
-    if (!data?.ok) return;
+    if (!data?.ok) return false;
+    // The event sequence is server-global and increases across Mapping
+    // sessions. Never let a delayed HTTP snapshot roll back a newer WS event.
+    if (navigationEventSeq > 0 && (!Number.isSafeInteger(data.event_seq)
+        || data.event_seq < navigationEventSeq)) return false;
     if (data.session_id && data.session_id !== lidarState.sessionId) {
         lidarState.map = null;
         lidarState.pose = null;
@@ -782,6 +786,7 @@ function applyNavigationSnapshot(data) {
     }
 
     emitNavigationVisualizationState(Boolean(data.map_changed));
+    return true;
 }
 
 function requestNavigationStreamResync() {
@@ -934,8 +939,9 @@ async function fetchNavigationSnapshot() {
             navigationSnapshotUrl(),
             { signal: controller.signal },
         );
-        applyNavigationSnapshot(data);
-        requestLidarRender();
+        if (applyNavigationSnapshot(data)) {
+            requestLidarRender();
+        }
     } finally {
         window.clearTimeout(timeoutId);
         navigationSnapshotInFlight = false;
