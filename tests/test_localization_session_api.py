@@ -259,3 +259,44 @@ def test_invalid_start_does_not_mutate_localization_session():
         assert api.snapshot()["session_id"] == ""
         assert api._task is None
     asyncio.run(run())
+
+
+def test_current_mapping_session_restart_rejects_frozen_pose():
+    async def run():
+        nav = Navigation()
+        api = LocalizationSessionApi(FastAPI(), nav)
+        started = await api.start({
+            "source": "current", "map_revision": "live-revision",
+            "manual_only": True,
+        }, user="operator")
+        await api._task
+        assert api.phase == "WAITING_FOR_CLICK"
+        assert api.live_source_session_id == "mapping-a"
+        nav.live_map["session_id"] = "mapping-b"
+        await api.pose({
+            "session_id": started["session_id"],
+            "initial_pose": {"x": 2, "y": 2, "yaw_degrees": 90},
+        })
+        await api._task
+        assert api.phase == "FAILED"
+        assert api.error_code == "MAPPING_SESSION_CHANGED"
+        assert nav.calls == []
+    asyncio.run(run())
+
+
+def test_motion_ownership_reserves_estimation_and_click_recovery():
+    async def run():
+        nav = Navigation()
+        api = LocalizationSessionApi(FastAPI(), nav)
+        assert api.motion_reserved is False
+        started = await api.start({
+            "source": "existing", "map_name": "saved",
+            "manual_only": True,
+        }, user="operator")
+        assert api.motion_reserved is True
+        await api._task
+        assert api.phase == "WAITING_FOR_CLICK"
+        assert api.motion_reserved is True
+        await api.cancel({"session_id": started["session_id"]})
+        assert api.motion_reserved is False
+    asyncio.run(run())
