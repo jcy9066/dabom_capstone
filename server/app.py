@@ -1216,6 +1216,7 @@ localization_session_api = LocalizationSessionApi(
     app=app,
     navigation=navigation_control_api,
 )
+navigation_control_api._localization_session_api = localization_session_api
 
 # A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
 # This observer only accepts command_id-matched ACKs from the current socket.
@@ -6144,10 +6145,11 @@ async def send_robot_command(
             status_code=409,
         )
     if (robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
-        and navigation_control_api._localization_turn_active):
+        and (navigation_control_api._localization_turn_active
+             or localization_session_api.motion_reserved)):
         return JSONResponse(
             {"ok": False, "delivered": False,
-             "error": "Automatic Initial Pose rotation owns motor control"},
+             "error": "Initial Pose localization owns motor control"},
             status_code=409,
         )
     # Initial Pose turns are internal-only. The public robot command endpoint
