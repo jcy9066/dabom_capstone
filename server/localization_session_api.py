@@ -123,13 +123,15 @@ class LocalizationSessionApi:
             raise NavigationControlError(
                 "LOOP_BUSY", "Stop the current Loop before localization.",
             )
-        self.session_id = uuid4().hex
-        self.source = source
-        self.map_name = map_name if source == "existing" else None
+        # Reject malformed requests before mutating the active session.
+        # Otherwise a rejected start invalidates another operator's session_id.
         if type(payload.get("manual_only", False)) is not bool:
             raise NavigationControlError(
                 "INVALID_REQUEST", "manual_only must be boolean.", 400,
             )
+        self.session_id = uuid4().hex
+        self.source = source
+        self.map_name = map_name if source == "existing" else None
         self.manual_only = payload.get("manual_only", False)
         self.map_revision = payload.get("map_revision")
         self.live_source_revision = (
