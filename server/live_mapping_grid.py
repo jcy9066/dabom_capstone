@@ -219,6 +219,10 @@ class LiveMappingGrid:
             incoming = _decode_cells(payload, width * height)
         except (TypeError, ValueError):
             return False
+        # An all-unknown OccupancyGrid has geometry but no observed map.
+        # Do not promote it to an authoritative, saveable SLAM snapshot.
+        if not any(cell >= 0 for cell in incoming):
+            return False
 
         with self._lock:
             if not self._base_map_seen:
