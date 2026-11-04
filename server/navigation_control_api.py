@@ -1561,6 +1561,7 @@ class NavigationControlApi:
                         selected,
                         expected_map_revision=(live_map.get("map_revision")
                                                if source in {"current", "save_current"} else None),
+                        require_mapping_health=source in {"current", "save_current"},
                     )
                 )
             else:
@@ -1679,7 +1680,9 @@ class NavigationControlApi:
                 f"Initial Pose requires confirmation: {risk['reason']}", 409,
             )
 
-    async def _bounded_initial_pose_turn(self, *, saved_map=None) -> None:
+    async def _bounded_initial_pose_turn(
+        self, *, saved_map=None, require_mapping_health: bool = False,
+    ) -> None:
         """One Pi-local 100ms, PWM 20% pulse; STOP proof is mandatory.
 
         This is never a Nav2 Spin and does not grant motion ownership to
@@ -1712,9 +1715,19 @@ class NavigationControlApi:
                 )
         if navigation_mode == "MAPPING":
             mapping = self._get_live_map() or {}
-            if (mapping.get("mapping_state") != "MAPPING_ACTIVE"
-                or mapping.get("source") != "slam_toolbox"):
-                raise UnsafeLocalizationTurn("Verified active Mapping required for a physical turn")
+            mapping_ready = (
+                mapping.get("mapping_state") == "MAPPING_ACTIVE"
+                and mapping.get("source") == "slam_toolbox"
+            )
+            # Current Mapping requires valid SLAM. A separately selected
+            # stored map may be recovered using fresh 360-degree scan and
+            # wheel odometry even when no Mapping session exists.
+            if not mapping_ready and (
+                require_mapping_health
+                or saved_map is None
+                or not getattr(saved_map, "yaml_path", None)
+            ):
+                raise UnsafeLocalizationTurn("Valid SLAM Mapping or a saved map is required")
         else:
             # A stored-map recovery can rotate in DRIVING before AMCL is
             # ready, but never while a Nav2 Goal/action is still active.
@@ -1845,6 +1858,7 @@ class NavigationControlApi:
 
     async def _estimate_initial_pose_with_retry(
         self, selected_map, *, expected_map_revision=None,
+        require_mapping_health: bool = False,
         cancelled: Callable[[], bool] | None = None,
     ):
         def ensure_not_cancelled():
@@ -1903,7 +1917,10 @@ class NavigationControlApi:
                 # Unsafe or failed turns always fall back to map-click recovery.
                 try:
                     ensure_not_cancelled()
-                    await self._bounded_initial_pose_turn(saved_map=selected_map)
+                    await self._bounded_initial_pose_turn(
+                        saved_map=selected_map,
+                        require_mapping_health=require_mapping_health,
+                    )
                     ensure_not_cancelled()
                     baseline_ticks = self._encoder_ticks
                     new_history = self._get_live_scans()
