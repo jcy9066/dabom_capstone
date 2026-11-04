@@ -734,12 +734,16 @@ function applyNavigationMapPayload(map, revision, mapChanged = true) {
     emitNavigationVisualizationState(mapChanged);
 }
 
-function applyNavigationSnapshot(data) {
+function applyNavigationSnapshot(data, fromWebSocket = false) {
     if (!data?.ok) return false;
-    // The event sequence is server-global and increases across Mapping
-    // sessions. Never let a delayed HTTP snapshot roll back a newer WS event.
-    if (navigationEventSeq > 0 && (!Number.isSafeInteger(data.event_seq)
-        || data.event_seq < navigationEventSeq)) return false;
+    // An authenticated, newly connected WS may establish a new server
+    // generation after backend restart, resetting event_seq to zero.
+    // A delayed HTTP response has no such authority.
+    const newWsSession = fromWebSocket && data.session_id
+        && data.session_id !== lidarState.sessionId;
+    if (!newWsSession && navigationEventSeq > 0
+        && (!Number.isSafeInteger(data.event_seq)
+            || data.event_seq < navigationEventSeq)) return false;
     if (data.session_id && data.session_id !== lidarState.sessionId) {
         lidarState.map = null;
         lidarState.pose = null;
@@ -803,7 +807,7 @@ function applyNavigationStreamMessage(message) {
     if (!message || typeof message !== 'object') return;
 
     if (message.type === 'snapshot') {
-        applyNavigationSnapshot(message.snapshot);
+        applyNavigationSnapshot(message.snapshot, true);
         return;
     }
     if (message.type === 'resync_required') {
