@@ -48,7 +48,7 @@ class Navigation:
         self.live_map = {
             "source": "slam_toolbox", "map_verified": True,
             "mapping_state": "MAPPING_ACTIVE",
-            "map_revision": "live-revision",
+            "map_revision": "live-revision", "session_id": "mapping-a",
         }
         self.use_live_pose = False
 
@@ -77,7 +77,7 @@ class Navigation:
             raise NavigationControlError(self.estimate_error, "Choose map position")
         return {"x": 2.0, "y": 2.0, "yaw_degrees": 20.0}, (0, 0, 0, 0)
 
-    async def switch_mode(self, request, *, user):
+    async def switch_mode(self, request, *, user, _localization_internal=False):
         self.calls.append((request, user))
         return {
             "navigation_mode": "DRIVING",
