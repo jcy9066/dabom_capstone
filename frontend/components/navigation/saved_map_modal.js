@@ -233,12 +233,20 @@
     async function waitLocalizationSession(container, progress, sessionId, token) {
         for (let attempt = 0; attempt < 600; attempt++) {
             if (!container.isConnected) {
-                await requestJson('/api/navigation/localization/cancel', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-                    body: JSON.stringify({session_id: sessionId}),
-                }).catch(() => null);
-                throw new Error('Localization 모달이 닫혀 위치 추정을 취소했습니다.');
+                let cancelConfirmed = false;
+                try {
+                    const cancellation = await requestJson('/api/navigation/localization/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                        body: JSON.stringify({session_id: sessionId}),
+                    });
+                    cancelConfirmed = cancellation?.phase === 'CANCELLED';
+                } catch (error) {
+                    console.warn('Localization cancellation is not confirmed:', error);
+                }
+                throw new Error(cancelConfirmed
+                    ? 'Localization 모달 종료로 위치 추정 취소가 접수됐습니다.'
+                    : '모달이 닫혔지만 Localization 취소는 확인되지 않았습니다. 서버 상태와 STOP을 확인하세요.');
             }
             const state = await requestJson('/api/navigation/localization/state');
             if (state.session_id !== sessionId) {
