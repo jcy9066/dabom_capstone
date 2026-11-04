@@ -317,3 +317,29 @@ def test_scan_preview_rotation_keeps_static_obstacle_in_world_coordinates():
                 ))
         assert occupied
         assert min(math.hypot(x - 2.0, y) for x, y in occupied) < 0.15
+
+
+def test_all_unknown_grid_is_not_promoted_to_authoritative_slam_map():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    empty = {
+        "width": 10, "height": 10, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "rle", "data": [[-1, 100]],
+    }
+    assert grid.update_base_map(empty) is False
+    assert grid.snapshot(robot_id="pi-01", wall_time=1.0) is None
+
+
+def test_invalid_grid_does_not_erase_last_verified_slam_map():
+    grid = LiveMappingGrid(resolution=0.1, padding_cells=0)
+    valid = {
+        "width": 2, "height": 2, "resolution": 0.1,
+        "origin": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+        "data_encoding": "raw", "data": [0, 100, 0, -1],
+    }
+    assert grid.update_base_map(valid) is True
+    empty = {**valid, "data": [-1] * 4}
+    assert grid.update_base_map(empty) is False
+    last = grid.snapshot(robot_id="pi-01", wall_time=2.0)
+    assert last["map_verified"] is True
+    assert cell_value(last, 0.15, 0.05) == 100
