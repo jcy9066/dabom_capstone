@@ -98,6 +98,10 @@ def fixture(tmp_path):
             return {"ok": True, "delivered": True, "manual_loop_pulse": {
                 "pulse_id": command["pulse_id"],
                 "replay_generation": command["replay_generation"],
+                "pulse_sequence": command["pulse_sequence"],
+                "direction": command["direction"], "speed": command["speed"],
+                "safety_session": command["safety_session"],
+                "safety_epoch": command["safety_epoch"],
                 "elapsed_ms": duration, "duration_ms": duration, "stopped": True,
             }}
         return True
