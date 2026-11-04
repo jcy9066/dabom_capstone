@@ -244,3 +244,18 @@ def test_failed_map_revision_does_not_activate_driving():
         assert api.error_code == "MAP_REVISION_CHANGED"
         assert nav.calls == []
     asyncio.run(run())
+
+
+def test_invalid_start_does_not_mutate_localization_session():
+    async def run():
+        api = LocalizationSessionApi(FastAPI(), Navigation())
+        with pytest.raises(NavigationControlError) as error:
+            await api.start({
+                "source": "existing", "map_name": "saved",
+                "manual_only": "false",
+            }, user="operator")
+        assert error.value.error_code == "INVALID_REQUEST"
+        assert api.snapshot()["phase"] == "IDLE"
+        assert api.snapshot()["session_id"] == ""
+        assert api._task is None
+    asyncio.run(run())
