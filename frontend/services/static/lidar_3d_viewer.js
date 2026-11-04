@@ -1242,8 +1242,8 @@ if (root && canvas) {
         robotPoseGroup.visible = Boolean(visible && robotModelReady);
         cameraFrustumPoseGroup.visible = Boolean(visible && cameraVisualReady);
         cameraViewPoseGroup.visible = Boolean(visible && cameraVisualReady);
-        scanRoot.visible = Boolean(visible && scanRayGeometry);
-        pointsRoot.visible = Boolean(visible && scanPointGeometry);
+        // Scan visibility is owned exclusively by rebuildScan(): a pose
+        // update must never reveal a scan rejected for missing scan-time TF.
     }
 
     function applyTfPose(pose) {
