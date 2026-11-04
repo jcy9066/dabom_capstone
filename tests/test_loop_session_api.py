@@ -53,6 +53,9 @@ class NavigationStub:
     def motion_allowed(self):
         return True
 
+    def manual_motion_health(self):
+        return True
+
     @staticmethod
     def _pi_command_delivered(response):
         return response is True or (
