@@ -223,6 +223,13 @@ class LoopSessionApi:
             recording = self._record
             if recording is None or recording["error"]:
                 return
+            if recording.get("closing"):
+                # A MOVE accepted before Save but ACKed afterwards may have
+                # continued applying power past the saved event boundary.
+                # Never create a Bag with an invented earlier STOP timestamp.
+                if kind == "move":
+                    recording["error"] = "MOVE_ACK_DURING_SAVE"
+                return
             elapsed = time.monotonic() - recording["start"]
             if elapsed > MAX_RECORD_SECONDS or len(recording["events"]) >= MAX_EVENTS:
                 recording["error"] = "RECORDING_LIMIT"
@@ -259,11 +266,17 @@ class LoopSessionApi:
                 raise RecordedLoopError("NOT_RECORDING", "No active manual recording")
             if record["error"]:
                 raise RecordedLoopError(record["error"], "Discard invalid recording")
-        # Capture the STOP request timestamp BEFORE waiting for encoder
-        # standstill. Encoder confirmation latency is not motor-on time.
-        stop_offset = round(time.monotonic() - record["start"], 5)
+            if record.get("closing"):
+                raise RecordedLoopError("RECORDING_CLOSING", "Save already in progress")
+            # Freeze the event boundary before waiting for physical STOP.
+            # Late positive MOVE ACKs invalidate this recording rather than
+            # being appended after its STOP event with an older timestamp.
+            record["closing"] = True
+            stop_offset = round(time.monotonic() - record["start"], 5)
         await self._verified_stop()
         with self._lock:
+            if record["error"]:
+                raise RecordedLoopError(record["error"], "Discard invalid recording")
             # The last bag command stops at the operator's Save request.
             record["events"].append({"at": stop_offset, "type": "stop"})
             if self._record is not record:
