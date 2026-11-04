@@ -410,23 +410,33 @@ class LoopSessionApi:
             "safety_session": context["safety_session"],
             "safety_epoch": context["safety_epoch"],
         }
+        preflight_rejected = None
+
         def preflight() -> bool:
-            # Recheck at the last WebSocket authorization boundary. A safe
-            # scan obtained before reconnect/STOP may now be stale or blocked.
-            clearance = path_blocked(
-                self.recorded.get_live_scan(), command["direction"],
-                mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
-                mount_yaw=env_float("LIDAR_YAW"),
-            )
-            return (
-                clearance is False
-                and not self._cancelled and not self._requires_resume
+            nonlocal preflight_rejected
+            # Checked by the serialized sender immediately before transport.
+            # A blocked/no-scan refusal means that the MOVE was NOT issued;
+            # it must not be mistaken for an ACK lost after motor execution.
+            safe_state = (
+                not self._cancelled and not self._requires_resume
                 and self._replay_generation == generation
                 and self._connection_generation == connection
                 and self._mode() == "MANUAL"
                 and self.navigation.motion_safety_context() == context
                 and not getattr(self.navigation, "_localization_turn_active", False)
             )
+            if not safe_state:
+                preflight_rejected = "MANUAL_SAFETY_REVOKED"
+                return False
+            clearance = path_blocked(
+                self.recorded.get_live_scan(), command["direction"],
+                mount_x=env_float("LIDAR_X"), mount_y=env_float("LIDAR_Y"),
+                mount_yaw=env_float("LIDAR_YAW"),
+            )
+            if clearance is not False:
+                preflight_rejected = "MANUAL_OBSTACLE_BLOCKED"
+                return False
+            return True
         try:
             reply = await asyncio.wait_for(
                 self.send(
@@ -438,18 +448,23 @@ class LoopSessionApi:
         except (asyncio.TimeoutError, ConnectionError, OSError) as exc:
             self._uncertain_manual_pulse = dict(command)
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN") from exc
-        if not preflight():
-            if not self._cancelled:
-                self._uncertain_manual_pulse = dict(command)
+        # A rejected preflight cannot have issued the motor command.
+        # The callback can run more than once, so inspect it before treating
+        # a false delivery as an uncertain Pi execution.
+        if preflight_rejected is not None and not self.navigation._pi_command_delivered(reply):
             raise RuntimeError(
-                "REPLAY_CANCELLED" if self._cancelled
-                else "MANUAL_PULSE_ACK_UNCERTAIN"
+                "REPLAY_CANCELLED" if self._cancelled else preflight_rejected
             )
         if not self.navigation._pi_command_delivered(reply):
             # A MOVE may have completed even when the ACK was lost.
             # Record its exact identity for a READ-ONLY Pi receipt query.
             self._uncertain_manual_pulse = dict(command)
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN")
+        if not preflight():
+            # A late safety change after an ACK must never permit another MOVE.
+            raise RuntimeError(
+                "REPLAY_CANCELLED" if self._cancelled else "MANUAL_SAFETY_REVOKED"
+            )
         observed = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
         if not isinstance(observed, dict):
             raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
@@ -620,9 +635,14 @@ class LoopSessionApi:
                         })
                     except RuntimeError as exc:
                         if str(exc) == "MANUAL_PULSE_ACK_UNCERTAIN":
-                            # The Pi enforces a local STOP. A read-only receipt
-                            # after operator Resume proves the lost exposure.
+                            # Pi might have moved; reconcile without reissuing.
                             applied_ms = await self._reconcile_uncertain_manual_pulse()
+                        elif str(exc) == "MANUAL_OBSTACLE_BLOCKED":
+                            # No MOVE was sent. STOP, wait for stable clearance,
+                            # then generate a NEW pulse identity for the same
+                            # remaining exposure budget.
+                            await self._wait_obstacle_clear(direction)
+                            continue
                         else:
                             raise
                     if applied_ms < 1:
