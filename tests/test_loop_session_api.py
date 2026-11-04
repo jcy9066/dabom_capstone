@@ -380,3 +380,36 @@ def test_manual_stop_cannot_claim_success_after_failed_final_proof(tmp_path):
         assert raised.value.code == "LOOP_STOP_NOT_CONFIRMED"
 
     asyncio.run(run())
+
+
+def test_save_rejects_late_move_ack_instead_of_nonmonotonic_bag(tmp_path):
+    api, nav, _ = fixture(tmp_path)
+    api.record()
+    api.note_motion_ack(
+        {"type": "move", "direction": "forward", "speed": 0.2}, True,
+    )
+
+    async def stop_with_late_move_ack():
+        assert api._record["closing"] is True
+        api.note_motion_ack(
+            {"type": "move", "direction": "forward", "speed": 0.2}, True,
+        )
+    api._verified_stop = stop_with_late_move_ack
+
+    async def scenario():
+        with pytest.raises(RecordedLoopError) as raised:
+            await api.save()
+        assert raised.value.code == "MOVE_ACK_DURING_SAVE"
+    asyncio.run(scenario())
+    assert api.snapshot()["recordings"] == []
+    assert api._record["error"] == "MOVE_ACK_DURING_SAVE"
+
+
+def test_operator_stop_revokes_manual_replay_before_ack(tmp_path):
+    api, nav, _ = fixture(tmp_path)
+    api._task = SimpleNamespace(done=lambda: False)
+    api._running_kind = "MANUAL"
+    api._replay_generation = 7
+    api.request_operator_interrupt()
+    assert api._cancelled is True
+    assert api._replay_generation == 8
