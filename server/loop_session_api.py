@@ -874,10 +874,12 @@ class LoopSessionApi:
                 "LOOP_BUSY", "Stop legacy recorded playback before session Loop")
         if self._record is not None:
             raise RecordedLoopError("RECORDING_ACTIVE", "Save or Delete the recording first")
-        if getattr(self.navigation, "_localization_turn_active", False):
+        localization = getattr(self.navigation, "_localization_session_api", None)
+        if (getattr(self.navigation, "_localization_turn_active", False)
+            or (localization is not None and localization.motion_reserved)):
             raise RecordedLoopError(
-                "LOCALIZATION_TURN_ACTIVE",
-                "Automatic Initial Pose rotation must finish before starting a Loop",
+                "LOCALIZATION_ACTIVE",
+                "Initial Pose localization must finish before starting a Loop",
             )
         key = self._active()
         entry = self._entry(key)
