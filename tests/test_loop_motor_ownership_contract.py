@@ -24,5 +24,14 @@ def test_manual_loop_owner_released_only_after_final_stop():
 def test_initial_pose_turn_and_loop_are_mutually_exclusive():
     loop = (ROOT / "server/loop_session_api.py").read_text(encoding="utf-8")
     pose = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
-    assert "LOCALIZATION_TURN_ACTIVE" in loop
+    assert '"LOCALIZATION_ACTIVE"' in loop
+    assert "localization.motion_reserved" in loop
     assert "self._loop_session_owner.done()" in pose
+
+
+def test_public_motor_api_rejects_motion_during_full_localization():
+    app = (ROOT / "server/app.py").read_text(encoding="utf-8")
+    assert "or localization_session_api.motion_reserved" in app
+    control = (ROOT / "server/navigation_control_api.py").read_text(encoding="utf-8")
+    assert '"LOCALIZATION_BUSY"' in control
+    assert "_localization_internal" in control
