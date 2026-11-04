@@ -232,6 +232,7 @@ def test_uncertain_pulse_recovers_only_exact_pi_receipt(tmp_path):
         "pulse_id": "receipt-007",
         "replay_generation": 2, "safety_session": "session",
         "safety_epoch": 1, "duration_ms": 100,
+        "direction": "forward", "speed": .2, "pulse_sequence": 1,
     }
     api._uncertain_manual_pulse = dict(original)
     api._requires_resume = True
@@ -250,6 +251,8 @@ def test_uncertain_pulse_recovers_only_exact_pi_receipt(tmp_path):
         return {"ok": True, "delivered": True,
                 "manual_loop_pulse": {
                     "pulse_id": "receipt-007", "replay_generation": 2,
+                    "pulse_sequence": 1, "direction": "forward", "speed": .2,
+                    "safety_session": "session", "safety_epoch": 1,
                     "duration_ms": 100, "elapsed_ms": 62, "stopped": True,
                 }}
 
@@ -342,6 +345,10 @@ def test_obstacle_after_positive_ack_preserves_confirmed_exposure(tmp_path):
             "manual_loop_pulse": {
                 "pulse_id": packet["pulse_id"],
                 "replay_generation": packet["replay_generation"],
+                "pulse_sequence": packet["pulse_sequence"],
+                "direction": packet["direction"], "speed": packet["speed"],
+                "safety_session": packet["safety_session"],
+                "safety_epoch": packet["safety_epoch"],
                 "duration_ms": packet["duration_ms"],
                 "elapsed_ms": 70, "stopped": True,
             },
