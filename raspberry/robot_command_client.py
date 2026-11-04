@@ -534,8 +534,9 @@ class RobotCommandClient:
 
             elif command_type == "initial_pose_turn":
                 self._require_current_motion_safety(message)
-                if self.current_mode != "manual" or self.navigation_mode != "mapping":
-                    raise RuntimeError("Initial Pose turn requires Pi MANUAL/MAPPING")
+                if (self.current_mode != "manual"
+                    or self.navigation_mode not in {"mapping", "driving"}):
+                    raise RuntimeError("Initial Pose turn requires Pi MANUAL with MAPPING or DRIVING")
                 duration = self._duration_ms(message.get("duration_ms"))
                 if not 1 <= duration <= 100:
                     raise RuntimeError("Initial Pose turn exceeds 100ms limit")
