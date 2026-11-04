@@ -193,6 +193,7 @@ class NavigationControlApi:
         self._sensor_recovery: dict[str, Any] | None = None
         self._encoder_ticks: tuple[int, int, int, int] | None = None
         self._encoder_sequence: int | None = None
+        self._encoder_last_received_at: float | None = None
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_commanded_at: float | None = None
         self._encoder_stop_violation = False
@@ -294,6 +295,7 @@ class NavigationControlApi:
             self._volume_override_until = 0.0
             # A replaced Pi socket must establish a fresh encoder baseline.
             self._encoder_sequence = None
+            self._encoder_last_received_at = None
             if not connected:
                 self._stop_confirmation_after_sequence = None
                 self._estop_generation += 1
@@ -544,6 +546,7 @@ class NavigationControlApi:
                 if self._encoder_sequence is not None and sequence <= self._encoder_sequence:
                     return
                 self._encoder_sequence = sequence
+                self._encoder_last_received_at = received_at
             self._encoder_ticks = ticks
             marker = self._stop_confirmation_after_sequence
             if marker is not None and sequence is not None and sequence > marker:
@@ -892,6 +895,27 @@ class NavigationControlApi:
     def recorded_stop_proven(self) -> bool:
         with self._lock:
             return self._stop_confirmed_locked(time.time())
+
+    def manual_motion_health(self) -> bool:
+        """MANUAL LOOP must have fresh, independently sequenced wheel telemetry.
+
+        Nav2's watchdog can be inactive in MANUAL mode; do not inherit its
+        early return as evidence that wheel measurements are live.
+        """
+        with self._lock:
+            now = time.time()
+            age = (None if self._encoder_last_received_at is None
+                   else now - self._encoder_last_received_at)
+            return bool(
+                self._connected and self._encoder_ticks is not None
+                and self._encoder_sequence is not None
+                and age is not None and 0 <= age <= min(
+                    0.5, self._watchdog.odometry_timeout_sec,
+                )
+                and not self._encoder_stop_violation
+                and not self._state["emergency_stop"]
+                and self._pi_estop_latched is False
+            )
 
     def motion_safety_context(self) -> dict[str, Any] | None:
         """Issue current Pi safety identity for an authorized motion command."""
