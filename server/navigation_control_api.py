@@ -1679,7 +1679,7 @@ class NavigationControlApi:
                 f"Initial Pose requires confirmation: {risk['reason']}", 409,
             )
 
-    async def _bounded_initial_pose_turn(self) -> None:
+    async def _bounded_initial_pose_turn(self, *, saved_map=None) -> None:
         """One Pi-local 100ms, PWM 20% pulse; STOP proof is mandatory.
 
         This is never a Nav2 Spin and does not grant motion ownership to
@@ -1688,11 +1688,12 @@ class NavigationControlApi:
         if not self._motor_output_enabled:
             raise UnsafeLocalizationTurn("Physical motor output is unavailable")
         with self._lock:
+            navigation_mode = self._state["navigation_mode"]
             ready = (
-                self._state["navigation_mode"] == "MAPPING"
-                and self._state["navigation_state"] == "IDLE"
+                navigation_mode in {"MAPPING", "DRIVING"}
+                and self._state["navigation_state"] in {"IDLE", "READY", "SUCCEEDED"}
                 and self._robot_mode == "manual"
-                and self._pi_navigation_mode == "MAPPING"
+                and self._pi_navigation_mode == navigation_mode
                 and not self._state["emergency_stop"]
                 and self._pi_estop_latched is False
                 and self._connected
@@ -1706,11 +1707,22 @@ class NavigationControlApi:
                 and self._encoder_ticks is not None
             )
             if not ready:
-                raise UnsafeLocalizationTurn("Manual/MAPPING motor ownership or Pi safety unavailable")
-        mapping = self._get_live_map() or {}
-        if (mapping.get("mapping_state") != "MAPPING_ACTIVE"
-            or mapping.get("source") != "slam_toolbox"):
-            raise UnsafeLocalizationTurn("Verified active Mapping required for a physical turn")
+                raise UnsafeLocalizationTurn(
+                    "Stationary MANUAL control, Pi safety, and exclusive motor ownership required"
+                )
+        if navigation_mode == "MAPPING":
+            mapping = self._get_live_map() or {}
+            if (mapping.get("mapping_state") != "MAPPING_ACTIVE"
+                or mapping.get("source") != "slam_toolbox"):
+                raise UnsafeLocalizationTurn("Verified active Mapping required for a physical turn")
+        else:
+            # A stored-map recovery can rotate in DRIVING before AMCL is
+            # ready, but never while a Nav2 Goal/action is still active.
+            if saved_map is None or not getattr(saved_map, "yaml_path", None):
+                raise UnsafeLocalizationTurn("Selected saved map is required in DRIVING")
+            nav_state = self._ros.navigation_status()
+            if nav_state.get("state") not in {"IDLE", "SUCCEEDED", "CANCELED"}:
+                raise UnsafeLocalizationTurn("Nav2 is active or unverified; rotation blocked")
         verify_localization_turn_clearance(self._get_live_scan())
 
         odom = self._ros.rotation_status()
@@ -1726,6 +1738,14 @@ class NavigationControlApi:
             or odom_age > 0.3 or start_sequence <= 0
             or abs(linear) > 0.05 or abs(angular) > 0.10):
             raise UnsafeLocalizationTurn("Odometry is stale or robot not stationary")
+        if navigation_mode == "DRIVING":
+            # An unexpired Nav2 velocity command must not overlap a local turn.
+            command_age = odom.get("command_age_sec")
+            if (isinstance(command_age, (int, float))
+                and math.isfinite(command_age) and command_age < 1.0
+                and (abs(float(odom.get("command_linear_x") or 0.0)) > 0.01
+                     or abs(float(odom.get("command_angular_z") or 0.0)) > 0.02)):
+                raise UnsafeLocalizationTurn("Recent nonzero Nav2 velocity blocks rotation")
         # A second preflight before reserving motor ownership defeats stale UI
         # observations and arbitrary movement from another controller.
         with self._lock:
@@ -1749,10 +1769,11 @@ class NavigationControlApi:
             while time.monotonic() < deadline:
                 context = self.motion_safety_context()
                 if (context is not None and context.get("robot_mode") == "manual"
-                    and context.get("pi_navigation_mode") == "MAPPING"):
+                    and context.get("pi_navigation_mode") == navigation_mode):
                     break
                 await asyncio.sleep(0.05)
-            if context is None or context.get("robot_mode") != "manual" or context.get("pi_navigation_mode") != "MAPPING":
+            if (context is None or context.get("robot_mode") != "manual"
+                or context.get("pi_navigation_mode") != navigation_mode):
                 raise UnsafeLocalizationTurn("Pi STOP safety generation not synchronized")
             verify_localization_turn_clearance(self._get_live_scan())
             # One short bounded pulse, strictly below the 30% motor firmware
@@ -1882,7 +1903,7 @@ class NavigationControlApi:
                 # Unsafe or failed turns always fall back to map-click recovery.
                 try:
                     ensure_not_cancelled()
-                    await self._bounded_initial_pose_turn()
+                    await self._bounded_initial_pose_turn(saved_map=selected_map)
                     ensure_not_cancelled()
                     baseline_ticks = self._encoder_ticks
                     new_history = self._get_live_scans()
