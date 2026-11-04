@@ -1642,7 +1642,11 @@ class NavigationControlApi:
             except Exception:
                 pass
             with self._lock:
+                # Mapping was stopped before the failed DRIVING transition.
+                # No ROS process is now known to provide a valid active mode.
+                self._state["navigation_mode"] = None
                 self._state["navigation_state"] = "ERROR"
+                self._state["active_map"] = None
                 self._state["last_error"] = str(exc)
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False
@@ -1668,7 +1672,9 @@ class NavigationControlApi:
                 pass
             with self._lock:
                 self._arm_pending_stop_locked()
+                self._state["navigation_mode"] = None
                 self._state["navigation_state"] = "ERROR"
+                self._state["active_map"] = None
                 self._state["localization_ready"] = False
                 self._state["nav2_ready"] = False
                 self._state["last_error"] = "PI_MODE_SYNC_FAILED"
