@@ -6186,6 +6186,10 @@ async def send_robot_command(
             )
         command["safety_session"] = motion_context["safety_session"]
         command["safety_epoch"] = motion_context["safety_epoch"]
+    # Interrupt LOOP before waiting for the STOP/E-STOP transport ACK.
+    # Otherwise another 120ms pulse could pass preflight while STOP is queued.
+    if robot_id == SERVER_ROBOT_ID and command_type in {"stop", "emergency_stop"}:
+        loop_session_api.request_operator_interrupt()
     # A WebSocket send only proves that the server handed the frame to the
     # transport. Never report physical motor/STOP delivery without the Pi's
     # command_id-matched ACK, including ordinary auto_drive, move and STOP.
