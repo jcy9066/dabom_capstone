@@ -460,11 +460,11 @@ class LoopSessionApi:
             # Record its exact identity for a READ-ONLY Pi receipt query.
             self._uncertain_manual_pulse = dict(command)
             raise RuntimeError("MANUAL_PULSE_ACK_UNCERTAIN")
-        if not preflight():
-            # A late safety change after an ACK must never permit another MOVE.
-            raise RuntimeError(
-                "REPLAY_CANCELLED" if self._cancelled else "MANUAL_SAFETY_REVOKED"
-            )
+        # Do not run a second obstacle preflight before processing a
+        # *delivered* ACK. That would discard the time already applied if a
+        # new obstacle appeared while the Pi was finishing this pulse.
+        # The replay worker debits confirmed exposure before its next scan
+        # clearance gate; subsequent MOVE still requires a fresh preflight.
         observed = reply.get("manual_loop_pulse") if isinstance(reply, dict) else None
         if not isinstance(observed, dict):
             raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
@@ -477,8 +477,10 @@ class LoopSessionApi:
             or type(elapsed) is not int
             or not 0 <= elapsed <= duration):
             raise RuntimeError("MANUAL_PULSE_ACK_INVALID")
-        if not self.navigation.note_authorized_motion(context):
-            raise RuntimeError("MANUAL_MOTION_PERMISSION_REVOKED")
+        # A STOP or E-STOP may have revoked future motion since the ACK.
+        # Preserve the already-confirmed elapsed time nevertheless; the next
+        # pulse cannot pass its independent motion/context preflight.
+        self.navigation.note_authorized_motion(context)
         self._manual_pi_safety_session = context["safety_session"]
         return float(elapsed)
 
