@@ -5644,6 +5644,12 @@ async def set_model_pipeline_state(request: Request):
     }
 
 
+# A newly authenticated LiDAR socket supersedes earlier connections for the
+# same robot. Only the current socket can update the shared sequence/health.
+lidar_ws_connections = {}
+lidar_ws_connection_lock = asyncio.Lock()
+
+
 @app.websocket("/ws/sensors/{robot_id}/lidar")
 async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
     supplied_token = websocket.headers.get("X-Robot-Control-Token", "")
@@ -5659,12 +5665,23 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
         return
 
     await websocket.accept()
-    lidar_ros_bridge.mark_connected(robot_id)
+    async with lidar_ws_connection_lock:
+        previous = lidar_ws_connections.get(robot_id)
+        lidar_ws_connections[robot_id] = websocket
+        lidar_ros_bridge.mark_connected(robot_id)
+    if previous is not None and previous is not websocket:
+        try:
+            await previous.close(code=1001, reason="replaced by new sensor socket")
+        except Exception:
+            pass
     print(f"[lidar-ws] connected robot_id={robot_id}")
 
     try:
         while True:
             raw_message = await websocket.receive_text()
+            async with lidar_ws_connection_lock:
+                if lidar_ws_connections.get(robot_id) is not websocket:
+                    return
 
             try:
                 message = json.loads(raw_message)
@@ -5807,9 +5824,12 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
     except Exception as exc:
         print(f"[lidar-ws] error robot_id={robot_id}: {exc}")
     finally:
-        lidar_ros_bridge.mark_disconnected(robot_id)
-        with state_lock:
-            localization_scan_history.clear()
+        async with lidar_ws_connection_lock:
+            if lidar_ws_connections.get(robot_id) is websocket:
+                lidar_ws_connections.pop(robot_id, None)
+                lidar_ros_bridge.mark_disconnected(robot_id)
+                with state_lock:
+                    localization_scan_history.clear()
 
 
 @app.get("/api/lidar/bridge")
