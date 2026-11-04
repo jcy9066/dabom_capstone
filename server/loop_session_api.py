@@ -421,7 +421,8 @@ class LoopSessionApi:
         if self._cancelled or self._mode() != "MANUAL" or self._requires_resume:
             raise RuntimeError("MANUAL_REPLAY_INTERRUPTED")
         context = self.navigation.motion_safety_context()
-        if context is None or not self.navigation.motion_allowed():
+        if (context is None or not self.navigation.motion_allowed()
+            or not self.navigation.manual_motion_health()):
             self._log_manual_safety_diagnostic("before_manual_pulse")
             raise RuntimeError("MANUAL_SAFETY_REVOKED")
         generation = self._replay_generation
@@ -447,6 +448,7 @@ class LoopSessionApi:
                 and self._connection_generation == connection
                 and self._mode() == "MANUAL"
                 and self.navigation.motion_safety_context() == context
+                and self.navigation.manual_motion_health()
                 and not getattr(self.navigation, "_localization_turn_active", False)
             )
             if not safe_state:
@@ -582,7 +584,8 @@ class LoopSessionApi:
             state = self._manual_state()
             if state.get("pi_safety", {}).get("fresh") is not True:
                 continue
-            if self.navigation.motion_safety_context() is None:
+            if (self.navigation.motion_safety_context() is None
+                or not self.navigation.manual_motion_health()):
                 raise RuntimeError("MANUAL_SAFETY_REVOKED")
             clear = obstacle()
             now = time.monotonic()
