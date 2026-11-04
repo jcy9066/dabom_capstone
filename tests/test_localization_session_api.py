@@ -52,12 +52,17 @@ class Navigation:
         }
         self.use_live_pose = False
 
-    @staticmethod
-    def state_response():
+    def state_response(self):
+        applied = self.calls[-1][0] if self.calls else None
         return {
             "connected": True, "robot_mode": "MANUAL",
-            "navigation_state": "IDLE", "emergency_stop": False,
+            "navigation_state": "READY" if applied else "IDLE",
+            "navigation_mode": "DRIVING" if applied else "MAPPING",
+            "emergency_stop": getattr(self, "emergency_stop", False),
             "active_goal": None,
+            "localization_ready": bool(applied),
+            "nav2_ready": bool(applied),
+            "active_map": {"map_name": applied["map_name"]} if applied else None,
         }
 
     def _get_live_map(self):
@@ -299,4 +304,19 @@ def test_motion_ownership_reserves_estimation_and_click_recovery():
         assert api.motion_reserved is True
         await api.cancel({"session_id": started["session_id"]})
         assert api.motion_reserved is False
+    asyncio.run(run())
+
+
+def test_ready_is_not_a_stale_approval_after_emergency_stop():
+    async def run():
+        nav = Navigation()
+        api = LocalizationSessionApi(FastAPI(), nav)
+        await api.start({"source": "existing", "map_name": "saved"}, user="operator")
+        await api._task
+        assert api.snapshot()["localization_ready"] is True
+        nav.emergency_stop = True
+        state = api.snapshot()
+        assert state["phase"] == "FAILED"
+        assert state["error_code"] == "LOCALIZATION_STALE"
+        assert state["localization_ready"] is False
     asyncio.run(run())
