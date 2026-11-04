@@ -2008,6 +2008,7 @@ class NavigationControlApi:
             "mode": "DRIVING",
             "source": "existing",
             "map_name": payload.get("map_name"),
+            "map_revision": payload.get("map_revision"),
             "initial_pose": payload.get("initial_pose"),
         }
         async with self._operation_lock:
