@@ -1031,16 +1031,18 @@ class NavigationVisualizationHub:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
+        # Assign sequence and schedule delivery under one lock. A delayed
+        # publisher must not enqueue event 101 after event 102.
         with self._event_lock:
             self._event_seq += 1
             sequence = self._event_seq
-        payload = dict(event)
-        payload["event_seq"] = sequence
-        payload.setdefault("session_id", navigation_state.get("session_id"))
-        try:
-            loop.call_soon_threadsafe(self._enqueue, payload)
-        except RuntimeError:
-            pass
+            payload = dict(event)
+            payload["event_seq"] = sequence
+            payload.setdefault("session_id", navigation_state.get("session_id"))
+            try:
+                loop.call_soon_threadsafe(self._enqueue, payload)
+            except RuntimeError:
+                pass
 
     def _enqueue(self, payload):
         for queue in tuple(self._queues.values()):
