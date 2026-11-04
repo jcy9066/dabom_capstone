@@ -29,6 +29,7 @@ class LocalizationSessionApi:
         self.map_name = None
         self.map_revision = None
         self.live_source_revision = None
+        self.live_source_session_id = None
         self.manual_only = False
         self.reason = None
         self.error_code = None
@@ -40,6 +41,12 @@ class LocalizationSessionApi:
         self._app = app
         self._attach_routes()
 
+    @property
+    def motion_reserved(self) -> bool:
+        """Reserve motor ownership through estimation, map click and AMCL apply."""
+        return (self.phase not in self.TERMINAL
+                or self._task is not None and not self._task.done())
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "ok": True,
@@ -49,6 +56,7 @@ class LocalizationSessionApi:
             "map_name": self.map_name,
             "map_revision": self.map_revision,
             "live_source_revision": self.live_source_revision,
+            "live_source_session_id": self.live_source_session_id,
             "manual_only": self.manual_only,
             "error_code": self.error_code,
             "reason": self.reason,
@@ -137,6 +145,7 @@ class LocalizationSessionApi:
         self.live_source_revision = (
             payload.get("map_revision") if source == "current" else None
         )
+        self.live_source_session_id = None
         self.phase = "QUEUED"
         self.reason = self.error_code = self.result = self.proposed_pose = None
         self._cancel_requested = False
@@ -174,7 +183,13 @@ class LocalizationSessionApi:
             raise NavigationControlError(
                 "MAP_REVISION_CHANGED", "The current SLAM map changed.", 409,
             )
+        session_id = live.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise NavigationControlError(
+                "MAPPING_SESSION_UNKNOWN", "Cannot validate current SLAM session.", 409,
+            )
         self.live_source_revision = revision
+        self.live_source_session_id = session_id
         self._check_cancelled()
         saved = await asyncio.to_thread(
             self.navigation._save_map, dict(live), None,
@@ -224,6 +239,11 @@ class LocalizationSessionApi:
         actual = current["map_revision"]
         if self.source == "current":
             live_state = self.navigation._get_live_map() or {}
+            if live_state.get("session_id") != self.live_source_session_id:
+                raise NavigationControlError(
+                    "MAPPING_SESSION_CHANGED",
+                    "Frozen map belongs to an earlier Mapping session.", 409,
+                )
             if live_state.get("mapping_state") != "MAPPING_ACTIVE":
                 raise NavigationControlError(
                     "MAPPING_NOT_READY", "Mapping became unhealthy.", 409,
@@ -257,7 +277,9 @@ class LocalizationSessionApi:
             "initial_pose": self.proposed_pose,
         }
         # This call revalidates the map and waits for AMCL/Nav2 + Pi.
-        result = await self.navigation.switch_mode(request, user=self._owner)
+        result = await self.navigation.switch_mode(
+            request, user=self._owner, _localization_internal=True,
+        )
         if (result.get("localization_ready") is not True
             or result.get("nav2_ready") is not True):
             raise NavigationControlError(
