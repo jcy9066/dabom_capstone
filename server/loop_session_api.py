@@ -472,6 +472,11 @@ class LoopSessionApi:
         duration = packet["duration_ms"]
         if (observed.get("pulse_id") != pulse_id
             or observed.get("replay_generation") != generation
+            or observed.get("pulse_sequence") != packet["pulse_sequence"]
+            or observed.get("direction") != packet["direction"]
+            or observed.get("speed") != packet["speed"]
+            or observed.get("safety_session") != context["safety_session"]
+            or observed.get("safety_epoch") != context["safety_epoch"]
             or observed.get("duration_ms") != duration
             or observed.get("stopped") is not True
             or type(elapsed) is not int
@@ -522,6 +527,11 @@ class LoopSessionApi:
         elapsed = receipt.get("elapsed_ms")
         if (receipt.get("pulse_id") != original["pulse_id"]
             or receipt.get("replay_generation") != original["replay_generation"]
+            or receipt.get("pulse_sequence") != original["pulse_sequence"]
+            or receipt.get("direction") != original["direction"]
+            or receipt.get("speed") != original["speed"]
+            or receipt.get("safety_session") != original["safety_session"]
+            or receipt.get("safety_epoch") != original["safety_epoch"]
             or receipt.get("duration_ms") != duration
             or receipt.get("stopped") is not True
             or type(elapsed) is not int or not 0 <= elapsed <= duration):
