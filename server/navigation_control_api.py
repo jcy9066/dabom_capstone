@@ -1386,10 +1386,20 @@ class NavigationControlApi:
                 self._touch_locked()
         return self.state_response()
 
-    async def switch_mode(self, payload: dict[str, Any], user: str = "unknown") -> dict[str, Any]:
+    async def switch_mode(
+        self, payload: dict[str, Any], user: str = "unknown",
+        *, _localization_internal: bool = False,
+    ) -> dict[str, Any]:
         mode = str(payload.get("mode", "")).strip().upper()
         if mode not in self.MODES:
             raise NavigationControlError("INVALID_MODE", "mode must be MAPPING or DRIVING.", 400)
+        localization = getattr(self, "_localization_session_api", None)
+        if (localization is not None and localization.motion_reserved
+            and not _localization_internal):
+            raise NavigationControlError(
+                "LOCALIZATION_BUSY",
+                "Cannot change navigation maps while Initial Pose is being established.", 409,
+            )
 
         if mode == "MAPPING":
             await self._stop_recorded_before_transition()
