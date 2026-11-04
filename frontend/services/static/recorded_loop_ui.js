@@ -6,7 +6,7 @@ const trigger = $("loopDrawerToggle");
 const drawer = $("loop-side-drawer");
 const drawerContent = $("loop-side-drawer-content");
 if (!trigger || !drawer || !drawerContent) return;
-let latest = null, csrf = null, busy = false, generation = 0, barrier = 0;
+let latest = null, csrf = null, busy = false, pendingStop = false, generation = 0, barrier = 0;
 let policy = "WAIT", order = [], selected = new Set(), chosenBag = "";
 let obstacleToggle = null;
 
@@ -142,7 +142,8 @@ function render() {
       && connected && manual && playing && mapReady;
   resume.hidden = !latest.resume_required;
   resume.disabled = busy || !canResume;
-  $("loop-stop").disabled = busy || !playing;
+  // STOP must remain clickable even while START/RESUME HTTP is pending.
+  $("loop-stop").disabled = !playing && !busy;
   $("loop-status").textContent = (latest.status || "IDLE")
     + (latest.lap ? " / Lap " + latest.lap : "")
     + (latest.ack_reconciliation_required
@@ -184,12 +185,26 @@ async function refresh() {
   }
 }
 async function mutate(path, body, message) {
-  if (busy) return;
+  // A STOP during an in-flight START must be replayed after START returns:
+  // otherwise a delayed START response can launch motion after an early STOP.
+  if (busy) {
+    if (path === "stop") pendingStop = true;
+    return;
+  }
   busy = true;
   barrier = ++generation;
   try { await api(path, body); feedback(message); }
   catch (error) { feedback("실패: " + error.message); }
-  finally { busy = false; await refresh(); }
+  finally {
+    busy = false;
+    if (pendingStop && path !== "stop") {
+      pendingStop = false;
+      await mutate("stop", {}, "Stop 요청");
+    } else {
+      pendingStop = false;
+      await refresh();
+    }
+  }
 }
 function bindOnce() {
   $("loop-bags").addEventListener("change", event => { chosenBag = event.target.value; render(); });
