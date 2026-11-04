@@ -19,4 +19,10 @@ def test_stored_map_turn_requires_idle_nav2_and_saved_map():
     assert 'self._loop_session_owner.done()' in turn
     assert '"initial_pose_turn"' in gpu
     assert 'self.navigation_mode not in {"mapping", "driving"}' in pi
+    assert 'require_mapping_health' in turn
+    assert 'if not mapping_ready and (' in turn
+    localization = (root / "server/localization_session_api.py").read_text(
+        encoding="utf-8",
+    )
+    assert 'require_mapping_health=self.source == "current"' in localization
     assert 'self.motor.stop("initialpose_local_stop")' in pi
