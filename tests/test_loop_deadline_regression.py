@@ -313,3 +313,44 @@ def test_obstacle_at_final_preflight_is_not_ack_loss(tmp_path):
     assert api._uncertain_manual_pulse is None
     assert api._manual_elapsed_ms == 0
     assert not any(command.get("type") == "manual_loop_pulse" for command in sent)
+
+
+def test_obstacle_after_positive_ack_preserves_confirmed_exposure(tmp_path):
+    api, nav, sent = module.fixture(tmp_path)
+    api._replay_generation = 1
+    api._running_kind = "MANUAL"
+
+    def scan(near=False):
+        import time
+        return {
+            "received_at": time.time(),
+            "angle_min": -3.141592653589793,
+            "angle_increment": 2 * 3.141592653589793 / 360,
+            "range_min": 0.12, "range_max": 6.0,
+            "ranges": [0.2 if near else 2.0] * 360,
+        }
+
+    api.recorded.get_live_scan = lambda: scan(near=False)
+
+    async def pi_ack_then_obstacle(_robot, packet, *, preflight=None, **_kwargs):
+        assert preflight is not None and preflight()
+        # A physical pulse has already finished and the Pi has STOPped.
+        # A newly observed obstacle must stop FUTURE motion, not erase time.
+        api.recorded.get_live_scan = lambda: scan(near=True)
+        return {
+            "ok": True, "delivered": True,
+            "manual_loop_pulse": {
+                "pulse_id": packet["pulse_id"],
+                "replay_generation": packet["replay_generation"],
+                "duration_ms": packet["duration_ms"],
+                "elapsed_ms": 70, "stopped": True,
+            },
+        }
+
+    api.send = pi_ack_then_obstacle
+    applied = asyncio.run(api._manual_send({
+        "pulse_id": "ack-before-obstacle", "pulse_sequence": 1,
+        "duration_ms": 100, "direction": "forward", "speed": .2,
+    }))
+    assert applied == 70
+    assert api._uncertain_manual_pulse is None
