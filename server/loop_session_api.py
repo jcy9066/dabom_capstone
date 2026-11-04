@@ -208,6 +208,17 @@ class LoopSessionApi:
                             "events": [], "error": None}
         return {"ok": True}
 
+    def request_operator_interrupt(self) -> None:
+        """Prevent all future LOOP pulses as soon as an operator STOP is admitted.
+
+        Physical STOP is still dispatched and must be separately ACKed/proven;
+        cancellation must never wait for that network round trip.
+        """
+        if self.manual_playing:
+            self._cancelled = True
+            self._replay_generation += 1
+            self._resume_event.set()
+
     def note_motion_ack(self, command: dict, delivered: bool) -> None:
         """Observe authenticated command-id-matched ACKs, never queued requests."""
         if not delivered or not isinstance(command, dict):
