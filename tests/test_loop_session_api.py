@@ -291,3 +291,66 @@ def test_offline_modal_preserves_cached_goals_for_selected_map(tmp_path):
     assert snapshot["goals"][0]["pose"]["x"] == 2.0
     with pytest.raises(RecordedLoopError, match="DRIVING"):
         api.toggle_goal({"pose": pose(4.0)})
+
+
+def test_manual_replay_compensates_delayed_stop_confirmation(tmp_path, monkeypatch):
+    """Delayed STOP proof must not invalidate the next MOVE's timing."""
+    import server.loop_session_api as loop_module
+
+    api, _, _ = fixture(tmp_path)
+    key = api._active()
+
+    clock = {"now": 0.0}
+    sent = []
+    stops = {"count": 0}
+
+    real_sleep = asyncio.sleep
+
+    async def virtual_sleep(delay):
+        clock["now"] += max(0.0, delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(
+        loop_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock["now"]),
+    )
+
+    monkeypatch.setattr(
+        loop_module,
+        "asyncio",
+        SimpleNamespace(
+            sleep=virtual_sleep,
+            wait_for=asyncio.wait_for,
+            TimeoutError=asyncio.TimeoutError,
+        ),
+    )
+
+    async def verified_stop():
+        stops["count"] += 1
+        if stops["count"] == 2:
+            clock["now"] += 0.08
+
+    async def clear_obstacle(_direction):
+        return 0.0
+
+    async def send_move(packet):
+        sent.append(dict(packet))
+        if len(sent) == 2:
+            api._cancelled = True
+
+    api._verified_stop = verified_stop
+    api._wait_obstacle_clear = clear_obstacle
+    api._manual_send = send_move
+
+    events = [
+        {"at": 0.00, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.03, "type": "stop"},
+        {"at": 0.04, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.08, "type": "stop"},
+    ]
+
+    asyncio.run(api._manual_bag(key, events))
+
+    assert len(sent) == 2
+    assert stops["count"] >= 2

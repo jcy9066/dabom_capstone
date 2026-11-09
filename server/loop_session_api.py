@@ -387,6 +387,13 @@ class LoopSessionApi:
                         raise RuntimeError("MANUAL_REPLAY_TIMING_OVERRUN")
                 else:
                     await self._verified_stop()
+                    # STOP 확인이 기록된 다음 이벤트 시각을 넘긴 경우에만
+                    # 그 초과분을 재생 일정에서 제외한다.
+                    if event_index + 1 < len(events):
+                        next_at = events[event_index + 1]["at"]
+                        overdue = time.monotonic() - (lap_start + next_at + paused)
+                        if overdue > 0:
+                            paused += overdue
             if not self._cancelled:
                 await self._verified_stop()
                 self._laps += 1
