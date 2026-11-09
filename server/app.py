@@ -76,8 +76,10 @@ from server.location_security_api import LocationSecurityApi
 from server.location_security_notifications import build_location_transition_message
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
+from server.audio_intercom import register_audio_intercom
 from server.live_mapping_grid import LiveMappingGrid
 from server.gpu_telemetry import GpuUtilizationSampler
+from server.automatic_warning import AutomaticWarningDispatcher
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -331,6 +333,7 @@ async def logout_user(request: Request):
 
 SERVER_ROBOT_ID = env_text("ROBOT_ID")
 ROBOT_CONTROL_TOKEN = env_text("ROBOT_CONTROL_TOKEN")
+register_audio_intercom(app, robot_id=SERVER_ROBOT_ID, robot_token=ROBOT_CONTROL_TOKEN, root_dir=ROOT_DIR)
 
 
 def robot_ingest_failure(request: Request):
@@ -955,6 +958,9 @@ class RobotConnectionManager:
 
 
 connections = RobotConnectionManager()
+automatic_warning = AutomaticWarningDispatcher.from_env(
+    robot_id=SERVER_ROBOT_ID, send_command=connections.send_command_wait_ack,
+)
 
 
 class NavigationVisualizationHub:
@@ -2833,6 +2839,10 @@ def publish_processed_inference_if_current(
             input_captured_at=captured_at,
             elapsed_ms=elapsed_ms,
         )
+        automatic_warning.observe_result(
+            robot_id=robot_id, result=result, captured_at=captured_at,
+            generation=processed_model_generation, stream_id=stream_id,
+        )
         return True
 
 
@@ -3042,6 +3052,7 @@ async def startup():
     global lidar_ros_bridge, encoder_ros_bridge
 
     navigation_visualization_hub.bind_loop(asyncio.get_running_loop())
+    automatic_warning.bind_loop(asyncio.get_running_loop())
     start_persistence_workers()
     ensure_runtime_model_config(force=True, reason="startup")
 
@@ -3084,6 +3095,7 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
+    automatic_warning.close()
     try :
         await loop_session_api.close()
         await recorded_loop_api.close()

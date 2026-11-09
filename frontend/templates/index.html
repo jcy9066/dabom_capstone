@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 순찰 관제 센터</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="static/style.css?v=20261029-object-list-contrast-v1">
+    <link rel="stylesheet" href="static/style.css?v=20261029-object-list-contrast-v1-camera-rotate-v1">
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261028-right-drawer-v5">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261020-beep-raised-v12">
     <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-border-v2">
+    <link rel="stylesheet" href="static/audio_intercom_dashboard.css?v=20261110-phase2">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
     <link rel="stylesheet" href="static/uiverse_dashboard_controls.css?v=20261020-verified-press-v4">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-return-animation-v4">
@@ -141,6 +142,29 @@
         </div>
     </header>
 
+    <!-- USB 양방향 음성 관제: Pico W Beep 제어와 독립 -->
+    <details class="dabom-audio-dock" id="dabomAudio">
+        <summary>🎙️ 현장 음성 관제 <span id="audioQuickState" aria-live="polite">⚪ 연결 안 됨</span></summary>
+        <div class="audio-dock-body">
+            <div class="audio-dock-status" id="audioStatus" role="status" aria-live="polite">오디오 연결 전</div>
+            <div class="audio-dock-buttons">
+                <button id="audioConnect" type="button">오디오 서버 연결</button>
+                <button id="audioListen" type="button" disabled>현장 청취 시작</button>
+                <button id="audioTalk" type="button" disabled>누르고 현장에 말하기</button>
+                <button id="audioDisconnect" type="button" disabled>연결 종료</button>
+            </div>
+            <label class="audio-dock-label">웹 청취 음량
+                <input type="range" id="audioListenVolume" min="0" max="100" value="28" aria-label="웹 청취 음량">
+                <span id="audioListenVolumeLabel">28%</span>
+            </label>
+            <label class="audio-dock-label">로봇 USB 스피커
+                <input type="range" id="audioRobotVolume" min="0" max="100" value="50" disabled aria-label="로봇 USB 스피커 음량">
+                <span id="audioRobotVolumeLabel">확인 중</span>
+            </label>
+            <p class="audio-dock-hint" id="audioSecureNote">마이크는 누르고 말할 때만 사용합니다. 현재 통화는 저장하지 않습니다.</p>
+            <pre class="audio-dock-log" id="audioLog" aria-live="polite"></pre>
+        </div>
+    </details>
     <div class="dashboard-container">
 
         <div class="card" id="camera-card">
@@ -201,6 +225,15 @@
                     class="overlay-controls top-left"
                     id="camera-controls"
                 >
+                    <button
+                        class="icon-btn"
+                        id="camera-rotate-btn"
+                        type="button"
+                        title="카메라 화면을 시계 방향으로 90도 회전"
+                        aria-label="카메라 화면을 시계 방향으로 90도 회전"
+                    >
+                        ↻ 0°
+                    </button>
                     <button
                         class="icon-btn"
                         onclick="toggleFullscreen('video-wrapper')"
@@ -880,6 +913,7 @@
     <script src="static/navigation_control.js?v=20261028-loop-modal-v1"></script>
     <script src="static/recorded_loop_ui.js?v=20261028-drawer-close-v8"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
+    <script src="static/audio_intercom_test.js?v=20261110-phase2"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
     <script src="/static/elastic_scroll.js?v=20261014-return-animation-v4"></script>
@@ -904,5 +938,6 @@
             if (!ready) document.getElementById('dashboardUiStartupError').hidden = false;
         }, { once: true });
     </script>
+    <script src="static/camera_rotation.js?v=20261109-camera-rotate-v3"></script>
 </body>
 </html>

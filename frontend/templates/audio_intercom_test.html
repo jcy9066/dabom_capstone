@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DABOM · 음성 관제 실험실</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background:#071e24; color:#e6faf5; display:grid; place-items:center; }
+    main { max-width:620px; width:min(94vw,620px); padding:26px; box-sizing:border-box; border:1px solid #3b7777; border-radius:18px; background:#113037; }
+    h1 {font-size:23px; margin:0 0 6px;} p {line-height:1.55; color:#b3d1cf;}
+    .status {padding:12px; border-radius:9px; background:#09282e; font-family:monospace; white-space:pre-line;}
+    .actions {display:flex; flex-wrap:wrap; gap:10px; margin:18px 0;}
+    button {border:0; border-radius:10px; padding:13px 17px; font-size:15px; cursor:pointer; background:#51cba3; color:#07241c; font-weight:700;}
+    button.secondary {background:#244d51; color:#e5fff7; border:1px solid #679c95;}
+    button:disabled {opacity:.45; cursor:not-allowed;}
+    button.active {background:#ffbd69; color:#282112;}
+    label {display:flex; align-items:center; gap:12px; margin:14px 0;}
+    input[type="range"] {flex:1;}
+    pre {white-space:pre-wrap; max-height:170px; overflow:auto; font-size:12px; background:#081f24; padding:12px; border-radius:8px;}
+    a {color:#72e4cb;}
+  </style>
+</head>
+<body>
+<main id="dabomAudio" data-robot-id="__DABOM_ROBOT_ID__">
+  <h1>🎙️ DABOM · 음성 관제 테스트</h1>
+  <p>기존 대시보드와 독립된 시험 화면입니다. 마이크는 버튼을 누를 때만 사용하며 음성을 저장하지 않습니다.</p>
+  <div class="status" id="audioStatus">오디오 연결 전</div>
+  <div class="actions">
+    <button id="audioConnect">오디오 서버 연결</button>
+    <button id="audioListen" class="secondary" disabled>현장 청취 시작</button>
+    <button id="audioTalk" class="secondary" disabled>누르고 현장에 말하기</button>
+    <button id="audioDisconnect" class="secondary" disabled>연결 종료</button>
+  </div>
+  <label>웹에서 듣는 소리 <input type="range" id="audioListenVolume" min="0" max="100" value="28"><span id="audioListenVolumeLabel">28%</span></label>
+  <label>로봇 USB 스피커 <input type="range" id="audioRobotVolume" min="0" max="100" value="50" disabled><span id="audioRobotVolumeLabel">확인 중</span></label>
+  <p id="audioSecureNote"></p>
+  <pre id="audioLog" aria-live="polite"></pre>
+  <p><a href="/main">← 다봄 대시보드</a></p>
+</main>
+<script src="/static/audio_intercom_test.js?v=20261109-mvp1" defer></script>
+</body>
+</html>
