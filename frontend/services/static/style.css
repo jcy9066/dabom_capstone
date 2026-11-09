@@ -355,6 +355,32 @@ h1 {
     width: 100%; height: 100%; object-fit: cover;
     transition: filter 0.2s, opacity 0.2s;
 }
+/* Rotate only the MJPEG preview, never the fullscreen button or dashboard overlays. */
+#video-wrapper[data-camera-rotation="180"] #camera-stream {
+    transform: rotate(180deg);
+}
+#video-wrapper[data-camera-rotation="90"] #camera-stream,
+#video-wrapper[data-camera-rotation="270"] #camera-stream {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: var(--camera-rotation-height, 100%);
+    height: var(--camera-rotation-width, 100%);
+    max-width: none;
+    object-fit: contain;
+    transform-origin: 50% 50%;
+}
+#video-wrapper[data-camera-rotation="90"] #camera-stream {
+    transform: translate(-50%, -50%) rotate(90deg);
+}
+#video-wrapper[data-camera-rotation="270"] #camera-stream {
+    transform: translate(-50%, -50%) rotate(270deg);
+}
+#camera-rotate-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .screen-content.camera-offline {
     background-color: #d1d5db;
     border-color: #9ca3af;
