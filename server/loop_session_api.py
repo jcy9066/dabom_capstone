@@ -331,7 +331,50 @@ class LoopSessionApi:
             await asyncio.sleep(0.10)
         raise RuntimeError("REPLAY_CANCELLED")
 
+    @staticmethod
+    def _compact_manual_events(events: list[dict]) -> list[dict]:
+        """Reduce redundant MOVE commands while preserving STOP and safety."""
+        next_stops = [None] * len(events)
+        next_stop = None
+
+        for index in range(len(events) - 1, -1, -1):
+            next_stops[index] = next_stop
+            if events[index]["type"] == "stop":
+                next_stop = events[index]["at"]
+
+        compacted = []
+        last_signature = None
+        last_kept_at = None
+
+        for index, event in enumerate(events):
+            if event["type"] != "move" or event.get("speed", 0) <= 0:
+                compacted.append(event)
+                last_signature = None
+                last_kept_at = None
+                continue
+
+            signature = (event["direction"], event["speed"])
+            same_motion = signature == last_signature
+            stop_at = next_stops[index]
+
+            if same_motion and last_kept_at is not None:
+                too_soon = event["at"] - last_kept_at < 0.20
+                near_stop = (
+                    stop_at is not None
+                    and stop_at - event["at"] <= 0.12
+                )
+
+                if too_soon or near_stop:
+                    continue
+
+            compacted.append(event)
+            last_signature = signature
+            last_kept_at = event["at"]
+
+        return compacted
+
     async def _manual_bag(self, key: tuple[str, str], events: list[dict]) -> None:
+        events = self._compact_manual_events(events)
         await self._verified_stop()
         self._status = "RUNNING"
         while not self._cancelled:

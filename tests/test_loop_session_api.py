@@ -354,3 +354,31 @@ def test_manual_replay_compensates_delayed_stop_confirmation(tmp_path, monkeypat
 
     assert len(sent) == 2
     assert stops["count"] >= 2
+
+
+
+def test_manual_replay_compacts_duplicate_move_heartbeats():
+    events = [
+        {"at": 0.00, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.12, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.24, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.36, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.48, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.60, "type": "move", "direction": "forward", "speed": 0.2},
+        {"at": 0.70, "type": "stop"},
+        {"at": 0.80, "type": "move", "direction": "backward_left", "speed": 0.2},
+        {"at": 1.10, "type": "stop"},
+        {"at": 1.20, "type": "move", "direction": "backward_right", "speed": 0.2},
+        {"at": 1.50, "type": "stop"},
+        {"at": 1.60, "type": "move", "direction": "backward", "speed": 0.2},
+        {"at": 2.00, "type": "stop"},
+    ]
+
+    result = LoopSessionApi._compact_manual_events(events)
+
+    assert [e["direction"] for e in result if e["type"] == "move"] == [
+        "forward", "forward", "forward",
+        "backward_left", "backward_right", "backward",
+    ]
+    assert sum(e["type"] == "stop" for e in result) == 4
+    assert result[-1] == events[-1]
