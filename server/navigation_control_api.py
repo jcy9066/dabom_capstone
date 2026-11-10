@@ -192,6 +192,10 @@ class NavigationControlApi:
         self._stop_encoder_ticks: tuple[int, int, int, int] | None = None
         self._stop_commanded_at: float | None = None
         self._encoder_stop_violation = False
+        # An authenticated MOVE can physically start before its ACK is returned.
+        # Temporarily defer only the OLD STOP baseline during that bounded handoff.
+        self._motion_handoff = None
+        self._motion_handoff_generation = 0
         self._stop_confirmation_after_sequence: int | None = None
         self._stop_confirmation_ticks: tuple[int, int, int, int] | None = None
         self._stop_confirmation_started_at: float | None = None
@@ -563,6 +567,7 @@ class NavigationControlApi:
                 self._stop_confirmation_last_at = received_at
             if (
                 self._stop_commanded_at is not None
+                and not self._motion_handoff_guards_stop_locked(received_at)
                 and received_at - self._stop_commanded_at >= self._watchdog.stop_encoder_grace_sec
                 and self._stop_encoder_ticks is not None
                 and max(
@@ -925,7 +930,118 @@ class NavigationControlApi:
                 "goal_generation": self._goal_motion_generation,
                 "robot_mode": self._robot_mode,
                 "pi_navigation_mode": self._pi_navigation_mode,
+                "stop_commanded_at": self._stop_commanded_at,
             }
+
+    def _motion_handoff_guards_stop_locked(self, now: float) -> bool:
+        """Defer a *previous* STOP check only during an authorized Pi MOVE ACK.
+
+        A newer STOP, ESTOP, changed Pi safety identity, or expired ACK deadline
+        immediately restores normal encoder monitoring. No generic bypass.
+        """
+        item = self._motion_handoff
+        if item is None or now > item["expires_at"]:
+            return False
+        safety = item["safety"]
+        return bool(
+            not self._state["emergency_stop"]
+            and not self._encoder_stop_violation
+            and self._stop_commanded_at == item["stop_at"]
+            and self._stop_encoder_ticks == item["stop_ticks"]
+            and self._estop_generation == safety["estop_generation"]
+            and self._goal_motion_generation == safety["goal_generation"]
+            and self._pi_safety_session == safety["safety_session"]
+            and self._pi_safety_epoch == safety["safety_epoch"]
+            and self._pi_estop_latched is False
+        )
+
+    def begin_motion_handoff(
+        self, command: dict[str, Any], max_wait_sec: float = 1.0
+    ) -> int | None:
+        """Called by the serialized WebSocket preflight just before Pi MOVE send."""
+        with self._lock:
+            if self._motion_handoff is not None:
+                return None  # Do not overlap ambiguous motion grants.
+            safety = self.motion_safety_context()
+            if safety is None or (
+                safety["safety_session"] != command.get("safety_session")
+                or safety["safety_epoch"] != command.get("safety_epoch")
+            ):
+                return None
+            self._motion_handoff_generation += 1
+            token = self._motion_handoff_generation
+            self._motion_handoff = {
+                "token": token,
+                "safety": dict(safety),
+                "stop_at": self._stop_commanded_at,
+                "stop_ticks": self._stop_encoder_ticks,
+                "expires_at": time.time() + max(0.5, min(5.0, float(max_wait_sec) + 0.25)),
+            }
+            return token
+
+    def complete_motion_handoff(self, token: int, acknowledged: bool) -> bool:
+        """Commit MOVE only after Pi's matching success ACK and unchanged STOP generation.
+
+        ACK failure never clears STOP. The transport invokes a compensating
+        emergency_stop if a command might have been sent but not acknowledged.
+        """
+        with self._lock:
+            item = self._motion_handoff
+            if item is None or item["token"] != token:
+                return False
+            self._motion_handoff = None
+            now = time.time()
+            safety = item["safety"]
+            valid = bool(
+                acknowledged and now <= item["expires_at"]
+                and not self._state["emergency_stop"]
+                and not self._encoder_stop_violation
+                and not self._patrol_transition
+                and not self._patrol_transition_error
+                and self._pending_nav_success is None
+                and self._sensor_recovery is None
+                and self._state["navigation_state"] not in {
+                    "FAILED", "CANCELING", "CANCELING_STOP", "PAUSING_FOR_MANUAL", "REPLACING_GOAL"
+                }
+                and self._connected
+                and self._age(now, self._pi_updated_at) <= self._watchdog.pi_timeout_sec
+                and self._pi_estop_latched is False
+                and self._pi_safety_session == safety["safety_session"]
+                and self._pi_safety_epoch == safety["safety_epoch"]
+                and self._estop_generation == safety["estop_generation"]
+                and self._goal_motion_generation == safety["goal_generation"]
+                and self._robot_mode == safety["robot_mode"]
+                and self._pi_navigation_mode == safety["pi_navigation_mode"]
+                and self._stop_commanded_at == item["stop_at"]
+                and self._stop_encoder_ticks == item["stop_ticks"]
+                and (
+                    self._robot_mode != "auto"
+                    or self._state["navigation_state"] in self.ACTIVE_NAV_STATES
+                    or self.recorded_nav2_health()
+                )
+            )
+            if valid:
+                self._stop_commanded_at = None
+                self._stop_encoder_ticks = None
+                self._stop_confirmation_after_sequence = None
+                self._post_resume_motion_ready = False
+                return True
+            # A late/missing ACK cannot be interpreted as permission to move.
+            # Restore the original STOP monitor, and immediately latch evidence
+            # already received while waiting for the Pi response.
+            if (
+                self._stop_commanded_at is not None
+                and self._stop_encoder_ticks is not None
+                and self._encoder_ticks is not None
+                and now - self._stop_commanded_at >= self._watchdog.stop_encoder_grace_sec
+                and max(abs(x - y) for x, y in zip(
+                    self._encoder_ticks, self._stop_encoder_ticks
+                )) >= self._watchdog.stop_encoder_tick_threshold
+                and not self._encoder_stop_violation
+            ):
+                self._encoder_stop_violation = True
+                self._estop_generation += 1
+            return False
 
     def note_authorized_motion(
         self, expected_safety: dict[str, Any] | None = None
@@ -956,6 +1072,14 @@ class NavigationControlApi:
             ):
                 return False
 
+            # Do not clear a newer STOP during post-ACK authorization.
+            if (
+                expected_safety is not None
+                and "stop_commanded_at" in expected_safety
+                and self._stop_commanded_at is not None
+                and self._stop_commanded_at != expected_safety["stop_commanded_at"]
+            ):
+                return False
             self._stop_commanded_at = None
             self._stop_encoder_ticks = None
             self._stop_confirmation_after_sequence = None

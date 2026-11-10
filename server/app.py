@@ -833,6 +833,32 @@ class RobotConnectionManager:
             if command_id in self.pending_acks:
                 return False
             self.pending_acks[command_id] = (robot_id, websocket, future)
+        # Only the serialized transport preflight may arm this bounded MOVE
+        # handoff. ACK success atomically commits it; failures retain STOP.
+        handoff_api = globals().get("navigation_control_api")
+        handoff_token = None
+        handoff_sent = False
+        is_motion_handoff = (
+            robot_id == globals().get("SERVER_ROBOT_ID")
+            and command.get("type") in {"move", "auto_drive"}
+            and "safety_session" in command and "safety_epoch" in command
+            and hasattr(handoff_api, "begin_motion_handoff")
+        )
+        if is_motion_handoff:
+            original_preflight = preflight
+
+            def preflight_with_handoff():
+                nonlocal handoff_token
+                if original_preflight is not None and not original_preflight():
+                    return False
+                if handoff_token is not None:
+                    return True
+                handoff_token = handoff_api.begin_motion_handoff(
+                    command, max_wait_sec=self.ack_timeout_sec
+                )
+                return handoff_token is not None
+
+            preflight = preflight_with_handoff
         # The total send + Pi ACK round trip shares ONE bounded deadline.
         # A blocked send must not acquire the global lock or evade timeout.
         deadline = loop.time() + self.ack_timeout_sec
@@ -841,6 +867,7 @@ class RobotConnectionManager:
                 self._send_serialized_command(robot_id, websocket, command, preflight),
                 timeout=max(0.001, deadline - loop.time()),
             )
+            handoff_sent = bool(sent)
             if not sent:
                 reporter = getattr(self, "command_transport_observer", None)
                 if callable(reporter) and command.get("type") == "auto_drive":
@@ -906,6 +933,23 @@ class RobotConnectionManager:
                     and type(ack.get("safety_epoch")) is int
                     and ack["safety_epoch"] == command.get("safety_epoch")
                 )
+                if handoff_token is not None:
+                    delivered = handoff_api.complete_motion_handoff(
+                        handoff_token, delivered
+                    )
+                    handoff_token = None
+                    if not delivered:
+                        # Pi may already be moving; a rejected or stale ACK
+                        # must trigger a compensating physical STOP.
+                        try:
+                            await handoff_api.emergency_stop(
+                                "MOTION_ACK_UNCONFIRMED", automatic=True, force=True
+                            )
+                        except Exception:
+                            import logging
+                            logging.getLogger(__name__).exception(
+                                "Compensating emergency STOP failed after rejected MOVE ACK"
+                            )
                 if (motion_ack and command.get("type") == "auto_drive"
                     and command.get("source") == "recorded_loop"):
                     motion = ack.get("motion") if isinstance(ack, dict) else None
@@ -930,6 +974,19 @@ class RobotConnectionManager:
                     pass
             return False
         finally:
+            if handoff_token is not None:
+                # Even if a MOVE was sent, an unknown/late ACK never grants
+                # movement. The Pi must be commanded to ESTOP on uncertainty.
+                handoff_api.complete_motion_handoff(handoff_token, False)
+                try:
+                    await handoff_api.emergency_stop(
+                        "MOTION_ACK_UNCONFIRMED", automatic=True, force=True
+                    )
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "Compensating emergency STOP failed after uncertain MOVE ACK"
+                    )
             async with self.lock:
                 self.pending_acks.pop(command_id, None)
 
