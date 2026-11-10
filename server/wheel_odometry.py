@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 
@@ -16,8 +17,16 @@ from tf2_ros import TransformBroadcaster
 
 try:
     from server.env_config import env_float, env_text
+    from server.odometry_calibration import (
+        DEFAULT_ODOMETRY_TRACK_MULTIPLIER,
+        effective_odometry_track_m,
+    )
 except ModuleNotFoundError:  # Direct script execution from server/.
     from env_config import env_float, env_text
+    from odometry_calibration import (
+        DEFAULT_ODOMETRY_TRACK_MULTIPLIER,
+        effective_odometry_track_m,
+    )
 
 
 def normalize_angle(angle: float) -> float:
@@ -336,14 +345,30 @@ class WheelOdometryRunner:
     def run(self) -> None:
         rclpy.init(args=None)
 
+        # Empirical 30-degree undershoot at a 180-degree target:
+        # wheel-odom indicated 180.6 deg while chassis turned ~150 deg.
+        # Apply a 1.204x effective track ONLY in /odom, not the Nav2/Pi
+        # WHEEL_TRACK_M used for wheel-speed and motion command geometry.
+        override = os.environ.get("ODOMETRY_TRACK_MULTIPLIER", "").strip()
+        multiplier = (
+            env_float("ODOMETRY_TRACK_MULTIPLIER", minimum=0.001)
+            if override
+            else DEFAULT_ODOMETRY_TRACK_MULTIPLIER
+        )
+        nominal_track_m = env_float("WHEEL_TRACK_M", minimum=0.001)
+        effective_track_m = effective_odometry_track_m(nominal_track_m, multiplier)
         self.node = WheelOdometryNode(
             wheel_diameter_m=env_float("WHEEL_DIAMETER_M", minimum=0.001),
-            wheel_track_m=env_float("WHEEL_TRACK_M", minimum=0.001),
+            wheel_track_m=effective_track_m,
             ticks_per_revolution=env_float("ENCODER_TICKS_PER_REV", minimum=1.0),
             wheel_ticks_topic=env_text("WHEEL_TICKS_TOPIC"),
             odom_topic=env_text("ODOM_TOPIC"),
             odom_frame=env_text("ODOM_FRAME"),
             base_frame=env_text("BASE_FRAME"),
+        )
+        self.node.get_logger().info(
+            f"odometry yaw calibration: nominal_track={nominal_track_m:.4f}m "
+            f"multiplier={multiplier:.6f} effective_track={effective_track_m:.4f}m"
         )
 
         self.executor = SingleThreadedExecutor()

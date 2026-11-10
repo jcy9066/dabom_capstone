@@ -396,12 +396,30 @@ def collect_used_env_vars(root: Path) -> set[str]:
             used.update(ENV_INDEX_RE.findall(source))
             used.update(ENV_HELPER_RE.findall(source))
 
-    for path in root.rglob("*.sh"):
+    # A validation fixture can be a directory outside a Git repository.
+    if (root / ".git").exists():
+        tracked_shells = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "*.sh"], cwd=root
+        ).decode("utf-8")
+        shell_paths = [
+            root / relative
+            for relative in tracked_shells.split("\0")
+            if relative
+        ]
+    else:
+        shell_paths = list(root.rglob("*.sh"))
+    for path in shell_paths:
+        if not path.is_file():
+            continue
         source = read_text(path)
         used.update(SHELL_REQUIRED_ENV_RE.findall(source))
         used.update(
             set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):-", source))
-            - {"XDG_RUNTIME_DIR", "TMPDIR"}
+            - {
+                "XDG_RUNTIME_DIR", "TMPDIR", "DABOM_GPU_PYTHON",
+                "PYTHON",  # Verification interpreter override.
+                "ODOM_DISCOVERY_PENDING",  # Launcher-internal state.
+            }
         )
         # Runtime launchers also validate indirectly via required_env arrays.
         for block in re.findall(r"required_env\s*=\s*\((.*?)\)", source, re.DOTALL):
@@ -474,10 +492,18 @@ def check_env_example(root: Path, findings: list[Finding]) -> None:
         entries.append(name)
         # Documented non-secret defaults; credentials must remain empty.
         defaults = {
+            "PIPELINE": "8",
             "MAX_WHEEL_MPS": "0.212",
             "MIN_AUTO_DRIVE_PWM": "0.30",
             "LIDAR_YAW": "3.141592653589793",
             "LIDAR_SCAN_STALE_SEC": "3.0",
+            "CAMERA_UPLOAD_MIN_BPS": "1024",
+            "CAMERA_UPLOAD_STALL_SEC": "15",
+            "ACTION_MIN_HISTORY_FRAMES": "12",
+            "ACTION_POSE_GAP_RESET_SEC": "1.5",
+            "ACTION_INTERACTION_PAIR_DISTANCE_RATIO": "1.5",
+            "ACTION_INTERACTION_MAX_PAIRS": "4",
+            "ACTION_INTERACTION_INFER_EVERY_N": "2",
         }
         if value and defaults.get(name) != value:
             nonempty.append(name)

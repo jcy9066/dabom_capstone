@@ -219,7 +219,7 @@ def test_slam_map_is_preserved_as_base_before_live_scan_updates():
     assert cell_value(payload, -0.05, 0.05) == 100
 
 
-def test_latest_scan_overrides_only_currently_observed_base_cells():
+def test_slam_map_remains_authoritative_after_live_scan():
     grid = LiveMappingGrid(
         resolution=0.1,
         refresh_sec=1.0,
@@ -246,5 +246,6 @@ def test_latest_scan_overrides_only_currently_observed_base_cells():
         force=True,
     )
     assert payload is not None
-    assert cell_value(payload, 1.0, 0.0) == 0
+    # SLAM occupied cells are not cleared by unaligned LiDAR overlay data.
+    assert cell_value(payload, 1.0, 0.0) == 100
 

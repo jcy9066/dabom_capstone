@@ -15,21 +15,8 @@ class CascadingTrigger:
         """
         반환값 - 0: Normal (렌더링 안 함), 1: Suspicious (주황색, 행동 분석 시작)
         """
-        states = {obj['id']: 0 for obj in tracked_boxes}
-        
         persons = [obj for obj in tracked_boxes if obj['cls'] == 0]
-        weapons = [obj for obj in tracked_boxes if obj['cls'] != 0]
-
-        # 흉기가 탐지되면 무조건 해당 객체는 의심 상태
-        for w in weapons:
-            states[w['id']] = 1
-            
-        # 흉기 주변 250픽셀 이내의 넓은 반경에 있는 모든 사람을 의심 상태로 전환
-        for p in persons:
-            for w in weapons:
-                dist = math.hypot(p['center'][0] - w['center'][0], p['center'][1] - w['center'][1])
-                if dist < self.proximity_threshold:
-                    states[p['id']] = 1
+        states = {obj['id']: 0 for obj in persons}
 
         # 사람에 대한 속도, 형태, 밀집도 분석
         for p in persons:

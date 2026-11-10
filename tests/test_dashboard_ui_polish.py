@@ -336,7 +336,7 @@ class DashboardUiPolishContract(unittest.TestCase):
         self.assertIn("record_modal.js?v=20261014-detail-overlay-v1", DASHBOARD)
         self.assertIn("system_control.js?v=20261014-hide-pi-service-v1", DASHBOARD)
         self.assertIn("record_table.js?v=20261014-ui-polish-v1", DASHBOARD)
-        self.assertIn("navigation_mode_control.js?v=20261014-stable-hydration-v1", DASHBOARD)
+        self.assertIn("navigation_mode_control.js?v=20261023-pr90-mapping-recovery-v1", DASHBOARD)
         self.assertIn('selected_ui.js?v=20261014-shared-drawer-v2', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261020-single-map-column-v11', DASHBOARD)
         self.assertIn('selected_ui.css?v=20261020-single-map-column-v11', LOGIN)

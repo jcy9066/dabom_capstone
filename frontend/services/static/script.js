@@ -593,45 +593,16 @@ function cancelNavigationGlobalPathStaleTimer() {
     }
 }
 
-function scheduleNavigationGlobalPathStale(receivedAtSec = null) {
+function scheduleNavigationGlobalPathStale() {
+    // A Global Path belongs to its Goal execution, not to a heartbeat.
+    // Keep it until an explicit replacement or Goal termination.
     cancelNavigationGlobalPathStaleTimer();
-
-    // Standalone ComputePathToPose debugging:
-    // retain the latest path until another path or reset arrives.
-    if (navigationGlobalPathRunKey === null) {
-        return;
-    }
-
-    let delayMs = GLOBAL_PATH_STALE_MS;
-    const received = Number(receivedAtSec);
-
-    if (Number.isFinite(received) && received > 0) {
-        delayMs = Math.max(
-            0,
-            GLOBAL_PATH_STALE_MS - Math.max(0, Date.now() - received * 1000),
-        );
-    }
-
-    if (delayMs <= 0) {
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        return;
-    }
-
-    navigationGlobalPathStaleTimer = window.setTimeout(() => {
-        navigationGlobalPathStaleTimer = null;
-
-        if (
-            lidarState.globalPathStatus !== 'fresh'
-            && lidarState.globalPathStatus !== 'pending'
-        ) return;
-
-        lidarState.globalPath = [];
-        lidarState.globalPathStatus = 'stale';
-        emitNavigationVisualizationState(false);
-    }, delayMs);
 }
 function applyNavigationGlobalPath(path, receivedAtSec = null, emit = true) {
+    // Raw ROS global_path has no Goal execution ID. Ignore packets received
+    // before an active Goal or after cancellation/completion so late arrivals
+    // cannot resurrect an orphaned route in dashboard visualization state.
+    if (navigationGlobalPathRunKey === null) return;
     lidarState.globalPath = Array.isArray(path) ? path : [];
     if (lidarState.globalPath.length >= 2) {
         lidarState.globalPathStatus = 'fresh';
@@ -661,6 +632,7 @@ function navigationControlGoalKey(control) {
     const goal = control?.active_goal;
     if (!goal) return null;
     return [
+        control?.goal_generation ?? 'unknown',
         Number(goal.x) || 0,
         Number(goal.y) || 0,
         Number(goal.yaw) || 0,
@@ -713,18 +685,8 @@ function applyNavigationSnapshot(data) {
         lidarState.statusObservedAtMs = performance.now();
     }
     lidarState.pose = data.pose_available ? data.pose : null;
-    if (Array.isArray(data.global_path) && data.global_path.length >= 2) {
-        applyNavigationGlobalPath(
-            data.global_path,
-            data.global_path_updated_at ?? null,
-            false,
-        );
-    } else if (
-        navigationGlobalPathRunKey !== null
-        && lidarState.globalPathStatus !== 'pending'
-    ) {
-        resetNavigationGlobalPath();
-    }
+    // Snapshot /plan events have no Goal execution identifier and are
+    // never an authoritative source of the approved route.
     lidarState.costmap = data.costmap && typeof data.costmap === 'object' ? data.costmap : null;
     if (data.scan_available && data.scan) {
         lidarState.scan = data.scan;
@@ -784,10 +746,8 @@ function applyNavigationStreamMessage(message) {
     }
 
     if (message.type === 'global_path') {
-        applyNavigationGlobalPath(
-            message.path,
-            message.received_at ?? null,
-        );
+        // Anonymous ROS /plan packets have no Goal owner. The approved
+        // path is delivered by the navigation control-state endpoint.
         return;
     }
 
@@ -824,13 +784,24 @@ function applyNavigationStreamMessage(message) {
 document.addEventListener('dabom:navigation-control-state', event => {
     const control = event.detail || {};
     const navState = String(control.navigation_state || '').toUpperCase();
-    const active = ['NAVIGATING', 'RESUMING'].includes(navState) && control.active_goal;
+    const active = ['PATH_READY', 'READY', 'NAVIGATING', 'RESUMING', 'PAUSING_FOR_MANUAL', 'REPLACING_GOAL', 'CANCELING', 'CANCELING_STOP'].includes(navState)
+        && control.active_goal;
     if (active) {
         const nextRunKey = navigationControlGoalKey(control);
         if (nextRunKey !== navigationGlobalPathRunKey) {
             navigationGlobalPathRunKey = nextRunKey;
             beginNavigationGlobalPathPending();
         }
+        const running = ['NAVIGATING', 'RESUMING'].includes(navState);
+        const preview = ['PATH_READY', 'READY'].includes(navState);
+        const path = running ? control.executed_path
+            : preview ? control.planned_path : [];
+        // An unconfirmed live FollowPath must never leave a stale preview
+        // on the 2D map. Stop/cancel also clears executable path display.
+        applyNavigationGlobalPath(
+            Array.isArray(path) ? path : [],
+            control.updated_at ?? null,
+        );
         return;
     }
 
@@ -1232,7 +1203,7 @@ async function reportDanger(isAuto = false) {
                 'Content-Type': 'application/json',
                 'X-CSRF-Token': csrf.csrf_token,
             },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ manual_voice: !isAuto }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.status !== 'success') {
@@ -1245,6 +1216,10 @@ async function reportDanger(isAuto = false) {
         }
         // API acknowledgement, not a simulated click, is the only success condition.
         window.DabomActionFeedback?.setReportState('success');
+        if (!isAuto && data.voice_status !== 'accepted') {
+            // Telegram succeeded; don't misreport its success as an error.
+            alert('텔레그램 신고 전송 성공, 현장 음성 송출은 수락되지 않았습니다. 중복 신고하지 마세요.');
+        }
         return true;
     } catch (error) {
         console.error('신고 요청 실패:', error);
@@ -1262,16 +1237,8 @@ function warnTrespasser() {
         window.navigationControl.warning();
         return;
     }
-    // The fallback must not send a robot command before the Pi state is known.
-    if (window.dabomNavigationControlState?.connected !== true) {
-        alert('Pi 연결을 확인할 수 없어 경고 명령을 전송하지 않았습니다.');
-        return;
-    }
-    sendRobotCommand({ type: 'speak', text: '경고합니다. 즉시 물러나십시오.' })
-        .then(ok => {
-            if (ok) alert("⚠️ 경고 방송 명령을 전송했습니다.");
-            else alert("경고 방송 명령 전송에 실패했습니다.");
-        });
+    // Never fall back to the legacy speak stub: it only prints, not audio.
+    alert('수동 경고 제어가 아직 준비되지 않았습니다.');
 }
 
 // ===================================================
@@ -1521,11 +1488,10 @@ async function togglePatrolMode() {
         const ok = await requestDriveMode(targetMode.toUpperCase());
 
         if (!ok) {
-            alert(
-                '로봇이 연결되지 않아 '
-                + '모드를 변경하지 못했습니다.',
-            );
-
+            const reason = window.navigationControl?.lastDriveError?.();
+            alert(reason
+                ? `주행 모드 전환 실패: ${reason}`
+                : '주행 모드 전환에 실패했습니다. 서버 상태를 확인해주세요.');
             return;
         }
 
@@ -2067,3 +2033,142 @@ async function logout() {
         if (button) button.disabled = false;
     }
 }
+// Tracking list is initialized after the existing camera/status polling code.
+// Display only live tracker IDs, never model labels burned into video.
+const OBJECT_LIST_POLL_MS = 2000;
+let objectListTimer = null;
+let objectListController = null;
+
+function renderTrackedPeople(detections) {
+    const container = document.getElementById('detection-data');
+    if (!container) return;
+    container.querySelectorAll('.detection-tag').forEach(node => node.remove());
+    const ids = [...new Set((Array.isArray(detections) ? detections : [])
+        .filter(item => item && item.cls === 0 && Number.isInteger(item.id) && item.id >= 0)
+        .map(item => item.id))].sort((a, b) => a - b);
+    for (const id of ids) {
+        const tag = document.createElement('span');
+        tag.className = 'detection-tag';
+        tag.textContent = 'Person #' + id;
+        container.appendChild(tag);
+    }
+}
+
+function renderSceneAnalysisStatus(payload, fresh) {
+    const element = document.getElementById('scene-analysis-status');
+    if (!element) return;
+
+    const scene = payload?.scene;
+    if (payload?.model_error) {
+        element.textContent = '분석 오류';
+    } else if (!fresh || !scene) {
+        element.textContent = '분석 상태 확인 불가';
+    } else if (scene.status === 'warming_up') {
+        element.textContent = '분석 준비 중';
+    } else if (scene.status !== 'ok' || scene.available === false) {
+        element.textContent = '분석 오류';
+    } else {
+        element.textContent = scene.danger ? '위험 감지' : '분석 정상';
+    }
+}
+
+// Show the current scene danger as one live status row.
+function renderLiveSceneAlert(payload, resultFresh) {
+    const target = document.getElementById('alertBox');
+    if (!target) return;
+
+    const scene = payload?.scene;
+    const updatedAt = Number(scene?.updated_at);
+    const age = Date.now() / 1000 - updatedAt;
+    const sceneFresh = Number.isFinite(updatedAt)
+        && Number.isFinite(age) && age >= 0 && age <= 3;
+    const danger = resultFresh
+        && !payload?.model_error
+        && scene?.status === 'ok'
+        && scene?.available !== false
+        && sceneFresh
+        && scene?.danger === true;
+
+    let row = target.querySelector('[data-live-scene-alert]');
+    if (!danger) {
+        row?.remove();
+        return;
+    }
+
+    if (!row) {
+        row = document.createElement('div');
+        row.className = 'alert-entry alert-danger';
+        row.dataset.liveSceneAlert = 'true';
+
+        const time = document.createElement('span');
+        time.className = 'alert-time';
+        time.textContent = new Date().toLocaleTimeString('ko-KR', {
+            hour12: false
+        });
+
+        const message = document.createElement('span');
+        message.className = 'alert-message';
+
+        row.append(time, message);
+        target.prepend(row);
+    }
+
+    const score = Number(scene.score);
+    const scoreText = Number.isFinite(score)
+        ? ` (${Math.round(score * 100)}%)` : '';
+    row.querySelector('.alert-message').textContent =
+        `위험 행동 감지: ${scene.label || '위험 상황'}${scoreText}`;
+}
+
+async function refreshTrackedPeople() {
+    if (!isDashboardDocumentVisible()) return;
+    objectListController?.abort();
+    const controller = new AbortController();
+    objectListController = controller;
+    try {
+        const response = await fetch('/api/latest_result', { signal: controller.signal });
+        if (!response.ok) throw new Error('tracker request failed');
+        const payload = await response.json();
+        // A fetch can finish parsing after its signal was aborted.
+        if (controller !== objectListController || controller.signal.aborted
+            || !isDashboardDocumentVisible()) return;
+        const age = Date.now() / 1000 - Number(payload.processed_at);
+        const fresh = payload.ok !== false && payload.processed_at
+            && Number.isFinite(age) && age >= 0 && age <= 3;
+        renderTrackedPeople(fresh ? payload.detections : []);
+        renderSceneAnalysisStatus(payload, fresh);
+        renderLiveSceneAlert(payload, fresh);
+    } catch (error) {
+        if (controller === objectListController && !controller.signal.aborted
+            && isDashboardDocumentVisible() && error.name !== 'AbortError') {
+            renderTrackedPeople([]);
+            renderSceneAnalysisStatus(null, false);
+            renderLiveSceneAlert(null, false);
+        }
+    } finally {
+        if (objectListController === controller) objectListController = null;
+    }
+}
+
+function stopTrackedPeoplePoll() {
+    clearInterval(objectListTimer);
+    objectListTimer = null;
+    objectListController?.abort();
+    objectListController = null;
+    renderTrackedPeople([]);
+    renderSceneAnalysisStatus(null, false);
+    renderLiveSceneAlert(null, false);
+}
+function startTrackedPeoplePoll() {
+    if (!isDashboardDocumentVisible() || objectListTimer !== null) return;
+    refreshTrackedPeople();
+    objectListTimer = setInterval(refreshTrackedPeople, OBJECT_LIST_POLL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+    if (isDashboardDocumentVisible()) startTrackedPeoplePoll();
+    else stopTrackedPeoplePoll();
+});
+startTrackedPeoplePoll();
+
+// ===================================================
+// END TRACKED PEOPLE LIST

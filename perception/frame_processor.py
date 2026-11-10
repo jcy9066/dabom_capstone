@@ -129,6 +129,8 @@ class FrameProcessor:
         danger = False
 
         for obj in tracked_boxes:
+            if obj.get("cls", 0) != 0:
+                continue
             oid = obj["id"]
             cls_id = obj.get("cls", 0)
             state = obj_states.get(oid, 0)
@@ -150,11 +152,6 @@ class FrameProcessor:
                         skeleton,
                         (120, 220, 120),
                     )
-            else:
-                detection["label"] = "WEAPON"
-                detection["danger"] = True
-                danger = True
-
             detections.append(detection)
 
         danger = danger or bool(scene_result.get("danger"))
@@ -210,6 +207,8 @@ class FrameProcessor:
         )
 
         for obj in tracked_boxes:
+            if obj.get("cls", 0) != 0:
+                continue
             oid = obj["id"]
             cls_id = obj.get("cls", 0)
             state = obj_states.get(oid, 0)
@@ -275,12 +274,6 @@ class FrameProcessor:
                             )
                     else:
                         label = f"[{current_action['label']}] {current_action['score'] * 100:.0f}%"
-            else:
-                danger = True
-                detection["label"] = "WEAPON"
-                detection["danger"] = True
-                label = "WEAPON"
-
             x1, y1, x2, y2 = map(int, obj["box"])
             # Bounding box visualization disabled. Keep this line for easy rollback.
             # cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
