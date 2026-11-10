@@ -62,16 +62,13 @@ launch_window() {
   printf '[demo] Started %-12s session=%s window=%s (%s)\n' "$name" "$session" "$id" "$name"
 }
 
-robot_pid="$(find_python_role 'raspberry/robot_command_client.py' || true)"
-supervisor_pid="$(find_pi_supervisor || true)"
-if [[ -n "$robot_pid" ]]; then
-  echo "[demo] Pi robot already running pid=$robot_pid: skip"
-elif [[ -n "$supervisor_pid" ]]; then
-  echo "[demo] Pi supervisor already starting pid=$supervisor_pid: skip; check its log"
-else
-  PI_CMD="cd '$ROOT'; bash start_pi_stack.sh; rc=\$?; echo '[demo] Pi stack exited code='\$rc; exec bash"
-  launch_window "$PI_SESSION" "exhibit-pi-$(date +%H%M%S)" "$PI_CMD"
-fi
+# Always start the complete, proven Pi stack.
+# Never skip startup solely because robot_command_client.py is running.
+# start_pi_stack.sh owns process cleanup, Pico STOP preflight,
+# LiDAR, encoder, camera, ROS and robot command initialization.
+# Keep start_pi_stack.sh itself completely unchanged.
+PI_CMD="cd '$ROOT'; bash start_pi_stack.sh; rc=\$?; echo '[demo] Pi stack exited code='\$rc; exec bash"
+launch_window "$PI_SESSION" "exhibit-pi-$(date +%H%M%S)" "$PI_CMD"
 
 if audio_pid="$(find_python_role 'raspberry/audio_intercom_client.py')"; then
   echo "[demo] Audio already running pid=$audio_pid: skip"
