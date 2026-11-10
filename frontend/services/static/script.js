@@ -1203,7 +1203,7 @@ async function reportDanger(isAuto = false) {
                 'Content-Type': 'application/json',
                 'X-CSRF-Token': csrf.csrf_token,
             },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ manual_voice: !isAuto }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.status !== 'success') {
@@ -1216,6 +1216,10 @@ async function reportDanger(isAuto = false) {
         }
         // API acknowledgement, not a simulated click, is the only success condition.
         window.DabomActionFeedback?.setReportState('success');
+        if (!isAuto && data.voice_status !== 'accepted') {
+            // Telegram succeeded; don't misreport its success as an error.
+            alert('텔레그램 신고 전송 성공, 현장 음성 송출은 수락되지 않았습니다. 중복 신고하지 마세요.');
+        }
         return true;
     } catch (error) {
         console.error('신고 요청 실패:', error);
@@ -1233,16 +1237,8 @@ function warnTrespasser() {
         window.navigationControl.warning();
         return;
     }
-    // The fallback must not send a robot command before the Pi state is known.
-    if (window.dabomNavigationControlState?.connected !== true) {
-        alert('Pi 연결을 확인할 수 없어 경고 명령을 전송하지 않았습니다.');
-        return;
-    }
-    sendRobotCommand({ type: 'speak', text: '경고합니다. 즉시 물러나십시오.' })
-        .then(ok => {
-            if (ok) alert("⚠️ 경고 방송 명령을 전송했습니다.");
-            else alert("경고 방송 명령 전송에 실패했습니다.");
-        });
+    // Never fall back to the legacy speak stub: it only prints, not audio.
+    alert('수동 경고 제어가 아직 준비되지 않았습니다.');
 }
 
 // ===================================================

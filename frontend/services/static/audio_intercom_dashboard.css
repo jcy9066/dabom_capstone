@@ -63,3 +63,26 @@
 @media (max-width: 600px) {
   .dabom-audio-dock { right: 12px; bottom: 12px; }
 }
+/* The existing Pico W Beep volume control lives below the USB speaker control. */
+.dabom-audio-dock .audio-beep-volume .speaker-volume-control {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  color: inherit;
+}
+.dabom-audio-dock .audio-beep-volume .speaker-volume-slider {
+  flex: 1 1 auto;
+  --slider-width: 100%;
+}
+.dabom-audio-dock .audio-beep-volume .speaker-volume-level {
+  width: 100%;
+}
+.dabom-audio-dock .audio-beep-volume .speaker-volume-value {
+  color: #c2eee0;
+}
+.dabom-audio-dock .audio-beep-volume[data-volume-state="error"] .speaker-volume-value,
+.dabom-audio-dock .audio-beep-volume .speaker-volume-control[data-volume-state="error"] .speaker-volume-value {
+  color: #ff9f9f;
+}

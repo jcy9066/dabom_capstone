@@ -20,6 +20,7 @@
         navigationPending: false,
         estopPending: false,
         warningPending: false,
+        lastManualAlertState: null,
         beepPending: false,
         ledPending: false,
         estopCooldownUntil: 0,
@@ -239,6 +240,18 @@
 
     function syncControlComponents(payload = state.control) {
         if (!payload) return;
+        const manual = payload.manual_alert;
+        if (manual && typeof manual.state === 'string') {
+            const signature = `${manual.kind}:${manual.state}`;
+            if (signature !== state.lastManualAlertState) {
+                state.lastManualAlertState = signature;
+                if (manual.state === 'failed') {
+                    setFeedback(`현장 TTS 재생 실패: ${manual.error || '장치 오류'}`, true);
+                } else if (manual.state === 'completed') {
+                    setFeedback(`현장 ${manual.kind === 'report' ? '신고' : '경고'} 음성 송출 완료.`);
+                }
+            }
+        }
         const controls = window.DabomDashboardComponents?.controls;
         controls?.driveMode?.sync(payload.robot_mode, {
             connected: payload.connected === true,
@@ -271,7 +284,7 @@
             warningButton.disabled = state.warningPending;
             warningButton.setAttribute('aria-busy', String(state.warningPending));
             warningButton.title = payload.connected === true
-                ? 'Pi 스피커와 LED로 경고합니다.'
+                ? 'Beep 3회 후 수동 TTS를 송출하며, LED는 음성 종료까지 점멸합니다.'
                 : 'Pi가 연결되어야 경고할 수 있습니다.';
         }
     }
@@ -840,8 +853,8 @@
         state.warningPending = true;
         syncControlComponents();
         try {
-            await mutate('/api/navigation/control/warning', { led_duration_ms: 10000 });
-            setFeedback('10초 경고 패턴(LED + 스피커)을 시작했습니다.');
+            await mutate('/api/navigation/control/manual-alert', { kind: 'warning' });
+            setFeedback('경고 요청을 수락했습니다. Beep 3회 후 TTS를 송출합니다.');
             return true;
         } catch (error) {
             setFeedback(`경고 명령 실패: ${error.message}`, true);

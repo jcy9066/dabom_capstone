@@ -162,6 +162,7 @@ class NavigationControlApi:
         self._pi_safety_epoch: int | None = None
         self._pi_seen_safety_sessions: set[str] = set()
         self._pi_session_stop_pending: str | None = None
+        self._manual_alert_state: dict[str, Any] | None = None
         self._led_enabled: bool | None = None
         self._speaker_volume_percent: int | None = None
         self._volume_override_until = 0.0
@@ -372,6 +373,15 @@ class NavigationControlApi:
                     self._state["navigation_state"] = "EMERGENCY_STOPPED"
                 elif not self._state["emergency_stop"]:
                     self._state["emergency_stop"] = False
+            reported_alert = payload.get("manual_alert")
+            if isinstance(reported_alert, dict) and reported_alert.get("state") in {
+                "idle", "running", "completed", "failed", "cancelled",
+            }:
+                self._manual_alert_state = {
+                    "kind": reported_alert.get("kind"),
+                    "state": reported_alert["state"],
+                    "error": str(reported_alert.get("error"))[:180] if reported_alert.get("error") else None,
+                }
             if isinstance(payload.get("led_enabled"), bool):
                 self._led_enabled = payload["led_enabled"]
             reported_volume = payload.get("speaker_volume_percent")
@@ -1190,6 +1200,7 @@ class NavigationControlApi:
                     ),
                     "updated_at": self._pi_updated_at,
                 },
+                "manual_alert": dict(self._manual_alert_state) if self._connected and self._manual_alert_state else None,
                 "led_enabled": self._led_enabled,
                 "speaker_volume_percent": (
                     self._speaker_volume_percent
@@ -2612,6 +2623,28 @@ class NavigationControlApi:
         if not delivered:
             raise NavigationControlError("PI_OFFLINE", "The LED test command was not delivered.", 409)
         return {"ok": True, "delivered": True, "duration_ms": duration_ms}
+
+    async def _dispatch_manual_alert(self, kind: str) -> dict[str, Any]:
+        with self._lock:
+            if not self._connected:
+                raise NavigationControlError("PI_OFFLINE", "Pi is not connected.", 409)
+        acknowledged = await self._send_robot_command(
+            self._robot_id,
+            {"type": "manual_alert", "kind": kind},
+        )
+        if not acknowledged:
+            raise NavigationControlError("ALERT_NOT_ACCEPTED", "Pi did not accept the manual audio request.", 409)
+        # ACK only establishes reservation, not audible completion.
+        return {"ok": True, "accepted": True, "kind": kind}
+
+    async def manual_alert(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Report audio can only be triggered internally AFTER Telegram succeeds.
+        if payload.get("kind") != "warning":
+            raise NavigationControlError("INVALID_REQUEST", "Only manual warning is allowed here.", 400)
+        return await self._dispatch_manual_alert("warning")
+
+    async def report_audio(self) -> dict[str, Any]:
+        return await self._dispatch_manual_alert("report")
 
     async def warning(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "경고합니다. 즉시 물러나십시오.").strip()[:240]
@@ -4806,6 +4839,10 @@ class NavigationControlApi:
         @self._app.post("/api/navigation/control/warning")
         async def send_warning(request: Request):
             return await self._mutation(request, self.warning)
+
+        @self._app.post("/api/navigation/control/manual-alert")
+        async def send_manual_alert(request: Request):
+            return await self._mutation(request, self.manual_alert, serialize=False)
 
     async def _mutation(
         self,

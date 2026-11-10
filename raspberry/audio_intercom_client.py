@@ -23,6 +23,10 @@ from dotenv import load_dotenv
 import websockets
 
 from audio_devices import MICROPHONE_USB_ID, SPEAKER_USB_ID, find_device
+try:
+    from raspberry.manual_tts_ipc import ManualTtsServer
+except ModuleNotFoundError:
+    from manual_tts_ipc import ManualTtsServer
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
@@ -47,6 +51,29 @@ class AudioClient:
         self.playback_proc = None
         self.listen_enabled = False
         self.talk_enabled = False
+        self._playback_lock = asyncio.Lock()
+        self._tts_active = False
+
+    async def _play_tts(self, wav: Path) -> None:
+        async with self._playback_lock:
+            self._tts_active = True
+            try:
+                # Stop intercom playback before opening the same ALSA output.
+                await self.stop_playback()
+                proc = await asyncio.create_subprocess_exec(
+                    "aplay", "-q", "-D", self.speaker, str(wav),
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=25)
+                except asyncio.TimeoutError as exc:
+                    proc.kill()
+                    await proc.wait()
+                    raise RuntimeError("TTS playback timed out") from exc
+                if proc.returncode != 0:
+                    raise RuntimeError(f"TTS playback failed (aplay exit={proc.returncode}): {stderr[:160]!r}")
+            finally:
+                self._tts_active = False
 
     async def _capture(self, ws) -> None:
         args = ["arecord", "-q", "-D", self.microphone, "-t", "raw",
@@ -126,15 +153,18 @@ class AudioClient:
         logger.info("로봇 스피커 출력 종료")
 
     async def on_audio(self, frame: bytes):
-        if not self.talk_enabled or not 0 < len(frame) <= 4096:
+        if not self.talk_enabled or self._tts_active or not 0 < len(frame) <= 4096:
             return
-        await self._open_playback()
-        try:
-            self.playback_proc.stdin.write(frame)
-            await asyncio.wait_for(self.playback_proc.stdin.drain(), timeout=0.3)
-        except (BrokenPipeError, ConnectionError, asyncio.TimeoutError, AttributeError):
-            logger.warning("스피커 출력 오류; 재생 프로세스를 초기화합니다")
-            await self.stop_playback()
+        async with self._playback_lock:
+            if self._tts_active:
+                return
+            await self._open_playback()
+            try:
+                self.playback_proc.stdin.write(frame)
+                await asyncio.wait_for(self.playback_proc.stdin.drain(), timeout=0.3)
+            except (BrokenPipeError, ConnectionError, asyncio.TimeoutError, AttributeError):
+                logger.warning("스피커 출력 오류; 재생 프로세스를 초기화합니다")
+                await self.stop_playback()
 
     def _speaker_card(self) -> int:
         match = re.fullmatch(r"plughw:(\d+),(\d+)", self.speaker)
@@ -202,6 +232,14 @@ class AudioClient:
         await self.stop_playback()
 
     async def serve(self, url: str, token: str):
+        tts_server = ManualTtsServer(root=ROOT, playback=self._play_tts)
+        await tts_server.start()
+        try:
+            await self._serve_relay(url, token)
+        finally:
+            await tts_server.close()
+
+    async def _serve_relay(self, url: str, token: str):
         while True:
             try:
                 async with websockets.connect(

@@ -16,7 +16,7 @@
     <link rel="stylesheet" href="/components/controls/controls.css?v=20261028-right-drawer-v5">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261020-beep-raised-v12">
     <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-border-v2">
-    <link rel="stylesheet" href="static/audio_intercom_dashboard.css?v=20261110-phase2">
+    <link rel="stylesheet" href="static/audio_intercom_dashboard.css?v=20261110-manual-alert-v1">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
     <link rel="stylesheet" href="static/uiverse_dashboard_controls.css?v=20261020-verified-press-v4">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-return-animation-v4">
@@ -161,6 +161,23 @@
                 <input type="range" id="audioRobotVolume" min="0" max="100" value="50" disabled aria-label="로봇 USB 스피커 음량">
                 <span id="audioRobotVolumeLabel">확인 중</span>
             </label>
+            <div class="audio-dock-label audio-beep-volume">
+                <span>Beep 전용 스피커</span>
+                <div class="speaker-volume-control" id="speaker-volume-control"
+                     data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
+                    <label class="speaker-volume-slider">
+                        <input id="speaker-volume-slider" class="speaker-volume-level"
+                               type="range" min="0" max="100" step="1" value="20"
+                               aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
+                        <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
+                             viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
+                        </svg>
+                    </label>
+                    <output class="speaker-volume-value" id="speaker-volume-value"
+                            for="speaker-volume-slider">20%</output>
+                </div>
+            </div>
             <p class="audio-dock-hint" id="audioSecureNote">마이크는 누르고 말할 때만 사용합니다. 현재 통화는 저장하지 않습니다.</p>
             <pre class="audio-dock-log" id="audioLog" aria-live="polite"></pre>
         </div>
@@ -175,20 +192,6 @@
                 <div class="camera-header-actions">
                     <span id="scene-analysis-status" role="status"
                           aria-live="polite">분석 상태 확인 중</span>
-                    <div class="speaker-volume-control" id="speaker-volume-control"
-                         data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
-                        <label class="speaker-volume-slider">
-                            <input id="speaker-volume-slider" class="speaker-volume-level"
-                                   type="range" min="0" max="100" step="1" value="20"
-                                   aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
-                            <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
-                                 viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
-                            </svg>
-                        </label>
-                        <output class="speaker-volume-value" id="speaker-volume-value"
-                                for="speaker-volume-slider">20%</output>
-                    </div>
                     <div
                     id="model-pipeline-toggle-mount"
                     class="dashboard-model-control-mount"
@@ -906,11 +909,11 @@
         }
     </script>
     <script type="module" src="static/lidar_3d_viewer.js?v=20261028-loop-modal-v1"></script>
-    <script src="static/script.js?v=20261029-live-scene-alert-v1"></script>
+    <script src="static/script.js?v=20261110-manual-alert-v1"></script>
     <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
-    <script src="static/navigation_control.js?v=20261028-loop-modal-v1"></script>
+    <script src="static/navigation_control.js?v=20261110-manual-alert-v1"></script>
     <script src="static/recorded_loop_ui.js?v=20261028-drawer-close-v8"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
     <script src="static/audio_intercom_test.js?v=20261110-phase2"></script>

@@ -3847,6 +3847,8 @@ async def send_telegram(request: Request):
             {"status": "error", "error": "JSON object required"},
             status_code=400,
         )
+    # Never initiate a robot voice announcement without an explicit manual click.
+    manual_voice = payload.get("manual_voice") is True
     try:
         raw_event_id = payload.get("event_id")
         event_id = None if raw_event_id in (None, "") else int(raw_event_id)
@@ -3908,6 +3910,15 @@ async def send_telegram(request: Request):
                     "Telegram sent, but the event was not updated."
                 )
         result = {"status": "success", "action_id": action_id}
+        if manual_voice:
+            try:
+                await navigation_control_api.report_audio()
+            except Exception as voice_exc:
+                # Telegram has ALREADY succeeded. Never suggest re-sending it.
+                result["voice_status"] = "failed"
+                result["voice_error"] = str(voice_exc)[:180]
+            else:
+                result["voice_status"] = "accepted"  # queued, NOT playback completed
         if persistence_warning:
             result["persistence_warning"] = persistence_warning
         return result
