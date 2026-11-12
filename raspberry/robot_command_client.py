@@ -15,6 +15,12 @@ from dotenv import load_dotenv
 
 from controllers.motor_controller import MotorController
 from controllers.speaker_controller import SpeakerController
+try:
+    from raspberry.manual_alert_engine import ManualAlertEngine, AlertBusyError
+    from raspberry.manual_tts_ipc import request_tts
+except ModuleNotFoundError:  # Pi script executed from raspberry/
+    from manual_alert_engine import ManualAlertEngine, AlertBusyError
+    from manual_tts_ipc import request_tts
 
 try:
     from raspberry.encoder_ros_publisher import EncoderRosPublisher
@@ -78,6 +84,8 @@ class RobotCommandClient:
         self._manual_led_enabled = False
         self._led_task = None
         self._warning_task = None
+        self._manual_alert_engine = None
+        self._manual_alert_status = {"kind": None, "state": "idle", "error": None}
         self._cpu_sample = None
         self._last_status_latency_ms = None
         self._server_reachable = None
@@ -244,6 +252,7 @@ class RobotCommandClient:
             "speaker_volume_percent": self._current_speaker_volume(),
             "motor_motion": self.motor.current_motion,
             "max_wheel_mps": self.motor.max_wheel_mps,
+            "manual_alert": dict(getattr(self, "_manual_alert_status", {"state": "idle"})),
         }
 
     def status_loop(self) -> None:
@@ -315,6 +324,8 @@ class RobotCommandClient:
                         finally:
                             self._resume_safety_prepared = False
                             was_moving = self.motor.current_motion != "stop"
+                            if getattr(self, "_manual_alert_engine", None) is not None:
+                                await self._manual_alert_engine.close()
                             self.motor.stop(
                                 reason="websocket_disconnected",
                                 suppress_errors=True,
@@ -435,6 +446,7 @@ class RobotCommandClient:
         ok = True
         error = None
         encoder_sequence = None
+        recorded_drive = None
 
         try:
             if command_type == "move":
@@ -461,12 +473,15 @@ class RobotCommandClient:
                         "자율주행 명령을 거부했습니다."
                     )
 
-                await asyncio.to_thread(
+                recorded_drive = await asyncio.to_thread(
                     self._run_guarded_motor_motion,
                     message,
-                    self.motor.drive,
+                    self.motor.drive_recorded if message.get("source") == "recorded_loop" else self.motor.drive,
                     message.get("left_mps"),
                     message.get("right_mps"),
+                    message.get("rear_blind_limited") is True,
+                    *((message.get("replay_command_id"), message.get("replay_duration"))
+                      if message.get("source") == "recorded_loop" else (False,)),
                 )
 
             elif command_type == "stop":
@@ -539,6 +554,12 @@ class RobotCommandClient:
                     if not self.emergency_stop_latched or message.get("safety_epoch") != self._safety_epoch:
                         raise RuntimeError("emergency stop changed during resume release")
                     self.emergency_stop_latched = False
+                # A timed-out direction handoff must not be cleared by a
+                # routine stop or a new auto-drive command. Re-arm it only
+                # after the explicit Pi emergency safety-resume handshake.
+                await asyncio.to_thread(
+                    self.motor.clear_direction_fault_after_safety_resume,
+                )
 
             elif command_type == "navigation_mode":
                 target_navigation_mode = str(
@@ -596,6 +617,8 @@ class RobotCommandClient:
                 await asyncio.to_thread(self.motor.set_volume, volume)
 
             elif command_type == "beep":
+                if self._active_manual_alert():
+                    raise RuntimeError("manual alert busy")
                 duration_ms = self._duration_ms(
                     message.get("duration_ms", 350)
                 )
@@ -605,6 +628,8 @@ class RobotCommandClient:
                 )
 
             elif command_type == "led":
+                if self._active_manual_alert():
+                    raise RuntimeError("manual alert busy")
                 enabled = message.get("enabled")
                 if not isinstance(enabled, bool):
                     raise RuntimeError("led.enabled must be boolean")
@@ -626,7 +651,23 @@ class RobotCommandClient:
                     duration_ms if enabled else 0
                 )
 
+            elif command_type == "manual_alert":
+                kind = message.get("kind")
+                if kind not in ("warning", "report"):
+                    raise RuntimeError("invalid manual alert kind")
+                if self._active_manual_alert():
+                    raise RuntimeError("manual alert busy")
+                # Verify the real USB audio client and WAV *before* Beep/LED.
+                await request_tts(kind, check_only=True)
+                await self._cancel_warning_pattern()
+                engine = self._get_manual_alert_engine()
+                self._manual_alert_status = {"kind": kind, "state": "running", "error": None}
+                task = engine.start(kind)
+                task.add_done_callback(lambda finished: self._manual_alert_completed(kind, finished))
+
             elif command_type == "warning":
+                if self._active_manual_alert():
+                    raise RuntimeError("manual alert busy")
                 # Dashboard warning contract:
                 # always run LED + Pico speaker for exactly 10 seconds.
                 duration_ms = 10000
@@ -673,6 +714,8 @@ class RobotCommandClient:
                     "emergency_stop": emergency_stop_latched,
             "led_enabled": bool(getattr(self.motor, "led_enabled", self.led_enabled)),
                     "motion": self.motor.current_motion,
+                    **({"recorded_drive": recorded_drive}
+                       if command_type == "auto_drive" and message.get("source") == "recorded_loop" else {}),
                     "motor_connected": (
                         self.motor.connected
                     ),
@@ -681,13 +724,14 @@ class RobotCommandClient:
             )
         )
 
-    def _run_guarded_motor_motion(self, message: dict, operation, *args) -> None:
+    def _run_guarded_motor_motion(self, message: dict, operation, *args):
         # Share the actual MotorController's UART command lock.
         # A STOP and a stale motion command cannot overtake each other.
         with self.motor._command_lock:
             self._require_current_motion_safety(message)
-            operation(*args)
+            result = operation(*args)
             self._require_current_motion_safety(message)
+            return result
 
     def _require_current_motion_safety(self, message: dict) -> None:
         with self._safety_lock:
@@ -715,6 +759,36 @@ class RobotCommandClient:
         if duration < 0 or duration > 10000:
             raise RuntimeError("duration must be between 0 and 10000 ms")
         return duration
+
+    def _active_manual_alert(self) -> bool:
+        return bool(getattr(self, "_manual_alert_engine", None) and self._manual_alert_engine.busy)
+
+    def _get_manual_alert_engine(self) -> ManualAlertEngine:
+        if getattr(self, "_manual_alert_engine", None) is None:
+            async def beep(duration_ms: int):
+                await asyncio.to_thread(self.motor.beep, duration_ms)
+
+            async def led(enabled: bool):
+                await asyncio.to_thread(self.motor.set_led, enabled)
+                self.led_enabled = enabled
+
+            async def tts(kind: str):
+                # The audio-intercom process is the sole owner of the USB speaker.
+                await request_tts(kind, timeout_sec=30)
+
+            self._manual_alert_engine = ManualAlertEngine(beep=beep, led=led, tts=tts)
+        return self._manual_alert_engine
+
+    def _manual_alert_completed(self, kind: str, task: asyncio.Task) -> None:
+        if task.cancelled():
+            self._manual_alert_status = {"kind": kind, "state": "cancelled", "error": "cancelled"}
+            return
+        exc = task.exception()
+        self._manual_alert_status = {
+            "kind": kind,
+            "state": "failed" if exc else "completed",
+            "error": str(exc)[:180] if exc else None,
+        }
 
     async def _cancel_warning_pattern(self) -> None:
         task = self._warning_task

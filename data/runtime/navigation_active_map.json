@@ -1,37 +1,39 @@
 {
   "version": 1,
-  "last_selected_map": "dabom_test_map",
+  "last_selected_map": "map_20261029_164725",
   "active_map": {
-    "map_name": "dabom_test_map",
-    "saved_at": "2026-09-23T14:04:21Z",
-    "width": 72,
-    "height": 87,
+    "map_name": "map_20261029_164725",
+    "saved_at": "2026-10-29T07:47:25Z",
+    "width": 185,
+    "height": 176,
     "resolution": 0.05000000074505806,
     "origin": {
-      "x": -2.114304574166341,
-      "y": -2.4726702792299258,
+      "x": -3.294644826317812,
+      "y": -1.758247084878166,
       "yaw": 0.0
     },
-    "yaml": "navigation/maps/dabom_test_map.yaml",
-    "loaded_at": "2026-09-23T18:51:08.588809Z",
+    "yaml": "navigation/maps/map_20261029_164725.yaml",
+    "location": null,
+    "loaded_at": "2026-10-29T07:47:41.196670Z",
     "initial_pose": {
-      "x": 0.094,
-      "y": -0.401,
-      "yaw_degrees": 170.25,
-      "yaw": 2.971423051520346
+      "x": -0.001955050399467591,
+      "y": 1.6967272160333453e-05,
+      "yaw_degrees": -0.9944689518734833,
+      "yaw": -0.017356757519049314
     },
     "verification": {
       "map": {
-        "width": 72,
-        "height": 87,
+        "width": 185,
+        "height": 176,
         "resolution": 0.05000000074505806
       },
       "amcl_pose": {
-        "x": 0.11317763636068238,
-        "y": -0.36312414186580183,
-        "yaw": 2.977324866151778
+        "x": -0.0458512505721473,
+        "y": 0.04243165681943426,
+        "yaw": -0.023545182104041017,
+        "stable_samples": 1
       }
     }
   },
-  "updated_at": "2026-09-23T18:51:08.588819Z"
+  "updated_at": "2026-10-29T07:47:41.196683Z"
 }

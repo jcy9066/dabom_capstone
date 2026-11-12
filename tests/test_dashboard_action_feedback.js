@@ -5,7 +5,7 @@ const listeners = new Map();
 const timers = new Map();
 let nextTimer = 0;
 const classes = () => { const set = new Set(); return {
-    add: name => set.add(name), remove: name => set.delete(name), has: name => set.has(name)
+    add: (...names) => names.forEach(name => set.add(name)), remove: (...names) => names.forEach(name => set.delete(name)), has: name => set.has(name)
 }; };
 const reportLabel = { textContent: '신고' };
 const report = { dataset:{}, attributes:{}, disabled:false, title:'',
@@ -14,16 +14,18 @@ const report = { dataset:{}, attributes:{}, disabled:false, title:'',
     classList:classes() };
 function action() { return {style:{values:new Map(),setProperty(k,v){this.values.set(k,v);}},
     classList:classes(),disabled:false,
-    getBoundingClientRect:()=>({left:0,top:0,width:90,height:36}),offsetWidth:90}; }
+    getBoundingClientRect:()=>({left:0,top:0,width:90,height:36}),offsetWidth:90,
+    closest:selector=>selector==='.dashboard-action-controls'?controls:null}; }
 const beep=action(), warning=action();
 let capture=false;
 const controls = {
     querySelector: selector=>selector==='.action-report'?report:null,
     contains:node=>[beep,warning,report].includes(node),
-    addEventListener:(name,handler,options)=>{listeners.set(name,handler);
-        if(name==='click')capture=Boolean(options?.capture);}
 };
-const window = { document:{querySelector:selector=>selector==='.dashboard-action-controls'?controls:null},
+const document = { querySelector:selector=>selector==='.dashboard-action-controls'?controls:null,
+    addEventListener:(name,handler,options)=>{listeners.set(name,handler);
+        if(name==='click')capture=Boolean(options?.capture);}};
+const window = { document,
     setTimeout(fn){const id=++nextTimer;timers.set(id,fn);return id;},
     clearTimeout(id){timers.delete(id);},matchMedia:()=>({matches:false})};
 vm.runInNewContext(fs.readFileSync('frontend/services/static/action_feedback.js','utf8'),{window});

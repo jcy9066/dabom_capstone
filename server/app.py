@@ -1,9 +1,11 @@
 import asyncio
+from collections import deque
 from importlib.util import module_from_spec, spec_from_file_location
 import gc
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -56,7 +58,8 @@ from server.database import (
     DatabaseConfigurationError,
     DatabaseOperationError,
 )
-from server.env_config import env_bool, env_float, env_int, env_text
+from server.env_config import EnvConfigurationError, env_bool, env_float, env_int, env_text
+from server.scan_pose_fusion import select_independent_encoder_scans
 from server.logging_service import ACTION_TYPES, EVENT_TYPES, EventLogWorker, SystemStatusWriter
 from server.media_service import (
     FrozenFrameCache,
@@ -65,14 +68,18 @@ from server.media_service import (
     UnsafeMediaPathError,
 )
 from server.navigation_control_api import NavigationControlApi
+from server.recorded_loop_api import RecordedLoopApi
+from server.loop_session_api import LoopSessionApi
 from server.navigation_map_api import NavigationMapApi
 from server.location_security import LocationSecurityService
 from server.location_security_api import LocationSecurityApi
 from server.location_security_notifications import build_location_transition_message
 from server.privacy import PrivacyProcessingError, PrivacyProcessor
 from server.navigation_process_control import NavigationProcessControl
+from server.audio_intercom import register_audio_intercom
 from server.live_mapping_grid import LiveMappingGrid
 from server.gpu_telemetry import GpuUtilizationSampler
+from server.automatic_warning import AutomaticWarningDispatcher
 from navigation.dry_run_planner import DryRunPlannerConfig, plan_scan, validate_scan_payload
 
 load_dotenv(ENV_PATH)
@@ -326,6 +333,7 @@ async def logout_user(request: Request):
 
 SERVER_ROBOT_ID = env_text("ROBOT_ID")
 ROBOT_CONTROL_TOKEN = env_text("ROBOT_CONTROL_TOKEN")
+register_audio_intercom(app, robot_id=SERVER_ROBOT_ID, robot_token=ROBOT_CONTROL_TOKEN, root_dir=ROOT_DIR)
 
 
 def robot_ingest_failure(request: Request):
@@ -346,6 +354,19 @@ def robot_id_failure(payload):
         {"ok": False, "error": "robot_id is not authorized"},
         status_code=403,
     )
+
+
+@app.get("/api/time/sync")
+async def gpu_time_sync(request: Request):
+    """Authenticated wall-clock sample for Pi/GPU LiDAR timestamp alignment.
+
+    This endpoint never changes either system clock. Client estimates transport
+    offset using multiple bounded RTT probes and falls back if unavailable.
+    """
+    denied = robot_ingest_failure(request)
+    if denied:
+        return denied
+    return {"server_time_sec": time.time()}
 
 
 @app.get("/api/auth/csrf")
@@ -377,7 +398,7 @@ TRIGGER_SUSPICIOUS_VISUAL_ENABLED = env_bool("TRIGGER_SUSPICIOUS_VISUAL_ENABLED"
 INFERENCE_MAX_RESULT_AGE_SEC = env_float("INFERENCE_MAX_RESULT_AGE_SEC", minimum=0.0)
 INFERENCE_DROP_OLDER_THAN_SEC = env_float("INFERENCE_DROP_OLDER_THAN_SEC", minimum=0.0)
 CUDA_DEVICE_INDEX = env_text("CUDA_DEVICE_INDEX")
-DEVICE = env_text("DEVICE").lower()
+DEVICE = env_text("DEVICE", default=f"cuda:{CUDA_DEVICE_INDEX}").lower()
 GPU_REQUIRED_FOR_INFERENCE = env_bool("GPU_REQUIRED_FOR_INFERENCE")
 ENV_RELOAD_CHECK_INTERVAL_SEC = env_float("ENV_RELOAD_CHECK_INTERVAL_SEC", minimum=0.1)
 CAMERA_TIMEOUT_SEC = env_float("CAMERA_TIMEOUT_SEC", minimum=0.1)
@@ -475,6 +496,9 @@ navigation_state = {
     "pose_updated_at": None,
     "scan_updated_at": None,
 }
+# Bounded in RAM; never persisted with saved maps. Only recent physical
+# stationary samples can be used for automatic Initial Pose.
+localization_scan_history = deque(maxlen=8)
 
 live_mapping_grid = LiveMappingGrid(
     resolution=0.05,
@@ -574,6 +598,59 @@ def stop_persistence_workers():
         event_log_worker = None
 
 
+def format_vision_alert(message, person_ids, *, scene_level=False):
+    """Add observed tracker IDs and a fresh robot location to a vision alert."""
+    ids = sorted({
+        value for value in person_ids
+        if type(value) is int and value >= 0
+    })
+    id_label = "화면 내 감지 ID" if scene_level else "관련 추적 ID"
+    id_text = ", ".join(str(value) for value in ids) if ids else "확인 불가"
+
+    location_text = "확인 불가"
+    try:
+        nav = navigation_control_api.state_response()
+        pose = current_navigation_pose_snapshot()
+        if nav.get("localization_ready") is True and isinstance(pose, dict):
+            received = float(pose.get("received_at", 0))
+            age = time.time() - received
+            x = float(pose["x"])
+            y = float(pose["y"])
+            if 0 <= age <= 2.0 and math.isfinite(x) and math.isfinite(y):
+                map_name = (nav.get("active_map") or {}).get("map_name")
+                map_text = f" ({map_name})" if map_name else ""
+                location_text = f"지도 X {x:.3f}m, Y {y:.3f}m{map_text}"
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    except Exception:
+        # Alert formatting must not block the underlying warning.
+        logging.getLogger(__name__).exception("Vision alert location unavailable")
+
+    if location_text == "확인 불가":
+        try:
+            status = robot_status_snapshot()
+            updated = float(status.get("gps_updated_at") or 0)
+            age = time.time() - updated
+            lat = float(status["gps_lat"])
+            lng = float(status["gps_lng"])
+            if (status.get("gps_fix") is True and 0 <= age <= 5.0
+                    and math.isfinite(lat) and math.isfinite(lng)
+                    and -90 <= lat <= 90 and -180 <= lng <= 180):
+                location_text = f"GPS 위도 {lat:.6f}, 경도 {lng:.6f}"
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+
+    id_caption = "화면 내 감지 ID" if scene_level else "관련 추적 ID"
+    lines = [
+        "🚨 위험 행동 감지",
+        "",
+        f"행동: {message}",
+        f"{id_caption}: {id_text}",
+        f"로봇 위치: {location_text}",
+    ]
+    return "\n".join(lines)
+
+
 def submit_automatic_event(
     event_source,
     event_type,
@@ -662,10 +739,14 @@ class RobotConnectionManager:
         self.active = {}
         self.lock = asyncio.Lock()
         self.pending_acks = {}
+        # One send mutex per robot. No slow WebSocket send holds the global
+        # connection/ACK bookkeeping lock or blocks other robots.
+        self._send_locks = {}
         self.ack_timeout_sec = env_float(
             "ROBOT_COMMAND_ACK_TIMEOUT_SEC",
             minimum=0.1,
         )
+        self.send_timeout_sec = self.ack_timeout_sec
 
     async def connect(self, robot_id, websocket):
         await websocket.accept()
@@ -708,18 +789,37 @@ class RobotConnectionManager:
                 future.set_result({"ok": False, "error": "robot disconnected"})
         return disconnected
 
+    async def _send_serialized_command(self, robot_id, websocket, command, preflight=None):
+        # Serialize sends to the same robot (including STOP), but never
+        # hold the global connection/ACK lock across network I/O.
+        send_lock = self._send_locks.setdefault(robot_id, asyncio.Lock())
+        async with send_lock:
+            async with self.lock:
+                if self.active.get(robot_id) is not websocket:
+                    return False
+            # Recheck Goal and safety generation after waiting for send lock.
+            if preflight is not None and not preflight():
+                return False
+            await websocket.send_json(command)
+            # A replaced/disconnected socket must never be accepted as
+            # current, even if its old send completed without exception.
+            async with self.lock:
+                return self.active.get(robot_id) is websocket
+
     async def send_command(self, robot_id, command):
         async with self.lock:
             websocket = self.active.get(robot_id)
         if websocket is None:
             return False
-        async with self.lock:
-            if self.active.get(robot_id) is not websocket:
-                return False
-            await websocket.send_json(command)
-        return True
+        try:
+            return await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command),
+                timeout=self.send_timeout_sec,
+            )
+        except Exception:
+            return False
 
-    async def send_command_wait_ack(self, robot_id, command):
+    async def send_command_wait_ack(self, robot_id, command, *, preflight=None, motion_ack=False):
         command = dict(command)
         command_id = str(command.get("command_id") or uuid4())
         command["command_id"] = command_id
@@ -733,14 +833,47 @@ class RobotConnectionManager:
             if command_id in self.pending_acks:
                 return False
             self.pending_acks[command_id] = (robot_id, websocket, future)
+        # The total send + Pi ACK round trip shares ONE bounded deadline.
+        # A blocked send must not acquire the global lock or evade timeout.
+        deadline = loop.time() + self.ack_timeout_sec
         try:
-            async with self.lock:
-                if self.active.get(robot_id) is not websocket:
-                    return False
-                await websocket.send_json(command)
-            ack = await asyncio.wait_for(future, timeout=self.ack_timeout_sec)
+            sent = await asyncio.wait_for(
+                self._send_serialized_command(robot_id, websocket, command, preflight),
+                timeout=max(0.001, deadline - loop.time()),
+            )
+            if not sent:
+                reporter = getattr(self, "command_transport_observer", None)
+                if callable(reporter) and command.get("type") == "auto_drive":
+                    try:
+                        reporter(robot_id, "auto_drive", "WebSocket send/preflight rejected")
+                    except Exception:
+                        pass
+                return False
+            ack = await asyncio.wait_for(
+                future, timeout=max(0.001, deadline - loop.time())
+            )
+            # ACK is authenticated to the current Pi WebSocket and matched
+            # against its pending command_id by receive_ack(). Report STOP
+            # safety epochs immediately, before the next auto_drive request,
+            # and retain the Pi's rejection reason for diagnosis.
+            observer = getattr(self, "command_ack_observer", None)
+            if callable(observer) and isinstance(ack, dict):
+                try:
+                    observer(robot_id, command, ack)
+                except Exception:
+                    # Observability never changes the physical ACK contract.
+                    pass
             if command.get("type") == "resume_safety_check":
-                return ack if isinstance(ack, dict) else False
+                # Only a command_id-matched Pi ACK can prove processing.
+                # The Pi's raw ACK has "ok" but no "delivered" field.
+                # Normalize it here; do not allow an untrusted/malformed
+                # incoming delivered flag to override the actual ACK result.
+                if not isinstance(ack, dict):
+                    return False
+                return {
+                    **ack,
+                    "delivered": ack.get("ok") is True,
+                }
             if command.get("type") == "resume_navigation":
                 return (
                     isinstance(ack, dict)
@@ -749,8 +882,52 @@ class RobotConnectionManager:
                     and ack.get("safety_session") == command.get("safety_session")
                     and ack.get("safety_epoch") == command.get("safety_epoch")
                 )
+            if command.get("type") in {"mode", "navigation_mode"}:
+                # ACK command IDs alone do not prove the Pi applied the
+                # requested mode. The Pi includes its *actual* mode in ACK.
+                field = "mode" if command["type"] == "mode" else "navigation_mode"
+                return (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and str(ack.get(field) or "").lower()
+                    == str(command.get("mode") or "").lower()
+                )
+            # Motion ACK must come from the Pi *after* motor execution,
+            # with the same safety generation that was authorized. The Pi
+            # advances its epoch on STOP, so this identity check applies
+            # only to the motion commands that carry an expected generation.
+            if command.get("type") in ("move", "auto_drive") and (
+                "safety_session" in command or "safety_epoch" in command
+            ):
+                delivered = (
+                    isinstance(ack, dict)
+                    and ack.get("ok") is True
+                    and ack.get("safety_session") == command.get("safety_session")
+                    and type(ack.get("safety_epoch")) is int
+                    and ack["safety_epoch"] == command.get("safety_epoch")
+                )
+                if (motion_ack and command.get("type") == "auto_drive"
+                    and command.get("source") == "recorded_loop"):
+                    motion = ack.get("motion") if isinstance(ack, dict) else None
+                    applied = (motion.startswith("drive:") if isinstance(motion, str)
+                               and (motion == "stop" or motion.startswith("drive:")) else None)
+                    return {"ok": delivered, "delivered": delivered,
+                            "motion_applied": applied,
+                            "recorded_drive": ack.get("recorded_drive") if isinstance(ack, dict) else None}
+                return delivered
             return isinstance(ack, dict) and ack.get("ok") is True
-        except Exception:
+        except Exception as exc:
+            reporter = getattr(self, "command_transport_observer", None)
+            if callable(reporter) and command.get("type") == "auto_drive":
+                try:
+                    reason = (
+                        "ACK/send deadline exceeded"
+                        if isinstance(exc, asyncio.TimeoutError)
+                        else type(exc).__name__
+                    )
+                    reporter(robot_id, "auto_drive", reason)
+                except Exception:
+                    pass
             return False
         finally:
             async with self.lock:
@@ -781,6 +958,9 @@ class RobotConnectionManager:
 
 
 connections = RobotConnectionManager()
+automatic_warning = AutomaticWarningDispatcher.from_env(
+    robot_id=SERVER_ROBOT_ID, send_command=connections.send_command_wait_ack,
+)
 
 
 class NavigationVisualizationHub:
@@ -881,9 +1061,23 @@ def current_navigation_pose_snapshot():
         return dict(current) if isinstance(current, dict) else None
 
 
+def current_navigation_scan_snapshot():
+    with state_lock:
+        current = navigation_state.get("scan")
+        return dict(current) if isinstance(current, dict) else None
+
+
+def current_navigation_scans_snapshot():
+    with state_lock:
+        # LiDAR can be faster than encoder telemetry; skip duplicate encoder
+        # packets but never accept a reused packet as independent evidence.
+        return select_independent_encoder_scans(list(localization_scan_history))
+
+
 def clear_navigation_visualization_state():
     live_mapping_grid.reset()
     with state_lock:
+        localization_scan_history.clear()
         navigation_state["map"] = None
         navigation_state["pose"] = None
         navigation_state["global_path"] = []
@@ -913,6 +1107,16 @@ def publish_live_mapping_map(map_payload, received_at):
     return stored_map
 
 
+def clear_navigation_goal_path():
+    # Do not reset the map, pose, camera, or local costmap on Goal cancel.
+    with state_lock:
+        navigation_state["global_path"] = []
+        navigation_state["global_path_updated_at"] = None
+    navigation_visualization_hub.publish({
+        "type": "global_path", "path": [], "goal_path_cleared": True,
+    })
+
+
 navigation_control_api = NavigationControlApi(
     app=app,
     map_api=navigation_map_api,
@@ -921,6 +1125,8 @@ navigation_control_api = NavigationControlApi(
     robot_id=SERVER_ROBOT_ID,
     get_live_map=current_navigation_map_snapshot,
     get_live_pose=current_navigation_pose_snapshot,
+    get_live_scan=current_navigation_scan_snapshot,
+    get_live_scans=current_navigation_scans_snapshot,
     save_map=lambda payload, name: save_navigation_map_files(
         payload,
         name,
@@ -928,7 +1134,46 @@ navigation_control_api = NavigationControlApi(
     ),
     send_robot_command=connections.send_command_wait_ack,
     clear_visualization=clear_navigation_visualization_state,
+    clear_goal_visualization=clear_navigation_goal_path,
     motor_output_enabled=MOTOR_OUTPUT_ENABLED,
+)
+# A physical STOP advances Pi safety_epoch before periodic telemetry arrives.
+# This observer only accepts command_id-matched ACKs from the current socket.
+recorded_loop_api = RecordedLoopApi(
+    app=app,
+    navigation=navigation_control_api,
+    map_api=navigation_map_api,
+    csrf_failure=csrf_failure,
+    store_path=ROOT_DIR / "data" / "runtime" / "recorded_loops.json",
+    send_robot_command=connections.send_command_wait_ack,
+    get_live_scan=current_navigation_scan_snapshot,
+    max_wheel_mps=MAX_WHEEL_MPS,
+    calibration_check=lambda robot_id: robot_speed_calibration_error(robot_id),
+)
+# Existing Set Goal / Set Loop Cancel, AUTO->MANUAL and DRIVING->MAPPING
+# first confirm the new Recorded Loop's physical STOP when it owns motors.
+loop_session_api = LoopSessionApi(
+    app=app,
+    navigation=navigation_control_api,
+    recorded=recorded_loop_api,
+    csrf_failure=csrf_failure,
+    send_robot_command=connections.send_command_wait_ack,
+)
+recorded_loop_api._external_session_active = lambda: loop_session_api.playing
+
+async def stop_recorded_loop_owners():
+    # Navigation transitions must revoke both replay systems before changing
+    # the Pi mode. from_navigation avoids recursive cancel_goal callbacks.
+    await loop_session_api.stop(from_navigation=True)
+    return await recorded_loop_api.stop_playback()
+
+navigation_control_api.set_recorded_cancel_callback(stop_recorded_loop_owners)
+connections.command_ack_observer = navigation_control_api.note_pi_command_ack
+connections.command_transport_observer = (
+    lambda robot_id, command_type, reason: logging.getLogger(__name__).warning(
+        "Pi command transport failure robot=%s type=%s reason=%s",
+        robot_id, command_type, reason,
+    )
 )
 
 def publish_navigation_ros_visualization(event):
@@ -937,18 +1182,11 @@ def publish_navigation_ros_visualization(event):
     payload = dict(event)
     event_type = str(payload.get("type") or "")
     if event_type == "global_path":
-        path = payload.get("path")
-        normalized = [dict(point) for point in path] if isinstance(path, list) else []
-        received_at = payload.get("received_at")
-        try:
-            received_at = float(received_at)
-        except (TypeError, ValueError):
-            received_at = time.time()
-        with state_lock:
-            navigation_state["global_path"] = normalized
-            navigation_state["global_path_updated_at"] = received_at
-        navigation_control_api.note_replanned_path(normalized)
-    elif event_type == "costmap":
+        # /plan has no execution owner. Never trigger a duplicate Nav2
+        # ComputePath action for visualization or mislabel this anonymous
+        # planner output as the controller's currently executed path.
+        return
+    if event_type == "costmap":
         costmap = payload.get("costmap")
         with state_lock:
             navigation_state["costmap"] = dict(costmap) if isinstance(costmap, dict) else None
@@ -1020,10 +1258,12 @@ RUNTIME_MODEL_ENV_KEYS = (
 
 def read_runtime_model_config():
     cuda_device_index = env_text("CUDA_DEVICE_INDEX")
-    device = env_text("DEVICE").lower()
+    device = env_text("DEVICE", default=f"cuda:{cuda_device_index}").lower()
     inference_enabled = env_bool("INFERENCE_ENABLED")
     visualization_enabled = env_bool("VISUALIZATION_ENABLED")
     pipeline = env_text("PIPELINE")
+    if pipeline != "8":
+        raise ValueError("Only PIPELINE=8 (RTMO-M + BotSORT + X3D-M) is supported.")
     stream_infer_every_n = env_int("STREAM_INFER_EVERY_N", minimum=1)
     inference_max_fps = env_float("INFERENCE_MAX_FPS", minimum=0.1)
     effective_request_fps = min(
@@ -1960,11 +2200,11 @@ def draw_skeleton_points(frame, skeleton, color):
             cv2.line(frame, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
 
 
-def draw_detection_overlay(frame, detection):
+def draw_detection_overlay(frame, detection, scene_danger=False):
     height, width = frame.shape[:2]
     x1, y1, x2, y2 = clamp_box(detection["box"], width, height)
     is_person = detection.get("cls", 0) == 0
-    is_danger = bool(detection.get("danger"))
+    is_danger = bool(detection.get("danger")) or (scene_danger and is_person)
     has_action_label = bool(detection.get("label"))
     confidence_level = detection.get("confidence_level")
     is_suspicious = bool(
@@ -1986,7 +2226,7 @@ def draw_detection_overlay(frame, detection):
     label = (
         detection.get("label")
         or detection.get("track_label")
-        or ("" if is_person else "WEAPON")
+        or ""
     )
     score = detection.get("score")
     if detection.get("action_source") == "pair":
@@ -2040,7 +2280,8 @@ def render_latest_overlay(frame, now=None):
     if pose_overlay_fresh:
         for detection in detections:
             if detection.get("box"):
-                draw_detection_overlay(display_frame, detection)
+                draw_detection_overlay(display_frame, detection, scene_danger=bool(
+                    scene and scene.get("status") == "ok" and scene.get("danger")))
         draw_interaction_overlays(
             display_frame,
             detections,
@@ -2211,6 +2452,8 @@ def process_frame_for_dashboard(frame):
                 frame_processor.action_display_buffer.pop(buffered_id, None)
 
     for obj in tracked_boxes:
+        if obj.get("cls", 0) != 0:
+            continue
         oid = obj["id"]
         cls_id = obj.get("cls", 0)
         state = obj_states.get(oid, 0)
@@ -2324,12 +2567,16 @@ def process_frame_for_dashboard(frame):
                                     "VISION_AI",
                                     event_type,
                                     confidence=detection["score"],
-                                    message=f"위험 행동 감지: {action_label}",
+                                    message=format_vision_alert(
+                                        f"위험 행동 감지: {action_label}", [oid]
+                                    ),
                                     frame=frame,
                                 )
                             else:
                                 automatic_notifier.send_event_alert_async(
-                                    f"위험 행동 감지: {action_label}",
+                                    format_vision_alert(
+                                        f"위험 행동 감지: {action_label}", [oid]
+                                    ),
                                     robot_id=SERVER_ROBOT_ID,
                                     event_type=vision_alert_type(action_label),
                                 )
@@ -2342,16 +2589,13 @@ def process_frame_for_dashboard(frame):
                 ):
                     detection["confidence_level"] = "trigger_suspicious"
                     detection["visual_state"] = "suspicious"
-        else:
-            danger = True
-            detection["label"] = "WEAPON"
-            detection["danger"] = True
-
         detections.append(detection)
 
     for detection in detections:
         if detection.get("box"):
-            draw_detection_overlay(display_frame, detection)
+            draw_detection_overlay(display_frame, detection, scene_danger=bool(
+                scene_level and scene_result and scene_result.get("status") == "ok"
+                and scene_result.get("danger")))
 
     if not scene_level:
         resolved_pair_overlays = interaction_pair_overlays(
@@ -2377,7 +2621,10 @@ def process_frame_for_dashboard(frame):
                     "VISION_AI",
                     event_type,
                     confidence=source.get("score"),
-                    message=f"위험 상호작용 감지: {action_label}",
+                    message=format_vision_alert(
+                        f"위험 상호작용 감지: {action_label}",
+                        [first.get("id"), second.get("id")],
+                    ),
                     frame=frame,
                     cooldown_key=interaction_incident_key(
                         pair_key,
@@ -2417,9 +2664,12 @@ def process_frame_for_dashboard(frame):
                     confidence=float(
                         scene_result.get("score") or 0.0
                     ),
-                    message=(
+                    message=format_vision_alert(
                         "폭행 상황 감지: VIOLENCE "
-                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%"
+                        f"{float(scene_result.get('score') or 0.0) * 100:.0f}%",
+                        [item.get("id") for item in detections
+                         if item.get("cls") == 0],
+                        scene_level=True,
                     ),
                     frame=frame,
                 )
@@ -2588,6 +2838,10 @@ def publish_processed_inference_if_current(
             frame_seq=display_frame_seq,
             input_captured_at=captured_at,
             elapsed_ms=elapsed_ms,
+        )
+        automatic_warning.observe_result(
+            robot_id=robot_id, result=result, captured_at=captured_at,
+            generation=processed_model_generation, stream_id=stream_id,
         )
         return True
 
@@ -2798,6 +3052,7 @@ async def startup():
     global lidar_ros_bridge, encoder_ros_bridge
 
     navigation_visualization_hub.bind_loop(asyncio.get_running_loop())
+    automatic_warning.bind_loop(asyncio.get_running_loop())
     start_persistence_workers()
     ensure_runtime_model_config(force=True, reason="startup")
 
@@ -2834,12 +3089,16 @@ async def startup():
             "Navigation ROS control is unavailable; map loading will remain disabled."
         )
     await navigation_control_api.start()
+    recorded_loop_api.start_service()
 
 
 @app.on_event("shutdown")
 async def shutdown_lidar_bridge():
     global lidar_ros_bridge, encoder_ros_bridge
+    automatic_warning.close()
     try :
+        await loop_session_api.close()
+        await recorded_loop_api.close()
         await navigation_control_api.close()
     finally :
         await asyncio.to_thread(stop_persistence_workers)
@@ -3588,6 +3847,8 @@ async def send_telegram(request: Request):
             {"status": "error", "error": "JSON object required"},
             status_code=400,
         )
+    # Never initiate a robot voice announcement without an explicit manual click.
+    manual_voice = payload.get("manual_voice") is True
     try:
         raw_event_id = payload.get("event_id")
         event_id = None if raw_event_id in (None, "") else int(raw_event_id)
@@ -3649,6 +3910,15 @@ async def send_telegram(request: Request):
                     "Telegram sent, but the event was not updated."
                 )
         result = {"status": "success", "action_id": action_id}
+        if manual_voice:
+            try:
+                await navigation_control_api.report_audio()
+            except Exception as voice_exc:
+                # Telegram has ALREADY succeeded. Never suggest re-sending it.
+                result["voice_status"] = "failed"
+                result["voice_error"] = str(voice_exc)[:180]
+            else:
+                result["voice_status"] = "accepted"  # queued, NOT playback completed
         if persistence_warning:
             result["persistence_warning"] = persistence_warning
         return result
@@ -5100,7 +5370,13 @@ async def set_model_pipeline_state(request: Request):
             status_code=400,
         )
 
-    success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    try:
+        success = await asyncio.to_thread(set_model_pipeline_enabled, enabled)
+    except (EnvConfigurationError, ValueError) as exc:
+        detail = f"Invalid model runtime configuration: {exc}"
+        return JSONResponse({"ok": False,
+            "enabled": bool(MODEL_ACTIVE and frame_processor is not None),
+            "model_error": detail, "detail": detail}, status_code=400)
     actual_enabled = bool(MODEL_ACTIVE and frame_processor is not None)
 
     if not success:
@@ -5223,6 +5499,25 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
                     )
                 navigation_state["scan"] = stored_scan
                 navigation_state["scan_updated_at"] = received_at
+                # No auto-localization without fresh, motion-free encoder
+                # observations corresponding to every stored LiDAR frame.
+                encoder_at = encoder_state.get("updated_at")
+                wheels = None
+                encoder_sequence = None
+                if (encoder_state.get("robot_id") == robot_id
+                    and isinstance(encoder_at, (int, float))
+                    and 0 <= received_at - encoder_at <= 0.4):
+                    wheels = tuple(encoder_state[k] for k in (
+                        "left_front_ticks", "right_front_ticks",
+                        "left_rear_ticks", "right_rear_ticks"
+                    ))
+                    encoder_sequence = encoder_state.get("sequence")
+                localization_scan_history.append({
+                    "scan": dict(stored_scan),
+                    "wheel_ticks": wheels,
+                    "encoder_received_at": encoder_at,
+                    "encoder_sequence": encoder_sequence,
+                })
                 status = build_navigation_status(received_at)
 
             navigation_visualization_hub.publish(
@@ -5254,6 +5549,8 @@ async def lidar_sensor_websocket(websocket: WebSocket, robot_id: str):
         print(f"[lidar-ws] error robot_id={robot_id}: {exc}")
     finally:
         lidar_ros_bridge.mark_disconnected(robot_id)
+        with state_lock:
+            localization_scan_history.clear()
 
 
 @app.get("/api/lidar/bridge")
@@ -5289,6 +5586,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
         return
     await connections.connect(robot_id, websocket)
     if robot_id == SERVER_ROBOT_ID:
+        # A new Pi connection must supply a fresh wheel observation; old
+        # session readings cannot authorize a new Initial Pose estimate.
+        with state_lock:
+            localization_scan_history.clear()
+            encoder_state["updated_at"] = None
         navigation_control_api.note_pi_connection(True)
     print(f"[ws] robot connected: {robot_id}")
     try:
@@ -5333,6 +5635,11 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
                     continue
 
                 with state_lock:
+                    if (encoder_state.get("updated_at") is not None
+                        and received_encoder["sequence"] <= encoder_state["sequence"]):
+                        # Ignore stale/duplicate Pi packets for visualization
+                        # and for sensor-independent localization proof.
+                        continue
                     encoder_state.update(received_encoder)
                 if robot_id == SERVER_ROBOT_ID:
                     navigation_control_api.note_encoder(received_encoder)
@@ -5345,8 +5652,8 @@ async def robot_websocket(websocket: WebSocket, robot_id: str):
 
             elif message.get("type") == "ack":
                 print(f"[ws] ack from {robot_id}: {message}")
-                if robot_id == SERVER_ROBOT_ID:
-                    navigation_control_api.note_pi_status(message)
+                # ACK confirms the command, not a fresh Pi telemetry sample.
+                # The periodic status frame independently confirms the mode.
                 await connections.receive_ack(robot_id, websocket, message)
     except WebSocketDisconnect:
         print(f"[ws] robot disconnected: {robot_id}")
@@ -5532,10 +5839,14 @@ async def send_robot_command(
                 status_code=400,
             )
 
-        if (
-            abs(left_mps) > MAX_WHEEL_MPS
-            or abs(right_mps) > MAX_WHEEL_MPS
-        ):
+        # Nav2 scales wheel speeds to MAX_WHEEL_MPS, but binary floating-
+        # point operations can produce a one-ULP excess (e.g.
+        # 0.21200000000000002 for a 0.212 m/s limit). Never reject a
+        # nominally in-range command solely for that rounding difference.
+        # Larger overshoots remain a hard error, with no extra speed budget.
+        wheel_peak_mps = max(abs(left_mps), abs(right_mps))
+        wheel_limit_roundoff_mps = 1e-12
+        if wheel_peak_mps > MAX_WHEEL_MPS + wheel_limit_roundoff_mps:
             return JSONResponse(
                 {
                     "ok": False,
@@ -5544,11 +5855,19 @@ async def send_robot_command(
                     "command": command,
                     "error": (
                         "wheel speed exceeds "
-                        f"{MAX_WHEEL_MPS:.2f} m/s"
+                        f"{MAX_WHEEL_MPS:.3f} m/s"
                     ),
                 },
                 status_code=400,
             )
+
+        # Rescale BOTH wheels rather than clipping one: preserve curvature
+        # and guarantee that even an accepted rounding excess never reaches
+        # the Pi beyond the original configured wheel-speed limit.
+        if wheel_peak_mps > MAX_WHEEL_MPS:
+            scale = MAX_WHEEL_MPS / wheel_peak_mps
+            left_mps *= scale
+            right_mps *= scale
 
         command["left_mps"] = left_mps
         command["right_mps"] = right_mps
@@ -5588,6 +5907,12 @@ async def send_robot_command(
             status_code=200,
         )
 
+    if (robot_id == SERVER_ROBOT_ID and command_type == "move"
+            and loop_session_api.manual_playing):
+        return JSONResponse(
+            {"ok": False, "delivered": False, "error": "Manual Loop replay owns motor control"},
+            status_code=409,
+        )
     controlled_motion = robot_id == SERVER_ROBOT_ID and command_type in {"move", "auto_drive"}
     motion_context = None
     if controlled_motion:
@@ -5600,12 +5925,31 @@ async def send_robot_command(
             )
         command["safety_session"] = motion_context["safety_session"]
         command["safety_epoch"] = motion_context["safety_epoch"]
-    if controlled_motion and navigation_control_api.motion_requires_ack():
-        delivered = await connections.send_command_wait_ack(robot_id, command)
+    # A WebSocket send only proves that the server handed the frame to the
+    # transport. Never report physical motor/STOP delivery without the Pi's
+    # command_id-matched ACK, including ordinary auto_drive, move and STOP.
+    physical_command = command_type in {"move", "auto_drive", "stop", "emergency_stop"}
+    if physical_command:
+        if controlled_motion:
+            # The earlier safety check may become stale while this command
+            # waits behind another WebSocket send or STOP.
+            delivered = await connections.send_command_wait_ack(
+                robot_id, command,
+                preflight=lambda: navigation_control_api.motion_safety_context() == motion_context,
+            )
+        else:
+            delivered = await connections.send_command_wait_ack(robot_id, command)
     else:
         delivered = await connections.send_command(robot_id, command)
     if delivered and controlled_motion:
         delivered = navigation_control_api.note_authorized_motion(motion_context)
+    # Observation only: recorder failures must never change legacy Pi ACK
+    # responses after physical motor execution.
+    try:
+        recorded_loop_api.note_motion_ack(command, bool(delivered))
+        loop_session_api.note_motion_ack(command, bool(delivered))
+    except Exception:
+        logging.getLogger(__name__).exception("recorded motor observer failed")
 
     status_code = (
         200 if delivered else 409
@@ -5615,13 +5959,13 @@ async def send_robot_command(
         {
             "ok": delivered,
             "delivered": delivered,
-            "blocked": False,
+            "blocked": not delivered,
             "robot_id": robot_id,
             "command": command,
             "error": (
                 None
                 if delivered
-                else "robot not connected"
+                else "robot command not delivered or acknowledged"
             ),
         },
         status_code=status_code,

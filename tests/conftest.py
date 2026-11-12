@@ -49,7 +49,7 @@ TEST_ENV = {
     "CURL_CONNECT_TIMEOUT_SEC": "5",
     "CAMERA_TIMEOUT_SEC": "3",
     "ROBOT_STATUS_TIMEOUT_SEC": "5",
-    "PIPELINE": "1",
+    "PIPELINE": "8",
     "MODEL_REQUIRED": "false",
     "INFERENCE_ENABLED": "false",
     "VISUALIZATION_ENABLED": "false",

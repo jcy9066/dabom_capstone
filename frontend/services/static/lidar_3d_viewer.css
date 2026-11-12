@@ -9,9 +9,7 @@
 
 .lidar-viewer-overlay .lidar-3d-viewer {
     overflow: hidden;
-    background:
-        radial-gradient(circle at 50% 45%, rgba(56, 74, 90, 0.22), transparent 52%),
-        #101821;
+    background: #0b1420;
 }
 
 .lidar-viewer-overlay .lidar-3d-canvas {
@@ -40,7 +38,7 @@
     right: 0 !important;
     bottom: 0 !important;
     border-radius: 0;
-    background: #101821;
+    background: #0b1420;
 }
 
 /* ===== Compact vertical drawer ===== */
