@@ -1,0 +1,24 @@
+<!-- One-time loop recovery: after a guarded backup, drive forward only to
+     the SAME Goal. Revalidate the live costmap and replan only when blocked. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="SafeForwardReapproach">
+      <Timeout msec="5000">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="LoopGridBased"/>
+      </Timeout>
+      <PipelineSequence name="FollowObstacleCheckedReapproach">
+        <RateController hz="10.0">
+          <Fallback name="ReusePathOrReplan">
+            <IsPathValid path="{path}" server_timeout="100"/>
+            <Timeout msec="5000">
+              <RetryUntilSuccessful num_attempts="5">
+                <ComputePathToPose goal="{goal}" path="{path}" planner_id="LoopGridBased"/>
+              </RetryUntilSuccessful>
+            </Timeout>
+          </Fallback>
+        </RateController>
+        <FollowPath path="{path}" controller_id="LoopFollowPath" goal_checker_id="loop_goal_checker"/>
+      </PipelineSequence>
+    </Sequence>
+  </BehaviorTree>
+</root>

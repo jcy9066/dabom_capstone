@@ -19,12 +19,15 @@ class SharedSpeakerVolumeUiTests(unittest.TestCase):
         self.assertIn('self.motor.beep', pi)
         self.assertIn('async def _run_warning_pattern(', pi)
 
-    def test_header_speaker_control_precedes_model_toggle(self):
+    def test_beep_volume_under_usb_speaker_inside_audio_dock(self):
         html = (ROOT / "frontend/templates/index.html").read_text(encoding="utf-8")
+        audio_dock = html.split('id="dabomAudio"', 1)[1].split('</details>', 1)[0]
         camera_header = html.split('id="camera-card"', 1)[1].split('id="video-wrapper"', 1)[0]
-        self.assertLess(camera_header.index('id="speaker-volume-control"'), camera_header.index('id="model-pipeline-toggle-mount"'))
-        self.assertIn('id="speaker-volume-slider"', camera_header)
-        self.assertIn('type="range" min="0" max="100" step="1" value="20"', camera_header)
+        self.assertLess(audio_dock.index('id="audioRobotVolume"'), audio_dock.index('id="speaker-volume-control"'))
+        self.assertNotIn('id="speaker-volume-control"', camera_header)
+        self.assertEqual(html.count('id="speaker-volume-control"'), 1)
+        self.assertIn('id="speaker-volume-slider"', audio_dock)
+        self.assertIn('type="range" min="0" max="100" step="1" value="20"', audio_dock)
         self.assertIn("speaker_volume.css?v=20261015-border-v2", html)
         self.assertIn("speaker_volume.js?v=20261015-volume-v1", html)
         styles = (ROOT / "frontend/services/static/speaker_volume.css").read_text(encoding="utf-8")

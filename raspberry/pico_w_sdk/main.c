@@ -972,9 +972,17 @@ static void drive_motors(
     }
 
     /*
-     * DRIVE 입력은 -1.0 ~ 1.0 범위의 정규화된 PWM 명령이다.
-     * 범위 검증은 command parser에서 먼저 수행한다.
+     * Preserve steering curvature when a direct UART client requests more
+     * than 30%: scale both wheels together before each channel's hard cap.
+     * Motor_write_pwm() remains the final hardware safety boundary.
      */
+    const float peak = fmaxf(abs_float(left_speed), abs_float(right_speed));
+    if (peak > MOTOR_MAX_PWM) {
+        const float scale = MOTOR_MAX_PWM / peak;
+        left_speed *= scale;
+        right_speed *= scale;
+    }
+
     motor_request_signed_speed(
         &left_motor,
         left_speed
@@ -1344,7 +1352,7 @@ static void handle_command(char *line) {
         speed = clamp_float(
             speed,
             0.0f,
-            1.0f
+            MOTOR_MAX_PWM
         );
 
         if (speed <= 0.0f) {

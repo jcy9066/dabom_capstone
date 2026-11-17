@@ -19,7 +19,7 @@ function setup({confirmed=true,mode='success',deferred=false}={}) {
             if(url==='/api/auth/csrf')return {ok:true,json:async()=>({csrf_token:'mock-token'})};
             if(url==='/send_telegram'){
                 if(deferred)await pending;
-                return {ok:mode==='success',json:async()=>mode==='success'?{status:'success'}:{status:'error',detail:'mock failure'}};
+                return {ok:mode==='success',json:async()=>mode==='success'?{status:'success',voice_status:'accepted'}:{status:'error',detail:'mock failure'}};
             }
             throw Error('unexpected request');
         },

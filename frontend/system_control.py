@@ -502,10 +502,19 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
             command["type"] = command_type
             command["safety_session"] = motion_context["safety_session"]
             command["safety_epoch"] = motion_context["safety_epoch"]
-        delivered = await module.connections.send_command_wait_ack(
-            module.SERVER_ROBOT_ID,
-            command,
-        )
+        if command_type in CONTROLLED_COMMAND_TYPES:
+            delivered = await module.connections.send_command_wait_ack(
+                module.SERVER_ROBOT_ID,
+                command,
+                preflight=lambda: (
+                    module.navigation_control_api.motion_safety_context() == motion_context
+                ),
+            )
+        else:
+            delivered = await module.connections.send_command_wait_ack(
+                module.SERVER_ROBOT_ID,
+                command,
+            )
         if delivered and command_type in CONTROLLED_COMMAND_TYPES:
             delivered = module.navigation_control_api.note_authorized_motion(motion_context)
         if not delivered:
@@ -523,6 +532,29 @@ def attach_system_control_routes(app, navigation_process_control=None) -> None:
                 error_code="COMMAND_DELIVERY_FAILED",
                 delivered=False,
                 control=dashboard_control_snapshot(client_id),
+            )
+
+        # Observe only commands confirmed by Pi and accepted by motion safety.
+        # Recorder errors must not change an already executed command's response.
+        observed_command = {**command, "type": command_type}
+        try:
+            module.recorded_loop_api.note_motion_ack(
+                observed_command, True,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "dashboard recorded motor observer failed"
+            )
+
+        try:
+            module.loop_session_api.note_motion_ack(
+                observed_command, True,
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "dashboard loop session observer failed"
             )
 
         apply_dashboard_command(command, client_id, user_id)

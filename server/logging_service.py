@@ -203,10 +203,11 @@ class EventLogWorker:
                 break
             try:
                 image_path: str | None = None
+                event_id = None
                 try:
                     if item.frame is not None:
                         image_path = self.image_store.save_image("events", item.frame)
-                    self.database.insert_event(
+                    event_id = self.database.insert_event(
                         event_source=item.event_source,
                         event_type=item.event_type,
                         image_path=image_path,
@@ -231,8 +232,13 @@ class EventLogWorker:
                             )
                     self.logger.warning("Automatic event persistence failed: %s", exc)
                 try:
+                    event_id_text = (
+                        str(event_id)
+                        if type(event_id) is int and event_id > 0
+                        else "저장 실패"
+                    )
                     self.notifier.send_event_alert_async(
-                        item.message,
+                        f"{item.message}\n이벤트 번호: {event_id_text}",
                         robot_id=item.robot_id,
                         event_type=item.event_type,
                     )
