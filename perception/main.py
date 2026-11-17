@@ -9,7 +9,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from perception.frame_processor import FrameProcessor
-from perception.pipeline_factory import create_pipeline, print_pipeline_menu
+from perception.pipeline_factory import create_pipeline
 from server.privacy import PrivateVideoWriter, PrivacyProcessingError
 
 class LocalVideoReader:
@@ -32,21 +32,11 @@ class LocalVideoReader:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', type=str, required=True, help="테스트 영상 경로")
-    parser.add_argument('--pipeline', type=str, help="구동할 파이프라인 번호 (1-9)")
+    parser.add_argument('--pipeline', type=str, choices=["8"], default="8", help="단일 파이프라인: RTMO-M + BotSORT + X3D-M")
     parser.add_argument('--max-frames', type=int, default=0, help="테스트용 최대 처리 프레임 수")
     args = parser.parse_args()
 
-    if args.pipeline:
-        choice = args.pipeline
-    else:
-        print_pipeline_menu()
-        choice = input("\n구동할 파이프라인 번호를 입력하십시오 (1-9): ").strip()
-
-    try:
-        pipeline = create_pipeline(choice)
-    except ValueError as exc:
-        print(exc)
-        return
+    pipeline = create_pipeline(args.pipeline)
 
     pipeline_name = pipeline["name"]
     processor = FrameProcessor(pipeline["detector"], pipeline["action_analyzer"])

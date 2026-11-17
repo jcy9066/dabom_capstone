@@ -134,6 +134,9 @@
             MAP_VERIFICATION_FAILED: '\uc9c0\ub3c4 \uba54\ud0c0\ub370\uc774\ud130 \ud655\uc778\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4.',
             AMCL_VERIFICATION_FAILED: 'AMCL \ucd08\uae30 \uc704\uce58\ub97c \ud655\uc778\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.',
             INITIAL_POSE_OUT_OF_BOUNDS: '\ucd08\uae30 \uc704\uce58\uac00 \uc120\ud0dd\ud55c \uc9c0\ub3c4 \ubc94\uc704\ub97c \ubc97\uc5b4\ub0a9\ub2c8\ub2e4.',
+            AUTO_INITIAL_POSE_UNCERTAIN: '자동 위치 추정의 신뢰도가 부족합니다. X·Y·방향을 직접 입력해주세요.',
+            AUTO_POSE_REQUIRES_STOP: '자동 위치 추정 전 로봇을 수동 정지 상태로 전환해주세요.',
+            AUTO_POSE_MOVED: '위치 추정 중 로봇 움직임이 감지됐습니다. 정지 후 다시 시도해주세요.',
             MAP_LOAD_IN_PROGRESS: '\ub2e4\ub978 \uc9c0\ub3c4 \ubd88\ub7ec\uc624\uae30\uac00 \ucc98\ub9ac \uc911\uc785\ub2c8\ub2e4.',
             MAP_OPERATION_IN_PROGRESS: '\ub2e4\ub978 \uc800\uc7a5 \uc9c0\ub3c4 \uc791\uc5c5\uc774 \ucc98\ub9ac \uc911\uc785\ub2c8\ub2e4.',
             MAP_NAME_ALREADY_EXISTS: '\uc774\ubbf8 \uac19\uc740 \uc774\ub984\uc758 \uc800\uc7a5 \uc9c0\ub3c4\uac00 \uc788\uc2b5\ub2c8\ub2e4.',
@@ -239,21 +242,24 @@
         const xText = container.querySelector('#saved-map-pose-x').value.trim();
         const yText = container.querySelector('#saved-map-pose-y').value.trim();
         const yawText = container.querySelector('#saved-map-pose-yaw').value.trim();
-        if (!xText || !yText || !yawText) {
-            showMessage(progress, '저장 지도를 불러올 때는 실제 Initial Pose를 입력해야 합니다.', true);
+        const manualPoseRequested = Boolean(xText || yText || yawText);
+        if (manualPoseRequested && (!xText || !yText || !yawText)) {
+            showMessage(progress, '수동 Initial Pose는 X, Y, 방향을 모두 입력해야 합니다.', true);
             return;
         }
         const x = Number(xText);
         const y = Number(yText);
         const yawDegrees = Number(yawText);
-        if (![x, y, yawDegrees].every(Number.isFinite)) {
-            showMessage(progress, '\ucd08\uae30 \uc704\uce58\uc5d0\ub294 \uc720\ud55c \uc22b\uc790\ub9cc \uc785\ub825\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.', true);
+        if (manualPoseRequested && ![x, y, yawDegrees].every(Number.isFinite)) {
+            showMessage(progress, '수동 Initial Pose는 유한한 숫자여야 합니다.', true);
             return;
         }
 
         state.busy = true;
         setControlsDisabled(container, true, true);
-        showMessage(progress, labels.loading);
+        showMessage(progress, manualPoseRequested
+            ? labels.loading
+            : '저장 지도와 최신 LiDAR를 정합해 자동 위치를 추정 중...');
         scheduleProgress(progress, labels.resetting, 700);
         scheduleProgress(progress, labels.verifying, 1800);
         let succeeded = false;
@@ -267,7 +273,7 @@
                     mode: 'DRIVING',
                     source: 'existing',
                     map_name: mapName,
-                    initial_pose: { x, y, yaw_degrees: yawDegrees }
+                    ...(manualPoseRequested ? { initial_pose: { x, y, yaw_degrees: yawDegrees } } : {})
                 })
             });
             global.navigationControl?.applyState?.(payload);

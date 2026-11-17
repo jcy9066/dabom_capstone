@@ -48,7 +48,7 @@ class NavigationProcessControl:
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = Path(root_dir)
         self.log_dir = self.root_dir / "logs" / "system_control"
-        self.ros_install_setup = self.root_dir / "navigation" / "ros" / "install" / "setup.bash"
+        self.ros_install_setup = self.root_dir / "navigation" / "ros" / "install" / "local_setup.bash"
         self.start_timeout_sec = env_float("NAV_PROCESS_START_TIMEOUT_SEC", minimum=0.2)
         self.stop_timeout_sec = env_float("NAV_PROCESS_STOP_TIMEOUT_SEC", minimum=0.2)
         self._lock = threading.RLock()
@@ -370,6 +370,21 @@ class NavigationProcessControl:
         source_parts = ["source /opt/ros/humble/setup.bash"]
         if self.ros_install_setup.exists():
             source_parts.append(f"source {shlex.quote(str(self.ros_install_setup))}")
+        # The child ROS launch runs via bash -lc, which can inherit an older
+        # AMENT_PREFIX_PATH from a different checkout. Fail before launching
+        # if its planner plugin or navigation package resolves outside ours.
+        install_prefix = str(self.ros_install_setup.parent.resolve())
+        for package in ("patrol_navigation_controller", "patrol_navigation"):
+            expected_package_prefix = str((self.ros_install_setup.parent / package).resolve())
+            source_parts.append(
+                f"actual_prefix=$(ros2 pkg prefix {package})"
+            )
+            source_parts.append(
+                'case "$(realpath -m -- "$actual_prefix")" in '
+                f"{shlex.quote(install_prefix)}|{shlex.quote(expected_package_prefix)}) ;; "
+                f"*) echo '[navigation] ERROR: wrong ROS overlay for {package}: '"
+                '"$actual_prefix" >&2; exit 78 ;; esac'
+            )
         source_parts.extend(
             [
                 f"export ROS_DOMAIN_ID={shlex.quote(env_text('ROS_DOMAIN_ID'))}",

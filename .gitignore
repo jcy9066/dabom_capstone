@@ -38,3 +38,9 @@ log/
 # colcon environment scripts
 local_setup.bash
 setup.bash
+
+# Local environment backups
+.env.before-*
+
+# Machine-specific ROS map links
+/navigation/ros/maps/

@@ -146,7 +146,10 @@ def _extract_rtmo_onnx_atomic(archive: Path, target: Path) -> None:
 def ensure_pipeline_assets(pipeline, *, weights_dir: str | Path | None = None):
     choice = str(pipeline).strip()
     if choice != "8":
-        return {}
+        raise ValueError(
+            f"Unsupported model asset pipeline: {choice}. "
+            "Only RTMO-M + BotSORT + X3D-M (8) is available."
+        )
 
     directory = Path(weights_dir) if weights_dir is not None else DEFAULT_WEIGHTS_DIR
     resolved = {}

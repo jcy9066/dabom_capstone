@@ -5,16 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 순찰 관제 센터</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="static/style.css?v=20261014-enterprise-ui-v1">
+    <link rel="stylesheet" href="static/style.css?v=20261029-object-list-contrast-v1-camera-rotate-v1">
     <link rel="stylesheet" href="static/system_control.css?v=20261014-vertical-center-v2">
     <link rel="stylesheet" href="static/navigation_map_control.css?v=20261020-map-only-v3">
     <link rel="stylesheet" href="static/navigation_control.css?v=20260930-lidar3d-controls-v16">
-    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261014-ux-refine-v17">
+    <link rel="stylesheet" href="static/recorded_loop_ui.css?v=20261028-visible-set-loop-v9">
+    <link rel="stylesheet" href="static/lidar_3d_viewer.css?v=20261020-dark-technical-v1">
     <link rel="stylesheet" href="/components/modal/modal.css?v=20260930-lidar3d-controls-v16">
     <link rel="stylesheet" href="/components/records/records.css?v=20261014-enterprise-ui-v1">
-    <link rel="stylesheet" href="/components/controls/controls.css?v=20261014-flat-drawer-v4">
+    <link rel="stylesheet" href="/components/controls/controls.css?v=20261028-right-drawer-v5">
     <link rel="stylesheet" href="static/selected_ui.css?v=20261020-beep-raised-v12">
     <link rel="stylesheet" href="static/speaker_volume.css?v=20261015-border-v2">
+    <link rel="stylesheet" href="static/audio_intercom_dashboard.css?v=20261110-manual-alert-v1">
     <link rel="stylesheet" href="/static/action_feedback.css?v=20261015-colored-borders-v1">
     <link rel="stylesheet" href="static/uiverse_dashboard_controls.css?v=20261020-verified-press-v4">
     <link rel="stylesheet" href="/static/elastic_scroll.css?v=20261014-return-animation-v4">
@@ -140,6 +142,46 @@
         </div>
     </header>
 
+    <!-- USB 양방향 음성 관제: Pico W Beep 제어와 독립 -->
+    <details class="dabom-audio-dock" id="dabomAudio">
+        <summary>🎙️ 현장 음성 관제 <span id="audioQuickState" aria-live="polite">⚪ 연결 안 됨</span></summary>
+        <div class="audio-dock-body">
+            <div class="audio-dock-status" id="audioStatus" role="status" aria-live="polite">오디오 연결 전</div>
+            <div class="audio-dock-buttons">
+                <button id="audioConnect" type="button">오디오 서버 연결</button>
+                <button id="audioListen" type="button" disabled>현장 청취 시작</button>
+                <button id="audioTalk" type="button" disabled>누르고 현장에 말하기</button>
+                <button id="audioDisconnect" type="button" disabled>연결 종료</button>
+            </div>
+            <label class="audio-dock-label">웹 청취 음량
+                <input type="range" id="audioListenVolume" min="0" max="100" value="28" aria-label="웹 청취 음량">
+                <span id="audioListenVolumeLabel">28%</span>
+            </label>
+            <label class="audio-dock-label">로봇 USB 스피커
+                <input type="range" id="audioRobotVolume" min="0" max="100" value="50" disabled aria-label="로봇 USB 스피커 음량">
+                <span id="audioRobotVolumeLabel">확인 중</span>
+            </label>
+            <div class="audio-dock-label audio-beep-volume">
+                <span>Beep 전용 스피커</span>
+                <div class="speaker-volume-control" id="speaker-volume-control"
+                     data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
+                    <label class="speaker-volume-slider">
+                        <input id="speaker-volume-slider" class="speaker-volume-level"
+                               type="range" min="0" max="100" step="1" value="20"
+                               aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
+                        <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
+                             viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
+                        </svg>
+                    </label>
+                    <output class="speaker-volume-value" id="speaker-volume-value"
+                            for="speaker-volume-slider">20%</output>
+                </div>
+            </div>
+            <p class="audio-dock-hint" id="audioSecureNote">마이크는 누르고 말할 때만 사용합니다. 현재 통화는 저장하지 않습니다.</p>
+            <pre class="audio-dock-log" id="audioLog" aria-live="polite"></pre>
+        </div>
+    </details>
     <div class="dashboard-container">
 
         <div class="card" id="camera-card">
@@ -148,20 +190,8 @@
                     실시간 카메라 (RTMO-M + BotSORT + X3D-M)
                 </h2>
                 <div class="camera-header-actions">
-                    <div class="speaker-volume-control" id="speaker-volume-control"
-                         data-volume-state="unavailable" title="Pico W 음량 상태 확인 중">
-                        <label class="speaker-volume-slider">
-                            <input id="speaker-volume-slider" class="speaker-volume-level"
-                                   type="range" min="0" max="100" step="1" value="20"
-                                   aria-label="Beep 및 경고음 음량" aria-valuetext="20%" disabled>
-                            <svg class="speaker-volume-icon" xmlns="http://www.w3.org/2000/svg"
-                                 viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                <path fill="currentColor" d="M18.36 19.36a1 1 0 0 1-.705-1.71C19.167 16.148 20 14.142 20 12s-.833-4.148-2.345-5.65a1 1 0 1 1 1.41-1.419C20.958 6.812 22 9.322 22 12s-1.042 5.188-2.935 7.069a.997.997 0 0 1-.705.291zM15.53 16.53a.999.999 0 0 1-.703-1.711C15.572 14.082 16 13.054 16 12s-.428-2.082-1.173-2.819a1 1 0 1 1 1.406-1.422A6 6 0 0 1 18 12a6 6 0 0 1-1.767 4.241.996.996 0 0 1-.703.289zM12 22a1 1 0 0 1-.707-.293L6.586 17H4c-1.103 0-2-.897-2-2V9c0-1.103.897-2 2-2h2.586l4.707-4.707A.998.998 0 0 1 13 3v18a1 1 0 0 1-1 1z"/>
-                            </svg>
-                        </label>
-                        <output class="speaker-volume-value" id="speaker-volume-value"
-                                for="speaker-volume-slider">20%</output>
-                    </div>
+                    <span id="scene-analysis-status" role="status"
+                          aria-live="polite">분석 상태 확인 중</span>
                     <div
                     id="model-pipeline-toggle-mount"
                     class="dashboard-model-control-mount"
@@ -200,6 +230,15 @@
                 >
                     <button
                         class="icon-btn"
+                        id="camera-rotate-btn"
+                        type="button"
+                        title="카메라 화면을 시계 방향으로 90도 회전"
+                        aria-label="카메라 화면을 시계 방향으로 90도 회전"
+                    >
+                        ↻ 0°
+                    </button>
+                    <button
+                        class="icon-btn"
                         onclick="toggleFullscreen('video-wrapper')"
                     >
                         전체화면
@@ -236,6 +275,8 @@
                             class="lidar-3d-canvas"
                             tabindex="0"
                         ></canvas>
+                        <div id="recordedLoopViewerStatus" class="recorded-loop-viewer-status"
+                             role="status" aria-live="polite" hidden></div>
 
                         <div
                             class="lidar-control-drawer"
@@ -277,6 +318,7 @@
                                         <span class="lidar-control-separator" aria-hidden="true"></span>
                                         <button type="button" data-lidar-interaction="view" data-control-button="view" class="active">VIEW</button>
                                         <button type="button" data-lidar-interaction="set-goal" data-control-button="goal">SET GOAL</button>
+                                        <label class="loop-map-radio"><input type="checkbox" id="loop-goal-toggle"><span>SET LOOP</span></label>
                                     </div>
 
                                     <div class="lidar-control-overflow" id="lidarControlOverflow" hidden>
@@ -361,6 +403,75 @@
                                 <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
                             </button>
                         </div>
+                        <div id="loop-side-drawer" class="loop-side-drawer" data-open="false"
+                             aria-label="LOOP 제어 패널">
+                            <button type="button"
+                                    class="dashboard-drawer-toggle dashboard-drawer-toggle--right loop-side-drawer-handle"
+                                    id="loopDrawerToggle" data-drawer-toggle data-drawer-target="loop-side-drawer"
+                                    data-drawer-open-label="LOOP 제어 패널 접기"
+                                    data-drawer-closed-label="LOOP 제어 패널 펼치기"
+                                    aria-expanded="false" aria-controls="loop-side-drawer-content"
+                                    aria-label="LOOP 제어 패널 펼치기"
+                                    title="LOOP 제어 패널 펼치기">
+                                <span class="dashboard-drawer-toggle-icon" aria-hidden="true"></span>
+                            </button>
+                        <div class="loop-drawer-content" id="loop-side-drawer-content" aria-hidden="true" inert hidden>
+                            <div class="loop-drawer-header"><strong>LOOP</strong></div>
+                            <div class="loop-modal-info">
+                                <div class="loop-map-status-row">
+                                    <span class="loop-map-name">Map <strong id="loop-map">--</strong></span>
+                                    <span id="loop-status" class="loop-modal-status" role="status">상태 확인 중</span>
+                                </div>
+                                <div class="loop-meta-row">
+                                    <span>Mode <strong id="loop-mode">--</strong></span>
+                                    <span id="loop-connection" role="status">Pi: 확인 중</span>
+                                </div>
+                            </div>
+                            <section class="loop-modal-section" aria-labelledby="loop-goals-heading">
+                                <h3 id="loop-goals-heading">GOALS <small>A–Z, a–z</small></h3>
+                                <p class="loop-modal-hint">SET LOOP에서 Goal을 선택합니다. 동일 위치를 다시 클릭하면 삭제합니다.</p>
+                                <div id="loop-goals" class="loop-goal-list" role="list"></div>
+                            </section>
+                            <section class="loop-modal-section" aria-labelledby="loop-record-heading">
+                                <h3 id="loop-record-heading">RECORD / PLAY</h3>
+                                <p class="loop-modal-hint" id="loop-help"></p>
+                                <select id="loop-bags" aria-label="Recorded manual loops" hidden disabled></select>
+                                <div class="loop-modal-buttons">
+                                    <button type="button" id="loop-record" disabled data-control-button="secondary">Record</button>
+                                    <button type="button" id="loop-save" disabled data-control-button="success">Save</button>
+                                    <button type="button" id="loop-delete" disabled data-control-button="danger">Delete</button>
+                                </div>
+                            </section>
+                            <section class="loop-modal-section loop-control-section" aria-labelledby="loop-control-heading">
+                                <h3 id="loop-control-heading">LOOP CONTROL</h3>
+                                <div class="loop-controls-inline">
+                                    <div class="loop-modal-subsection">
+                                        <span class="loop-modal-subtitle">OBSTACLE</span>
+                                        <div id="loop-obstacle-toggle-mount" class="loop-obstacle-toggle-mount"
+                                             aria-label="장애물 대응 정책">
+                                            <button type="button" class="navigation-mode-toggle loop-obstacle-toggle"
+                                                    role="switch" aria-checked="false" aria-label="Obstacle: Wait">
+                                                <span class="navigation-mode-toggle-label" data-navigation-mode-target="MAPPING">Wait</span>
+                                                <span class="navigation-mode-toggle-track" aria-hidden="true"><span class="navigation-mode-toggle-slider"></span></span>
+                                                <span class="navigation-mode-toggle-label" data-navigation-mode-target="DRIVING">Replan</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="loop-modal-subsection">
+                                        <span class="loop-modal-subtitle">EXECUTION</span>
+                                        <div class="loop-modal-buttons">
+                                            <button type="button" id="loop-start" disabled data-control-button="accent">Start</button>
+                                            <button type="button" id="loop-stop" disabled data-control-button="danger">Stop</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                            <div class="loop-modal-footer">
+                                <div id="loop-feedback" class="loop-modal-feedback" role="status"></div>
+                            </div>
+                        </div>
+                        </div>
+
                     </div>
 
                     <div class="lidar-bottom-status" id="lidar-bottom-status">
@@ -403,6 +514,7 @@
                             NO SCAN DATA
                         </div>
                     </div>
+
 
                     <button
                         class="lidar-map-select-btn"
@@ -785,7 +897,7 @@
     <script src="/components/controls/model_pipeline_toggle.js?v=20261014-stable-hydration-v1"></script>
     <script src="/components/controls/cycle_filter_button.js?v=20261013-selected-ui-v3"></script>
     <script src="/components/controls/drive_mode_control.js?v=20261014-stable-hydration-v1"></script>
-    <script src="/components/controls/navigation_mode_control.js?v=20261014-stable-hydration-v1"></script>
+    <script src="/components/controls/navigation_mode_control.js?v=20261023-pr90-mapping-recovery-v1"></script>
     <script src="/components/gallery/image_detail.js?v=20261014-compact-ui-v2"></script>
     <script src="/components/current_situation/current_situation.js?v=20261014-finish-ui-v2"></script>
     <script type="importmap">
@@ -796,13 +908,15 @@
             }
         }
     </script>
-    <script type="module" src="static/lidar_3d_viewer.js?v=20261006-dynamic-obstacle-v31"></script>
-    <script src="static/script.js?v=20261020-gpu-status-v2"></script>
+    <script type="module" src="static/lidar_3d_viewer.js?v=20261028-loop-modal-v1"></script>
+    <script src="static/script.js?v=20261110-manual-alert-v1"></script>
     <script src="static/system_control.js?v=20261014-hide-pi-service-v1"></script>
     <script src="static/navigation_map_control.js?v=20260930-lidar3d-controls-v16"></script>
     <script src="static/dashboard_state.js?v=20261014-batched-pages-v1"></script>
-    <script src="static/navigation_control.js?v=20261020-clickable-offline-v1"></script>
+    <script src="static/navigation_control.js?v=20261110-manual-alert-v1"></script>
+    <script src="static/recorded_loop_ui.js?v=20261028-drawer-close-v8"></script>
     <script src="static/speaker_volume.js?v=20261015-volume-v1"></script>
+    <script src="static/audio_intercom_test.js?v=20261110-phase2"></script>
     <script src="static/selected_ui.js?v=20261014-shared-drawer-v2"></script>
     <script src="/static/action_feedback.js?v=20261020-delegated-press-v4"></script>
     <script src="/static/elastic_scroll.js?v=20261014-return-animation-v4"></script>
@@ -827,5 +941,6 @@
             if (!ready) document.getElementById('dashboardUiStartupError').hidden = false;
         }, { once: true });
     </script>
+    <script src="static/camera_rotation.js?v=20261109-camera-rotate-v3"></script>
 </body>
 </html>
