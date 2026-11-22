@@ -81,7 +81,7 @@ Pico W UART는 **115200 bps**, Raspberry Pi의 **GPIO14(TXD) / GPIO15(RXD)** 및
 
 ### 4.2 데이터 흐름
 
-\`\`\`mermaid
+```mermaid
 flowchart LR
     subgraph PI["Raspberry Pi / Pico W"]
         CAM["Camera H.264"]
@@ -114,13 +114,13 @@ flowchart LR
     AUDIO <-->|Audio WS| API
     API <--> WEB["Web Dashboard"]
     API --> TG["Telegram"]
-\`\`\`
+```
 
-Pi와 GPU 간 센서 전송은 HTTP/WebSocket을 사용합니다. GPU 측 ROS Bridge는 \`/scan\`과 \`/wheel_ticks\`를 발행하며, Wheel Odometry는 \`/odom\`과 \`odom → base_link\` TF를 제공합니다. SLAM Toolbox는 Mapping에, AMCL 및 Nav2는 저장 지도를 이용하는 Driving에 사용합니다.
+Pi와 GPU 간 센서 전송은 HTTP/WebSocket을 사용합니다. GPU 측 ROS Bridge는 `/scan`과 `/wheel_ticks`를 발행하며, Wheel Odometry는 `/odom`과 `odom → base_link` TF를 제공합니다. SLAM Toolbox는 Mapping에, AMCL 및 Nav2는 저장 지도를 이용하는 Driving에 사용합니다.
 
 ### 4.3 저장소 구조
 
-\`\`\`text
+```text
 dabom_capstone/
 ├── start_gpu_server.sh          # GPU FastAPI / Odometry 실행
 ├── start_pi_stack.sh            # Pi 센서 / 모터 / 카메라 실행
@@ -133,13 +133,13 @@ dabom_capstone/
 ├── data/database/               # SQL schema / migrations
 ├── tests/                       # 소프트웨어 테스트
 └── docs/                        # 기술 문서
-\`\`\`
+```
 
 ## 05. Core Pipelines
 
 ### 5.1 Mapping → Localization → Navigation
 
-\`\`\`mermaid
+```mermaid
 flowchart LR
     S["LiDAR /scan"] --> M["SLAM Toolbox"]
     O["Encoder /wheel_ticks"] --> W["Wheel Odometry /odom"]
@@ -152,12 +152,12 @@ flowchart LR
     PLANNER --> CONTROL["SegmentedRPPController"]
     CONTROL --> BRIDGE["Nav2 Command Bridge"]
     BRIDGE --> PICO["Pi / Pico W / Motor"]
-\`\`\`
+```
 
 - **Mapping:** SLAM Toolbox의 비동기 온라인 Mapping 및 Occupancy Grid 저장
 - **Localization:** 저장 지도·LiDAR·오도메트리 기반 AMCL, 자동 초기 위치 후보 추정 및 수동 초기 위치 지정
-- **Global Planner:** \`TimeScoredLatticePlanner\`가 State Lattice 기반 경로 후보를 주행 시간과 충돌 검사를 통해 비교
-- **Controller:** \`SegmentedRPPController\`가 주행·회전 세그먼트를 추종하고, 일반 목표점 주행은 Rotation Shim을 결합
+- **Global Planner:** `TimeScoredLatticePlanner`가 State Lattice 기반 경로 후보를 주행 시간과 충돌 검사를 통해 비교
+- **Controller:** `SegmentedRPPController`가 주행·회전 세그먼트를 추종하고, 일반 목표점 주행은 Rotation Shim을 결합
 - **장애물:** Nav2 Costmap 및 경로 유효성 검사로 차단 여부를 판단하고, 유효한 경로는 불필요하게 재계획하지 않음
 - **LOOP MANUAL:** 기록된 모터 명령의 시간·순서를 재생하며 장애물 감지 시 정지·대기
 - **LOOP AUTO:** 기록된 목표점·경로를 이용하여 Nav2 반복 순찰 수행. WAIT와 REPLAN 정책 제공
@@ -168,7 +168,7 @@ Mapping과 Driving은 별도 모드이며 동시에 실행하지 않습니다.
 
 ### 5.2 Vision AI
 
-\`\`\`mermaid
+```mermaid
 flowchart LR
     CAM["RGB 영상"] --> RTMO["RTMO-M · Pose"]
     RTMO --> TRACK["BoT-SORT · Tracking"]
@@ -176,12 +176,12 @@ flowchart LR
     CAM --> X3D["X3D-M · 장면 행동 인식"]
     X3D --> EVENT["장면 위험 판단"]
     EVENT --> DASH["웹 대시보드 · 이벤트 기록"]
-\`\`\`
+```
 
-- \`RTMO-M\`: ONNX 기반 다중 인원 2D 자세 추정
-- \`BoT-SORT\`: 프레임 간 인원 ID 추적
-- \`X3D-M\`: **16개 RGB 프레임 / 4초 구간**을 입력으로 사용하고 **1초 간격**으로 장면 행동을 분석
-- 최종 추론 구성: **\`PIPELINE=8\`** (\`RTMO-M + BoT-SORT + X3D-M\`)
+- `RTMO-M`: ONNX 기반 다중 인원 2D 자세 추정
+- `BoT-SORT`: 프레임 간 인원 ID 추적
+- `X3D-M`: **16개 RGB 프레임 / 4초 구간**을 입력으로 사용하고 **1초 간격**으로 장면 행동을 분석
+- 최종 추론 구성: **`PIPELINE=8`** (`RTMO-M + BoT-SORT + X3D-M`)
 - X3D-M의 장면 위험 판정은 개별 인물에 대한 독립적인 행동 분류 결과와 구분합니다.
 
 관련 구현: [Pipeline Factory](./perception/pipeline_factory.py) · [RTMO](./perception/models/detector_rtmo.py) · [X3D-M](./perception/models/scene_x3d.py)
@@ -190,7 +190,7 @@ flowchart LR
 
 - **수동 경고:** LED 점멸, Pico W Beep, 사전 생성된 한국어 안내 음성 WAV 재생
 - **수동 신고:** Telegram 메시지 전송과 경고음·한국어 안내 음성 연동
-- **자동 위험 경고:** AI 위험 판정의 연속 감지·쿨다운 조건을 만족할 때 Pi에 LED/Beep 명령 전달. \`AUTO_WARNING_ENABLED\`와 \`AUTO_WARNING_DRY_RUN\`으로 실행 제어
+- **자동 위험 경고:** AI 위험 판정의 연속 감지·쿨다운 조건을 만족할 때 Pi에 LED/Beep 명령 전달. `AUTO_WARNING_ENABLED`와 `AUTO_WARNING_DRY_RUN`으로 실행 제어
 - **양방향 음성:** 별도 Pi Audio Client와 브라우저 간 WebSocket 중계. 16 kHz, mono, signed 16-bit PCM, 20 ms 프레임
 - **기록:** 영상/시스템 이벤트 및 관리자 조치를 DB에 저장하고, 이미지 저장 시 개인정보 보호 처리를 적용
 
@@ -200,7 +200,7 @@ flowchart LR
 
 실제 [최종 SQL 스키마](./data/database/init_schema.sql)의 핵심 테이블 및 관계를 기준으로 정리했습니다.
 
-\`\`\`mermaid
+```mermaid
 erDiagram
     users ||--o{ action_log : performs
     event_log o|--o{ action_log : relates_to
@@ -235,12 +235,12 @@ erDiagram
         smallint ping
         datetime recorded_at
     }
-\`\`\`
+```
 
-- \`users\`: 관리자 계정
-- \`event_log\`: AI 및 시스템 이벤트, 이미지 및 처리 상태
-- \`action_log\`: 관리자 조치 이력. \`user_id\`와 \`event_id\`는 FK이고, \`event_id\`는 NULL 허용
-- \`system_status\`: 주기적으로 수집한 시스템 상태
+- `users`: 관리자 계정
+- `event_log`: AI 및 시스템 이벤트, 이미지 및 처리 상태
+- `action_log`: 관리자 조치 이력. `user_id`와 `event_id`는 FK이고, `event_id`는 NULL 허용
+- `system_status`: 주기적으로 수집한 시스템 상태
 
 스키마 상세: [init_schema.sql](./data/database/init_schema.sql) · [DB Migrations](./data/database/migrations/)
 
@@ -249,21 +249,21 @@ erDiagram
 ### 7.1 사전 준비
 
 - GPU: Ubuntu 22.04/WSL2, ROS 2 Humble, Nav2, SLAM Toolbox, Python, CUDA 사용 환경
-- Pi: Ubuntu Server 22.04 arm64, ROS 2 Humble, \`rpicam-vid\`, RPLIDAR 드라이버, USB·UART 접근 권한
-- 오디오: USB 마이크·스피커 및 ALSA 유틸리티(\`arecord\`, \`aplay\`, \`amixer\`)
-- 서버 인증·DB·로봇 통신 설정: \`.env.example\`을 복사한 후 각 장비의 \`.env\`에 운영 환경별 값 입력
+- Pi: Ubuntu Server 22.04 arm64, ROS 2 Humble, `rpicam-vid`, RPLIDAR 드라이버, USB·UART 접근 권한
+- 오디오: USB 마이크·스피커 및 ALSA 유틸리티(`arecord`, `aplay`, `amixer`)
+- 서버 인증·DB·로봇 통신 설정: `.env.example`을 복사한 후 각 장비의 `.env`에 운영 환경별 값 입력
 
-\`\`\`bash
+```bash
 git clone --branch dev https://github.com/jcy9066/dabom_capstone.git
 cd dabom_capstone
 cp .env.example .env
-\`\`\`
+```
 
-\`.env\`에는 서버 주소 및 포트, \`ROBOT_ID\`, \`ROBOT_CONTROL_TOKEN\`, DB, UART 및 LiDAR 설정이 필요합니다. 토큰·비밀번호·운영 IP는 저장소에 기록하지 않습니다. GPU 추론 설정은 \`PIPELINE=8\`을 사용합니다.
+`.env`에는 서버 주소 및 포트, `ROBOT_ID`, `ROBOT_CONTROL_TOKEN`, DB, UART 및 LiDAR 설정이 필요합니다. 토큰·비밀번호·운영 IP는 저장소에 기록하지 않습니다. GPU 추론 설정은 `PIPELINE=8`을 사용합니다.
 
 ### 7.2 GPU 서버 설치·실행
 
-\`\`\`bash
+```bash
 python3 -m pip install -r requirements.txt
 source /opt/ros/humble/setup.bash
 cd navigation/ros
@@ -272,13 +272,13 @@ source install/setup.bash
 cd ../..
 
 bash start_gpu_server.sh
-\`\`\`
+```
 
 GPU Launcher는 FastAPI 및 Wheel Odometry를 시작하며, Mapping/Driving ROS Stack은 대시보드에서 모드를 선택할 때 실행됩니다.
 
 ### 7.3 Raspberry Pi 설치·실행
 
-\`\`\`bash
+```bash
 python3 -m pip install -r raspberry/requirements.txt
 source /opt/ros/humble/setup.bash
 cd navigation/ros
@@ -286,69 +286,69 @@ colcon build --symlink-install --packages-select patrol_navigation
 cd ../..
 
 bash start_pi_stack.sh
-\`\`\`
+```
 
 기본 Pi Launcher는 Pico UART PING/STOP 응답, 카메라 탐지 및 LiDAR LaserScan 수신을 확인한 뒤 로봇·LiDAR·카메라 관련 프로세스를 시작합니다. **기본 Launcher에는 오디오 인터컴 클라이언트가 포함되지 않습니다.**
 
 전시용 통합 Pi Launcher:
 
-\`\`\`bash
+```bash
 bash start_dabom_pi_demo_v2.sh
-\`\`\`
+```
 
-이 전시용 스크립트는 \`/home/dabom_user/dabom_capstone\`을 설치 경로로 사용하며 \`tmux\`와 \`flock\`을 요구합니다. Pi Stack과 독립 Audio Client를 실행하고, 이미 실행 중인 Audio Client는 중복 실행하지 않습니다.
+이 전시용 스크립트는 `/home/dabom_user/dabom_capstone`을 설치 경로로 사용하며 `tmux`와 `flock`을 요구합니다. Pi Stack과 독립 Audio Client를 실행하고, 이미 실행 중인 Audio Client는 중복 실행하지 않습니다.
 
 별도 음성 장치 검증 및 실행:
 
-\`\`\`bash
+```bash
 set -a
 source .env
 set +a
 
 python3 raspberry/audio_intercom_client.py --check
 python3 raspberry/audio_intercom_client.py
-\`\`\`
+```
 
 음성 클라이언트를 중복 실행하지 마십시오.
 
 ### 7.4 대시보드·센서 확인
 
-웹 서버 설정에 맞는 주소로 접속해 로그인하고 \`/main\`에서 관제합니다. 음성 시험 페이지는 \`/audio/intercom-test\`입니다.
+웹 서버 설정에 맞는 주소로 접속해 로그인하고 `/main`에서 관제합니다. 음성 시험 페이지는 `/audio/intercom-test`입니다.
 
 기본 포트가 21063일 때 GPU 로컬에서:
 
-\`\`\`bash
+```bash
 curl http://localhost:21063/get_status
 curl http://localhost:21063/api/stream_status
 curl http://localhost:21063/api/lidar/bridge
 curl http://localhost:21063/api/encoder/bridge
 curl http://localhost:21063/api/navigation/status
 curl http://localhost:21063/api/audio/status
-\`\`\`
+```
 
 ROS 2에서:
 
-\`\`\`bash
+```bash
 source /opt/ros/humble/setup.bash
 source navigation/ros/install/setup.bash
 ros2 topic hz /scan
 ros2 topic hz /wheel_ticks
 ros2 topic hz /odom
 ros2 run tf2_ros tf2_echo odom base_link
-\`\`\`
+```
 
 | 상태 | 의미 |
 | --- | --- |
-| \`READY\` | 로컬 필수 구성 정상 |
-| \`WAITING\` | 상대 장치 연결 대기 |
-| \`CONNECTED\` | 상대 장치와 통신 가능 |
-| \`ERROR\` / \`WARN\` | 필수 구성 실패 또는 실행 중 경고 |
+| `READY` | 로컬 필수 구성 정상 |
+| `WAITING` | 상대 장치 연결 대기 |
+| `CONNECTED` | 상대 장치와 통신 가능 |
+| `ERROR` / `WARN` | 필수 구성 실패 또는 실행 중 경고 |
 
 ### 7.5 안전·시간 동기화
 
 - 모터 출력 제한: Pi [MotorController](./raspberry/controllers/motor_controller.py) 및 Pico W [펌웨어](./raspberry/pico_w_sdk/main.c)에 **PWM 최대 절댓값 30%**를 적용합니다. PWM 제한은 전류 제한이 아닙니다.
-- \`MAX_WHEEL_MPS=0.212\`는 구성에 사용되는 보정 기준값으로, 30% PWM 조건에서 실측된 최고 속도를 의미하지 않습니다.
-- 실제 주행 전 \`MOTOR_OUTPUT_ENABLED=false\`를 통한 Dry-run, E-STOP, 엔코더 정지 확인, watchdog 동작을 점검해야 합니다.
+- `MAX_WHEEL_MPS=0.212`는 구성에 사용되는 보정 기준값으로, 30% PWM 조건에서 실측된 최고 속도를 의미하지 않습니다.
+- 실제 주행 전 `MOTOR_OUTPUT_ENABLED=false`를 통한 Dry-run, E-STOP, 엔코더 정지 확인, watchdog 동작을 점검해야 합니다.
 - Pi/GPU 간 LiDAR 타임스탬프 정합은 GPU 시간 동기화 API를 이용합니다. Pi 측 동기화 확인은 [check_gpu_pi_clock.py](./scripts/check_gpu_pi_clock.py)로 수행할 수 있습니다.
 - Raspberry Pi의 장치 제어 및 서버 재시작 명령은 모터가 안전하게 정지한 상태에서 수행해야 합니다.
 
