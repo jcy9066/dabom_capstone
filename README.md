@@ -367,7 +367,7 @@ ros2 run tf2_ros tf2_echo odom base_link
 | 영역 | 최종 구현 결과 |
 | --- | --- |
 | **자율주행** | 2D LiDAR 기반 SLAM 지도 생성·저장, AMCL 위치 추정, Nav2 목표점 경로 계획·속도·조향 제어 구현 |
-| **반복 순찰** | 기록된 모터 명령을 재생하는 LOOP MANUAL과 Nav2 경로를 추종하는 LOOP AUTO 구현. 장애물 대기(WAIT) 및 차단 경로 재계획(REPLAN) 지원 |
+| **반복 순찰** | 기록된 모터 명령을 재생하는 LOOP MANUAL과 Nav2 기반 LOOP AUTO 구현. MANUAL은 장애물 감지 시 정지·대기하고, AUTO는 WAIT 또는 차단 경로 재계획(REPLAN) 정책 지원 |
 | **AI 위험 행동 분석** | RTMO-M 자세 추정·BoT-SORT 인원 추적·X3D-M 장면 행동 인식을 통합한 영상 분석 파이프라인 구성 |
 | **실시간 관제** | 웹에서 영상, LiDAR 지도, 로봇 위치·주행 경로의 3D 시각화, 수동/자동 주행 전환 및 이벤트·조치 기록 제공 |
 | **현장 대응 및 안전** | E-STOP·모터 명령 확인·PWM 제한, LED·Beep·한국어 음성 경고, Telegram 신고 및 양방향 음성 관제 구현 |
