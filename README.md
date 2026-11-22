@@ -41,6 +41,7 @@
 | **Audio Intercom** | 브라우저 ↔ 로봇 USB 마이크·스피커의 실시간 양방향 음성 송수신 |
 | **Warning & Report** | LED, Pico W Beep, 한국어 안내 음성, Telegram 신고 연동 |
 | **Safety** | E-STOP, 제어권 관리, STOP ACK 확인, 통신 Watchdog, 모터 PWM 제한 |
+| **GPS 위치 정보** | GPS 수신 상태 확인 및 저장된 위치 구역의 일치 여부 판별 |
 
 <p align="center">
   <a href="./팜플렛.pptx"><img src="./팜플렛.png" alt="다봄 프로젝트 팜플렛" width="850"></a>
@@ -58,6 +59,7 @@
 | **Pico W** | UART 기반 모터·엔코더·LED·경고음 제어 |
 | **MDD10A 및 DC 모터·엔코더** | 좌우 바퀴 구동 및 주행 거리 추정 |
 | **USB 마이크·스피커** | 현장 청취, 원격 음성 전달 및 경고 음성 재생 |
+| **GPS 수신기** | 위치·수신 상태 전송 및 저장된 위치 구역과 비교 |
 | **GPU 서버** | FastAPI, Vision AI, ROS 2 Mapping·Localization·Navigation, DB |
 
 Raspberry Pi의 기본 운영 환경은 Ubuntu Server 22.04 arm64이고, GPU 서버는 Ubuntu 22.04/WSL2 및 ROS 2 Humble을 기준으로 구성했습니다. 카메라 구성은 최종 전시에 사용한 IMX708을 기준으로 기술했습니다.
@@ -145,10 +147,12 @@ flowchart LR
     O["Encoder /wheel_ticks"] --> W["Wheel Odometry /odom"]
     W --> M
     M --> MAP["Occupancy Grid 저장"]
-    MAP --> AMCL["AMCL 위치 추정"]
+    MAP --> MS["Map Server · 저장 지도"]
+    MS --> AMCL["AMCL 위치 추정"]
     S --> AMCL
     W --> AMCL
-    AMCL --> PLANNER["TimeScoredLatticePlanner"]
+    AMCL --> BT["Nav2 목표점 · Behavior Tree"]
+    BT --> PLANNER["TimeScoredLatticePlanner"]
     PLANNER --> CONTROL["SegmentedRPPController"]
     CONTROL --> BRIDGE["Nav2 Command Bridge"]
     BRIDGE --> PICO["Pi / Pico W / Motor"]
@@ -188,13 +192,13 @@ flowchart LR
 
 ### 5.3 현장 경고·신고 및 음성 관제
 
-- **수동 경고:** LED 점멸, Pico W Beep, 사전 생성된 한국어 안내 음성 WAV 재생
-- **수동 신고:** Telegram 메시지 전송과 경고음·한국어 안내 음성 연동
-- **자동 위험 경고:** AI 위험 판정의 연속 감지·쿨다운 조건을 만족할 때 Pi에 LED/Beep 명령 전달. `AUTO_WARNING_ENABLED`와 `AUTO_WARNING_DRY_RUN`으로 실행 제어
+- **수동 경고:** LED 점멸과 Pico W Beep 3회, 사전 생성된 한국어 안내 음성 WAV 재생
+- **수동 신고:** Telegram 전송 성공 후 수동 음성 요청이 포함된 경우 Pico W Beep 2회와 한국어 안내 음성 재생
+- **자동 위험 경고:** AI 위험 판정의 연속 감지·쿨다운 조건을 만족하면 10초간 LED/Beep 명령 전송. `AUTO_WARNING_ENABLED` 기본값은 `false`, `AUTO_WARNING_DRY_RUN` 기본값은 `true`
 - **양방향 음성:** 별도 Pi Audio Client와 브라우저 간 WebSocket 중계. 16 kHz, mono, signed 16-bit PCM, 20 ms 프레임
 - **기록:** 영상/시스템 이벤트 및 관리자 조치를 DB에 저장하고, 이미지 저장 시 개인정보 보호 처리를 적용
 
-한국어 안내 음성은 요청마다 새 문장을 합성하는 방식이 아니라 [오디오 파일](./raspberry/audio/)의 WAV를 재생하는 방식입니다. 브라우저 마이크는 HTTPS 또는 localhost 보안 컨텍스트가 필요합니다.
+한국어 안내 음성은 [고정 WAV 파일](./raspberry/audio/)을 재생합니다. 브라우저 마이크는 HTTPS 또는 localhost 보안 컨텍스트가 필요합니다.
 
 ## 06. Database Architecture
 
@@ -259,22 +263,25 @@ cd dabom_capstone
 cp .env.example .env
 ```
 
-`.env`에는 서버 주소 및 포트, `ROBOT_ID`, `ROBOT_CONTROL_TOKEN`, DB, UART 및 LiDAR 설정이 필요합니다. 토큰·비밀번호·운영 IP는 저장소에 기록하지 않습니다. GPU 추론 설정은 `PIPELINE=8`을 사용합니다.
+`.env`에는 서버 주소·포트, `ROBOT_ID`, `ROBOT_CONTROL_TOKEN`, DB·UART·LiDAR 설정 및 ROS 2 관련 필수 항목을 채워야 합니다. **Pi와 GPU 모두 `ROS_LOCALHOST_ONLY=1`이 필수**이며, 센서는 호스트 간 DDS가 아닌 WebSocket으로 전송됩니다. GPU 추론은 `PIPELINE=8`을 사용합니다. 토큰·비밀번호·운영 IP는 저장소에 기록하지 않습니다.
 
 ### 7.2 GPU 서버 설치·실행
 
 ```bash
-python3 -m pip install -r requirements.txt
+# GPU launcher가 우선 사용하는 Python 3.10 환경
+python3 -m venv --system-site-packages ~/.venvs/dabom-gpu310
+~/.venvs/dabom-gpu310/bin/python -m pip install -r requirements.txt
+
 source /opt/ros/humble/setup.bash
 cd navigation/ros
 colcon build --symlink-install --packages-select patrol_navigation_controller patrol_navigation
-source install/setup.bash
+source install/local_setup.bash
 cd ../..
 
 bash start_gpu_server.sh
 ```
 
-GPU Launcher는 FastAPI 및 Wheel Odometry를 시작하며, Mapping/Driving ROS Stack은 대시보드에서 모드를 선택할 때 실행됩니다.
+GPU Launcher는 `DABOM_GPU_PYTHON` 지정값을 먼저 확인하고, 지정하지 않으면 `~/.venvs/dabom-gpu310/bin/python`, 저장소의 `.venv-gpu310/bin/python`, 시스템 `python3` 순서로 사용합니다. 의존성은 실제 Launcher가 사용할 Python에 설치해야 합니다. GPU Launcher는 FastAPI 및 Wheel Odometry를 시작하며, Mapping/Driving ROS Stack은 대시보드에서 모드를 선택할 때 실행됩니다.
 
 ### 7.3 Raspberry Pi 설치·실행
 
@@ -296,7 +303,7 @@ bash start_pi_stack.sh
 bash start_dabom_pi_demo_v2.sh
 ```
 
-이 전시용 스크립트는 `/home/dabom_user/dabom_capstone`을 설치 경로로 사용하며 `tmux`와 `flock`을 요구합니다. Pi Stack과 독립 Audio Client를 실행하고, 이미 실행 중인 Audio Client는 중복 실행하지 않습니다.
+이 전시용 스크립트는 `/home/dabom_user/dabom_capstone`을 설치 경로로 사용하며 `tmux`와 `flock`을 요구합니다. **기존 Pi Stack을 정리·재시작**하고 독립 Audio Client를 실행합니다. 이미 실행 중인 Audio Client는 중복 실행하지 않습니다. 모터 정지 후 실행해야 합니다.
 
 별도 음성 장치 검증 및 실행:
 
@@ -323,8 +330,9 @@ curl http://localhost:21063/api/stream_status
 curl http://localhost:21063/api/lidar/bridge
 curl http://localhost:21063/api/encoder/bridge
 curl http://localhost:21063/api/navigation/status
-curl http://localhost:21063/api/audio/status
 ```
+
+음성 연결 상태는 **로그인한 브라우저**에서 `/api/audio/status`를 조회합니다(로그인 세션이 없으면 HTTP 401).
 
 ROS 2에서:
 
@@ -372,7 +380,7 @@ ros2 run tf2_ros tf2_echo odom base_link
 | 전시 | [포스터 PNG](./포스터.png) · [포스터 PPTX](./포스터.pptx) · [팜플렛 PNG](./팜플렛.png) · [팜플렛 PPTX](./팜플렛.pptx) |
 | 중간 결과 | [중간 보고서 PDF](./다봄_중간보고서.pdf) · [중간 발표자료 PPTX](./다봄_중간발표.pptx) |
 | 프로젝트 계획 | [프로젝트 개요 PDF](./프로젝트%20개요.pdf) · [프로젝트 진행 상황도 PDF](./프로젝트%20진행%20상황도.pdf) · [제작계획서 HWP](./졸업작품%20제작계획서.hwp) |
-| 설계·요구사항 | [요구사항 정의서](./Dabom_요구사항_정의서.xlsx) · [DFD](./DFD.png) · [Activity Diagram](./Activity_Diagram.png) · [Activity Diagram 2](./Activity_Diagram_2.png) |
+| 설계·요구사항 | [요구사항 정의서](./Dabom_요구사항_정의서.xlsx) · [ERD 설계 이미지](./ERD.png) · [DFD](./DFD.png) · [Activity Diagram](./Activity_Diagram.png) · [Activity Diagram 2](./Activity_Diagram_2.png) |
 | 하드웨어 | [상단 섀시](./RC카%20상단%20섀시.3mf) · [하단 섀시](./RC카%20하단%20섀시.3mf) |
 | 구매 내역 | [1차](./부품구매내역서_1차_40만원.xlsx) · [2차](./부품구매내역서_2차_20만원.xlsx) · [3-1차](./부품구매내역서_3-1차_10만원.xlsx) · [3-2차](./부품구매내역서_3-2차_10만원.xlsx) · [3-3차](./부품구매내역서_3-3차_5만원.xlsx) · [4차](./부품구매내역서_4차_30만원.xlsx) |
 | 구현·실행 자료 | [ROS 2 설정](./navigation/ros/patrol_navigation/config/) · [데이터베이스 스키마](./data/database/init_schema.sql) · [기술 문서](./docs/) |
