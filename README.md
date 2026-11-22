@@ -60,7 +60,7 @@
 | **USB 마이크·스피커** | 현장 청취, 원격 음성 전달 및 경고 음성 재생 |
 | **GPU 서버** | FastAPI, Vision AI, ROS 2 Mapping·Localization·Navigation, DB |
 
-Raspberry Pi의 기본 운영 환경은 Ubuntu Server 22.04 arm64이며, GPU 서버는 Ubuntu 22.04/WSL2 및 ROS 2 Humble을 기준으로 구성했습니다. 저장소에는 기존 OV5647 카메라 구성의 구현 이력도 있으나, 최종 전시 카메라 연동에는 IMX708을 사용했습니다.
+Raspberry Pi의 기본 운영 환경은 Ubuntu Server 22.04 arm64이고, GPU 서버는 Ubuntu 22.04/WSL2 및 ROS 2 Humble을 기준으로 구성했습니다. 카메라 구성은 최종 전시에 사용한 IMX708을 기준으로 기술했습니다.
 
 Pico W UART는 **115200 bps**, Raspberry Pi의 **GPIO14(TXD) / GPIO15(RXD)** 및 공통 GND를 사용합니다. Pico와 LiDAR는 서로 다른 직렬 장치를 사용해야 합니다.
 
